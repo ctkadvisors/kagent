@@ -29,6 +29,8 @@ A fresh session must read these in order — the *why* and *what* are all here:
 4. [`docs/PRIOR-ART.md`](./docs/PRIOR-ART.md)
 5. [`docs/HARNESS-LESSONS.md`](./docs/HARNESS-LESSONS.md)
 6. [`docs/ROADMAP.md`](./docs/ROADMAP.md)
+7. [`docs/PLATFORM-PRIORITIES.md`](./docs/PLATFORM-PRIORITIES.md)
+8. [`docs/WORKBENCH.md`](./docs/WORKBENCH.md)
 
 ## Conventions
 

@@ -1,7 +1,7 @@
 # Roadmap
 
 **Date:** 2026-04-26
-**Status:** Draft, pre-implementation
+**Status:** Phase 4 smoke test passed; Phase 4.x hardening and Phase 5 prioritization underway
 **Convention:** one phase = one git commit cluster + one tag (`vX.Y.Z-phaseN`).
 
 > Read [`DESIGN-V0.1.md`](./DESIGN-V0.1.md) for the v0.1 architecture detail. This document is the multi-version phasing plan.
@@ -82,7 +82,9 @@
 
 These are scoped tightly to issues the live deploy exposed; do them before Phase 5's E2E work expands the surface area.
 
-- [ ] **Watch K8s Job/Pod terminal state and reflect into AgentTask.status.** Today the operator dispatches and walks away — if the agent-pod crashes before it patches status (image pull fails, OOMKilled, container exits non-zero), the task pins in `phase=Dispatched` forever and the operator's reconciler short-circuits on next watch event. Add a Job watcher that maps Job `failed`/`succeeded` to AgentTask phase when no status was patched. (Codex review 2026-04-27 called this out as the highest-leverage lifecycle hardening.)
+- [x] **Watch K8s Job/Pod terminal state and reflect into AgentTask.status.** The operator now watches owned Jobs/Pods, detects image-pull failures, unschedulable pods, failed Jobs, and terminal container failures, then patches the parent AgentTask Failed without clobbering Completed.
+- [x] **Enforce AgentTask deadlines at the Kubernetes layer.** `AgentTask.spec.timeoutSeconds` now maps to agent-pod `AbortSignal.timeout(...)` and Job `activeDeadlineSeconds`, so hung model calls and pre-loop pod stalls both reach terminal status.
+- [x] **Make smoke-test reruns reliable under Argo sync.** The smoke AgentTask and verifier Job are revision-suffixed Sync hooks with Replace/Force semantics, so repeated syncs create fresh task resources instead of reusing a terminal prior run.
 - [ ] **Restore Bun runtime when `@kubernetes/client-node`'s TLS path fixes parity.** The Watch path under `bun:1.1-alpine` rejects K3s's self-signed CA with `SELF_SIGNED_CERT_IN_CHAIN` even though the same kubeconfig works for one-shot API calls; same bug on the agent-pod's `patchNamespacedCustomObjectStatus`. Both runtimes pivoted to `node:22-alpine` + tsx as a workaround; CLAUDE.md updated to reflect that. Track Bun's undici/TLS work and revert when fixed.
 - [ ] **Trigger Gitea Actions on mirrored tags.** Gitea's mirror-pull from GitHub does NOT fire its own Actions workflows by default in 1.22.3, so `git.knuteson.io/homelab/kagent-{operator,agent-pod}` stayed empty until images were pushed manually from a workstation. Long-term fix is one of: (a) push directly to Gitea (loses GitHub-mirror semantics), (b) wait for Gitea/Forgejo to support workflow_dispatch via API in a version we can upgrade to, (c) keep a small webhook bridge that POSTs `mirror-sync` + `workflow_dispatch` together. Until then: manual `workflow_dispatch` in the Gitea UI on every release tag, OR direct `docker buildx --push` from a dev box.
 - [ ] **Wire Agent.spec.tools through to the executor.** The agent-pod runs chat-only today — the AgentRegistry registration in `runner.ts` skips the `tools` field. Most consumer workloads (researcher, summarizer) need at least HTTP fetch / MCP tool wiring before Phase 5 can land.
@@ -92,6 +94,11 @@ These are scoped tightly to issues the live deploy exposed; do them before Phase
 
 ## Phase 5 — End-to-end + first consumer (~1 week)
 
+Phase 5 has two tracks: prove the first real workflow and make the engine visible enough to operate. The priority spine lives in [`PLATFORM-PRIORITIES.md`](./PLATFORM-PRIORITIES.md); the visibility surface is [`WORKBENCH.md`](./WORKBENCH.md).
+
+- [ ] Read-only Workbench: list/detail for AgentTasks, Agents, owned Jobs/Pods, failure reasons, detector flags, result content, and trace links.
+- [ ] Wire `Agent.spec.tools` into agent-pod provider construction for the first researcher tool bundle.
+- [ ] Add minimal `ArtifactRef` surface for markdown reports and future screenshots/patches.
 - [ ] E2E test: `kubectl apply -f` an `AgentTask` → Pod spawned → loop runs against jetson1 Ollama → result written back to AgentTask status → trace in Langfuse
 - [ ] Port researcher agent from `homelab-orchestrator` → produces same daily digest on new substrate
 - [ ] A2A demo: researcher delegates to summarizer specialist via NATS, both as separate Pods, both traced
@@ -142,7 +149,7 @@ These ship if and when there's a concrete driver, not on speculation:
 - **Streaming responses** — for chat-style consumers; requires SSE pass-through from agent pod through operator to client
 - **Multi-tenant** — namespace-per-tenant + RBAC + LiteLLM virtual keys keyed by tenant
 - **Authority graph / OPA policy enforcement** — only if a real workload demands pre-dispatch policy that detector middleware can't satisfy
-- **Operator UI** — replaces `kubectl` interaction; not until the user surface justifies it
+- **Write-enabled Workbench actions** — retry/cancel/create-task once the read-only visibility surface proves useful
 - **Untrusted-code-exec sandbox per tool call** — nested isolation (Bubblewrap or Firecracker pool) inside Kata pods, only when a workload needs it
 - **Strands TS or Mastra adoption** — if Phase 7 verdict says swap
 

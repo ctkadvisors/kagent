@@ -27,6 +27,8 @@ The control plane is a small TypeScript Kubernetes operator that watches `Agent`
 3. [`docs/PRIOR-ART.md`](./docs/PRIOR-ART.md) — what exists in 2026, what we use, what we don't, why
 4. [`docs/HARNESS-LESSONS.md`](./docs/HARNESS-LESSONS.md) — model failure modes from prior experiments that inform substrate design
 5. [`docs/ROADMAP.md`](./docs/ROADMAP.md) — v0.1 / v0.2 / v0.3 / future phasing
+6. [`docs/PLATFORM-PRIORITIES.md`](./docs/PLATFORM-PRIORITIES.md) — prioritized implementation spine after the Phase 4 smoke test
+7. [`docs/WORKBENCH.md`](./docs/WORKBENCH.md) — read-only visibility surface over the engine, not a new channel
 
 ## License
 
