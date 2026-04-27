@@ -36,6 +36,12 @@ metadata:
   labels:
     {{- include "kagent-operator.labels" . | nindent 4 }}
     kagent.knuteson.io/role: smoke-test
+  annotations:
+    # Replace + force on every Application sync so re-syncs actually
+    # re-trigger the agent run. Without this an AgentTask in
+    # phase=Completed/Failed stays put across syncs and the verify Job
+    # passes/fails based on the prior result, not a fresh execution.
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
 spec:
   targetAgent: smoke-test
   payload:
