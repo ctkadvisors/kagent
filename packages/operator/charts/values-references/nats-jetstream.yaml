@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Reference values for the upstream nats-io/nats Helm chart, sized for
+# the homelab K3s cluster's per-agent-microVM substrate. Apply with:
+#
+#   helm repo add nats https://nats-io.github.io/k8s/helm/charts/
+#   helm install nats nats/nats \
+#     --namespace kagent-system --create-namespace \
+#     -f packages/operator/charts/values-references/nats-jetstream.yaml
+#
+# JetStream subjects + KV bucket consumed by the operator (per
+# docs/DESIGN-V0.1.md §4.3):
+#   agent.<agentId>.task.<taskId>     — task assignments
+#   agent.cap.<capability>.task.<id>  — capability-routed tasks
+#   agent.<agentId>.event.<seq>       — heartbeat / lifecycle events
+#   KV bucket: agents-live            — agentId → {capabilities[], lastHeartbeatMs}
+#
+# v0.1 single-node JetStream; clustering is a v0.2 concern when HA matters.
+
+config:
+  cluster:
+    enabled: false # single-node v0.1
+  jetstream:
+    enabled: true
+    fileStore:
+      enabled: true
+      pvc:
+        enabled: true
+        size: 10Gi
+        storageClassName: local-path
+    memoryStore:
+      enabled: true
+      maxSize: 256Mi
+
+container:
+  image:
+    tag: '2.10-alpine'
+
+# Resource sizing for a homelab K3s node. Generous for v0.1 since
+# JetStream comfortably handles the substrate's expected load.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+service:
+  enabled: true
+  ports:
+    nats:
+      enabled: true
+    monitor:
+      enabled: true # http://nats:8222/varz for ops surface
+
+
+# NB: KV bucket creation is NOT done by the chart — it's bootstrapped
+# by the operator on first connect (Phase 3 C3+ wires this; the
+# kagent-system convention is bucket name `agents-live`, TTL ~30s
+# matching agent-pod heartbeat cadence).

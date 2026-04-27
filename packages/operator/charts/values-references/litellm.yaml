@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Reference values for the upstream berriai/litellm Helm chart. Apply:
+#
+#   helm repo add litellm https://berriai.github.io/litellm-helm-chart/
+#   helm install litellm litellm/litellm \
+#     --namespace kagent-system \
+#     -f packages/operator/charts/values-references/litellm.yaml
+#
+# LiteLLM is the multi-provider proxy agent pods call for inference.
+# The default `KAGENT_LITELLM_BASE_URL` in agent-pod/src/env.ts is
+# `http://litellm.kagent-system.svc.cluster.local:4000/v1` — keep the
+# release name `litellm` and the namespace `kagent-system` to match.
+#
+# Provider credentials (Cloudflare AI Gateway, Bedrock, Anthropic
+# direct, etc.) live in a separate Secret you create out-of-band; the
+# `existingSecret` reference below points at it.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/berriai/litellm
+  tag: 'main-stable'
+
+# Routes registered with LiteLLM. Names here are what agent pods
+# pass in the OpenAI-compat `model` field (with provider prefix per
+# CLAUDE.md operational context).
+proxy_config:
+  model_list:
+    - model_name: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+      litellm_params:
+        model: 'cloudflare/@cf/meta/llama-4-scout-17b-16e-instruct'
+        api_key: os.environ/CLOUDFLARE_API_KEY
+        # Cloudflare AI Gateway compat endpoint
+        api_base: 'https://gateway.ai.cloudflare.com/v1/<CF_ACCOUNT>/<CF_GATEWAY>/workers-ai'
+    - model_name: 'aws-bedrock/au.anthropic.claude-sonnet-4-6'
+      litellm_params:
+        model: 'bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0' # placeholder; update for real Bedrock model id
+        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+        aws_region_name: 'us-east-1'
+    - model_name: 'ollama/nemotron-3-nano-4b'
+      litellm_params:
+        model: 'ollama/nemotron-3-nano-4b'
+        # jetson1 bare-metal Ollama (per CLAUDE.md operational context)
+        api_base: 'http://192.168.68.73:11434'
+  # Postgres backing for virtual keys + cost tracking. The chart can
+  # provision its own Postgres or you can point at an existing one.
+  general_settings:
+    master_key: os.environ/LITELLM_MASTER_KEY
+    database_url: os.environ/DATABASE_URL
+
+# Pull provider credentials from this Secret (created out-of-band).
+existingSecret: 'litellm-providers'
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 4000
+
+# Enable the bundled Postgres for v0.1 simplicity. v0.2 should point
+# at a shared Postgres on the cluster.
+db:
+  deployStandalone: true
+  database: 'litellm'

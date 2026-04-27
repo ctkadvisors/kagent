@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Reference values for the upstream langfuse/langfuse Helm chart.
+#
+#   helm repo add langfuse https://langfuse.github.io/langfuse-k8s
+#   helm install langfuse langfuse/langfuse \
+#     --namespace kagent-system \
+#     -f packages/operator/charts/values-references/langfuse.yaml
+#
+# Langfuse 4.x ingests OTLP natively at:
+#   POST http://langfuse-web.kagent-system.svc.cluster.local:3000/api/public/otel/v1/traces
+#
+# Agent pods set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to that URL (or
+# its tunnel-fronted equivalent on the homelab) and OtelTraceSink
+# (packages/trace-sinks/src/otel-sink.ts) does the rest — no Langfuse-
+# specific SDK in the agent pods.
+#
+# Authentication: Langfuse OTLP endpoints accept the project's public
+# key in the `Authorization: Bearer <key>` header. Set
+# OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20<pk> in the agent
+# pod env (operator's Helm values plumb this through; pre-encode the
+# space as %20 since OTel parses comma-separated headers).
+
+# Single-replica web + worker; HA waits for v0.2.
+deployment:
+  web:
+    replicaCount: 1
+  worker:
+    replicaCount: 1
+
+# Bundled Postgres + ClickHouse + Redis for v0.1 simplicity.
+# v0.2 should point at shared infra.
+postgresql:
+  deploy: true
+  auth:
+    username: langfuse
+    database: langfuse
+clickhouse:
+  deploy: true
+redis:
+  deploy: true
+
+# Storage class — homelab uses local-path; cloud overrides to its CSI
+# default.
+persistence:
+  storageClass: local-path
+
+resources:
+  web:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  worker:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# Service exposure — internal-only by default. The homelab fronts
+# Langfuse via Traefik IngressRoute owned by `new_localai`; CLAUDE.md
+# requires checking existing hostnames before grabbing
+# `langfuse.knuteson.io` (or similar). This chart's values stay
+# behind ClusterIP; the IngressRoute is a separate manifest.
+web:
+  service:
+    type: ClusterIP
+    port: 3000
+
+# Initial project setup is manual after first install (create org +
+# project + API key via the web UI). Long-term we should switch to
+# the org-level admin API once Langfuse 4.x stabilizes its
+# self-provisioning surface.
