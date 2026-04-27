@@ -67,11 +67,15 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_AGENT_POD_OTLP_HEADERS,
     });
   }
+  const pullPolicy = env.KAGENT_AGENT_POD_IMAGE_PULL_POLICY;
   return {
     ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
         image: env.KAGENT_AGENT_POD_IMAGE,
       }),
+    ...((pullPolicy === 'Always' || pullPolicy === 'IfNotPresent' || pullPolicy === 'Never') && {
+      imagePullPolicy: pullPolicy,
+    }),
     ...(typeof env.KAGENT_AGENT_POD_IMAGE_PULL_SECRET === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE_PULL_SECRET.length > 0 && {
         imagePullSecret: env.KAGENT_AGENT_POD_IMAGE_PULL_SECRET,

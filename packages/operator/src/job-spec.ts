@@ -25,6 +25,9 @@ const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 3600; // GC completed Pods after 1h.
 export interface BuildJobSpecOptions {
   /** Container image for the agent pod. Defaults to the v0.0.1 placeholder. */
   readonly image?: string;
+  /** `imagePullPolicy` for the agent container. Defaults to K8s default
+   * (`IfNotPresent`); set `Always` while iterating on a mutable tag. */
+  readonly imagePullPolicy?: 'Always' | 'IfNotPresent' | 'Never';
   /** Optional `imagePullSecrets[].name` (e.g. ghcr-pull). */
   readonly imagePullSecret?: string;
   /** ServiceAccount the agent pod runs under. */
@@ -107,6 +110,9 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
             name: 'agent',
             image,
             env,
+            ...(opts.imagePullPolicy !== undefined && {
+              imagePullPolicy: opts.imagePullPolicy,
+            }),
             // Resources are tunable via Helm values in operator chart;
             // the spec here is a defensible default for v0.1.
             resources: {
