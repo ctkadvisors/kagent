@@ -13,3 +13,15 @@
 
 export { StubDispatcher } from './dispatcher.js';
 export type { Dispatcher, DispatchedTask } from './dispatcher.js';
+
+export { API_GROUP, API_VERSION, API_GROUP_VERSION, isAgent, isAgentTask } from './crds/index.js';
+export type {
+  Agent,
+  AgentSpec,
+  AgentTask,
+  AgentTaskSpec,
+  AgentTaskStatus,
+  AgentTaskPhase,
+  AgentCapability,
+  AgentCapabilitySpec,
+} from './crds/index.js';

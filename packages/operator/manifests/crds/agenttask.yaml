@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# AgentTask — single invocation request, addressed by agent name OR
+# capability tag. See packages/operator/src/crds/types.ts.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agenttasks.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: AgentTask
+    listKind: AgentTaskList
+    plural: agenttasks
+    singular: agenttask
+    shortNames:
+      - kat
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - payload
+              # Exactly one of targetAgent / targetCapability must be set;
+              # the operator's resolve step is the source of truth — the
+              # CRD schema enforces only "at least one" via oneOf below.
+              oneOf:
+                - required: [targetAgent]
+                - required: [targetCapability]
+              properties:
+                targetAgent:
+                  type: string
+                  description: metadata.name of an Agent CRD in this namespace.
+                targetCapability:
+                  type: string
+                  description: Capability tag resolved against the live Agent registry.
+                payload:
+                  # Substrate-opaque — passed through to the agent loop.
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                timeoutSeconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 86400
+                parentTask:
+                  type: string
+                  description: UID of the AgentTask that delegated this one.
+                originalUserMessage:
+                  type: string
+                  description: 'Required at the protocol level (HARNESS-LESSONS §4); the operator copies parent value if unset on a delegated task.'
+                parentDistillation:
+                  type: string
+                expectedTools:
+                  type: array
+                  items:
+                    type: string
+                  description: 'Tool category names the operator expects to fire (feeds the F2 detector).'
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Dispatched
+                    - Completed
+                    - Failed
+                result:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                error:
+                  type: string
+                startedAt:
+                  type: string
+                  format: date-time
+                completedAt:
+                  type: string
+                  format: date-time
+                podName:
+                  type: string
+                structuralVerdict:
+                  type: object
+                  properties:
+                    suspicious:
+                      type: array
+                      items:
+                        type: string
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Target
+          type: string
+          jsonPath: .spec.targetAgent
+        - name: Capability
+          type: string
+          jsonPath: .spec.targetCapability
+        - name: Pod
+          type: string
+          jsonPath: .status.podName
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

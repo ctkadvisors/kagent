@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Agent — declarative spec for a workload that can be invoked.
+# See packages/operator/src/crds/types.ts for the TS surface.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: Agent
+    listKind: AgentList
+    plural: agents
+    singular: agent
+    shortNames:
+      - kag
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - model
+              properties:
+                model:
+                  type: string
+                  minLength: 1
+                  description: 'LiteLLM model id WITH provider prefix (e.g. workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct).'
+                systemPrompt:
+                  type: string
+                tools:
+                  type: array
+                  items:
+                    type: string
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                sandboxProfile:
+                  type: string
+                  enum:
+                    - default
+                    - strict
+                  default: default
+      additionalPrinterColumns:
+        - name: Model
+          type: string
+          jsonPath: .spec.model
+        - name: Sandbox
+          type: string
+          jsonPath: .spec.sandboxProfile
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

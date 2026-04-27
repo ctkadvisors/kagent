@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# AgentCapability — capability tag → matcher rules.
+#
+# v0.1 ships the schema for forward compatibility. v0.1 reconcile
+# resolves capabilities against the live `agents-live` NATS KV bucket
+# (Phase 3); this CRD is the persistent / declarative form for matcher
+# rules that don't fit a heartbeat model. Materially used in v0.2.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentcapabilities.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: AgentCapability
+    listKind: AgentCapabilityList
+    plural: agentcapabilities
+    singular: agentcapability
+    shortNames:
+      - kac
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - capability
+              properties:
+                capability:
+                  type: string
+                  minLength: 1
+                  description: 'Capability tag — appears in AgentTask.spec.targetCapability.'
+                agentSelector:
+                  type: object
+                  properties:
+                    matchLabels:
+                      type: object
+                      additionalProperties:
+                        type: string
+      additionalPrinterColumns:
+        - name: Capability
+          type: string
+          jsonPath: .spec.capability
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
