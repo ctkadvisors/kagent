@@ -1,0 +1,74 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+*/}}
+kagent-workbench {{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }}) installed.
+
+The workbench is a READ-ONLY operator console over the kagent control
+plane (Agent / AgentTask / AgentCapability + the operator-owned Jobs
+and Pods). Write actions (cancel/retry/create-task) are NOT enabled in
+this slice — they ship in v0.2 behind a separate ClusterRole.
+
+Resources installed:
+  - Deployment    {{ include "kagent-workbench.fullname" . }}  (api + ui sidecar)
+  - Service       {{ include "kagent-workbench.fullname" . }}  (port 80 → api 8080, port 81 → ui 8081)
+  - ServiceAccount {{ include "kagent-workbench.serviceAccountName" . }}
+  {{- if .Values.rbac.create }}
+  - ClusterRole / ClusterRoleBinding {{ include "kagent-workbench.fullname" . }}-reader (cluster-wide read)
+  {{- end }}
+  {{- if .Values.ingress.enabled }}
+  {{- if .Values.ingress.authMiddleware }}
+  - Traefik IngressRoute on https://{{ .Values.ingress.host }} (auth: {{ .Values.ingress.authMiddleware }})
+  {{- else }}
+  - Ingress {{ if .Values.ingress.tls.secretName }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}
+  {{- end }}
+  {{- end }}
+
+Local testing (no Ingress required):
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward \
+    svc/{{ include "kagent-workbench.fullname" . }} 8080:80
+
+  Then open http://localhost:8080 — the api container will serve the
+  UI from its embedded proxy to the ui sidecar.
+
+  For direct UI sidecar access (debugging static-asset issues):
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward \
+    svc/{{ include "kagent-workbench.fullname" . }} 8081:81
+
+Health check:
+
+  curl -fsS http://localhost:8080{{ .Values.api.healthPath }}
+
+{{- if not .Values.ingress.enabled }}
+
+Enable an Ingress when you're ready to expose the workbench beyond
+port-forward. Two recipes:
+
+  1. Vanilla networking.k8s.io/v1 Ingress (cert-manager / oauth2-proxy):
+
+     helm upgrade {{ .Release.Name }} ./packages/operator/charts/kagent-workbench \
+       --namespace {{ .Release.Namespace }} \
+       --set ingress.enabled=true \
+       --set ingress.host=workbench.example.com \
+       --set ingress.className=nginx \
+       --set ingress.tls.secretName=workbench-tls
+
+  2. Traefik IngressRoute with a basicAuth Middleware (homelab pattern):
+
+     helm upgrade {{ .Release.Name }} ./packages/operator/charts/kagent-workbench \
+       --namespace {{ .Release.Namespace }} \
+       --set ingress.enabled=true \
+       --set ingress.host=kagent.knuteson.io \
+       --set ingress.className=traefik \
+       --set ingress.tls.secretName=knuteson-tls \
+       --set ingress.authMiddleware=kagent-workbench-basic-auth
+
+  See packages/operator/charts/kagent-workbench/README.md for the full
+  auth integration recipe.
+{{- end }}
+
+ServiceAccount + RBAC are READ-ONLY by design. To audit:
+
+  kubectl get clusterrole {{ include "kagent-workbench.fullname" . }}-reader -o yaml
