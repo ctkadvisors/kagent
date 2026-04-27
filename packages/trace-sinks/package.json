@@ -4,7 +4,7 @@
   "private": true,
   "description": "TraceSink implementations: stdout pretty-printer, per-run JSONL file writer, and OTLP/HTTP OTel exporter (Langfuse-compatible).",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

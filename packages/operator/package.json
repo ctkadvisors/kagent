@@ -4,7 +4,7 @@
   "private": true,
   "description": "Kubernetes control plane — watches Agent + AgentTask + AgentCapability CRDs and materializes pods (Phase 2).",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

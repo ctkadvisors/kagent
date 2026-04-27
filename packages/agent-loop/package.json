@@ -4,7 +4,7 @@
   "private": true,
   "description": "In-pod agent execution loop — forked AgentExecutor + RunBudget + run-end detector middleware.",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

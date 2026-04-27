@@ -4,7 +4,7 @@
   "private": true,
   "description": "MCP stdio ToolProvider — wraps @modelcontextprotocol/sdk to spawn MCP servers as subprocesses; tools/list discovery + tools/call invocation with structured error envelope + AbortSignal plumbing.",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
