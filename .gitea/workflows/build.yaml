@@ -23,6 +23,8 @@ env:
   REGISTRY: git.knuteson.io
   IMAGE_OPERATOR: git.knuteson.io/homelab/kagent-operator
   IMAGE_AGENT_POD: git.knuteson.io/homelab/kagent-agent-pod
+  IMAGE_WORKBENCH_API: git.knuteson.io/homelab/kagent-workbench-api
+  IMAGE_WORKBENCH_UI: git.knuteson.io/homelab/kagent-workbench-ui
 
 jobs:
   build:
@@ -85,3 +87,43 @@ jobs:
           push: true
           tags: ${{ steps.meta-agent-pod.outputs.tags }}
           labels: ${{ steps.meta-agent-pod.outputs.labels }}
+
+      - name: Extract workbench-api metadata
+        id: meta-workbench-api
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_WORKBENCH_API }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push workbench-api
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: packages/workbench-api/Dockerfile
+          push: true
+          tags: ${{ steps.meta-workbench-api.outputs.tags }}
+          labels: ${{ steps.meta-workbench-api.outputs.labels }}
+
+      - name: Extract workbench-ui metadata
+        id: meta-workbench-ui
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_WORKBENCH_UI }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push workbench-ui
+        # context is the repo root (not packages/workbench-ui) so the
+        # build can pull @kagent/dto via the pnpm workspace.
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: packages/workbench-ui/Dockerfile
+          push: true
+          tags: ${{ steps.meta-workbench-ui.outputs.tags }}
+          labels: ${{ steps.meta-workbench-ui.outputs.labels }}
