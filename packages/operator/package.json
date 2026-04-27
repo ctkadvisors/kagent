@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
-    "@kubernetes/client-node": "1.4.0"
+    "@kubernetes/client-node": "1.4.0",
+    "nats": "2.29.3"
   },
   "devDependencies": {
     "tsx": "4.21.0"
