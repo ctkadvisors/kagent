@@ -2,9 +2,13 @@ name: Images
 
 on:
   push:
+    # Match every version-prefixed tag. The earlier patterns
+    # ('v*-phase*' + strict semver) didn't cover suffixed tags
+    # like v0.0.5-workbench-mvp, which silently produced no
+    # tag-push workflow run + no v0.0.5-workbench-mvp image.
+    # Caught when the chart referenced a tag ghcr.io never saw.
     tags:
-      - 'v*-phase*'
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*'
     branches:
       - main
   workflow_dispatch:
