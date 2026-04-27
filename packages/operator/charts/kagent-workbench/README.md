@@ -32,7 +32,7 @@ helm install kagent-workbench ./packages/operator/charts/kagent-workbench \
   --create-namespace
 ```
 
-The workbench expects to live in the **same namespace as the operator** so it shares the operator's pull secret (`gitea-registry-secret` on the homelab). On a fresh cluster, install the operator first (`packages/operator/charts/kagent-operator`) — the workbench reads the CRDs the operator installs.
+The workbench expects to live in the **same namespace as the operator** so it shares the operator's image-pull setup (the chart's defaults pull from `ghcr.io/ctkadvisors/...` public packages — no pull secret needed). On a fresh cluster, install the operator first (`packages/operator/charts/kagent-operator`) — the workbench reads the CRDs the operator installs.
 
 Verify after install:
 
@@ -48,21 +48,21 @@ curl -fsS http://localhost:8080/api/healthz
 | Key                            | Default                                              | Notes                                                              |
 | ------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------ |
 | `replicaCount`                 | `1`                                                  | Single replica is fine for MVP — state is rebuilt from the API server on restart. |
-| `api.image.repository`         | `git.knuteson.io/homelab/kagent-workbench-api`       | workbench-api image.                                               |
+| `api.image.repository`         | `ghcr.io/ctkadvisors/kagent-workbench-api`           | workbench-api image. Public ghcr.io package — no pull secret.       |
 | `api.image.tag`                | `''` (defaults to `Chart.appVersion`)                | Pin in dev with `--set api.image.tag=...`.                         |
-| `api.image.pullPolicy`         | `Always`                                             | Mutable MVP tags need a refetch every rollout.                     |
+| `api.image.pullPolicy`         | `IfNotPresent`                                       | ghcr.io tags are immutable per release. Set `Always` for moving tags. |
 | `api.port`                     | `8080`                                               | Container port the api listens on.                                 |
 | `api.healthPath`               | `/api/healthz`                                       | Liveness + readiness probe path. Owned by the workbench-api package. |
 | `api.langfuseBaseUrl`          | `''`                                                 | Optional. Plumbed as `LANGFUSE_BASE_URL` for "open trace" links.   |
 | `api.authRequired`             | `''`                                                 | Optional. Set non-empty to make the api enforce auth itself.       |
 | `api.resources`                | `50m / 128Mi → 500m / 256Mi`                         | Bump when watching many AgentTasks.                                |
-| `ui.image.repository`          | `git.knuteson.io/homelab/kagent-workbench-ui`        | workbench-ui static-asset image.                                   |
+| `ui.image.repository`          | `ghcr.io/ctkadvisors/kagent-workbench-ui`            | workbench-ui static-asset image. Public ghcr.io package.            |
 | `ui.image.tag`                 | `''` (defaults to `Chart.appVersion`)                |                                                                    |
-| `ui.image.pullPolicy`          | `Always`                                             |                                                                    |
+| `ui.image.pullPolicy`          | `IfNotPresent`                                       |                                                                    |
 | `ui.port`                      | `8081`                                               | Sidecar nginx-alpine bind port.                                    |
 | `ui.healthPath`                | `/`                                                  | nginx-alpine default 200 surface.                                  |
 | `ui.resources`                 | `10m / 32Mi → 100m / 64Mi`                           | Static file server — tiny.                                         |
-| `imagePullSecrets`             | `[{ name: gitea-registry-secret }]`                  | Homelab convention. Set `[]` on other clusters.                    |
+| `imagePullSecrets`             | `[]`                                                 | None needed for ghcr.io public packages. Add `[{ name: ... }]` for private mirrors. |
 | `serviceAccount.create`        | `true`                                               | Set false to bind a pre-existing SA via `serviceAccount.name`.     |
 | `serviceAccount.name`          | `kagent-workbench`                                   | Empty → defaults to the chart fullname.                            |
 | `serviceAccount.annotations`   | `{}`                                                 |                                                                    |

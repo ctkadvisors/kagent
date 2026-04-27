@@ -30,13 +30,14 @@ replicaCount: 1
 # UI at `/` (proxies to the sidecar) and the JSON/SSE surface at `/api`.
 api:
   image:
-    repository: git.knuteson.io/homelab/kagent-workbench-api
+    repository: ghcr.io/ctkadvisors/kagent-workbench-api
     # Defaults to .Chart.appVersion when empty; override here for dev pins.
     tag: ''
-    # `Always` mirrors the homelab convention for in-cluster Gitea
-    # pulls — the registry tag policy is mutable for `:latest`-style
-    # MVP tags and we want every rollout to refetch.
-    pullPolicy: Always
+    # `IfNotPresent` — ghcr.io publishes immutable per-tag artifacts,
+    # so we only need to pull on first scheduling onto a node. Override
+    # to `Always` if you're pinning to a moving tag like `:latest`
+    # during development.
+    pullPolicy: IfNotPresent
   # Container port the workbench-api listens on. The chart's Service
   # exposes this as port 80; the Ingress / IngressRoute routes / →
   # this port.
@@ -84,9 +85,9 @@ api:
 # coupled.
 ui:
   image:
-    repository: git.knuteson.io/homelab/kagent-workbench-ui
+    repository: ghcr.io/ctkadvisors/kagent-workbench-ui
     tag: ''
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   # Container port the UI sidecar (nginx-alpine) listens on.
   port: 8081
   # Path nginx serves a 200 on for liveness/readiness. nginx-alpine's
@@ -102,13 +103,12 @@ ui:
       memory: '64Mi'
 
 # ---------------------------------------------------------------------
-# Image pull secret(s). Defaults to the homelab convention — the
-# `gitea-registry-secret` already exists in `kagent-system` (created by
-# new_localai/k8s/argocd-apps/kagent-registry-secret.yaml). On other
-# clusters, set to `[]` for no secret, or a list of `{ name: ... }`.
+# Image pull secret(s). Defaults to none — `ghcr.io/ctkadvisors/...`
+# images are published from a public GitHub repo and require no
+# credentials. Override with `[{ name: ... }]` if pulling from a
+# private mirror.
 # ---------------------------------------------------------------------
-imagePullSecrets:
-  - name: gitea-registry-secret
+imagePullSecrets: []
 
 # ---------------------------------------------------------------------
 # ServiceAccount the workbench-api Pod runs as. The cluster-wide
