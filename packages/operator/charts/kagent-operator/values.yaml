@@ -73,17 +73,30 @@ agentPod:
   # built-ins (rss_fetch, extract_text) honor the same allowlist.
   builtinTools:
     # Domain allowlist for `http_get` / `rss_fetch`. DEFAULT-DENY:
-    # an empty list means no outbound HTTP via built-in tools. Each
-    # entry is matched against the request URL's host (case-insensitive
-    # exact match — no glob, no suffix; explicitly enumerate every host).
+    # an empty list means no outbound HTTP via built-in tools.
+    #
+    # Match semantics (case-insensitive; see
+    # packages/agent-pod/src/builtin-tools.ts isHostAllowed +
+    # builtin-tools.test.ts:109):
+    #   1. exact host match: entry `arxiv.org` allows `arxiv.org`.
+    #   2. sub-domain match: entry `arxiv.org` ALSO allows
+    #      `xxx.arxiv.org` and `a.b.arxiv.org`.
+    # No glob, no regex. To restrict to a single host, list its
+    # FQDN with the prefix you actually use; e.g. list
+    # `feeds.example.com` (not `example.com`) if you don't want
+    # `evil.example.com` accepted by extension. The DNS-resolution
+    # SSRF guard still rejects any returned address in private /
+    # loopback / link-local ranges, but the host-allowlist is the
+    # first gate.
+    #
     # The chart joins this list with `,` and forwards as the
     # KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS env var on the operator
-    # Deployment; operator's buildJobSpecOptionsFromEnv re-emits it as
-    # KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS on every spawned Job.
+    # Deployment; operator's buildJobSpecOptionsFromEnv re-emits it
+    # as KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS on every spawned Job.
     #
     # Example for the homelab researcher workload:
     #   httpAllowDomains:
-    #     - 'news.ycombinator.com'
+    #     - 'news.ycombinator.com'   # also allows news.ycombinator.com sub-paths and any sub-domain
     #     - 'hnrss.org'
     #     - 'lobste.rs'
     httpAllowDomains: []

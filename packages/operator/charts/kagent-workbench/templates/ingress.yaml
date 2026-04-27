@@ -8,7 +8,8 @@ Ingress — TWO RENDER PATHS, both gated on `ingress.enabled=true`:
      `ingress.authMiddleware` is BLANK. Use this on clusters where
      auth + TLS are handled outside the chart (cert-manager
      annotations on the Ingress, oauth2-proxy front-door, etc.).
-     Routes the host's `/` to the workbench Service's `api` port (80).
+     Routes the host's `/` to the workbench Service's `api` port
+     (`.Values.service.port`, default 80).
 
   2. TRAEFIK INGRESSROUTE (`traefik.io/v1alpha1 IngressRoute`) when
      `ingress.authMiddleware` is SET. Use this on the homelab K3s
@@ -52,7 +53,7 @@ spec:
       kind: Rule
       services:
         - name: {{ $svcName }}
-          port: 80
+          port: {{ .Values.service.port }}
       middlewares:
         - name: {{ .Values.ingress.authMiddleware }}
           namespace: {{ .Release.Namespace }}
@@ -93,6 +94,6 @@ spec:
               service:
                 name: {{ $svcName }}
                 port:
-                  number: 80
+                  number: {{ .Values.service.port }}
 {{- end }}
 {{- end }}

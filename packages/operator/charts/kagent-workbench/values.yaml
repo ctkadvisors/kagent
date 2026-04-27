@@ -132,14 +132,25 @@ rbac:
   create: true
 
 # ---------------------------------------------------------------------
-# Service. Exposes port 80 → api.port (8080) and port 81 → ui.port
-# (8081). The Ingress / IngressRoute routes everything to port 80
-# (api), which proxies UI requests to port 81 internally.
+# Service. Exposes port `service.port` → api container's `api.port`
+# and port `service.uiPort` → ui sidecar's `ui.port`. Defaults pair
+# 80→8080 (api) and 81→8081 (ui) — the Service-side ports are what
+# any Ingress / IngressRoute / port-forward target connects to. The
+# Ingress in this chart targets the `api` Service port; the api
+# container then proxies non-/api requests to the ui sidecar over
+# loopback (see ui-proxy.ts).
+#
+# Override the Service-side port (e.g. `service.port: 8080`) when
+# something else in the namespace already owns 80; container ports
+# (`api.port` / `ui.port`) are independent and stay 8080 / 8081 by
+# default.
 # ---------------------------------------------------------------------
 service:
   type: ClusterIP
-  port: 8080
-  uiPort: 8081
+  # Cluster-side port for the api container. Targets api.port.
+  port: 80
+  # Cluster-side port for the ui sidecar. Targets ui.port.
+  uiPort: 81
 
 # ---------------------------------------------------------------------
 # Ingress. Two render paths:

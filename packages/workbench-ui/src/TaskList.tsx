@@ -101,6 +101,7 @@ export function TaskList(): React.JSX.Element {
               <th>Name</th>
               <th>Namespace</th>
               <th>Phase</th>
+              <th>Children / Artifacts</th>
               <th>Target</th>
               <th>Created</th>
               <th>Pod</th>
@@ -126,6 +127,7 @@ export function TaskList(): React.JSX.Element {
                       ))
                     : null}
                 </td>
+                <td>{renderGraphCell(t)}</td>
                 <td>
                   {t.targetAgent ?? (t.targetCapability !== undefined ? `cap:${t.targetCapability}` : '—')}
                 </td>
@@ -139,6 +141,67 @@ export function TaskList(): React.JSX.Element {
       )}
     </div>
   );
+}
+
+/**
+ * Render the children + artifacts cell. Reads `childCount` /
+ * `artifactCount` / `aggregatePhase` off the row. Each piece is shown
+ * only when the API surfaces it — `undefined` (no projection yet)
+ * collapses to an em-dash, while `0` is rendered as a muted "0"
+ * (operator observed but found none).
+ */
+function renderGraphCell(t: TaskSummary): React.JSX.Element {
+  const hasChildren = typeof t.childCount === 'number';
+  const hasArtifacts = typeof t.artifactCount === 'number';
+  const hasAggregate = typeof t.aggregatePhase === 'string';
+
+  if (!hasChildren && !hasArtifacts && !hasAggregate) {
+    return <span className={styles.countChipMuted}>—</span>;
+  }
+
+  return (
+    <span>
+      {hasChildren ? (
+        <span
+          className={`${styles.countChip} ${(t.childCount ?? 0) === 0 ? styles.countChipMuted : ''}`}
+          title="Child tasks delegated by this task"
+        >
+          {(t.childCount ?? 0).toString()} child
+        </span>
+      ) : null}
+      {hasArtifacts ? (
+        <span
+          className={`${styles.countChip} ${(t.artifactCount ?? 0) === 0 ? styles.countChipMuted : ''}`}
+          title="Artifacts attached to status.artifacts"
+        >
+          {(t.artifactCount ?? 0).toString()} art
+        </span>
+      ) : null}
+      {hasAggregate && t.aggregatePhase !== undefined ? (
+        <span
+          className={`${styles.aggregatePill} ${aggregateClass(t.aggregatePhase)}`}
+          title="Aggregate phase across child tasks"
+        >
+          {t.aggregatePhase}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function aggregateClass(phase: NonNullable<TaskSummary['aggregatePhase']>): string {
+  switch (phase) {
+    case 'AllComplete':
+      return styles.aggregateAllComplete ?? '';
+    case 'AnyFailed':
+      return styles.aggregateAnyFailed ?? '';
+    case 'PartiallyComplete':
+      return styles.aggregatePartiallyComplete ?? '';
+    case 'Pending':
+    case 'Dispatched':
+    default:
+      return '';
+  }
 }
 
 function phaseClass(phase: TaskSummary['phase']): string {
