@@ -96,14 +96,37 @@ These are scoped tightly to issues the live deploy exposed; do them before Phase
 
 Phase 5 has two tracks: prove the first real workflow and make the engine visible enough to operate. The priority spine lives in [`PLATFORM-PRIORITIES.md`](./PLATFORM-PRIORITIES.md); the visibility surface is [`WORKBENCH.md`](./WORKBENCH.md).
 
-- [ ] Read-only Workbench: list/detail for AgentTasks, Agents, owned Jobs/Pods, failure reasons, detector flags, result content, and trace links.
-- [ ] Wire `Agent.spec.tools` into agent-pod provider construction for the first researcher tool bundle.
-- [ ] Add minimal `ArtifactRef` surface for markdown reports and future screenshots/patches.
-- [ ] E2E test: `kubectl apply -f` an `AgentTask` → Pod spawned → loop runs against jetson1 Ollama → result written back to AgentTask status → trace in Langfuse
-- [ ] Port researcher agent from `homelab-orchestrator` → produces same daily digest on new substrate
-- [ ] A2A demo: researcher delegates to summarizer specialist via NATS, both as separate Pods, both traced
-- [ ] Comparison rig: run existing 5-topic workload through both substrates for one week; compare cost + completion + median latency
-- [ ] Publish comparison numbers in `docs/V0.1-COMPARISON.md`
+**Substrate primitives (overnight 2026-04-27 fan-out):**
+
+- [x] `@kagent/dto` package — read-model DTOs (`TaskSummary`, `TaskDetail`, `AgentSummary`, `PodFailureSummary`, `TraceLink`, `ArtifactSummary`) + pure mappers. Underpins every visibility client (Workbench, CLI, webhooks).
+- [x] `Agent.spec.tools` wired into the agent-pod executor (P2). Built-in `http_get` / `rss_fetch` / `extract_text` with SSRF guard + domain allowlist via `KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS`. Unknown tool names fail FAST at boot.
+- [x] `ArtifactRef` type + `AgentTask.status.artifacts` schema (P3). Status-reference-only — writer slice is the next P3 step.
+- [x] Task-graph helpers (`buildChildTaskManifest`, `aggregateChildren`, `cycleCheck`, parent/child labels) + status-projection schema (P4). Operator wire-up (re-reconcile parent on child status change) is the next P4 step.
+- [x] Workbench API + UI blueprint (`docs/WORKBENCH.md` §5; full file-by-file scaffold ready in the WS2 design output for next-session materialization).
+- [x] Workbench deployment plan in `new_localai` — `feat/kagent-workbench-deploy` branch with RBAC + auth integration recipe; manifest staged with DO-NOT-APPLY banner pending chart shipping.
+
+**Phase 5 implementation slate (in PLATFORM-PRIORITIES.md priority order):**
+
+- [ ] Materialize the Workbench API + UI from the WS2 blueprint (`packages/workbench-api`, `packages/workbench-ui`); first view is `TaskList` over `/api/tasks`.
+- [ ] Ship the Workbench Helm chart at `packages/operator/charts/kagent-workbench/` referenced by `new_localai/k8s/argocd-apps/kagent-workbench-app.yaml`.
+- [ ] Build + push `kagent-workbench-{api,ui}` images via the Gitea Actions workflow.
+- [ ] Wire the operator's reconcile to USE the task-graph helpers (P4 wire-up): on child status change, look up parent and patch parent.status.children + aggregatePhase.
+- [ ] Implement the artifact writer (P3 wire-up): mount the `kagent-artifacts` PVC into agent-pods, expose a `write_artifact` built-in tool, populate `status.artifacts`.
+- [ ] Port researcher agent from `homelab-orchestrator` → produces same daily digest on new substrate.
+- [ ] A2A demo: researcher delegates to summarizer specialist via task-graph (parent + child AgentTasks), both as separate Pods, both traced, parent waits via re-reconcile.
+- [ ] Comparison rig: run existing 5-topic workload through both substrates for one week; compare cost + completion + median latency.
+- [ ] Publish comparison numbers in `docs/V0.1-COMPARISON.md`.
+
+**Open questions surfaced by the substrate slice (carry forward to next session):**
+
+- **Tool wiring:** Should `Agent.spec.tools` grow a `provider` field so non-built-in tools route differently in P6? Currently just a `string[]` of names. (WS3 Q1)
+- **Tools allowlist plumbing:** Project `KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS` from a cluster-level ConfigMap, or keep Helm-values-managed? (WS3 Q2)
+- **HTTP body cap:** Hard 1MB with `truncated: true` flag, or refuse over-cap responses outright so the model never sees a half-page? (WS3 Q5)
+- **ArtifactRef type duplication:** Should agent-pod adopt a shared `@kagent/contracts` package now, or keep the local copy until the writer slice lands? (WS4 Q1)
+- **Inline media-type allowlist:** `inlineSafe` accepts `text/{plain,markdown,x-diff,x-patch}` + `application/json`. Add `text/html` / `application/yaml` / `text/csv`, or wait for the writer? (WS4 Q2)
+- **Task-graph cancellation:** `cycleCheck` is fail-open on missing parents. Move to fail-closed for stale chains? Add `Cancelled` to the phase enum? (WS5 Q2/Q3)
+- **DTO consolidation:** `@kagent/dto` copied the failure-detector + CRD shapes from `@kagent/operator` (which has no public API). Promote to a shared `@kagent/crds` package now or after Workbench lands? (WS1)
+- **Workbench auth:** Tailscale-only on `kagent.homelab` vs Traefik basicAuth + SealedSecret on `kagent.knuteson.io`? Pick before the chart ships. (WS6)
 
 **Tag:** `v0.1.0-phase5` — **v0.1 ships when this tag lands and the comparison-rig numbers do not regress against `homelab-orchestrator`'s baseline.**
 
