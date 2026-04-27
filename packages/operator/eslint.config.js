@@ -53,6 +53,15 @@ export default tseslint.config(
           ' */',
         ],
       ],
+      // Standard `_`-prefix convention for intentionally-unused params.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
     },
   },
   prettierConfig,
