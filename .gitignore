@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+bun.lockb
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Helm / k8s scratch
+charts/*.tgz
+*.values.local.yaml
+
+# Operator scratch
+.kube/
+*.kubeconfig
