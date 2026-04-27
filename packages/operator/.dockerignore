@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+**/node_modules
+**/dist
+**/coverage
+**/.tsbuildinfo
+**/.git
+**/.gitignore
+**/*.test.ts
+**/__fixtures__
+**/.vitest-cache
+**/eslint.config.js
+**/vitest.config.ts
+**/tsconfig.json
+**/tsconfig.eslint.json
+docs/
+README.md
+CLAUDE.md
+LICENSE
+.github/
+.changeset/
+.claude/
+
+# The operator image doesn't need the agent-pod runtime baked in —
+# the operator just templates it into Job specs.
+packages/agent-pod/
