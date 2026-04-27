@@ -68,6 +68,37 @@ agentPod:
   # Comma-separated headers (e.g., 'authorization=Bearer%20<pk>').
   otlpHeaders: ''
 
+  # Artifact storage — Phase 5 / Platform-Priorities P3. When enabled,
+  # the chart provisions a single shared RWX PVC the operator mounts
+  # into every agent pod at `mountPath`. The in-pod `write_artifact`
+  # tool persists outputs under `<mountPath>/<task-uid>/<name>`; the
+  # operator threads the resulting ArtifactRefs into
+  # `AgentTask.status.artifacts`.
+  #
+  # Backed by the homelab's existing SMB-fronted `ai-models-storage`
+  # StorageClass per docs/ARTIFACTS.md §3 (RWX, Retain). Swap to MinIO
+  # in v0.2 by changing the writer in @kagent/agent-pod; the URI scheme
+  # is the swap point. Per-task subdir isolation is sufficient for v0.1
+  # (shared PVC across all Agents in the namespace) — escalate to
+  # per-Agent PVCs only if mixed-Agent contention shows up under load.
+  artifactStorage:
+    enabled: true
+    # PVC claim name (referenced from the spawned Job's volume mount).
+    pvcName: 'kagent-artifacts'
+    # Container path the PVC mounts at inside every agent pod.
+    mountPath: '/var/kagent/artifacts'
+    # PVC size. SMB-backed, so this is the upper bound the StorageClass
+    # honors at provisioning time; the underlying SMB share's free
+    # space is the real cap.
+    size: '10Gi'
+    # StorageClass to use. Defaults to the homelab's RWX SMB class;
+    # set '' to use the cluster default StorageClass.
+    storageClassName: 'ai-models-storage'
+    # Access mode. RWX is required so the PVC can be mounted into many
+    # concurrent agent pods; ReadWriteOnce would serialize task
+    # execution.
+    accessMode: 'ReadWriteMany'
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate
