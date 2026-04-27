@@ -25,8 +25,10 @@ import { NatsDispatcher } from './nats-dispatcher.js';
 import {
   markAgentTaskFailedFromExternal,
   reconcileAgentTask,
+  reconcileParentFromChildEvent,
   type ReconcileDeps,
 } from './reconcile.js';
+import { parentTaskRefFromChild } from './task-graph.js';
 import type { AgentTaskHandler } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
 
@@ -103,6 +105,22 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
  * because the Job is OwnerRef'd to the AgentTask, so K8s GC removes
  * the Job (and its Pod) automatically when the AgentTask disappears.
  *
+ * Two-pass routing on add/update:
+ *
+ *   1. ALWAYS run `reconcileAgentTask(task)` — the existing dispatch
+ *      path. Idempotent for terminal/Dispatched phases.
+ *   2. WHEN the event resource carries the `parent-task-name` label
+ *      (i.e. it's a child AgentTask), ALSO run
+ *      `reconcileParentFromChildEvent(parentRef)` so the parent's
+ *      `status.children` / `status.aggregatePhase` projection stays
+ *      live. This is the Workstream 5 / Phase 5 wire-up — see
+ *      `docs/TASK-GRAPH.md` §3 for the rationale (operator-driven
+ *      parent re-reconcile, no in-pod NATS subscription in v0.1).
+ *
+ * The two paths are independent: failures in one are logged but never
+ * propagate to the other. This keeps a misbehaving child-aggregation
+ * path from blocking dispatch (and vice versa).
+ *
  * Exported for tests and for any embedded harness that wants to drive
  * the operator without booting an informer.
  */
@@ -111,10 +129,12 @@ export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
     async onAdd(task) {
       const result = await reconcileAgentTask(task, deps);
       logResult('add', task, result);
+      await maybeReconcileParent('add', task, deps);
     },
     async onUpdate(task) {
       const result = await reconcileAgentTask(task, deps);
       logResult('update', task, result);
+      await maybeReconcileParent('update', task, deps);
     },
     onDelete(task) {
       console.log(
@@ -125,6 +145,46 @@ export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
       console.error('[kagent-operator] watch error:', err);
     },
   };
+}
+
+/**
+ * If the event resource carries the parent-task labels written by
+ * `buildChildTaskManifest`, fire `reconcileParentFromChildEvent` for
+ * the parent. Logs failures but never re-throws — the dispatch path
+ * for THIS task already completed; we don't want a parent-aggregation
+ * hiccup to surface as a watch error and trigger informer restart.
+ */
+async function maybeReconcileParent(
+  verb: 'add' | 'update',
+  task: import('./crds/index.js').AgentTask,
+  deps: ReconcileDeps,
+): Promise<void> {
+  const parentRef = parentTaskRefFromChild(task);
+  if (parentRef === null) return;
+  try {
+    const action = await reconcileParentFromChildEvent(
+      { namespace: parentRef.namespace, name: parentRef.name },
+      { customApi: deps.customApi },
+    );
+    const childId = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
+    const parentId = `${parentRef.namespace}/${parentRef.name}`;
+    if (action.kind === 'updated') {
+      console.log(
+        `[kagent-operator] ${verb} ${childId} → re-aggregated parent ${parentId} ` +
+          `(aggregatePhase=${action.aggregatePhase}, children=${action.childCount})`,
+      );
+    } else {
+      console.log(
+        `[kagent-operator] ${verb} ${childId} → parent re-aggregate skipped (${action.reason})`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[kagent-operator] ${verb} ${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'} ` +
+        `parent re-aggregate failed for ${parentRef.namespace}/${parentRef.name}:`,
+      err,
+    );
+  }
 }
 
 function logResult(
