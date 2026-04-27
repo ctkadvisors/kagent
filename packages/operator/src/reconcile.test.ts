@@ -197,6 +197,7 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
           },
         },
       }),
+      expect.objectContaining({ middleware: expect.any(Array) }),
     );
   });
 });
@@ -241,6 +242,7 @@ describe('reconcileAgentTask — failure paths', () => {
       expect.objectContaining({
         body: { status: expect.objectContaining({ phase: 'Failed' }) },
       }),
+      expect.objectContaining({ middleware: expect.any(Array) }),
     );
   });
 

@@ -13,10 +13,21 @@
  * token (RBAC granted by the operator's Helm chart).
  */
 
-import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
+import { CustomObjectsApi, KubeConfig, setHeaderOptions } from '@kubernetes/client-node';
 
 import type { PodConfig } from './env.js';
 import type { RunResult } from './runner.js';
+
+/**
+ * Per-call options forcing the Content-Type to merge-patch. The
+ * generated `patchNamespacedCustomObjectStatus` defaults to
+ * `application/json-patch+json` (RFC 6902, expects an array of ops);
+ * we send merge bodies (`{ status: { phase, ... } }`) which need
+ * RFC 7396 — apiserver rejects with
+ * `cannot unmarshal object into Go value of type []handlers.jsonPatchOp`
+ * otherwise.
+ */
+const mergePatchOptions = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 const API_GROUP = 'kagent.knuteson.io';
 const API_VERSION = 'v1alpha1';
@@ -66,14 +77,17 @@ export async function writeStatus(
   patch: StatusPatch,
   api: CustomObjectsApi,
 ): Promise<void> {
-  await api.patchNamespacedCustomObjectStatus({
-    group: API_GROUP,
-    version: API_VERSION,
-    namespace: config.taskNamespace,
-    plural: PLURAL,
-    name: config.taskName,
-    body: { status: patch },
-  });
+  await api.patchNamespacedCustomObjectStatus(
+    {
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace: config.taskNamespace,
+      plural: PLURAL,
+      name: config.taskName,
+      body: { status: patch },
+    },
+    mergePatchOptions,
+  );
 }
 
 /** Convenience for callers — load default kubeconfig + build the API client. */

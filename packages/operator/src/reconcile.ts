@@ -33,6 +33,7 @@ import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
 import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
+import { mergePatchOptions } from './k8s.js';
 
 export interface ReconcileDeps {
   readonly customApi: CustomObjectsApi;
@@ -235,12 +236,15 @@ async function patchStatus(
   if (typeof name !== 'string' || name.length === 0) {
     throw new Error('AgentTask is missing metadata.name');
   }
-  await customApi.patchNamespacedCustomObjectStatus({
-    group: API_GROUP,
-    version: API_VERSION,
-    namespace,
-    plural: 'agenttasks',
-    name,
-    body: { status: patch },
-  });
+  await customApi.patchNamespacedCustomObjectStatus(
+    {
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace,
+      plural: 'agenttasks',
+      name,
+      body: { status: patch },
+    },
+    mergePatchOptions,
+  );
 }
