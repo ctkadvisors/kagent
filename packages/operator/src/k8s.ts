@@ -10,7 +10,7 @@
  * real KubeConfig.
  */
 
-import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
+import { BatchV1Api, CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
 
 /**
  * Load KubeConfig from the standard places — in-cluster service-account
@@ -26,4 +26,9 @@ export function loadKubeConfig(): KubeConfig {
 /** Build a typed `CustomObjectsApi` from a KubeConfig. */
 export function makeCustomObjectsApi(kc: KubeConfig): CustomObjectsApi {
   return kc.makeApiClient(CustomObjectsApi);
+}
+
+/** Build a typed `BatchV1Api` from a KubeConfig — used for Job creation. */
+export function makeBatchApi(kc: KubeConfig): BatchV1Api {
+  return kc.makeApiClient(BatchV1Api);
 }

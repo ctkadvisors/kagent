@@ -5,42 +5,43 @@
 
 /**
  * Operator entrypoint — boots a KubeConfig, opens an informer on
- * AgentTask, and routes events to the (Phase 2 C4) reconcile loop.
- * In Phase 2 C3 the handler is a logging stub; C4 swaps it for the
- * real reconcile body.
+ * AgentTask, and routes events into the reconcile loop.
  *
  * Run via `pnpm --filter @kagent/operator start` (uses tsx). In-cluster
  * boot loads via service-account mount; out-of-cluster falls back to
  * KUBECONFIG / ~/.kube/config.
  */
 
-import { StubDispatcher, type Dispatcher } from './dispatcher.js';
+import { StubDispatcher } from './dispatcher.js';
+import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
+import { reconcileAgentTask, type ReconcileDeps } from './reconcile.js';
 import type { AgentTaskHandler } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
-import { loadKubeConfig, makeCustomObjectsApi } from './k8s.js';
 
 /**
- * Build the handler given a Dispatcher. Phase 2 C3 logs only; C4
- * inserts the reconcile body. Exported so tests can drive it without
- * standing up a real informer.
+ * Build the watch handler given a set of reconcile dependencies. The
+ * informer fires onAdd/onUpdate/onDelete; we route add+update through
+ * reconcile (which is idempotent — re-reconciling a phase=Dispatched
+ * task is a no-op short-circuit). Delete is a logging-only path
+ * because the Job is OwnerRef'd to the AgentTask, so K8s GC removes
+ * the Job (and its Pod) automatically when the AgentTask disappears.
+ *
+ * Exported for tests and for any embedded harness that wants to drive
+ * the operator without booting an informer.
  */
-export function buildHandler(
-  _dispatcher: Dispatcher /* will be threaded through to reconcile in C4 */,
-): AgentTaskHandler {
+export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
   return {
-    onAdd(task) {
-      console.log(
-        `[kagent-operator] add AgentTask ${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`,
-      );
+    async onAdd(task) {
+      const result = await reconcileAgentTask(task, deps);
+      logResult('add', task, result);
     },
-    onUpdate(task) {
-      console.log(
-        `[kagent-operator] update AgentTask ${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'} phase=${task.status?.phase ?? 'Pending'}`,
-      );
+    async onUpdate(task) {
+      const result = await reconcileAgentTask(task, deps);
+      logResult('update', task, result);
     },
     onDelete(task) {
       console.log(
-        `[kagent-operator] delete AgentTask ${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`,
+        `[kagent-operator] delete AgentTask ${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'} (Job GC by ownerRef)`,
       );
     },
     onError(err) {
@@ -49,13 +50,26 @@ export function buildHandler(
   };
 }
 
+function logResult(
+  verb: 'add' | 'update',
+  task: { metadata: { namespace?: string; name?: string } },
+  result: { action: string; reason?: string; jobName?: string },
+): void {
+  const id = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
+  const tail = result.jobName !== undefined ? ` job=${result.jobName}` : '';
+  const why = result.reason !== undefined ? ` (${result.reason})` : '';
+  console.log(`[kagent-operator] ${verb} ${id} → ${result.action}${tail}${why}`);
+}
+
 async function main(): Promise<void> {
   const kc = loadKubeConfig();
-  const api = makeCustomObjectsApi(kc);
-  const dispatcher: Dispatcher = new StubDispatcher();
+  const customApi = makeCustomObjectsApi(kc);
+  const batchApi = makeBatchApi(kc);
+  const dispatcher = new StubDispatcher();
 
-  const handler = buildHandler(dispatcher);
-  const informer = createAgentTaskInformer(kc, api, handler);
+  const deps: ReconcileDeps = { customApi, batchApi, dispatcher };
+  const handler = buildHandler(deps);
+  const informer = createAgentTaskInformer(kc, customApi, handler);
 
   // Graceful shutdown — stop the informer cleanly on SIGTERM/SIGINT
   // so K8s can drain the operator pod without orphaning the watch.
