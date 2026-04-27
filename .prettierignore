@@ -5,6 +5,11 @@ pnpm-lock.yaml
 *.tsbuildinfo
 node_modules/
 
+# Subagent worktrees live here — they're git-worktree branches, not part
+# of the main worktree's checked-in tree. Prettier walks the filesystem
+# regardless and would otherwise lint stale or experimental copies.
+.claude/
+
 # Phase 0 docs are locked spec — exempt from prettier churn.
 # Re-enable selectively if a doc is intentionally reopened.
 docs/

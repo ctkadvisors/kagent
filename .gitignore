@@ -38,3 +38,6 @@ charts/*.tgz
 # Operator scratch
 .kube/
 *.kubeconfig
+
+# Claude Code subagent worktrees + per-session state
+.claude/
