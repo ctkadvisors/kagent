@@ -65,5 +65,8 @@ export type {
   AgentTaskPhase,
   AgentTaskSpec,
   AgentTaskStatus,
+  AggregatePhase,
+  ArtifactRef,
+  ChildRef,
 } from './crds.js';
 export { API_GROUP, API_GROUP_VERSION, API_VERSION } from './crds.js';

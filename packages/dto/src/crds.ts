@@ -69,6 +69,47 @@ export interface AgentTaskSpec {
   readonly expectedTools?: readonly string[];
 }
 
+/**
+ * Substrate-defined artifact handle. Type-only mirror of
+ * `packages/operator/src/crds/artifact-ref.ts`'s `ArtifactRef` (the
+ * runtime helpers — pvcUri, parseArtifactUri, inlineSafe — stay in
+ * the operator package; the DTO layer only ever reads refs back).
+ *
+ * See docs/ARTIFACTS.md for the full type rationale. Mirrored here
+ * so `@kagent/dto` stays a leaf workspace dep — once a shared
+ * `@kagent/crds` package exists, both copies fold behind it.
+ */
+export interface ArtifactRef {
+  readonly uri: string;
+  readonly mediaType?: string;
+  readonly sizeBytes?: number;
+  readonly checksum?: string;
+  readonly name?: string;
+  readonly producedAt?: string;
+}
+
+/**
+ * Parent/child task-graph projection. Operator-owned state populated
+ * by `reconcileParentFromChildEvent`; agent-pods never write these.
+ * Mirror of the `ChildRef` shape in
+ * `packages/operator/src/crds/types.ts`.
+ */
+export interface ChildRef {
+  readonly name: string;
+  readonly namespace: string;
+  readonly uid?: string;
+  readonly phase?: AgentTaskPhase;
+  readonly completedAt?: string;
+  readonly error?: string;
+}
+
+export type AggregatePhase =
+  | 'Pending'
+  | 'Dispatched'
+  | 'PartiallyComplete'
+  | 'AllComplete'
+  | 'AnyFailed';
+
 export interface AgentTaskStatus {
   readonly phase?: AgentTaskPhase;
   readonly result?: unknown;
@@ -79,6 +120,33 @@ export interface AgentTaskStatus {
   readonly structuralVerdict?: {
     readonly suspicious: readonly string[];
   };
+
+  /**
+   * Artifacts produced by this task. Populated by the agent-pod's
+   * end-of-run collation step (see packages/agent-pod/src/runner.ts).
+   * Empty/undefined = no artifacts. Bytes live behind `uri` in the
+   * configured backend; etcd carries metadata only.
+   */
+  readonly artifacts?: readonly ArtifactRef[];
+
+  /* ---- Phase 5 / Workstream 5 — parent/child task-graph projection.
+   * Operator-owned. See packages/operator/src/crds/types.ts and
+   * docs/TASK-GRAPH.md §4 for the aggregation algorithm. */
+
+  /** Children spawned by this task as a parent (delegation chain). */
+  readonly children?: readonly ChildRef[];
+
+  /** Aggregate phase across `children` — distinct from this task's own `phase`. */
+  readonly aggregatePhase?: AggregatePhase;
+
+  /** Children currently in `phase=Completed`. */
+  readonly successCount?: number;
+
+  /** Children currently in `phase=Failed`. */
+  readonly failureCount?: number;
+
+  /** Children that have not reached a terminal phase yet. */
+  readonly inFlightCount?: number;
 }
 
 export interface AgentTask {

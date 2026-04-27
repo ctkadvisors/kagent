@@ -209,6 +209,40 @@ describe('taskSummary', () => {
     expect(Object.hasOwn(s, 'error')).toBe(false);
     expect(Object.hasOwn(s, 'suspicious')).toBe(false);
     expect(Object.hasOwn(s, 'podName')).toBe(false);
+    expect(Object.hasOwn(s, 'artifactCount')).toBe(false);
+    expect(Object.hasOwn(s, 'childCount')).toBe(false);
+    expect(Object.hasOwn(s, 'aggregatePhase')).toBe(false);
+  });
+
+  it('counts artifacts + children + surfaces aggregatePhase from status', () => {
+    const t = makeTask({
+      status: {
+        phase: 'Completed',
+        artifacts: [
+          { uri: 'pvc://kagent-artifacts/9b1a8c4e-fixture/digest.md' },
+          {
+            uri: 'pvc://kagent-artifacts/9b1a8c4e-fixture/sources.json',
+            mediaType: 'application/json',
+          },
+        ],
+        children: [
+          { name: 'child-a', namespace: 'kagent-system', phase: 'Completed' },
+          { name: 'child-b', namespace: 'kagent-system', phase: 'Failed' },
+        ],
+        aggregatePhase: 'AnyFailed',
+      },
+    });
+    const s = taskSummary(t);
+    expect(s.artifactCount).toBe(2);
+    expect(s.childCount).toBe(2);
+    expect(s.aggregatePhase).toBe('AnyFailed');
+  });
+
+  it('artifactCount = 0 when explicitly empty (distinct from undefined)', () => {
+    const t = makeTask({ status: { phase: 'Completed', artifacts: [] } });
+    const s = taskSummary(t);
+    expect(s.artifactCount).toBe(0);
+    expect(Object.hasOwn(s, 'childCount')).toBe(false);
   });
 });
 
@@ -263,6 +297,60 @@ describe('taskDetail', () => {
     });
     expect(d.eventsSummary).toHaveLength(1);
     expect(d.eventsSummary[0]?.reason).toBe('BackOff');
+  });
+
+  it('projects status.artifacts into ArtifactSummary[] (drops checksum, threads producedByTask)', () => {
+    const t = makeTask({
+      uid: '9b1a8c4e-fixture',
+      status: {
+        phase: 'Completed',
+        artifacts: [
+          {
+            uri: 'pvc://kagent-artifacts/9b1a8c4e-fixture/digest.md',
+            mediaType: 'text/markdown',
+            sizeBytes: 1234,
+            checksum: 'sha256:deadbeef',
+            name: 'digest.md',
+            producedAt: '2026-04-26T12:05:00Z',
+          },
+        ],
+      },
+    });
+    const d = taskDetail(t);
+    expect(d.artifacts).toHaveLength(1);
+    expect(d.artifacts?.[0]).toEqual({
+      uri: 'pvc://kagent-artifacts/9b1a8c4e-fixture/digest.md',
+      mediaType: 'text/markdown',
+      sizeBytes: 1234,
+      name: 'digest.md',
+      producedAt: '2026-04-26T12:05:00Z',
+      producedByTask: '9b1a8c4e-fixture',
+    });
+    // Checksum is intentionally not part of the UI surface.
+    expect(d.artifacts?.[0]).not.toHaveProperty('checksum');
+  });
+
+  it('forwards children + counts from the task-graph projection', () => {
+    const t = makeTask({
+      status: {
+        phase: 'Dispatched',
+        children: [
+          { name: 'child-a', namespace: 'kagent-system', phase: 'Completed' },
+          { name: 'child-b', namespace: 'kagent-system', phase: 'Failed' },
+          { name: 'child-c', namespace: 'kagent-system', phase: 'Dispatched' },
+        ],
+        aggregatePhase: 'PartiallyComplete',
+        successCount: 1,
+        failureCount: 1,
+        inFlightCount: 1,
+      },
+    });
+    const d = taskDetail(t);
+    expect(d.children).toHaveLength(3);
+    expect(d.aggregatePhase).toBe('PartiallyComplete');
+    expect(d.successCount).toBe(1);
+    expect(d.failureCount).toBe(1);
+    expect(d.inFlightCount).toBe(1);
   });
 });
 

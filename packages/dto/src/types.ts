@@ -18,7 +18,7 @@
 
 import type { V1ContainerStatus } from '@kubernetes/client-node';
 
-import type { AgentTaskPhase } from './crds.js';
+import type { AgentTaskPhase, AggregatePhase, ChildRef } from './crds.js';
 import type { FailureVerdict } from './failure.js';
 
 /* =====================================================================
@@ -83,6 +83,31 @@ export interface TaskSummary {
    * etc., per HARNESS-LESSONS §6). Undefined = no verdict written yet.
    */
   readonly suspicious?: readonly string[];
+
+  /**
+   * Number of artifacts produced by this task — derived from
+   * `status.artifacts.length`. Surfaced on the list row so the
+   * Workbench can render an "n artifacts" affordance without the
+   * detail fetch. Undefined = task hasn't reported artifacts yet
+   * (distinct from 0 = explicitly produced none).
+   */
+  readonly artifactCount?: number;
+
+  /**
+   * Number of children this task has delegated to — derived from
+   * `status.children.length`. Surfaced on the list row so the
+   * Workbench can show a "child task badge" (and pivot into the task
+   * graph view) without fetching detail. Undefined = no projection
+   * written yet (operator hasn't observed any children).
+   */
+  readonly childCount?: number;
+
+  /**
+   * Aggregate phase across this task's children, distinct from `phase`
+   * (which describes the parent's own pod-side work). Mirror of
+   * `status.aggregatePhase` from the operator's task-graph projection.
+   */
+  readonly aggregatePhase?: AggregatePhase;
 }
 
 /* =====================================================================
@@ -138,6 +163,27 @@ export interface TaskDetail extends TaskSummary {
    * change is purely additive on the mapper side.
    */
   readonly eventsSummary: readonly EventSummary[];
+
+  /**
+   * Full artifact projection for the detail view. Mirrors
+   * `status.artifacts` 1:1 (uri/mediaType/sizeBytes/name/producedAt
+   * — checksum dropped, the UI doesn't render it). Empty array when
+   * the task produced none; undefined when no projection has been
+   * written yet (distinct cases for the UI).
+   */
+  readonly artifacts?: readonly ArtifactSummary[];
+
+  /** Children spawned by this task — operator-owned task-graph projection. */
+  readonly children?: readonly ChildRef[];
+
+  /** Children currently in `phase=Completed`. Mirror of `status.successCount`. */
+  readonly successCount?: number;
+
+  /** Children currently in `phase=Failed`. Mirror of `status.failureCount`. */
+  readonly failureCount?: number;
+
+  /** Children that have not reached a terminal phase yet. */
+  readonly inFlightCount?: number;
 }
 
 /**
