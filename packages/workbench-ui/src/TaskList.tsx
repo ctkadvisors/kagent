@@ -1,0 +1,164 @@
+/**
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ */
+
+/**
+ * TaskList — primary read-only Workbench view.
+ *
+ * Lifecycle:
+ *
+ *   1. On mount: fetch /api/tasks once.
+ *   2. Subscribe to /api/stream (SSE).
+ *   3. On every `cache` event with kind=task, refetch the list (cheap;
+ *      the API serves from in-memory cache and lists are small in v0.1).
+ *      A v0.2 optimization is to patch the row in-place using the event's
+ *      `key`, but the dumb refetch is correct and easy to reason about.
+ *   4. Heartbeats keep `lastEventAt` fresh — the connection chip turns
+ *      "stale" if no event arrives for 60s.
+ *
+ * No router yet; the design doc defers Task Detail / Agent Catalog
+ * views to follow-up commits. The TaskList is the milestone-1 deliverable
+ * that proves the SSE refresh path works end-to-end.
+ */
+
+import { useEffect, useRef, useState } from 'react';
+
+import { fetchTasks, subscribeCacheEvents } from './api.js';
+import type { TaskSummary } from './types.js';
+import styles from './TaskList.module.css';
+
+const STALE_THRESHOLD_MS = 60_000;
+
+export function TaskList(): React.JSX.Element {
+  const [tasks, setTasks] = useState<readonly TaskSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [lastEventAt, setLastEventAt] = useState<number>(Date.now());
+  const [now, setNow] = useState<number>(Date.now());
+  const refetchAbortRef = useRef<AbortController | null>(null);
+
+  const refetch = (): void => {
+    refetchAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    refetchAbortRef.current = ctrl;
+    fetchTasks(ctrl.signal)
+      .then((items) => {
+        setTasks(items);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  useEffect(() => {
+    refetch();
+    const unsubscribe = subscribeCacheEvents(
+      (ev) => {
+        setLastEventAt(Date.now());
+        if (ev.kind === 'task') {
+          refetch();
+        }
+      },
+      () => {
+        setLastEventAt(Date.now());
+      },
+    );
+    const tick = setInterval(() => {
+      setNow(Date.now());
+    }, 5_000);
+    return () => {
+      unsubscribe();
+      clearInterval(tick);
+      refetchAbortRef.current?.abort();
+    };
+    // Effect intentionally runs once on mount — refetch is captured by
+    // ref-based identity above, so adding it to deps would just churn.
+  }, []);
+
+  const isStale = now - lastEventAt > STALE_THRESHOLD_MS;
+
+  return (
+    <div className={styles.wrapper}>
+      <div className={styles.header}>
+        <h1 className={styles.title}>Tasks</h1>
+        <span
+          className={`${styles.connection} ${isStale ? styles.connectionStale : styles.connectionLive}`}
+        >
+          {isStale ? `stream stale (${formatAgo(now - lastEventAt)})` : 'stream live'}
+        </span>
+      </div>
+
+      {error !== null ? <div className={styles.error}>error: {error}</div> : null}
+
+      {tasks.length === 0 && error === null ? (
+        <div className={styles.empty}>No tasks observed yet.</div>
+      ) : (
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Namespace</th>
+              <th>Phase</th>
+              <th>Target</th>
+              <th>Created</th>
+              <th>Pod</th>
+              <th>Failure</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((t) => (
+              <tr key={t.uid !== '' ? t.uid : `${t.namespace}/${t.name}`}>
+                <td>{t.name}</td>
+                <td>{t.namespace}</td>
+                <td>
+                  {t.phase !== undefined ? (
+                    <span className={`${styles.phasePill} ${phaseClass(t.phase)}`}>{t.phase}</span>
+                  ) : (
+                    <span className={styles.phasePill}>—</span>
+                  )}
+                  {t.suspicious !== undefined && t.suspicious.length > 0
+                    ? t.suspicious.map((tag) => (
+                        <span key={tag} className={styles.suspicious}>
+                          {tag}
+                        </span>
+                      ))
+                    : null}
+                </td>
+                <td>
+                  {t.targetAgent ?? (t.targetCapability !== undefined ? `cap:${t.targetCapability}` : '—')}
+                </td>
+                <td>{t.createdAt ?? '—'}</td>
+                <td>{t.podName ?? '—'}</td>
+                <td>{t.error ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function phaseClass(phase: TaskSummary['phase']): string {
+  switch (phase) {
+    case 'Pending':
+      return styles.phasePending ?? '';
+    case 'Dispatched':
+      return styles.phaseDispatched ?? '';
+    case 'Completed':
+      return styles.phaseCompleted ?? '';
+    case 'Failed':
+      return styles.phaseFailed ?? '';
+    default:
+      return '';
+  }
+}
+
+function formatAgo(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds.toString()}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes.toString()}m ago`;
+}

@@ -1,0 +1,113 @@
+.wrapper {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  padding: 1.5rem;
+  color: #1a202c;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.connection {
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.connectionLive {
+  color: #047857;
+}
+
+.connectionStale {
+  color: #b45309;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.table th {
+  background: #f7fafc;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4a5568;
+}
+
+.phasePill {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #edf2f7;
+  color: #4a5568;
+}
+
+.phasePending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.phaseDispatched {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.phaseCompleted {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.phaseFailed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.suspicious {
+  display: inline-block;
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.empty {
+  padding: 2rem;
+  text-align: center;
+  color: #718096;
+}
+
+.error {
+  padding: 1rem;
+  background: #fee2e2;
+  color: #991b1b;
+  border-radius: 0.375rem;
+  margin-bottom: 1rem;
+}
