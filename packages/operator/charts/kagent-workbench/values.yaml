@@ -1,0 +1,197 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# kagent-workbench default values.
+#
+# The workbench is a read-only operator console over the kagent control
+# plane (Agents, AgentTasks, AgentCapabilities + the Jobs/Pods the
+# operator owns). It runs in the same namespace as the operator
+# (`kagent-system` in the homelab) and shares the operator's pull
+# secret. See:
+#
+#   - kagent/docs/WORKBENCH.md (especially §6 Deployment)
+#   - new_localai/docs/kagent-workbench-rbac.md (RBAC + auth plan)
+#   - new_localai/k8s/argocd-apps/kagent-workbench-app.yaml
+#     (the ArgoCD Application that consumes this chart)
+#
+# Override at install time with `--set` or `-f values.local.yaml`.
+
+# Number of replicas for the workbench Deployment. Single-replica is
+# fine for MVP — the workbench holds only K8s-watch state, which it
+# rebuilds from the API server on restart. Scale to 2+ once you care
+# about brief restart-window blips during rollouts.
+replicaCount: 1
+
+# ---------------------------------------------------------------------
+# Workbench API (thin Kubernetes-watch + DTO facade)
+# ---------------------------------------------------------------------
+# Container 1 in the Deployment. Talks to the Kubernetes API server
+# using the chart-managed ServiceAccount (read-only RBAC). Serves the
+# UI at `/` (proxies to the sidecar) and the JSON/SSE surface at `/api`.
+api:
+  image:
+    repository: git.knuteson.io/homelab/kagent-workbench-api
+    # Defaults to .Chart.appVersion when empty; override here for dev pins.
+    tag: ''
+    # `Always` mirrors the homelab convention for in-cluster Gitea
+    # pulls — the registry tag policy is mutable for `:latest`-style
+    # MVP tags and we want every rollout to refetch.
+    pullPolicy: Always
+  # Container port the workbench-api listens on. The chart's Service
+  # exposes this as port 80; the Ingress / IngressRoute routes / →
+  # this port.
+  port: 8080
+  # Liveness/readiness probe path served by workbench-api. The
+  # workbench-api package owns this contract — the chart treats it as
+  # an interface promise from the API package.
+  healthPath: '/api/healthz'
+  # Optional — when set, the workbench-api will surface "open trace"
+  # links pointing at this Langfuse base URL. Typical homelab value:
+  # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
+  langfuseBaseUrl: ''
+  # Optional — set to 'true' to require the workbench-api to enforce
+  # auth itself (e.g. session cookies). Default unset → the API trusts
+  # the in-cluster network boundary + whatever sits in front of the
+  # Ingress (Tailscale, Traefik basicAuth middleware, future SSO).
+  authRequired: ''
+  # Per-container resource budget. Conservative MVP defaults — bump
+  # when you start watching many AgentTasks (the in-memory cache scales
+  # with the count of objects under watch).
+  resources:
+    requests:
+      cpu: '50m'
+      memory: '128Mi'
+    limits:
+      cpu: '500m'
+      memory: '256Mi'
+
+# ---------------------------------------------------------------------
+# Workbench UI (Next.js / React; static assets served by nginx-alpine)
+# ---------------------------------------------------------------------
+# Container 2 in the Deployment (sidecar). Pure browser bundle — owns
+# no Kubernetes credentials. The workbench-ui image is the Next.js
+# build's `out/` (or `dist/`) baked behind nginx-alpine on `ui.port`.
+# The workbench-api proxies `/` requests to this sidecar; everything
+# under `/api/*` stays in the API container.
+#
+# Why sidecar over single-container-static-assets: the workbench-api
+# is a Bun/Node binary that doesn't ship a static-file server, and we
+# don't want to bloat the API image with the UI build. Two containers
+# in one Pod keeps the network hop loopback-only and the lifecycle
+# coupled.
+ui:
+  image:
+    repository: git.knuteson.io/homelab/kagent-workbench-ui
+    tag: ''
+    pullPolicy: Always
+  # Container port the UI sidecar (nginx-alpine) listens on.
+  port: 8081
+  # Path nginx serves a 200 on for liveness/readiness. nginx-alpine's
+  # default `/` returns the index page, which is fine for probes.
+  healthPath: '/'
+  # Per-container resource budget. UI is a static-file server — tiny.
+  resources:
+    requests:
+      cpu: '10m'
+      memory: '32Mi'
+    limits:
+      cpu: '100m'
+      memory: '64Mi'
+
+# ---------------------------------------------------------------------
+# Image pull secret(s). Defaults to the homelab convention — the
+# `gitea-registry-secret` already exists in `kagent-system` (created by
+# new_localai/k8s/argocd-apps/kagent-registry-secret.yaml). On other
+# clusters, set to `[]` for no secret, or a list of `{ name: ... }`.
+# ---------------------------------------------------------------------
+imagePullSecrets:
+  - name: gitea-registry-secret
+
+# ---------------------------------------------------------------------
+# ServiceAccount the workbench-api Pod runs as. The cluster-wide
+# read-only RBAC below binds to this SA.
+# ---------------------------------------------------------------------
+serviceAccount:
+  create: true
+  # Empty → defaults to `kagent-workbench`. Override here if you want
+  # to bind a pre-existing SA.
+  name: 'kagent-workbench'
+  annotations: {}
+
+# ---------------------------------------------------------------------
+# RBAC. Cluster-scoped read-only ClusterRole + binding for the
+# workbench-api ServiceAccount. NO write verbs in this slice — write
+# actions (cancel/retry/create-task) ship in v0.2 behind a separate
+# ClusterRole keyed off `actions.enabled` (not yet implemented). See
+# new_localai/docs/kagent-workbench-rbac.md §2.2.
+# ---------------------------------------------------------------------
+rbac:
+  create: true
+
+# ---------------------------------------------------------------------
+# Service. Exposes port 80 → api.port (8080) and port 81 → ui.port
+# (8081). The Ingress / IngressRoute routes everything to port 80
+# (api), which proxies UI requests to port 81 internally.
+# ---------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8080
+  uiPort: 8081
+
+# ---------------------------------------------------------------------
+# Ingress. Two render paths:
+#
+#   1. `ingress.enabled=true` + `ingress.authMiddleware` BLANK → renders
+#      a vanilla `networking.k8s.io/v1 Ingress`. Use this on clusters
+#      where TLS / auth are handled outside the chart (cert-manager
+#      annotations, oauth2-proxy front-door, etc.).
+#
+#   2. `ingress.enabled=true` + `ingress.authMiddleware` SET → renders a
+#      Traefik `traefik.io/v1alpha1 IngressRoute` instead, with the
+#      named Middleware referenced for auth. This is the homelab
+#      pattern — Traefik IngressRoute under the wildcard `knuteson-tls`
+#      cert with a `kagent-workbench-basic-auth` Middleware in front.
+#
+# See new_localai/docs/kagent-workbench-rbac.md §3 for the full auth
+# rationale.
+# ---------------------------------------------------------------------
+ingress:
+  enabled: false
+  # `traefik` for the homelab IngressRoute path; standard ingress class
+  # name (e.g. `nginx`) for the vanilla Ingress path.
+  className: 'traefik'
+  # Public hostname (e.g. `kagent.knuteson.io`) or Tailscale-only host
+  # (e.g. `kagent.homelab`). REQUIRED when `enabled=true`.
+  host: ''
+  # TLS configuration. When `secretName` is set, both render paths emit
+  # TLS — vanilla Ingress as `spec.tls[]`, IngressRoute as the route's
+  # `tls.secretName`. Empty → HTTP only (only sensible behind Tailscale).
+  tls:
+    secretName: ''
+  # Name of a Traefik Middleware (in this Release's namespace) to
+  # reference for auth. When non-empty, the chart renders an
+  # IngressRoute instead of a plain Ingress and chains this Middleware
+  # in. The Middleware itself is NOT created by this chart — provision
+  # it separately (e.g. a Sealed-Secret-backed `basicAuth` Middleware
+  # in `kagent-system`).
+  authMiddleware: ''
+  # Free-form annotations applied to the rendered Ingress / IngressRoute
+  # metadata. Useful for `cert-manager.io/cluster-issuer`, etc.
+  annotations: {}
+
+# Node placement
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod-level extras
+podAnnotations: {}
+podLabels: {}
+
+# Workbench logging verbosity (info | debug). Plumbed as LOG_LEVEL into
+# the workbench-api container.
+logLevel: 'info'
+
+# Optional name + fullname overrides — standard Helm idiom.
+nameOverride: ''
+fullnameOverride: ''
