@@ -65,7 +65,7 @@
 **Scope deviation from original ROADMAP**: Phase 4 was "LiteLLM + Langfuse Helm deploys + smoke." The actual shape pivoted to "shortest path to a deployed + proven kagent": skip the LiteLLM/Langfuse Helm deploys (their values are documented in [`packages/operator/charts/values-references/`](../packages/operator/charts/values-references/)), point the smoke test directly at LM Studio for inference, and prove the GitOps loop end-to-end. LiteLLM + Langfuse install when the homelab actually needs them; the substrate doesn't gate on either.
 
 - [x] CI image build pipeline ([`.github/workflows/images.yml`](../.github/workflows/images.yml)): builds + pushes `ghcr.io/ctkadvisors/kagent-operator` and `ghcr.io/ctkadvisors/kagent-agent-pod` on tag-push (`v*-phase*` or `vX.Y.Z`), main-branch pushes, and manual dispatch.
-- [x] Operator Dockerfile mirroring agent-pod's multi-stage shape (Node 22 + pnpm install → `oven/bun:1.1-alpine` runtime).
+- [x] Operator Dockerfile mirroring agent-pod's multi-stage shape (Node 22 + pnpm install → Node 22 + tsx runtime; Bun runtime reverted because `@kubernetes/client-node` Watch + status-PATCH paths fail with `SELF_SIGNED_CERT_IN_CHAIN` against K3s under Bun, see Phase 4.x follow-ups below).
 - [x] ArgoCD Application + repo secret placeholder in sibling `new_localai/k8s/argocd-apps/kagent-app.yaml`. Targets the kagent repo's Helm chart, sync wave 6.
 - [x] Helm chart wires the agent-pod's runtime config (LiteLLM base URL + API key, OTel endpoint + headers) through operator env into the spawned pods. agent-pod ServiceAccount + Role for AgentTask.status patching created by the chart.
 - [x] Smoke-test bundle in the Helm chart (`smokeTest.enabled`): Agent CRD + AgentTask CRD + verification Job. Verification Job polls AgentTask phase, prints status YAML, exits 0 on Completed / 1 on Failed-or-timeout. Replace+Force annotation so re-syncs re-run the test.
@@ -73,6 +73,20 @@
 - [ ] Langfuse self-hosted Helm deploy — **deferred to v0.2**; OtelTraceSink no-ops when no endpoint is set, so the substrate runs without Langfuse. Values reference at [`packages/operator/charts/values-references/langfuse.yaml`](../packages/operator/charts/values-references/langfuse.yaml).
 
 **Tag:** `v0.0.4-phase4`. CI builds the images on tag push.
+
+**Smoke test verified 2026-04-27**: AgentTask CR → operator informer → Job → agent-pod runs against LM Studio (`google/gemma-4-26b-a4b` at `192.168.68.60:1234/v1`) → status patched with `result.content` + `structuralVerdict.suspicious: []` in ~11s end-to-end.
+
+---
+
+## Phase 4.x — Follow-ups surfaced by the smoke-test bring-up
+
+These are scoped tightly to issues the live deploy exposed; do them before Phase 5's E2E work expands the surface area.
+
+- [ ] **Watch K8s Job/Pod terminal state and reflect into AgentTask.status.** Today the operator dispatches and walks away — if the agent-pod crashes before it patches status (image pull fails, OOMKilled, container exits non-zero), the task pins in `phase=Dispatched` forever and the operator's reconciler short-circuits on next watch event. Add a Job watcher that maps Job `failed`/`succeeded` to AgentTask phase when no status was patched. (Codex review 2026-04-27 called this out as the highest-leverage lifecycle hardening.)
+- [ ] **Restore Bun runtime when `@kubernetes/client-node`'s TLS path fixes parity.** The Watch path under `bun:1.1-alpine` rejects K3s's self-signed CA with `SELF_SIGNED_CERT_IN_CHAIN` even though the same kubeconfig works for one-shot API calls; same bug on the agent-pod's `patchNamespacedCustomObjectStatus`. Both runtimes pivoted to `node:22-alpine` + tsx as a workaround; CLAUDE.md updated to reflect that. Track Bun's undici/TLS work and revert when fixed.
+- [ ] **Trigger Gitea Actions on mirrored tags.** Gitea's mirror-pull from GitHub does NOT fire its own Actions workflows by default in 1.22.3, so `git.knuteson.io/homelab/kagent-{operator,agent-pod}` stayed empty until images were pushed manually from a workstation. Long-term fix is one of: (a) push directly to Gitea (loses GitHub-mirror semantics), (b) wait for Gitea/Forgejo to support workflow_dispatch via API in a version we can upgrade to, (c) keep a small webhook bridge that POSTs `mirror-sync` + `workflow_dispatch` together. Until then: manual `workflow_dispatch` in the Gitea UI on every release tag, OR direct `docker buildx --push` from a dev box.
+- [ ] **Wire Agent.spec.tools through to the executor.** The agent-pod runs chat-only today — the AgentRegistry registration in `runner.ts` skips the `tools` field. Most consumer workloads (researcher, summarizer) need at least HTTP fetch / MCP tool wiring before Phase 5 can land.
+- [ ] **Move Agent + Task spec injection off env JSON.** `KAGENT_AGENT_SPEC` and `KAGENT_TASK_SPEC` as env-var JSON strings is fine for smoke tests but caps payloads at ARG_MAX and exposes secrets to `ps`/`/proc`. Switch to a downward-API volume or a per-task ConfigMap mounted at a known path before the first real consumer.
 
 ---
 
