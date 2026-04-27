@@ -2,7 +2,7 @@
   "name": "@kagent/trace-sinks",
   "version": "0.0.0",
   "private": true,
-  "description": "Local TraceSink implementations — color-coded stdout pretty-printer + per-run JSONL file writer. Zero runtime deps.",
+  "description": "TraceSink implementations: stdout pretty-printer, per-run JSONL file writer, and OTLP/HTTP OTel exporter (Langfuse-compatible).",
   "license": "MIT",
   "author": "Chris Knuteson <cknuteson@gmail.com>",
   "type": "module",
@@ -16,7 +16,12 @@
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
   "dependencies": {
-    "@kagent/agent-loop": "workspace:*"
+    "@kagent/agent-loop": "workspace:*",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.215.0",
+    "@opentelemetry/resources": "2.7.0",
+    "@opentelemetry/sdk-trace-node": "2.7.0",
+    "@opentelemetry/semantic-conventions": "1.40.0"
   },
   "engines": {
     "node": ">=22.0.0"
