@@ -43,6 +43,28 @@ import { resolveBuiltinTools } from './builtin-tools.js';
 import type { PodConfig } from './env.js';
 
 /**
+ * Substrate-defined artifact handle. Structurally identical to the
+ * canonical `ArtifactRef` in `@kagent/operator/crds/artifact-ref.ts`;
+ * redeclared here to avoid pulling the operator (and its `nats` /
+ * `@kubernetes/client-node` transitive surface) into the agent-pod
+ * dependency tree just for a 6-field interface. The operator's status
+ * patcher accepts this shape via structural typing — see
+ * `docs/ARTIFACTS.md` for the canonical definition.
+ *
+ * v0.1 wires this *through* without producing any artifacts (no writer
+ * yet); the field exists so a future tool inside the agent loop can
+ * populate it without touching substrate code.
+ */
+export interface ArtifactRef {
+  readonly uri: string;
+  readonly mediaType?: string;
+  readonly sizeBytes?: number;
+  readonly checksum?: string;
+  readonly name?: string;
+  readonly producedAt?: string;
+}
+
+/**
  * Output of a single agent-pod run. The pod's main.ts uses this to
  * drive the AgentTask.status writeback.
  */
@@ -54,6 +76,13 @@ export interface RunResult {
   readonly traces: readonly TraceEntry[];
   readonly budget: ExecutionResult['budget'];
   readonly error?: { readonly message: string };
+  /**
+   * Optional artifact references produced during the run. Empty/undefined
+   * = none. The substrate forwards these into the status patch as-is;
+   * the byte payload is the agent loop's responsibility. See
+   * `docs/ARTIFACTS.md`.
+   */
+  readonly artifacts?: readonly ArtifactRef[];
 }
 
 /**
@@ -141,6 +170,11 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
 
+  // Artifact wiring is additive: v0.1 has no writer plumbed into the
+  // agent loop, so `artifacts` is omitted here. The slot exists in
+  // `RunResult` so a future tool / middleware can populate it without
+  // any substrate change. When that arrives, replace this comment with
+  // a real read from the loop result (or a `RunDeps` injection seam).
   return {
     runId: result.runId,
     status: result.status,

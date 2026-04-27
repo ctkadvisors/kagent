@@ -14,7 +14,7 @@ export { parseEnv } from './env.js';
 export type { AgentSpecEnv, PodConfig, TaskSpecEnv } from './env.js';
 
 export { runAgentTask, pickUserMessage, resolveToolProviders } from './runner.js';
-export type { RunDeps, RunResult } from './runner.js';
+export type { ArtifactRef, RunDeps, RunResult } from './runner.js';
 
 export {
   buildBuiltinToolRegistry,

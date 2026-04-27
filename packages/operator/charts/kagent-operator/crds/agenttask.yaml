@@ -97,6 +97,39 @@ spec:
                       type: array
                       items:
                         type: string
+                # Artifact references — see docs/ARTIFACTS.md. Bytes live
+                # in the backend addressed by `uri` (pvc:// in v0.1,
+                # s3://minio:// in v0.2); etcd holds metadata only. The
+                # array is optional and additive in v0.1; no writer
+                # populates it yet (next slice). `preserve-unknown-fields`
+                # on each item lets v0.2 backends attach extra metadata
+                # without a CRD bump.
+                artifacts:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - uri
+                    properties:
+                      uri:
+                        type: string
+                        description: 'Backend-addressable URI. v0.1 emits pvc://kagent-artifacts/<task-uid>/<name>.'
+                      mediaType:
+                        type: string
+                        description: 'RFC 6838 media type, e.g. text/markdown, image/png, text/x-diff.'
+                      sizeBytes:
+                        type: integer
+                        minimum: 0
+                      checksum:
+                        type: string
+                        description: 'Algorithm-prefixed lowercase-hex digest, e.g. "sha256:abc...".'
+                      name:
+                        type: string
+                        description: 'Human-readable label / stable name within the producing task.'
+                      producedAt:
+                        type: string
+                        format: date-time
+                    x-kubernetes-preserve-unknown-fields: true
       additionalPrinterColumns:
         - name: Phase
           type: string

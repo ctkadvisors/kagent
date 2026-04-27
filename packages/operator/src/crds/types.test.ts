@@ -46,6 +46,29 @@ describe('isAgentTask', () => {
   });
 });
 
+describe('AgentTaskStatus.artifacts (additive field)', () => {
+  it('accepts an empty / undefined artifacts array on a status object', () => {
+    // Type-only assertion: a status without artifacts must still type-check.
+    const status: import('./types.js').AgentTaskStatus = { phase: 'Completed' };
+    expect(status.artifacts).toBeUndefined();
+  });
+
+  it('round-trips an artifacts array of well-formed refs', () => {
+    const status: import('./types.js').AgentTaskStatus = {
+      phase: 'Completed',
+      artifacts: [
+        {
+          uri: 'pvc://kagent-artifacts/uid-1/digest.md',
+          mediaType: 'text/markdown',
+          sizeBytes: 1234,
+          name: 'digest.md',
+        },
+      ],
+    };
+    expect(status.artifacts?.[0]?.uri).toBe('pvc://kagent-artifacts/uid-1/digest.md');
+  });
+});
+
 describe('isAgent', () => {
   const valid = {
     apiVersion: API_GROUP_VERSION,
