@@ -1,0 +1,21 @@
+{
+  "name": "@kagent/openai-compat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpenAI Chat Completions v1 LLMClient adapter — speaks the protocol against any compatible backend (LiteLLM proxy, Ollama, vLLM, OpenAI direct, Workers AI, Bedrock-via-LiteLLM).",
+  "license": "MIT",
+  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

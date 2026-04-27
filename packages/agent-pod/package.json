@@ -1,0 +1,21 @@
+{
+  "name": "@kagent/agent-pod",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bun-based agent pod runtime — hosts @kagent/agent-loop, subscribes to NATS task subjects, exports OTel traces (Phase 3).",
+  "license": "MIT",
+  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@kagent/trace-sinks",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local TraceSink implementations — color-coded stdout pretty-printer + per-run JSONL file writer. Zero runtime deps.",
+  "license": "MIT",
+  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

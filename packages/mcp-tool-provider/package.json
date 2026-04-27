@@ -1,0 +1,21 @@
+{
+  "name": "@kagent/mcp-tool-provider",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MCP stdio ToolProvider — wraps @modelcontextprotocol/sdk to spawn MCP servers as subprocesses; tools/list discovery + tools/call invocation with structured error envelope + AbortSignal plumbing.",
+  "license": "MIT",
+  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

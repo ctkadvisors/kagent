@@ -45,6 +45,22 @@ importers:
         specifier: 4.1.4
         version: 4.1.4(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(yaml@2.8.3)
 
+  packages/agent-loop: {}
+
+  packages/agent-pod: {}
+
+  packages/http-tool-provider: {}
+
+  packages/in-process-tool-provider: {}
+
+  packages/mcp-tool-provider: {}
+
+  packages/openai-compat: {}
+
+  packages/operator: {}
+
+  packages/trace-sinks: {}
+
 packages:
 
   '@babel/helper-string-parser@7.27.1':
