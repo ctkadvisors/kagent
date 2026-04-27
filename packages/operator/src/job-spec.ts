@@ -83,9 +83,22 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     ...(opts.extraEnv ?? []).map((e) => ({ name: e.name, value: e.value })),
   ];
 
+  // Honor AgentTask.spec.timeoutSeconds via Job.spec.activeDeadlineSeconds
+  // so K8s itself terminates the pod when the deadline passes — belt-
+  // and-suspenders alongside the agent-pod's AbortSignal.timeout. This
+  // catches the case where the agent-pod is wedged BEFORE the executor
+  // arms its signal (e.g. crashed during boot, hung on K8s API client
+  // init), or where the AbortSignal fires but the runtime doesn't honor
+  // the cancel for some reason. The Job's failure then surfaces via
+  // job-watch.ts → markAgentTaskFailedFromExternal as DeadlineExceeded.
+  const timeoutSeconds = task.spec.timeoutSeconds;
+  const activeDeadlineSeconds =
+    typeof timeoutSeconds === 'number' && timeoutSeconds > 0 ? timeoutSeconds : undefined;
+
   const podSpec: V1Job['spec'] = {
     backoffLimit: DEFAULT_BACKOFF_LIMIT,
     ttlSecondsAfterFinished: DEFAULT_TTL_SECONDS_AFTER_FINISHED,
+    ...(activeDeadlineSeconds !== undefined && { activeDeadlineSeconds }),
     template: {
       metadata: {
         labels: {

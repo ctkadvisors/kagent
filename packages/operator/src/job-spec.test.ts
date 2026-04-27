@@ -166,4 +166,22 @@ describe('buildJobSpec', () => {
     expect(labels['kagent.knuteson.io/task']).toBe('t1');
     expect(labels['kagent.knuteson.io/managed-by']).toBe('kagent-operator');
   });
+
+  it('omits activeDeadlineSeconds when AgentTask.spec.timeoutSeconds is unset', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    expect(job.spec?.activeDeadlineSeconds).toBeUndefined();
+  });
+
+  it('sets Job.spec.activeDeadlineSeconds from AgentTask.spec.timeoutSeconds', () => {
+    const t = { ...sampleTask, spec: { ...sampleTask.spec, timeoutSeconds: 60 } };
+    const job = buildJobSpec(sampleAgent, t);
+    expect(job.spec?.activeDeadlineSeconds).toBe(60);
+  });
+
+  it('omits activeDeadlineSeconds when timeoutSeconds is 0 or negative (defensive)', () => {
+    const zero = { ...sampleTask, spec: { ...sampleTask.spec, timeoutSeconds: 0 } };
+    expect(buildJobSpec(sampleAgent, zero).spec?.activeDeadlineSeconds).toBeUndefined();
+    const neg = { ...sampleTask, spec: { ...sampleTask.spec, timeoutSeconds: -5 } };
+    expect(buildJobSpec(sampleAgent, neg).spec?.activeDeadlineSeconds).toBeUndefined();
+  });
 });
