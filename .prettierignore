@@ -1,0 +1,13 @@
+dist/
+coverage/
+pnpm-lock.yaml
+.tsbuildinfo
+*.tsbuildinfo
+node_modules/
+
+# Phase 0 docs are locked spec — exempt from prettier churn.
+# Re-enable selectively if a doc is intentionally reopened.
+docs/
+README.md
+CLAUDE.md
+LICENSE

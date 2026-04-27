@@ -1,0 +1,53 @@
+{
+  "name": "kagent",
+  "private": true,
+  "version": "0.0.0",
+  "description": "K3s-native, OSS, MIT-licensed agent farm operator (Bun + NATS JetStream + LiteLLM + Langfuse + Kata).",
+  "license": "MIT",
+  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ctkadvisors/kagent.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"**/*.{ts,md,json,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,md,json,yml,yaml}\"",
+    "test": "pnpm -r test",
+    "test:coverage": "pnpm -r test:coverage",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint-staged && pnpm -r typecheck"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --flag v10_config_lookup_from_file --fix --max-warnings 0",
+      "prettier --write"
+    ],
+    "*.{md,json,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@types/node": "22",
+    "@vitest/coverage-v8": "4.1.4",
+    "eslint": "9.39.4",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-license-header": "0.9.0",
+    "lint-staged": "16.4.0",
+    "prettier": "3.8.3",
+    "simple-git-hooks": "2.13.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.59.0",
+    "vitest": "4.1.4"
+  }
+}
