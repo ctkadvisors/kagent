@@ -16,8 +16,10 @@ import { StubDispatcher } from './dispatcher.js';
 import {
   markAgentTaskFailedFromExternal,
   reconcileAgentTask,
+  reconcileParentFromChildEvent,
   type ReconcileDeps,
 } from './reconcile.js';
+import { PARENT_TASK_NAME_LABEL, PARENT_TASK_UID_LABEL } from './task-graph.js';
 
 /* =====================================================================
  * Mock factories — stand in for @kubernetes/client-node clients.
@@ -435,5 +437,198 @@ describe('markAgentTaskFailedFromExternal', () => {
       now: () => fixedNow,
     });
     expect(action).toEqual({ kind: 'marked-failed', previousPhase: '(unset)' });
+  });
+});
+
+/* =====================================================================
+ * reconcileParentFromChildEvent — Workstream 5 / Phase 5 wire-up.
+ *
+ * Mirrors the markAgentTaskFailedFromExternal block above: every test
+ * spins up a mock CustomObjectsApi configured with the parent GET
+ * response and the children LIST response, calls the new entry point,
+ * and asserts both the action verdict AND the patch body. The KEY
+ * INVARIANT throughout: the patch body MUST NOT contain `phase` —
+ * that field's ownership stays with the agent-pod and the failure
+ * detector. See TASK-GRAPH.md §6.
+ * ===================================================================== */
+
+interface MockListCustomApi extends MockCustomApi {
+  listNamespacedCustomObject: ReturnType<typeof vi.fn>;
+}
+
+function makeListCustomApi(overrides: Partial<MockListCustomApi> = {}): MockListCustomApi {
+  return {
+    getNamespacedCustomObject: vi.fn(),
+    patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [] }),
+    ...overrides,
+  };
+}
+
+/**
+ * Build a child AgentTask in the shape the operator's LIST returns:
+ * carrying the parent labels and a status.phase.
+ */
+function makeChild(
+  uid: string,
+  phase: 'Pending' | 'Dispatched' | 'Completed' | 'Failed' | undefined,
+  parentUid = 'parent-uid-1',
+  parentName = 'parent-task',
+): AgentTask {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'AgentTask',
+    metadata: {
+      name: `child-${uid}`,
+      namespace: 'default',
+      uid,
+      labels: {
+        [PARENT_TASK_UID_LABEL]: parentUid,
+        [PARENT_TASK_NAME_LABEL]: parentName,
+      },
+    },
+    spec: {
+      targetAgent: 'researcher',
+      payload: {},
+      parentTask: parentUid,
+      originalUserMessage: 'plan a k3s upgrade',
+    },
+    ...(phase !== undefined && { status: { phase } }),
+  };
+}
+
+const PARENT_REF = { namespace: 'default', name: 'parent-task' };
+
+function makeParent(overrides: Partial<AgentTask> = {}): AgentTask {
+  return makeTask({
+    metadata: { name: 'parent-task', namespace: 'default', uid: 'parent-uid-1' },
+    ...overrides,
+  });
+}
+
+describe('reconcileParentFromChildEvent — child aggregation projection', () => {
+  it('projects empty list → aggregatePhase=Pending with all counts at 0', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'updated', aggregatePhase: 'Pending', childCount: 0 });
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          status: {
+            children: [],
+            aggregatePhase: 'Pending',
+            successCount: 0,
+            failureCount: 0,
+            inFlightCount: 0,
+          },
+        },
+      }),
+      expect.objectContaining({ middleware: expect.any(Array) }),
+    );
+  });
+
+  it('projects 3 Completed children → AllComplete with successCount=3', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({
+        items: [
+          makeChild('c1', 'Completed'),
+          makeChild('c2', 'Completed'),
+          makeChild('c3', 'Completed'),
+        ],
+      }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'updated', aggregatePhase: 'AllComplete', childCount: 3 });
+    const patchCall = customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+      body: { status: { successCount: number; failureCount: number; inFlightCount: number } };
+    };
+    expect(patchCall.body.status.successCount).toBe(3);
+    expect(patchCall.body.status.failureCount).toBe(0);
+    expect(patchCall.body.status.inFlightCount).toBe(0);
+  });
+
+  it('projects 1 Failed + 2 Completed → AnyFailed with failureCount=1, successCount=2', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({
+        items: [
+          makeChild('c1', 'Completed'),
+          makeChild('c2', 'Completed'),
+          makeChild('c3', 'Failed'),
+        ],
+      }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'updated', aggregatePhase: 'AnyFailed', childCount: 3 });
+    const patchCall = customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+      body: { status: { successCount: number; failureCount: number; inFlightCount: number } };
+    };
+    expect(patchCall.body.status.failureCount).toBe(1);
+    expect(patchCall.body.status.successCount).toBe(2);
+    expect(patchCall.body.status.inFlightCount).toBe(0);
+  });
+
+  it('returns skipped/not-found when the parent AgentTask is gone (404)', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockRejectedValue({ code: 404 }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'skipped', reason: 'not-found' });
+    expect(customApi.listNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('still updates children/aggregatePhase when parent is already terminal (Completed) without touching status.phase', async () => {
+    const completedParent = makeParent({ status: { phase: 'Completed' } });
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(completedParent),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({
+        items: [makeChild('c1', 'Failed')],
+      }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action.kind).toBe('updated');
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+    const body = (
+      customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+        body: { status: Record<string, unknown> };
+      }
+    ).body.status;
+    // CRITICAL: the patch body must NOT include `phase`. Aggregate state is
+    // parallel data — terminal parents stay terminal; only their child
+    // projection refreshes.
+    expect(body).not.toHaveProperty('phase');
+    expect(body.aggregatePhase).toBe('AnyFailed');
+  });
+
+  it('LISTs children with the right labelSelector (parent-task-uid=<uid>) in the parent namespace', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [] }),
+    });
+    await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(customApi.listNamespacedCustomObject).toHaveBeenCalledWith({
+      group: 'kagent.knuteson.io',
+      version: 'v1alpha1',
+      namespace: 'default',
+      plural: 'agenttasks',
+      labelSelector: 'kagent.knuteson.io/parent-task-uid=parent-uid-1',
+    });
   });
 });

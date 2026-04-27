@@ -97,6 +97,63 @@ spec:
                       type: array
                       items:
                         type: string
+                # ---- Workstream 5 / Phase 5: parent/child task-graph projection.
+                # Populated by the operator's parent re-reconcile
+                # (`reconcileParentFromChildEvent`). Schema is additive — no
+                # required keys at status level so existing AgentTasks remain
+                # valid. Mirror of `charts/kagent-operator/crds/agenttask.yaml`;
+                # the Helm copy is the canonical source per the chart README.
+                # See docs/TASK-GRAPH.md §4 for the aggregation algorithm.
+                children:
+                  type: array
+                  description: |
+                    Projection of child AgentTasks discovered via the
+                    `kagent.knuteson.io/parent-task-uid` label selector.
+                    Bounded shape — full child spec lives on the child CR.
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                      uid:
+                        type: string
+                      phase:
+                        type: string
+                        enum:
+                          - Pending
+                          - Dispatched
+                          - Completed
+                          - Failed
+                      completedAt:
+                        type: string
+                        format: date-time
+                      error:
+                        type: string
+                aggregatePhase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Dispatched
+                    - PartiallyComplete
+                    - AllComplete
+                    - AnyFailed
+                  description: |
+                    Aggregate state of this task's children, distinct from
+                    `phase` (which is the parent's own pod-side work).
+                successCount:
+                  type: integer
+                  minimum: 0
+                  description: 'Number of children currently in phase=Completed.'
+                failureCount:
+                  type: integer
+                  minimum: 0
+                  description: 'Number of children currently in phase=Failed.'
+                inFlightCount:
+                  type: integer
+                  minimum: 0
+                  description: 'Children that have not reached a terminal phase yet (Pending/Dispatched/absent).'
       additionalPrinterColumns:
         - name: Phase
           type: string

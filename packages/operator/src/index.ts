@@ -41,8 +41,13 @@ export type {
   ParsedArtifactUri,
 } from './crds/index.js';
 
-export { reconcileAgentTask } from './reconcile.js';
-export type { ReconcileDeps, ReconcileResult } from './reconcile.js';
+export { reconcileAgentTask, reconcileParentFromChildEvent } from './reconcile.js';
+export type {
+  ReconcileDeps,
+  ReconcileParentFromChildAction,
+  ReconcileParentFromChildDeps,
+  ReconcileResult,
+} from './reconcile.js';
 export { buildJobSpec, jobNameForTask } from './job-spec.js';
 export type { BuildJobSpecOptions } from './job-spec.js';
 export { buildHandler } from './main.js';

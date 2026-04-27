@@ -122,6 +122,43 @@ export interface AgentTaskStatus {
    * yet (writer lands in the next slice).
    */
   readonly artifacts?: readonly ArtifactRef[];
+  /* ---- Workstream 5 / Phase 5 — parent/child task-graph projection.
+   *
+   * Populated by the operator's parent re-reconcile path
+   * (`reconcileParentFromChildEvent` in `reconcile.ts`). All fields
+   * are additive + optional so existing AgentTasks remain valid; the
+   * agent-pod NEVER writes these — they are operator-owned state
+   * derived from a `LIST agenttasks --label-selector=parent-task-uid`.
+   *
+   * The shape mirrors `ParentStatusProjection` in `task-graph.ts`,
+   * minus the `children: ChildRef[]` field which is duplicated here
+   * with a slightly different optional-readonly profile to satisfy
+   * the strict CRD-types pattern. See docs/TASK-GRAPH.md §4 for the
+   * aggregation algorithm. */
+  readonly children?: ReadonlyArray<{
+    readonly name: string;
+    readonly namespace: string;
+    readonly uid?: string;
+    readonly phase?: AgentTaskPhase;
+    readonly completedAt?: string;
+    readonly error?: string;
+  }>;
+  /**
+   * Aggregate phase across `children`, distinct from this task's own
+   * `phase` (which describes the parent's own pod-side work).
+   */
+  readonly aggregatePhase?:
+    | 'Pending'
+    | 'Dispatched'
+    | 'PartiallyComplete'
+    | 'AllComplete'
+    | 'AnyFailed';
+  /** Number of children currently in `phase=Completed`. */
+  readonly successCount?: number;
+  /** Number of children currently in `phase=Failed`. */
+  readonly failureCount?: number;
+  /** Children that have not reached a terminal phase yet. */
+  readonly inFlightCount?: number;
 }
 
 export interface AgentTask {

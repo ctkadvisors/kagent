@@ -34,6 +34,12 @@ import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
 import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
 import { mergePatchOptions } from './k8s.js';
+import {
+  PARENT_TASK_UID_LABEL,
+  aggregateChildren,
+  type ChildRef,
+  type ParentStatusProjection,
+} from './task-graph.js';
 
 export interface ReconcileDeps {
   readonly customApi: CustomObjectsApi;
@@ -224,6 +230,16 @@ interface StatusPatch {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  /* ---- Workstream 5 / Phase 5 — child-aggregation projection.
+   * Operator-owned (NOT agent-pod-owned). `reconcileParentFromChildEvent`
+   * is the only writer. Carved out separately from `phase` so terminal
+   * parents (Completed/Failed) keep getting children/aggregatePhase
+   * refreshes as their children move through state. See TASK-GRAPH.md §4. */
+  children?: readonly ChildRef[];
+  aggregatePhase?: ParentStatusProjection['aggregatePhase'];
+  successCount?: number;
+  failureCount?: number;
+  inFlightCount?: number;
 }
 
 async function patchStatus(
@@ -308,4 +324,116 @@ function isNotFound(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const e = err as { code?: unknown; statusCode?: unknown };
   return e.code === 404 || e.statusCode === 404;
+}
+
+/* =====================================================================
+ * reconcileParentFromChildEvent
+ *
+ * External entry point — called by the AgentTask informer in `main.ts`
+ * whenever a child AgentTask event fires (any AgentTask carrying the
+ * `kagent.knuteson.io/parent-task-name` label). Mirrors the shape of
+ * `markAgentTaskFailedFromExternal`: read the parent, decide an action,
+ * patch a NARROWLY-SCOPED slice of status, return an action verdict.
+ *
+ * Responsibility split (parallel to failure-detector ↔ reconcile):
+ *
+ *   - failure-detector / job-watch  → owns `status.phase=Failed` writes
+ *     when Job/Pod terminal states race ahead of the agent-pod.
+ *   - reconcileParentFromChildEvent → owns `status.children` /
+ *     `status.aggregatePhase` projection. NEVER touches `status.phase`,
+ *     so terminal parents (Completed/Failed) still get their child
+ *     projection refreshed on subsequent child events.
+ *
+ * Idempotent: re-firing on every relist (informer resync) writes the
+ * same projection; merge-patch semantics make the no-op cheap.
+ * ===================================================================== */
+
+export interface ReconcileParentFromChildDeps {
+  readonly customApi: CustomObjectsApi;
+}
+
+export type ReconcileParentFromChildAction =
+  | {
+      kind: 'updated';
+      aggregatePhase: ParentStatusProjection['aggregatePhase'];
+      childCount: number;
+    }
+  | { kind: 'skipped'; reason: 'not-found' | 'missing-uid' };
+
+/**
+ * Re-aggregate a parent AgentTask's child projection. Steps:
+ *
+ *   1. GET the parent. 404 → `{ kind: 'skipped', reason: 'not-found' }`
+ *      (the parent may have been deleted between the child event and
+ *      this reconcile firing — race vs. cascade-GC).
+ *   2. Confirm `metadata.uid` is present. Without it we cannot construct
+ *      a label selector for the children list — extremely defensive,
+ *      should never happen for a CR returned by the apiserver.
+ *   3. LIST all AgentTasks in the parent's namespace whose
+ *      `kagent.knuteson.io/parent-task-uid` label matches the parent's
+ *      UID. The label was stamped on each child by
+ *      `buildChildTaskManifest` in `task-graph.ts`.
+ *   4. Run `aggregateChildren` (pure helper) to fold the list into a
+ *      `ParentStatusProjection`.
+ *   5. PATCH parent.status with the projection. Crucially, the patch
+ *      body NEVER includes `phase` — that field's ownership stays with
+ *      the agent-pod (success path) and `markAgentTaskFailedFromExternal`
+ *      (failure path).
+ */
+export async function reconcileParentFromChildEvent(
+  ref: { readonly namespace: string; readonly name: string },
+  deps: ReconcileParentFromChildDeps,
+): Promise<ReconcileParentFromChildAction> {
+  let parent: AgentTask | undefined;
+  try {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const res = await deps.customApi.getNamespacedCustomObject({
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace: ref.namespace,
+      plural: 'agenttasks',
+      name: ref.name,
+    });
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    parent = res as AgentTask;
+  } catch (err) {
+    if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
+    throw err;
+  }
+
+  const parentUid = parent.metadata.uid;
+  if (typeof parentUid !== 'string' || parentUid.length === 0) {
+    return { kind: 'skipped', reason: 'missing-uid' };
+  }
+
+  // LIST children — namespaced because children always live in the same
+  // namespace as their parent (enforced by `buildChildTaskManifest`).
+  /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+  const listRes = await deps.customApi.listNamespacedCustomObject({
+    group: API_GROUP,
+    version: API_VERSION,
+    namespace: ref.namespace,
+    plural: 'agenttasks',
+    labelSelector: `${PARENT_TASK_UID_LABEL}=${parentUid}`,
+  });
+  /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  const itemsRaw = (listRes as { items?: unknown }).items;
+  const items: AgentTask[] = Array.isArray(itemsRaw) ? (itemsRaw as AgentTask[]) : [];
+
+  const projection = aggregateChildren(items);
+
+  // Narrow patch — children/aggregatePhase only. NEVER includes `phase`.
+  await patchStatus(parent, deps.customApi, {
+    children: projection.children,
+    aggregatePhase: projection.aggregatePhase,
+    successCount: projection.successCount,
+    failureCount: projection.failureCount,
+    inFlightCount: projection.inFlightCount,
+  });
+
+  return {
+    kind: 'updated',
+    aggregatePhase: projection.aggregatePhase,
+    childCount: projection.children.length,
+  };
 }
