@@ -1,0 +1,31 @@
+{
+  "name": "@kagent/workbench-api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Read-only HTTP facade over kagent CRDs (Agent, AgentTask, Job, Pod). Powers the Workbench UI and any other client (CLI, webhooks, scripts) that wants UI-friendly DTOs without re-deriving K8s projection logic.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@kagent/dto": "workspace:*",
+    "@kubernetes/client-node": "1.4.0",
+    "hono": "4.6.14",
+    "@hono/node-server": "1.13.7"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
