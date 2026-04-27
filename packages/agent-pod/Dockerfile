@@ -53,20 +53,22 @@ COPY packages/agent-pod/src packages/agent-pod/src
 COPY tsconfig.base.json ./
 
 # ---------------------------------------------------------------------
-# Stage 2: runtime — Bun-based, lean.
+# Stage 2: runtime — Node 22. Originally Bun (per CLAUDE.md
+# "Bun is the runtime, both for the operator and inside agent pods"),
+# but @kubernetes/client-node 1.4.0 hits a TLS chain validation bug
+# under Bun against K3s's self-signed CA — affects both the operator
+# Watch path AND the agent-pod's status writeback. Switched to Node
+# 22 + tsx for parity with the operator. Revisit when Bun fixes
+# undici/TLS parity, or pin a workaround.
 # ---------------------------------------------------------------------
-FROM oven/bun:1.1-alpine AS runtime
+FROM node:22-alpine AS runtime
 
-# Run as non-root. The bun base image already provides a `bun` user.
-USER bun
+USER node
 WORKDIR /app
 
-# Copy the resolved workspace + node_modules from the install stage.
-# `node_modules` includes the pnpm-isolated symlinks; Bun's resolver
-# follows them.
-COPY --from=install --chown=bun:bun /repo /app
+COPY --from=install --chown=node:node /repo /app
 
 WORKDIR /app/packages/agent-pod
 
-# Bun runs main.ts directly. Operator's job-spec sets the KAGENT_* env.
-ENTRYPOINT ["bun", "src/main.ts"]
+# tsx (devDep) executes TypeScript directly under Node 22.
+ENTRYPOINT ["node", "--import", "tsx/esm", "src/main.ts"]

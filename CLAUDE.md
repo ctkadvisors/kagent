@@ -32,8 +32,8 @@ A fresh session must read these in order — the *why* and *what* are all here:
 
 ## Conventions
 
-- **TypeScript primary**, strict mode, ESM, Node 22 / Bun 1.1+ target
-- **Bun is the runtime**, both for the operator and inside agent pods (Anthropic owns Bun as of Dec 2025; alignment with that ecosystem is intentional)
+- **TypeScript primary**, strict mode, ESM, Node 22 target
+- **Runtime is currently Node 22 + tsx for both operator and agent-pod images.** Bun was the original target (Anthropic owns Bun as of Dec 2025; alignment intentional), but Bun 1.1's TLS handling rejects K3s's self-signed CA when `@kubernetes/client-node` opens its watch / status-patch paths — same kubeconfig works in Node, breaks in Bun. Reverting to Bun is on the v0.2 list once Bun fixes undici/TLS parity. See Dockerfile comments at `packages/operator/Dockerfile` and `packages/agent-pod/Dockerfile`.
 - **MIT license header** on every `.ts` source file
 - **Conventional commits** with co-author attribution per Chris's ctkadvisors style
 - **No squash-on-merge** — keep history legible

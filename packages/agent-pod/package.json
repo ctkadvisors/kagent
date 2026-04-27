@@ -14,13 +14,16 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "start": "bun src/main.ts"
+    "start": "node --import tsx/esm src/main.ts"
   },
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
     "@kagent/openai-compat": "workspace:*",
     "@kagent/trace-sinks": "workspace:*",
     "@kubernetes/client-node": "1.4.0"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
   },
   "engines": {
     "node": ">=22.0.0"

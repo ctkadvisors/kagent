@@ -40,16 +40,20 @@ COPY packages/operator/src packages/operator/src
 COPY tsconfig.base.json ./
 
 # ---------------------------------------------------------------------
-# Stage 2: runtime — Bun base. The operator uses Bun for the same
-# reason as the agent-pod (TS-first, lean image).
+# Stage 2: runtime — Node 22 base. The operator runs on Node (not Bun)
+# because @kubernetes/client-node's Watch path hits a TLS chain
+# validation bug under Bun against K3s's self-signed CA, even when the
+# same kubeconfig works for one-shot API calls. The agent-pod stays on
+# Bun (no Watch usage). Revisit when Bun fixes undici/TLS parity.
 # ---------------------------------------------------------------------
-FROM oven/bun:1.1-alpine AS runtime
+FROM node:22-alpine AS runtime
 
-USER bun
+USER node
 WORKDIR /app
 
-COPY --from=install --chown=bun:bun /repo /app
+COPY --from=install --chown=node:node /repo /app
 
 WORKDIR /app/packages/operator
 
-ENTRYPOINT ["bun", "src/main.ts"]
+# tsx (devDep) executes TypeScript directly under Node 22.
+ENTRYPOINT ["node", "--import", "tsx/esm", "src/main.ts"]

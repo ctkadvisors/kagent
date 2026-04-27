@@ -61,6 +61,10 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+    devDependencies:
+      tsx:
+        specifier: 4.21.0
+        version: 4.21.0
 
   packages/http-tool-provider:
     dependencies:
