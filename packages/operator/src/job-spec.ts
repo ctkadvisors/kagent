@@ -42,7 +42,32 @@ export interface BuildJobSpecOptions {
    * own env into the spawned pod without per-Agent overrides.
    */
   readonly extraEnv?: readonly { readonly name: string; readonly value: string }[];
+  /**
+   * Artifact PVC plumbing — Phase 5 / P3. When set, the operator mounts
+   * the named PVC at `mountPath` in the agent container and injects
+   * `KAGENT_ARTIFACTS_DIR=<mountPath>` + `KAGENT_ARTIFACT_PVC_NAME=<claimName>`
+   * env vars so the in-pod `write_artifact` tool can write under the
+   * task-uid subdirectory. When unset, no PVC plumbing is added — the
+   * agent-pod can still spawn but `write_artifact` will fail at boot
+   * because `KAGENT_ARTIFACT_PVC_NAME` is absent.
+   *
+   * Cluster operators set the PVC via Helm
+   * (`agentPod.artifactStorage.{enabled,pvcName,mountPath}`); the
+   * operator's main.ts forwards those into `BuildJobSpecOptions`.
+   */
+  readonly artifactPvc?: {
+    /** PVC claim name in the AgentTask's namespace. */
+    readonly claimName: string;
+    /** Container path the PVC mounts at. Defaults to `/var/kagent/artifacts`. */
+    readonly mountPath?: string;
+  };
 }
+
+/** Default mount path for the artifact PVC inside the agent-pod. */
+export const DEFAULT_ARTIFACT_MOUNT_PATH = '/var/kagent/artifacts';
+
+/** Volume name used for the artifact PVC in the spawned pod spec. */
+export const ARTIFACT_VOLUME_NAME = 'artifacts';
 
 /**
  * Deterministic Job name from an AgentTask. Uses the task UID (which
@@ -73,6 +98,19 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   const jobName = jobNameForTask(task);
   const image = opts.image ?? DEFAULT_IMAGE;
 
+  // Artifact PVC plumbing: when supplied, inject the env vars the
+  // in-pod `write_artifact` tool reads + add a matching volume mount
+  // below. Done here (rather than at the writer level) so the agent-pod
+  // image stays unaware of K8s primitives.
+  const artifactEnv: { name: string; value: string }[] = [];
+  if (opts.artifactPvc !== undefined) {
+    const mountPath = opts.artifactPvc.mountPath ?? DEFAULT_ARTIFACT_MOUNT_PATH;
+    artifactEnv.push(
+      { name: 'KAGENT_ARTIFACTS_DIR', value: mountPath },
+      { name: 'KAGENT_ARTIFACT_PVC_NAME', value: opts.artifactPvc.claimName },
+    );
+  }
+
   const env: { name: string; value: string }[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
@@ -80,8 +118,27 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
     { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
+    ...artifactEnv,
     ...(opts.extraEnv ?? []).map((e) => ({ name: e.name, value: e.value })),
   ];
+
+  // Volume + volumeMount for the artifact PVC. Volume lives at the
+  // pod level; the mount lives on the agent container only (no
+  // sidecars in v0.1).
+  const artifactVolume =
+    opts.artifactPvc !== undefined
+      ? {
+          name: ARTIFACT_VOLUME_NAME,
+          persistentVolumeClaim: { claimName: opts.artifactPvc.claimName },
+        }
+      : undefined;
+  const artifactVolumeMount =
+    opts.artifactPvc !== undefined
+      ? {
+          name: ARTIFACT_VOLUME_NAME,
+          mountPath: opts.artifactPvc.mountPath ?? DEFAULT_ARTIFACT_MOUNT_PATH,
+        }
+      : undefined;
 
   // Honor AgentTask.spec.timeoutSeconds via Job.spec.activeDeadlineSeconds
   // so K8s itself terminates the pod when the deadline passes — belt-
@@ -118,6 +175,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         ...(opts.imagePullSecret !== undefined && {
           imagePullSecrets: [{ name: opts.imagePullSecret }],
         }),
+        ...(artifactVolume !== undefined && { volumes: [artifactVolume] }),
         containers: [
           {
             name: 'agent',
@@ -125,6 +183,9 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
             env,
             ...(opts.imagePullPolicy !== undefined && {
               imagePullPolicy: opts.imagePullPolicy,
+            }),
+            ...(artifactVolumeMount !== undefined && {
+              volumeMounts: [artifactVolumeMount],
             }),
             // Resources are tunable via Helm values in operator chart;
             // the spec here is a defensible default for v0.1.

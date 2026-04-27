@@ -75,6 +75,14 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
     });
   }
   const pullPolicy = env.KAGENT_AGENT_POD_IMAGE_PULL_POLICY;
+  // Artifact PVC plumbing — Helm sets KAGENT_ARTIFACT_PVC_NAME +
+  // (optionally) KAGENT_ARTIFACT_MOUNT_PATH on the operator deployment;
+  // we forward both into BuildJobSpecOptions so spawned Jobs mount the
+  // PVC and the agent-pod's `write_artifact` tool can write under
+  // <mountPath>/<task-uid>/<name>. When unset, no PVC plumbing is
+  // added and the tool fails fast at boot if invoked.
+  const artifactPvcName = env.KAGENT_ARTIFACT_PVC_NAME;
+  const artifactMountPath = env.KAGENT_ARTIFACT_MOUNT_PATH;
   return {
     ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
@@ -90,6 +98,14 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
     ...(typeof env.KAGENT_AGENT_POD_SERVICE_ACCOUNT === 'string' &&
       env.KAGENT_AGENT_POD_SERVICE_ACCOUNT.length > 0 && {
         serviceAccountName: env.KAGENT_AGENT_POD_SERVICE_ACCOUNT,
+      }),
+    ...(typeof artifactPvcName === 'string' &&
+      artifactPvcName.length > 0 && {
+        artifactPvc: {
+          claimName: artifactPvcName,
+          ...(typeof artifactMountPath === 'string' &&
+            artifactMountPath.length > 0 && { mountPath: artifactMountPath }),
+        },
       }),
     ...(extraEnv.length > 0 && { extraEnv }),
   };
