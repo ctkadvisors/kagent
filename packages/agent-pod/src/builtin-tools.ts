@@ -51,6 +51,7 @@ import {
   buildPvcUri,
   inlineSafeForArtifact,
   resolveWriterEnv,
+  validateArtifactName,
   writeArtifactToDisk,
   type ArtifactRef,
 } from './artifacts.js';
@@ -777,10 +778,18 @@ export function buildBuiltinToolRegistry(
       // payload qualifies, skip the FS round-trip and return a synthetic
       // ref. Callers that prefer the inline-content-in-status path can
       // see `inlineSafe: true` on the metadata and act accordingly.
+      //
+      // The name validation MUST happen here too — `writeArtifactToDisk`
+      // runs `validateArtifactName` before it touches the filesystem,
+      // but the inline path skips the writer entirely. Without this
+      // call, a name like '../../../etc/passwd' would round-trip into
+      // status.artifacts as a `pvc://...` URI, misleading any consumer
+      // that follows the URI later (Workbench, downstream agents, etc.).
       if (inline && inlineSafeForArtifact(content, mediaType)) {
+        const safeName = validateArtifactName(name);
         const synthetic: ArtifactRef = {
-          uri: buildPvcUri(writerEnv.pvcName, writerEnv.taskUid, name),
-          name,
+          uri: buildPvcUri(writerEnv.pvcName, writerEnv.taskUid, safeName),
+          name: safeName,
           mediaType,
           sizeBytes: Buffer.byteLength(content, 'utf8'),
           producedAt: clock().toISOString(),

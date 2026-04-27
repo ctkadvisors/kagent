@@ -41,10 +41,13 @@ api:
   # exposes this as port 80; the Ingress / IngressRoute routes / →
   # this port.
   port: 8080
-  # Liveness/readiness probe path served by workbench-api. The
-  # workbench-api package owns this contract — the chart treats it as
-  # an interface promise from the API package.
-  healthPath: '/api/healthz'
+  # Liveness/readiness probe path served by workbench-api. K8s probes
+  # hit the pod's container port directly (bypassing the Ingress) so
+  # the value is the API's bare HTTP path, not its public Ingress URL.
+  # workbench-api/src/routes/healthz.ts mounts /healthz + /readyz at
+  # the root — readiness probe should ideally use /readyz; v0.1 uses
+  # /healthz for both for simplicity (informer warm-up grace is short).
+  healthPath: '/healthz'
   # Optional — when set, the workbench-api will surface "open trace"
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.

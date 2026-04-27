@@ -636,6 +636,101 @@ describe('rss_fetch tool', () => {
 });
 
 /* =====================================================================
+ * write_artifact tool — inline-mode validation
+ * ===================================================================== */
+
+describe('write_artifact tool — inline mode', () => {
+  // Stub the underlying writer so the inline path can be exercised
+  // without touching real disk. The inline branch never calls the
+  // writer anyway, but a non-inline assertion uses it.
+  const stubWriter = (
+    name: string,
+    content: string,
+    mediaType: string,
+  ): { ref: import('./artifacts.js').ArtifactRef } => ({
+    ref: {
+      uri: `pvc://kagent-artifacts/test-uid/${name}`,
+      name,
+      mediaType,
+      sizeBytes: Buffer.byteLength(content, 'utf8'),
+      checksum: 'sha256:fake',
+      producedAt: '2026-04-27T00:00:00Z',
+    },
+  });
+
+  function makeProvider(): InProcessToolProvider {
+    const reg = buildBuiltinToolRegistry({
+      env: {
+        KAGENT_TASK_ID: 'test-uid',
+        KAGENT_ARTIFACTS_DIR: '/tmp/kagent-test',
+      },
+      writeArtifact: stubWriter as unknown as Parameters<
+        typeof buildBuiltinToolRegistry
+      >[0] extends infer O
+        ? O extends { writeArtifact?: infer W }
+          ? W
+          : never
+        : never,
+      now: () => new Date('2026-04-27T00:00:00Z'),
+    });
+    const def = reg.get('write_artifact')!;
+    return new InProcessToolProvider({ tools: [def] });
+  }
+
+  it('rejects a traversal-looking name in inline mode (validateArtifactName runs)', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: '../../../etc/passwd',
+        mediaType: 'text/plain',
+        content: 'pwned',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/"name" must not contain ".." segments/);
+  });
+
+  it('rejects a name with leading "/" in inline mode', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: '/abs/digest.md',
+        mediaType: 'text/markdown',
+        content: '# hi',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/"name" must not begin with "\/"/);
+  });
+
+  it('happy path — inline mode returns a synthetic ArtifactRef without disk I/O', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: 'digest.md',
+        mediaType: 'text/markdown',
+        content: '# Hello',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    const ref = JSON.parse((r.content as { text: string }[])[0]!.text) as {
+      uri: string;
+      name: string;
+      sizeBytes: number;
+    };
+    expect(ref.uri).toBe('pvc://kagent-artifacts/test-uid/digest.md');
+    expect(ref.name).toBe('digest.md');
+    expect(ref.sizeBytes).toBe(7);
+  });
+});
+
+/* =====================================================================
  * resolveBuiltinTools — runner-side wiring
  * ===================================================================== */
 
