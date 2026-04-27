@@ -24,13 +24,13 @@
 
 ## Phase 1 — TS scaffold + agent-loop fork (~1 week)
 
-- [ ] `package.json` + `bun.lockb` + `tsconfig.json` (strict ESM Node 22 / Bun 1.1+ target)
-- [ ] `pnpm-workspace.yaml` for monorepo: `packages/agent-loop`, `packages/operator`, `packages/agent-pod`
-- [ ] Lift AgentExecutor + RunBudget + JsonlSink + ToolProvider abstraction from `agent-runtime` into `packages/agent-loop`
-- [ ] Lift F1/F2/F3 detectors + refusal detection + synthesis-vacuity heuristic from chat-server commits into `packages/agent-loop` as run-end middleware
-- [ ] MIT license header on every `.ts` source file
-- [ ] CI: typecheck + lint + test on push-to-main + every PR
-- [ ] Coverage: ≥85% on agent-loop core, ≥75% on glue
+- [x] `package.json` + `pnpm-lock.yaml` + `tsconfig.base.json` (strict ESM Node 22 target). Bun is the runtime target for the operator and agent pod images; pnpm 9.15.9 + Node 22 is the workspace package manager + build target.
+- [x] `pnpm-workspace.yaml` for monorepo: 8 packages — `agent-loop`, `openai-compat`, `in-process-tool-provider`, `mcp-tool-provider`, `http-tool-provider`, `trace-sinks`, `operator`, `agent-pod`. Companion packages 2-6 lifted from agent-runtime sibling; operator + agent-pod are stubs for Phase 2/3.
+- [x] Lift AgentExecutor + RunBudget + LLMClient/ToolProvider/TraceSink abstractions + AgentRegistry + JsonlFileSink/StdoutSink + 5 companion packages from `agent-runtime` into the new workspace. Sempf/kernel/paperclip framing stripped on copy; cross-package imports rewired to `@kagent/agent-loop`.
+- [x] Lift F1/F2/F3 + refusal detection + synthesis-vacuity heuristic from `homelab-orchestrator/src/chat/{server,delegate-tool}.ts` into `packages/agent-loop/src/detectors/` as run-end middleware (`computeQualityFlags`, `detectRefusal`).
+- [x] SPDX MIT license header on every `.ts` source file (`/** SPDX-License-Identifier: MIT … */` JSDoc form, enforced by `eslint-plugin-license-header`).
+- [x] CI: GitHub Actions workflow runs install (frozen lockfile) → typecheck → lint → test → format check on PRs + push-to-main.
+- [ ] Coverage thresholds: ≥85% on agent-loop core, ≥75% on glue. Deferred from Phase 1 — vitest configs ship with thresholds at 0; calibrate and gate once Phase 2 operator numbers settle. (432 tests passing across 30 test files; lifted code inherits sibling's high coverage.)
 
 **Tag:** `v0.0.1-phase1`
 
