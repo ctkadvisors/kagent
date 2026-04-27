@@ -31,23 +31,33 @@ spec:
 apiVersion: kagent.knuteson.io/v1alpha1
 kind: AgentTask
 metadata:
-  name: smoke-test
+  # Suffixing the name with the Helm release revision guarantees a
+  # FRESH AgentTask resource on every `helm upgrade` / Argo sync,
+  # which sidesteps Argo's spec-diff gate (an AgentTask whose spec
+  # didn't change across syncs would otherwise stay put at its prior
+  # terminal phase). The hook annotations below cover the same case
+  # for Argo-managed installs that don't bump the revision.
+  name: smoke-test-r{{ .Release.Revision }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kagent-operator.labels" . | nindent 4 }}
     kagent.knuteson.io/role: smoke-test
   annotations:
-    # Replace + force on every Application sync so re-syncs actually
-    # re-trigger the agent run. Without this an AgentTask in
-    # phase=Completed/Failed stays put across syncs and the verify Job
-    # passes/fails based on the prior result, not a fresh execution.
+    # Belt + suspenders for re-runs:
+    #   - Replace=true,Force=true: when this resource IS in a sync diff,
+    #     replace instead of patch (avoids merge edge-cases).
+    #   - hook=Sync + hook-delete-policy=BeforeHookCreation: treat as a
+    #     sync-time hook so even an identical spec re-creates the
+    #     resource on every sync, deleting the prior instance first.
     argocd.argoproj.io/sync-options: Replace=true,Force=true
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   targetAgent: smoke-test
   payload:
     smokeTest: true
   originalUserMessage: {{ .Values.smokeTest.prompt | quote }}
-  timeoutSeconds: 60
+  timeoutSeconds: {{ .Values.smokeTest.timeoutSeconds | default 60 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -88,16 +98,19 @@ subjects:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smoke-test-verify
+  # Suffix with revision so we get a fresh Job alongside the fresh
+  # AgentTask on every Argo sync. The previous instance is removed by
+  # hook-delete-policy on the next sync.
+  name: smoke-test-verify-r{{ .Release.Revision }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kagent-operator.labels" . | nindent 4 }}
     kagent.knuteson.io/role: smoke-test
   annotations:
-    # Argo: replace + sync on every Application sync so we can re-run
-    # the smoke test by re-syncing.
     argocd.argoproj.io/sync-options: Replace=true,Force=true
     argocd.argoproj.io/sync-wave: '10'
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 86400
@@ -111,14 +124,21 @@ spec:
       containers:
         - name: verify
           image: {{ .Values.smokeTest.verificationImage | quote }}
+          env:
+            - name: AGENT_TASK_NAME
+              value: smoke-test-r{{ .Release.Revision }}
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: TIMEOUT_SECONDS
+              value: {{ .Values.smokeTest.timeoutSeconds | default 300 | quote }}
           command:
             - /bin/bash
             - -ec
             - |
-              echo "[smoke-test-verify] waiting for AgentTask/smoke-test to reach a terminal phase…"
+              echo "[smoke-test-verify] waiting for AgentTask/${AGENT_TASK_NAME} in ${NAMESPACE} to reach a terminal phase…"
               # Poll instead of `kubectl wait` so we can match either Completed OR Failed.
-              for i in $(seq 1 {{ .Values.smokeTest.timeoutSeconds }}); do
-                phase=$(kubectl get agenttask smoke-test -n {{ .Release.Namespace }} -o jsonpath='{.status.phase}' 2>/dev/null || echo '')
+              for i in $(seq 1 "${TIMEOUT_SECONDS}"); do
+                phase=$(kubectl get agenttask "${AGENT_TASK_NAME}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo '')
                 if [ "$phase" = "Completed" ] || [ "$phase" = "Failed" ]; then
                   echo "[smoke-test-verify] phase=$phase after ${i}s"
                   break
@@ -126,9 +146,7 @@ spec:
                 sleep 1
               done
               echo "[smoke-test-verify] final AgentTask status:"
-              kubectl get agenttask smoke-test -n {{ .Release.Namespace }} -o yaml
-              # Exit 0 on Completed, 1 on Failed/timeout — surfaces in
-              # the Job's success-vs-fail signal that ArgoCD picks up.
+              kubectl get agenttask "${AGENT_TASK_NAME}" -n "${NAMESPACE}" -o yaml
               if [ "$phase" = "Completed" ]; then
                 echo "[smoke-test-verify] PASS"
                 exit 0
