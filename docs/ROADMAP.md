@@ -60,13 +60,19 @@
 
 ---
 
-## Phase 4 — LiteLLM + Langfuse (~0.5 week)
+## Phase 4 — Deploy + prove (~0.5 week)
 
-- [ ] LiteLLM Proxy Helm chart deployed; routes for `cf-gateway`, `ollama`, `bedrock`, future `on-prem-*`
-- [ ] Langfuse self-hosted Helm chart; OTel ingest verified
-- [ ] Smoke: agent pod calls LiteLLM, trace lands in Langfuse with cost attribution
+**Scope deviation from original ROADMAP**: Phase 4 was "LiteLLM + Langfuse Helm deploys + smoke." The actual shape pivoted to "shortest path to a deployed + proven kagent": skip the LiteLLM/Langfuse Helm deploys (their values are documented in [`packages/operator/charts/values-references/`](../packages/operator/charts/values-references/)), point the smoke test directly at LM Studio for inference, and prove the GitOps loop end-to-end. LiteLLM + Langfuse install when the homelab actually needs them; the substrate doesn't gate on either.
 
-**Tag:** `v0.0.4-phase4`
+- [x] CI image build pipeline ([`.github/workflows/images.yml`](../.github/workflows/images.yml)): builds + pushes `ghcr.io/ctkadvisors/kagent-operator` and `ghcr.io/ctkadvisors/kagent-agent-pod` on tag-push (`v*-phase*` or `vX.Y.Z`), main-branch pushes, and manual dispatch.
+- [x] Operator Dockerfile mirroring agent-pod's multi-stage shape (Node 22 + pnpm install → `oven/bun:1.1-alpine` runtime).
+- [x] ArgoCD Application + repo secret placeholder in sibling `new_localai/k8s/argocd-apps/kagent-app.yaml`. Targets the kagent repo's Helm chart, sync wave 6.
+- [x] Helm chart wires the agent-pod's runtime config (LiteLLM base URL + API key, OTel endpoint + headers) through operator env into the spawned pods. agent-pod ServiceAccount + Role for AgentTask.status patching created by the chart.
+- [x] Smoke-test bundle in the Helm chart (`smokeTest.enabled`): Agent CRD + AgentTask CRD + verification Job. Verification Job polls AgentTask phase, prints status YAML, exits 0 on Completed / 1 on Failed-or-timeout. Replace+Force annotation so re-syncs re-run the test.
+- [ ] LiteLLM Proxy Helm deploy — **deferred to v0.2**; the substrate works against any OpenAI-compat backend (LM Studio, OpenRouter, Ollama, Bedrock-via-LiteLLM). Values reference at [`packages/operator/charts/values-references/litellm.yaml`](../packages/operator/charts/values-references/litellm.yaml).
+- [ ] Langfuse self-hosted Helm deploy — **deferred to v0.2**; OtelTraceSink no-ops when no endpoint is set, so the substrate runs without Langfuse. Values reference at [`packages/operator/charts/values-references/langfuse.yaml`](../packages/operator/charts/values-references/langfuse.yaml).
+
+**Tag:** `v0.0.4-phase4`. CI builds the images on tag push.
 
 ---
 
