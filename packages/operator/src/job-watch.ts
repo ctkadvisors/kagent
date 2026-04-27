@@ -1,0 +1,156 @@
+/**
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ */
+
+/**
+ * Job + Pod watcher — surfaces terminal Kubernetes failures back into
+ * `AgentTask.status.phase=Failed` so a crashed pod doesn't silently
+ * leave its task stuck in `Dispatched`.
+ *
+ * The AgentTask informer (watch.ts) handles the AgentTask CR side. The
+ * happy-path status writeback lives in the agent-pod (status.ts). This
+ * module covers the unhappy paths the agent-pod can't report on its
+ * own: image pull failures, OOMKills before status patch, scheduling
+ * failures, container config errors.
+ *
+ * Cluster-wide watch in v0.1, label-selected to only see resources the
+ * operator manages (`kagent.knuteson.io/managed-by=kagent-operator`).
+ */
+
+import {
+  type CoreV1Api,
+  type Informer,
+  type KubeConfig,
+  type KubernetesListObject,
+  type V1Job,
+  type V1JobList,
+  type V1Pod,
+  makeInformer,
+} from '@kubernetes/client-node';
+
+const MANAGED_BY_LABEL = 'kagent.knuteson.io/managed-by=kagent-operator';
+const TASK_LABEL = 'kagent.knuteson.io/task';
+
+/** Per-event handler invoked by the informers. */
+export interface JobPodHandler {
+  /**
+   * A Job tied to one of our AgentTasks changed. Implementations should
+   * look up the parent AgentTask via the `kagent.knuteson.io/task`
+   * label, classify failure via `failure-detector`, and patch status.
+   */
+  onJob(job: V1Job): void | Promise<void>;
+  /**
+   * A Pod we manage changed. Implementations call failure-detector on
+   * the pod (and may correlate with the parent Job).
+   */
+  onPod(pod: V1Pod): void | Promise<void>;
+  /** Optional: surface watcher errors to the caller's logger. */
+  onError?(err: unknown): void;
+}
+
+/**
+ * Build a Job + Pod informer pair. Caller starts both via the returned
+ * handles and is responsible for `stop()` on shutdown. Errors emitted
+ * by either underlying watch trigger `handler.onError` plus a 5-second
+ * automatic restart, matching the AgentTask informer pattern.
+ *
+ * Returns one combined "informer-set" object so main.ts can manage the
+ * pair as a unit.
+ */
+export interface JobPodInformerSet {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export function createJobPodInformer(
+  kc: KubeConfig,
+  coreApi: CoreV1Api,
+  batchListFn: () => Promise<V1JobList>,
+  handler: JobPodHandler,
+): JobPodInformerSet {
+  const jobListWrapper = async (): Promise<KubernetesListObject<V1Job>> => {
+    const res = await batchListFn();
+    return res;
+  };
+
+  const podListWrapper = async (): Promise<KubernetesListObject<V1Pod>> => {
+    const res = await coreApi.listPodForAllNamespaces({
+      labelSelector: MANAGED_BY_LABEL,
+    });
+    return res;
+  };
+
+  const jobInformer: Informer<V1Job> = makeInformer<V1Job>(
+    kc,
+    `/apis/batch/v1/jobs?labelSelector=${encodeURIComponent(MANAGED_BY_LABEL)}`,
+    jobListWrapper,
+  );
+
+  const podInformer: Informer<V1Pod> = makeInformer<V1Pod>(
+    kc,
+    `/api/v1/pods?labelSelector=${encodeURIComponent(MANAGED_BY_LABEL)}`,
+    podListWrapper,
+  );
+
+  // Wire add + update through the same handler — failure verdicts are
+  // idempotent (markFailed skips terminal AgentTasks), so re-firing on
+  // every relist is safe. Delete is a no-op since the AgentTask owner
+  // GC takes care of cleanup.
+  jobInformer.on('add', (j) => {
+    void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
+  });
+  jobInformer.on('update', (j) => {
+    void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
+  });
+  jobInformer.on('error', (err) => {
+    handler.onError?.(err);
+    setTimeout(() => {
+      void jobInformer.start();
+    }, 5000);
+  });
+
+  podInformer.on('add', (p) => {
+    void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
+  });
+  podInformer.on('update', (p) => {
+    void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
+  });
+  podInformer.on('error', (err) => {
+    handler.onError?.(err);
+    setTimeout(() => {
+      void podInformer.start();
+    }, 5000);
+  });
+
+  return {
+    async start(): Promise<void> {
+      await jobInformer.start();
+      await podInformer.start();
+    },
+    async stop(): Promise<void> {
+      await jobInformer.stop();
+      await podInformer.stop();
+    },
+  };
+}
+
+/**
+ * Pull the parent AgentTask name+namespace out of a Job/Pod's labels.
+ * Returns null when the resource isn't tagged — defensive against
+ * label-selector misses (e.g. a Job created out-of-band that happens
+ * to satisfy our managed-by selector but lacks the task label).
+ */
+export function parentTaskRef(resource: {
+  metadata?: { labels?: Record<string, string>; namespace?: string } | undefined;
+}): { namespace: string; name: string } | null {
+  const labels = resource.metadata?.labels ?? {};
+  const name = labels[TASK_LABEL];
+  const namespace = resource.metadata?.namespace;
+  if (typeof name !== 'string' || name.length === 0) return null;
+  if (typeof namespace !== 'string' || namespace.length === 0) return null;
+  return { namespace, name };
+}
+
+/** Re-export so callers don't have to import the constant separately. */
+export const TASK_LABEL_KEY = TASK_LABEL;

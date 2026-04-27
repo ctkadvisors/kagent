@@ -12,14 +12,21 @@
  * KUBECONFIG / ~/.kube/config.
  */
 
+import { CoreV1Api, type V1Job, type V1JobList, type V1Pod } from '@kubernetes/client-node';
 import { connect, type NatsConnection } from 'nats';
 
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
+import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import type { BuildJobSpecOptions } from './job-spec.js';
+import { createJobPodInformer, parentTaskRef } from './job-watch.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
 import { NatsDispatcher } from './nats-dispatcher.js';
-import { reconcileAgentTask, type ReconcileDeps } from './reconcile.js';
+import {
+  markAgentTaskFailedFromExternal,
+  reconcileAgentTask,
+  type ReconcileDeps,
+} from './reconcile.js';
 import type { AgentTaskHandler } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
 
@@ -182,14 +189,62 @@ async function main(): Promise<void> {
   const handler = buildHandler(deps);
   const informer = createAgentTaskInformer(kc, customApi, handler);
 
+  // Phase 4.x — Job/Pod failure watcher. The agent-pod owns success-
+  // path status writeback; this watcher closes the loop on failures
+  // the pod can't report (image pull, OOMKill, unschedulable, etc).
+  const coreApi = kc.makeApiClient(CoreV1Api);
+  const jobListFn = async (): Promise<V1JobList> => {
+    return await batchApi.listJobForAllNamespaces({
+      labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
+    });
+  };
+  const surfaceFailure = async (
+    ref: { namespace: string; name: string },
+    failure: { reason: string; message: string; source: 'job' | 'pod' },
+  ): Promise<void> => {
+    try {
+      const action = await markAgentTaskFailedFromExternal(ref, failure, { customApi });
+      if (action.kind === 'marked-failed') {
+        console.log(
+          `[kagent-operator] marked Failed ${ref.namespace}/${ref.name} ` +
+            `(was ${action.previousPhase}) due to ${failure.source}/${failure.reason}: ${failure.message}`,
+        );
+      }
+    } catch (err) {
+      console.error(`[kagent-operator] failed to mark ${ref.namespace}/${ref.name} Failed:`, err);
+    }
+  };
+  const jobPodInformer = createJobPodInformer(kc, coreApi, jobListFn, {
+    async onJob(job: V1Job): Promise<void> {
+      const ref = parentTaskRef(job);
+      if (ref === null) return;
+      const verdict = detectJobFailure(job);
+      if (verdict !== null) await surfaceFailure(ref, verdict);
+    },
+    async onPod(pod: V1Pod): Promise<void> {
+      const ref = parentTaskRef(pod);
+      if (ref === null) return;
+      const verdict = detectPodFailure(pod);
+      if (verdict !== null) await surfaceFailure(ref, verdict);
+    },
+    onError(err) {
+      console.error('[kagent-operator] job/pod watch error:', err);
+    },
+  });
+
   // Graceful shutdown — stop the informer cleanly on SIGTERM/SIGINT
   // so K8s can drain the operator pod without orphaning the watch.
   const shutdown = async (signal: string): Promise<void> => {
-    console.log(`[kagent-operator] ${signal} — stopping informer`);
+    console.log(`[kagent-operator] ${signal} — stopping informers`);
     try {
       await informer.stop();
     } catch (err) {
       console.error('[kagent-operator] informer.stop() failed:', err);
+    }
+    try {
+      await jobPodInformer.stop();
+    } catch (err) {
+      console.error('[kagent-operator] job/pod informer stop failed:', err);
     }
     if (onShutdownExtra !== undefined) {
       try {
@@ -203,9 +258,10 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
-  console.log('[kagent-operator] starting informer on AgentTask (cluster-wide)');
+  console.log('[kagent-operator] starting informers on AgentTask + Job + Pod');
   await informer.start();
-  console.log('[kagent-operator] informer started');
+  await jobPodInformer.start();
+  console.log('[kagent-operator] informers started');
 }
 
 // Only run main() when this module is the entrypoint — unit tests

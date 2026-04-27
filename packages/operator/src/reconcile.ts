@@ -248,3 +248,64 @@ async function patchStatus(
     mergePatchOptions,
   );
 }
+
+/**
+ * External entry point — used by the Job/Pod watcher to mark an
+ * AgentTask Failed when its underlying K8s primitives died before the
+ * agent-pod could write status itself (image pull failures, OOMKill,
+ * unschedulable pod, etc).
+ *
+ * Reads the current AgentTask first to avoid clobbering a Completed
+ * status the agent-pod successfully wrote in the same window. Returns
+ * the action taken so the watcher can log usefully.
+ */
+export interface MarkFailureDeps {
+  readonly customApi: CustomObjectsApi;
+  readonly now?: () => Date;
+}
+
+export type MarkFailureAction =
+  | { kind: 'marked-failed'; previousPhase: string }
+  | { kind: 'skipped'; reason: 'already-completed' | 'already-failed' | 'not-found' };
+
+export async function markAgentTaskFailedFromExternal(
+  ref: { readonly namespace: string; readonly name: string },
+  failure: { readonly reason: string; readonly message: string; readonly source: 'job' | 'pod' },
+  deps: MarkFailureDeps,
+): Promise<MarkFailureAction> {
+  const now = deps.now ?? (() => new Date());
+  let current: AgentTask | undefined;
+  try {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const res = await deps.customApi.getNamespacedCustomObject({
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace: ref.namespace,
+      plural: 'agenttasks',
+      name: ref.name,
+    });
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    current = res as AgentTask;
+  } catch (err) {
+    if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
+    throw err;
+  }
+
+  const phase = current?.status?.phase;
+  if (phase === 'Completed') return { kind: 'skipped', reason: 'already-completed' };
+  if (phase === 'Failed') return { kind: 'skipped', reason: 'already-failed' };
+
+  const errorPrefix = `[${failure.source}/${failure.reason}] `;
+  await patchStatus(current, deps.customApi, {
+    phase: 'Failed',
+    error: errorPrefix + failure.message,
+    completedAt: now().toISOString(),
+  });
+  return { kind: 'marked-failed', previousPhase: phase ?? '(unset)' };
+}
+
+function isNotFound(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: unknown; statusCode?: unknown };
+  return e.code === 404 || e.statusCode === 404;
+}

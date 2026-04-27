@@ -13,7 +13,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
 import { StubDispatcher } from './dispatcher.js';
-import { reconcileAgentTask, type ReconcileDeps } from './reconcile.js';
+import {
+  markAgentTaskFailedFromExternal,
+  reconcileAgentTask,
+  type ReconcileDeps,
+} from './reconcile.js';
 
 /* =====================================================================
  * Mock factories — stand in for @kubernetes/client-node clients.
@@ -343,5 +347,93 @@ describe('reconcileAgentTask — namespace defaulting', () => {
     expect(deps.mocks.batchApi.createNamespacedJob).toHaveBeenCalledWith(
       expect.objectContaining({ namespace: 'default' }),
     );
+  });
+});
+
+describe('markAgentTaskFailedFromExternal', () => {
+  const ref = { namespace: 'kagent-system', name: 'smoke-test' };
+  const failure = {
+    reason: 'ImagePullBackOff',
+    message: 'manifest unknown',
+    source: 'pod' as const,
+  };
+  const fixedNow = new Date('2026-04-27T05:30:00.000Z');
+
+  it('marks Failed when AgentTask is currently Dispatched', async () => {
+    const customApi: MockCustomApi = {
+      getNamespacedCustomObject: vi
+        .fn()
+        .mockResolvedValue(makeTask({ status: { phase: 'Dispatched' } })),
+      patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    };
+    const action = await markAgentTaskFailedFromExternal(ref, failure, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      now: () => fixedNow,
+    });
+    expect(action).toEqual({ kind: 'marked-failed', previousPhase: 'Dispatched' });
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          status: expect.objectContaining({
+            phase: 'Failed',
+            error: '[pod/ImagePullBackOff] manifest unknown',
+            completedAt: fixedNow.toISOString(),
+          }),
+        },
+      }),
+      expect.objectContaining({ middleware: expect.any(Array) }),
+    );
+  });
+
+  it('skips when AgentTask is already Completed (preserves agent-pod success)', async () => {
+    const customApi: MockCustomApi = {
+      getNamespacedCustomObject: vi
+        .fn()
+        .mockResolvedValue(makeTask({ status: { phase: 'Completed' } })),
+      patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    };
+    const action = await markAgentTaskFailedFromExternal(ref, failure, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'skipped', reason: 'already-completed' });
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('skips when AgentTask is already Failed (idempotent)', async () => {
+    const customApi: MockCustomApi = {
+      getNamespacedCustomObject: vi
+        .fn()
+        .mockResolvedValue(makeTask({ status: { phase: 'Failed' } })),
+      patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    };
+    const action = await markAgentTaskFailedFromExternal(ref, failure, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'skipped', reason: 'already-failed' });
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('skips silently when AgentTask is gone (404 — race vs. owner GC)', async () => {
+    const customApi: MockCustomApi = {
+      getNamespacedCustomObject: vi.fn().mockRejectedValue({ code: 404 }),
+      patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    };
+    const action = await markAgentTaskFailedFromExternal(ref, failure, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'skipped', reason: 'not-found' });
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('marks Failed when status.phase is unset (early failure before reconcile)', async () => {
+    const customApi: MockCustomApi = {
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeTask()),
+      patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    };
+    const action = await markAgentTaskFailedFromExternal(ref, failure, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      now: () => fixedNow,
+    });
+    expect(action).toEqual({ kind: 'marked-failed', previousPhase: '(unset)' });
   });
 });
