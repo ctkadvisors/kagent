@@ -40,10 +40,12 @@ jobs:
           driver-opts: image=moby/buildkit:latest
 
       - name: Log in to git.knuteson.io
+        # gitea.actor + secrets.GITEA_TOKEN are auto-injected by the
+        # runner — no manual secret setup needed for same-owner pushes.
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.GITEA_USERNAME }}
+          username: ${{ gitea.actor }}
           password: ${{ secrets.GITEA_TOKEN }}
 
       - name: Extract operator metadata
