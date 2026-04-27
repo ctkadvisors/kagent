@@ -16,6 +16,8 @@
 
 import type { V1ObjectMeta } from '@kubernetes/client-node';
 
+import type { ArtifactRef } from './artifact-ref.js';
+
 export const API_GROUP = 'kagent.knuteson.io';
 export const API_VERSION = 'v1alpha1';
 export const API_GROUP_VERSION = `${API_GROUP}/${API_VERSION}` as const;
@@ -111,6 +113,15 @@ export interface AgentTaskStatus {
   readonly structuralVerdict?: {
     readonly suspicious: readonly string[];
   };
+  /**
+   * Artifacts produced by this task (substrate-defined `ArtifactRef`s).
+   * Empty/undefined = no artifacts. Bytes live behind `uri` in the
+   * configured backend (PVC v0.1, MinIO v0.2); etcd carries metadata
+   * only. See `docs/ARTIFACTS.md` for the addressing scheme + retention
+   * policy. Optional / additive in v0.1 — no agent loop populates this
+   * yet (writer lands in the next slice).
+   */
+  readonly artifacts?: readonly ArtifactRef[];
 }
 
 export interface AgentTask {
