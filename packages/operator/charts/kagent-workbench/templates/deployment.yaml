@@ -1,0 +1,144 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Workbench Deployment — single Pod, two containers:
+
+  - `api`: workbench-api (Bun/Node). Talks to the Kubernetes API
+    server using the chart-managed ServiceAccount. Owns the read-only
+    facade (Agent/AgentTask/AgentCapability + Job/Pod/Event watches)
+    and serves SSE/JSON under /api/. Listens on api.port (8080).
+
+  - `ui`: workbench-ui sidecar (nginx-alpine baking the Next.js
+    static `out/`/`dist/` build). No K8s creds. Listens on ui.port
+    (8081). The api container proxies non-/api requests to this
+    sidecar over loopback (127.0.0.1:{ui.port}).
+
+Why one Pod with a sidecar instead of two Deployments:
+  - The api/ui contract is loopback-only (UI is a pure browser
+    bundle once served — no in-cluster UI→service hop).
+  - Lifecycle is coupled (no UI without API).
+  - Avoids a second Service + a second pull spec for what is, in
+    practice, one console.
+
+Single-replica is fine for MVP — workbench holds only K8s-watch
+state, which it rebuilds from the API server on restart. Bump
+replicaCount once you care about brief restart-window blips during
+rollouts.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kagent-workbench.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-workbench.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "kagent-workbench.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: {{ include "kagent-workbench.api.image" . }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.api.port }}
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: WORKBENCH_PORT
+              value: {{ .Values.api.port | quote }}
+            - name: WORKBENCH_HOSTNAME
+              value: '0.0.0.0'
+            # Loopback URL for the api → ui static-asset proxy.
+            - name: WORKBENCH_UI_UPSTREAM
+              value: 'http://127.0.0.1:{{ .Values.ui.port }}'
+            {{- with .Values.api.langfuseBaseUrl }}
+            - name: LANGFUSE_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.api.authRequired }}
+            - name: WORKBENCH_AUTH_REQUIRED
+              value: {{ . | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.api.healthPath }}
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.api.healthPath }}
+              port: api
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+        - name: ui
+          image: {{ include "kagent-workbench.ui.image" . }}
+          imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+          ports:
+            - name: ui
+              containerPort: {{ .Values.ui.port }}
+              protocol: TCP
+          env:
+            # The UI image's nginx config reads PORT to know where to
+            # bind. Sidecar contract — workbench-ui's Dockerfile honors
+            # this.
+            - name: PORT
+              value: {{ .Values.ui.port | quote }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.ui.healthPath }}
+              port: ui
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.ui.healthPath }}
+              port: ui
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.ui.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

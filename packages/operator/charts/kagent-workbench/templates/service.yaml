@@ -1,0 +1,36 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Single ClusterIP Service exposing both containers in the workbench
+Pod:
+
+  - port 80   → api.port (default 8080), name `api`
+  - port 81   → ui.port  (default 8081), name `ui`
+
+The Ingress / IngressRoute targets the `api` port — the api container
+proxies static-asset requests to the `ui` sidecar internally over
+loopback. Exposing the `ui` port on the Service is intentional for
+debugging / direct port-forward (`kubectl port-forward svc/...
+8081:81`), not for normal traffic flow.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "kagent-workbench.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: 80
+      targetPort: api
+      protocol: TCP
+    - name: ui
+      port: 81
+      targetPort: ui
+      protocol: TCP

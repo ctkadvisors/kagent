@@ -1,0 +1,98 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Ingress — TWO RENDER PATHS, both gated on `ingress.enabled=true`:
+
+  1. PLAIN INGRESS (`networking.k8s.io/v1 Ingress`) when
+     `ingress.authMiddleware` is BLANK. Use this on clusters where
+     auth + TLS are handled outside the chart (cert-manager
+     annotations on the Ingress, oauth2-proxy front-door, etc.).
+     Routes the host's `/` to the workbench Service's `api` port (80).
+
+  2. TRAEFIK INGRESSROUTE (`traefik.io/v1alpha1 IngressRoute`) when
+     `ingress.authMiddleware` is SET. Use this on the homelab K3s
+     cluster, which runs Traefik with IngressRoute CRDs and shared
+     Middlewares (`security-headers`, `rate-limit`, etc.). The
+     auth Middleware reference (e.g. a basicAuth Middleware named
+     `kagent-workbench-basic-auth`) is the only Middleware the chart
+     wires in — auth is the load-bearing concern. The Middleware
+     itself is NOT created by this chart (provision a Sealed-Secret
+     -backed basicAuth Middleware in the Release namespace, or
+     point at a `forwardAuth` Middleware in the future-shared
+     ingress-system namespace).
+
+See new_localai/docs/kagent-workbench-rbac.md §3 for the full auth
+rationale.
+*/}}
+{{- if .Values.ingress.enabled -}}
+{{- if not .Values.ingress.host -}}
+{{- fail "ingress.host is required when ingress.enabled=true" -}}
+{{- end -}}
+{{- $fullName := include "kagent-workbench.fullname" . -}}
+{{- $svcName := include "kagent-workbench.fullname" . -}}
+{{- if .Values.ingress.authMiddleware }}
+# Render path 2: Traefik IngressRoute with auth Middleware chained in.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ .Values.ingress.host }}`)
+      kind: Rule
+      services:
+        - name: {{ $svcName }}
+          port: 80
+      middlewares:
+        - name: {{ .Values.ingress.authMiddleware }}
+          namespace: {{ .Release.Namespace }}
+  {{- if .Values.ingress.tls.secretName }}
+  tls:
+    secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+{{- else }}
+# Render path 1: vanilla networking.k8s.io/v1 Ingress.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.secretName }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $svcName }}
+                port:
+                  number: 80
+{{- end }}
+{{- end }}
