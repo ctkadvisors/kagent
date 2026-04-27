@@ -47,7 +47,20 @@ importers:
 
   packages/agent-loop: {}
 
-  packages/agent-pod: {}
+  packages/agent-pod:
+    dependencies:
+      '@kagent/agent-loop':
+        specifier: workspace:*
+        version: link:../agent-loop
+      '@kagent/openai-compat':
+        specifier: workspace:*
+        version: link:../openai-compat
+      '@kagent/trace-sinks':
+        specifier: workspace:*
+        version: link:../trace-sinks
+      '@kubernetes/client-node':
+        specifier: 1.4.0
+        version: 1.4.0
 
   packages/http-tool-provider:
     dependencies:
