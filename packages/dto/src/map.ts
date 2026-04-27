@@ -4,8 +4,8 @@
  */
 
 /**
- * Pure mapping helpers — `taskSummary`, `taskDetail`, `podFailureSummary`.
- * Every helper:
+ * Pure mapping helpers — `taskSummary`, `taskDetail`, `agentSummary`,
+ * `podFailureSummary`, `traceLink`. Every helper:
  *
  *   1. Takes plain object inputs (no K8s clients, no fetch).
  *   2. Tolerates partial fixtures (missing status, missing pod, missing
@@ -24,7 +24,16 @@ import type { V1ContainerStatus, V1Job, V1Pod } from '@kubernetes/client-node';
 
 import type { Agent, AgentTask } from './crds.js';
 import { detectFailure } from './failure.js';
-import type { EventSummary, PodFailureSummary, TaskDetail, TaskSummary } from './types.js';
+import type {
+  AgentSummary,
+  AgentTaskCounts,
+  ArtifactSummary,
+  EventSummary,
+  PodFailureSummary,
+  TaskDetail,
+  TaskSummary,
+  TraceLink,
+} from './types.js';
 
 /* =====================================================================
  * Task mappers
@@ -108,6 +117,78 @@ export function taskDetail(task: AgentTask, opts: TaskDetailOptions = {}): TaskD
 }
 
 /* =====================================================================
+ * Agent mapper
+ * ===================================================================== */
+
+export interface AgentSummaryOptions {
+  /**
+   * Optional snapshot of AgentTasks the caller wants counted into the
+   * summary. Filters by `spec.targetAgent === agent.metadata.name` AND
+   * matching namespace. No filter = no counts (avoids cross-namespace
+   * counting surprises).
+   */
+  readonly tasks?: readonly AgentTask[];
+}
+
+const ZERO_COUNTS: AgentTaskCounts = {
+  pending: 0,
+  dispatched: 0,
+  completed: 0,
+  failed: 0,
+};
+
+export function agentSummary(agent: Agent, opts: AgentSummaryOptions = {}): AgentSummary {
+  const namespace = agent.metadata.namespace ?? 'default';
+  const counts = opts.tasks
+    ? countTasks(agent.metadata.name ?? '', namespace, opts.tasks)
+    : ZERO_COUNTS;
+
+  return {
+    name: agent.metadata.name ?? '',
+    namespace,
+    model: agent.spec.model,
+    sandboxProfile: agent.spec.sandboxProfile ?? 'default',
+    capabilities: agent.spec.capabilities ?? [],
+    tools: agent.spec.tools ?? [],
+    recentTaskCounts: counts,
+  };
+}
+
+function countTasks(
+  agentName: string,
+  namespace: string,
+  tasks: readonly AgentTask[],
+): AgentTaskCounts {
+  let pending = 0;
+  let dispatched = 0;
+  let completed = 0;
+  let failed = 0;
+  for (const t of tasks) {
+    if (t.spec.targetAgent !== agentName) continue;
+    if ((t.metadata.namespace ?? 'default') !== namespace) continue;
+    switch (t.status?.phase) {
+      case 'Pending':
+        pending++;
+        break;
+      case 'Dispatched':
+        dispatched++;
+        break;
+      case 'Completed':
+        completed++;
+        break;
+      case 'Failed':
+        failed++;
+        break;
+      default:
+        // Unset phase counts as Pending — the operator hasn't observed it yet.
+        pending++;
+        break;
+    }
+  }
+  return { pending, dispatched, completed, failed };
+}
+
+/* =====================================================================
  * Failure mapper
  * ===================================================================== */
 
@@ -171,6 +252,76 @@ export function podFailureSummary(job: V1Job, pod?: V1Pod): PodFailureSummary | 
 
   return summary;
 }
+
+/* =====================================================================
+ * Trace link mapper
+ * ===================================================================== */
+
+export interface TraceLinkOptions {
+  readonly provider: TraceLink['provider'];
+  /**
+   * Provider base URL (e.g. `https://langfuse.knuteson.io`). When set,
+   * the mapper returns a fully-resolved deep-link in `url`. When omitted,
+   * the URL is left undefined and the consumer can render runId-only.
+   */
+  readonly baseUrl?: string;
+}
+
+/**
+ * Build a TraceLink from a task UID. Returns null when the task lacks a
+ * UID (defensive — list-row renderers shouldn't show a "View trace"
+ * button that 404s).
+ *
+ * Substrate convention (per Phase 4 OTel sink): the AgentTask UID is
+ * re-used as the trace's runId. If a future provider needs a different
+ * mapping, feature-detect on `provider` and branch here.
+ */
+export function traceLink(task: AgentTask, opts: TraceLinkOptions): TraceLink | null {
+  const uid = task.metadata.uid;
+  if (typeof uid !== 'string' || uid.length === 0) return null;
+
+  const link: { provider: TraceLink['provider']; runId: string; url?: string } = {
+    provider: opts.provider,
+    runId: uid,
+  };
+
+  if (opts.baseUrl !== undefined) {
+    link.url = renderTraceUrl(opts.provider, opts.baseUrl, uid);
+  }
+
+  return link;
+}
+
+function renderTraceUrl(provider: TraceLink['provider'], baseUrl: string, runId: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  switch (provider) {
+    case 'langfuse':
+      // Langfuse trace URLs follow `<host>/trace/<traceId>` per the
+      // self-hosted UI route. v0.2 will revisit if Langfuse changes.
+      return `${trimmed}/trace/${runId}`;
+    case 'jaeger':
+      // Jaeger UI: `<host>/trace/<traceId>`.
+      return `${trimmed}/trace/${runId}`;
+    case 'otel-collector':
+      // OTel collector has no UI; return the OTLP endpoint as-is so a
+      // CLI consumer can curl it. Workbench callers usually pass
+      // 'langfuse' once Langfuse is up.
+      return trimmed;
+    default: {
+      // Exhaustive switch — TS will error here if a new provider lands
+      // and we forget to handle it.
+      const _exhaustive: never = provider;
+      return _exhaustive;
+    }
+  }
+}
+
+/* =====================================================================
+ * Re-exports for ergonomics — these aren't mappers but consumers usually
+ * want the placeholder type alongside the live ones.
+ * ===================================================================== */
+
+export type { ArtifactSummary };
 
 /* =====================================================================
  * Internal helpers

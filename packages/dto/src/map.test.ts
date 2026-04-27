@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { V1Job, V1Pod } from '@kubernetes/client-node';
 
 import { type Agent, type AgentTask, type AgentTaskPhase, type AgentTaskStatus } from './crds.js';
-import { podFailureSummary, taskDetail, taskSummary } from './map.js';
+import { agentSummary, podFailureSummary, taskDetail, taskSummary, traceLink } from './map.js';
 
 /* =====================================================================
  * Fixture builders
@@ -119,7 +119,7 @@ function podWithImagePullBackOff(): V1Pod {
 }
 
 /* =====================================================================
- * taskSummary — phase coverage (the 7 states the brief calls out)
+ * taskSummary — phase coverage
  * ===================================================================== */
 
 describe('taskSummary', () => {
@@ -267,8 +267,51 @@ describe('taskDetail', () => {
 });
 
 /* =====================================================================
- * podFailureSummary — covers the brief's Failed-via-ImagePullBackOff
- * and Failed-via-DeadlineExceeded cases.
+ * agentSummary
+ * ===================================================================== */
+
+describe('agentSummary', () => {
+  it('maps base fields with defaults when sandboxProfile is unset', () => {
+    const a = makeAgent({ sandboxProfile: undefined });
+    expect(agentSummary(a)).toMatchObject({
+      name: 'researcher',
+      namespace: 'kagent-system',
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      sandboxProfile: 'default',
+      capabilities: ['research'],
+      tools: ['fetch_url'],
+      recentTaskCounts: { pending: 0, dispatched: 0, completed: 0, failed: 0 },
+    });
+  });
+
+  it('counts tasks by phase when a snapshot is supplied', () => {
+    const a = makeAgent();
+    const tasks: AgentTask[] = [
+      makeTask({ name: 'a', uid: 'u1', phase: 'Pending' }),
+      makeTask({ name: 'b', uid: 'u2', phase: 'Dispatched' }),
+      makeTask({ name: 'c', uid: 'u3', phase: 'Completed' }),
+      makeTask({ name: 'd', uid: 'u4', phase: 'Completed' }),
+      makeTask({ name: 'e', uid: 'u5', phase: 'Failed' }),
+      // Different agent — must not be counted
+      makeTask({ name: 'f', uid: 'u6', phase: 'Failed', spec: { targetAgent: 'other' } }),
+    ];
+    expect(agentSummary(a, { tasks }).recentTaskCounts).toEqual({
+      pending: 1,
+      dispatched: 1,
+      completed: 2,
+      failed: 1,
+    });
+  });
+
+  it('counts a task with undefined phase as pending (operator unobserved)', () => {
+    const a = makeAgent();
+    const tasks: AgentTask[] = [makeTask({ name: 'unseen', uid: 'u' })];
+    expect(agentSummary(a, { tasks }).recentTaskCounts.pending).toBe(1);
+  });
+});
+
+/* =====================================================================
+ * podFailureSummary
  * ===================================================================== */
 
 describe('podFailureSummary', () => {
@@ -314,5 +357,55 @@ describe('podFailureSummary', () => {
     expect(s?.verdict.source).toBe('job');
     expect(s?.podName).toBeUndefined();
     expect(s?.lastTransitionTime).toBe('2026-04-26T12:01:00.000Z');
+  });
+});
+
+/* =====================================================================
+ * traceLink
+ * ===================================================================== */
+
+describe('traceLink', () => {
+  it('returns null when the task has no UID', () => {
+    const t = makeTask({});
+    const tWithoutUid: AgentTask = {
+      ...t,
+      metadata: { ...t.metadata, uid: undefined },
+    };
+    expect(traceLink(tWithoutUid, { provider: 'langfuse' })).toBeNull();
+  });
+
+  it('returns provider + runId without URL when no baseUrl', () => {
+    const t = makeTask({});
+    expect(traceLink(t, { provider: 'langfuse' })).toEqual({
+      provider: 'langfuse',
+      runId: '9b1a8c4e-fixture',
+    });
+  });
+
+  it('renders Langfuse trace URL', () => {
+    const t = makeTask({});
+    expect(
+      traceLink(t, { provider: 'langfuse', baseUrl: 'https://langfuse.knuteson.io/' }),
+    ).toEqual({
+      provider: 'langfuse',
+      runId: '9b1a8c4e-fixture',
+      url: 'https://langfuse.knuteson.io/trace/9b1a8c4e-fixture',
+    });
+  });
+
+  it('renders Jaeger trace URL', () => {
+    const t = makeTask({});
+    expect(traceLink(t, { provider: 'jaeger', baseUrl: 'https://jaeger.local' })).toMatchObject({
+      url: 'https://jaeger.local/trace/9b1a8c4e-fixture',
+    });
+  });
+
+  it('renders OTel-collector base URL as-is', () => {
+    const t = makeTask({});
+    expect(
+      traceLink(t, { provider: 'otel-collector', baseUrl: 'https://otel-collector:4318/' }),
+    ).toMatchObject({
+      url: 'https://otel-collector:4318',
+    });
   });
 });

@@ -28,11 +28,25 @@
  * never throw; they degrade missing inputs to `undefined` fields.
  */
 
-export type { EventSummary, PodFailureSummary, TaskDetail, TaskSummary } from './types.js';
+export type {
+  AgentSummary,
+  AgentTaskCounts,
+  ArtifactSummary,
+  EventSummary,
+  PodFailureSummary,
+  TaskDetail,
+  TaskSummary,
+  TraceLink,
+} from './types.js';
 
-export { podFailureSummary, taskDetail, taskSummary } from './map.js';
+export { agentSummary, podFailureSummary, taskDetail, taskSummary, traceLink } from './map.js';
 
-export type { TaskDetailOptions, TaskSummaryOptions } from './map.js';
+export type {
+  AgentSummaryOptions,
+  TaskDetailOptions,
+  TaskSummaryOptions,
+  TraceLinkOptions,
+} from './map.js';
 
 // Re-export the canonical FailureVerdict shape so clients don't have to
 // import from @kagent/operator. See packages/dto/src/failure.ts for the

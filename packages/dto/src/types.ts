@@ -157,6 +157,49 @@ export interface EventSummary {
 }
 
 /* =====================================================================
+ * AgentSummary — Agent-list-row shape.
+ *
+ * Minimum a "what agents are deployed in this namespace" view needs:
+ * identity, model, capabilities, configured tools, and a coarse count
+ * of recent task activity. Counts are derived from a caller-supplied
+ * task list snapshot (no network access from this layer).
+ * ===================================================================== */
+
+export interface AgentSummary {
+  /** Agent metadata.name. */
+  readonly name: string;
+
+  /** Agent metadata.namespace. */
+  readonly namespace: string;
+
+  /** Model identifier (Agent.spec.model). */
+  readonly model: string;
+
+  /** Sandbox profile — 'default' or 'strict'. Falls back to 'default' when unset. */
+  readonly sandboxProfile: 'default' | 'strict';
+
+  /** Capability tags the agent satisfies (Agent.spec.capabilities). */
+  readonly capabilities: readonly string[];
+
+  /** Tool names the agent is allowed to invoke (Agent.spec.tools). */
+  readonly tools: readonly string[];
+
+  /**
+   * Recent task-phase counts. Filled when the caller supplies a
+   * `tasks` snapshot to the mapper; defaults to all-zero otherwise.
+   * The mapper does NOT fetch tasks itself — substrate stays pure.
+   */
+  readonly recentTaskCounts: AgentTaskCounts;
+}
+
+export interface AgentTaskCounts {
+  readonly pending: number;
+  readonly dispatched: number;
+  readonly completed: number;
+  readonly failed: number;
+}
+
+/* =====================================================================
  * PodFailureSummary — terminal-failure projection for a Job/Pod pair.
  *
  * Wraps FailureVerdict (re-exported from index) with the K8s-side
@@ -184,4 +227,53 @@ export interface PodFailureSummary {
    * Pod conditions / waiting state. Undefined when nothing's available.
    */
   readonly lastTransitionTime?: string;
+}
+
+/* =====================================================================
+ * TraceLink — observability deep-link.
+ *
+ * The substrate emits OTel spans (Phase 4 onward); v0.1 trace store is
+ * "OTLP-collector or nothing" with Langfuse landing in v0.2. The link
+ * lets a Workbench detail panel render a "View trace" affordance
+ * without the DTO layer knowing the provider URL by heart.
+ * ===================================================================== */
+
+export interface TraceLink {
+  readonly provider: 'langfuse' | 'jaeger' | 'otel-collector';
+  /** Trace / run identifier — usually the AgentTask UID re-used as the trace ID. */
+  readonly runId: string;
+  /**
+   * Fully-resolved deep-link, when the caller supplied a `baseUrl` to
+   * the mapper. Undefined when no baseUrl is configured (the substrate
+   * doesn't know where the trace UI lives).
+   */
+  readonly url?: string;
+}
+
+/* =====================================================================
+ * ArtifactSummary — placeholder for the Phase 5 Artifacts workstream.
+ *
+ * docs/ARTIFACTS.md proposes `ArtifactRef` with required fields uri /
+ * name / mediaType / sizeBytes / checksum / producedAt / producedBy.
+ * This DTO carries a SUBSET — only what a list-row needs — so the
+ * Workbench can render artifact lists today even though the operator
+ * hasn't started writing AgentTaskStatus.artifacts yet.
+ *
+ * When the Artifacts workstream lands, ArtifactSummary collapses into
+ * ArtifactRef (or wraps it 1:1) — no breaking change for consumers
+ * because the field set here is a strict subset.
+ * ===================================================================== */
+
+export interface ArtifactSummary {
+  /** Backend-addressable URI (pvc://… in v0.1, s3://… in v0.2). */
+  readonly uri: string;
+
+  /** RFC 6838 media type, when known. */
+  readonly mediaType?: string;
+
+  /** Byte count at write time, when known. */
+  readonly sizeBytes?: number;
+
+  /** UID of the AgentTask that produced this artifact, when known. */
+  readonly producedByTask?: string;
 }
