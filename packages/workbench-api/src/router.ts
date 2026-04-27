@@ -22,26 +22,59 @@ import { agentsRoute } from './routes/agents.js';
 import { healthzRoute } from './routes/healthz.js';
 import { streamRoute } from './routes/stream.js';
 import { tasksRoute } from './routes/tasks.js';
+import { uiProxyRoute } from './routes/ui-proxy.js';
 
 export interface RouterDeps {
   readonly cache: SnapshotCache;
   readonly broker: SseBroker;
   readonly ready: () => boolean;
+  /**
+   * Loopback URL of the workbench-ui sidecar. When set, non-API
+   * routes proxy to it; when omitted, non-API routes 404 (which is
+   * the right behavior out-of-cluster + in tests). The chart's
+   * deployment.yaml sets `WORKBENCH_UI_UPSTREAM=http://127.0.0.1:8081`.
+   */
+  readonly uiUpstream?: string;
+  /**
+   * Test-injectable fetch for the UI proxy. Defaults to global fetch.
+   */
+  readonly proxyFetch?: typeof fetch;
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
   const app = new Hono();
 
-  // Liveness/readiness — mounted at the root.
+  // Liveness/readiness — mounted at the root. Probes hit the pod
+  // port directly (not via Ingress).
   app.route('/', healthzRoute({ cache: deps.cache, ready: deps.ready }));
 
-  // API surface — read-only GETs only in v0.1.
+  // API surface — read-only GETs only in v0.1. Each route owns its
+  // own /api/* prefix internally; mounting at '/' here keeps the
+  // surface flat for a future SemVer-aware mount move.
   app.route('/', tasksRoute({ cache: deps.cache }));
   app.route('/', agentsRoute({ cache: deps.cache }));
   app.route('/', streamRoute({ broker: deps.broker }));
 
-  // Catch-all 404 with a JSON body so the UI doesn't have to parse HTML.
-  app.notFound((c) => c.json({ error: 'not-found', path: c.req.path }, 404));
+  // Sidecar UI proxy — catches every non-API path the routes above
+  // didn't claim. Hono's first-match-wins routing means the API
+  // routes always take precedence; this proxy fields `/`,
+  // `/index.html`, `/assets/*`, etc. In test mode (no upstream
+  // configured), keep the JSON 404 so harnesses can still assert
+  // miss behavior.
+  if (deps.uiUpstream !== undefined && deps.uiUpstream.length > 0) {
+    app.route(
+      '/',
+      uiProxyRoute({
+        upstream: deps.uiUpstream,
+        ...(deps.proxyFetch !== undefined && { fetch: deps.proxyFetch }),
+      }),
+    );
+  } else {
+    // No upstream — keep the JSON 404 so test harnesses can still
+    // assert miss behavior, and out-of-cluster CLI tests don't try
+    // to fetch a sidecar that doesn't exist.
+    app.notFound((c) => c.json({ error: 'not-found', path: c.req.path }, 404));
+  }
 
   return app;
 }

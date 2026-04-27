@@ -2,7 +2,7 @@
   "name": "kagent",
   "private": true,
   "version": "0.0.0",
-  "description": "K3s-native, OSS, MIT-licensed agent farm operator (Bun + NATS JetStream + LiteLLM + Langfuse + Kata).",
+  "description": "K3s-native, OSS, MIT-licensed agent farm operator (Node 22 + tsx + NATS JetStream + LiteLLM + Langfuse + Kata; Bun on the v0.2 list pending undici/TLS parity with @kubernetes/client-node).",
   "license": "MIT",
   "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "repository": {

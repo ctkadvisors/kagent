@@ -12,7 +12,10 @@
  *   4. Patch AgentTask.status via the K8s API.
  *   5. Flush OTel + exit (Job controller GCs the Pod after ttl).
  *
- * Designed for Bun (`bun src/main.ts`) — see Dockerfile in this dir.
+ * Runs under Node 22 + tsx (`node --import tsx/esm src/main.ts`); the
+ * Dockerfile in this dir bakes the same entrypoint. Bun was the v0.1
+ * target but @kubernetes/client-node's TLS path rejects K3s
+ * self-signed CAs under Bun 1.1; revisit when undici/TLS parity lands.
  */
 
 import { StdoutSink, isOtelEnabled, OtelTraceSink, setupOtelExporter } from '@kagent/trace-sinks';

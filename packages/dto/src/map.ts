@@ -80,6 +80,15 @@ export function taskSummary(task: AgentTask, opts: TaskSummaryOptions = {}): Tas
     ...(status?.structuralVerdict?.suspicious !== undefined && {
       suspicious: status.structuralVerdict.suspicious,
     }),
+    ...(status?.artifacts !== undefined && {
+      artifactCount: status.artifacts.length,
+    }),
+    ...(status?.children !== undefined && {
+      childCount: status.children.length,
+    }),
+    ...(status?.aggregatePhase !== undefined && {
+      aggregatePhase: status.aggregatePhase,
+    }),
   };
 }
 
@@ -113,6 +122,28 @@ export function taskDetail(task: AgentTask, opts: TaskDetailOptions = {}): TaskD
     ...(task.spec.parentTask !== undefined && { parentTask: task.spec.parentTask }),
     containerStatuses,
     eventsSummary: opts.events ?? [],
+    ...(task.status?.artifacts !== undefined && {
+      artifacts: task.status.artifacts.map((a): ArtifactSummary => {
+        const summary: {
+          uri: string;
+          mediaType?: string;
+          sizeBytes?: number;
+          name?: string;
+          producedAt?: string;
+          producedByTask?: string;
+        } = { uri: a.uri };
+        if (a.mediaType !== undefined) summary.mediaType = a.mediaType;
+        if (a.sizeBytes !== undefined) summary.sizeBytes = a.sizeBytes;
+        if (a.name !== undefined) summary.name = a.name;
+        if (a.producedAt !== undefined) summary.producedAt = a.producedAt;
+        if (task.metadata.uid !== undefined) summary.producedByTask = task.metadata.uid;
+        return summary;
+      }),
+    }),
+    ...(task.status?.children !== undefined && { children: task.status.children }),
+    ...(task.status?.successCount !== undefined && { successCount: task.status.successCount }),
+    ...(task.status?.failureCount !== undefined && { failureCount: task.status.failureCount }),
+    ...(task.status?.inFlightCount !== undefined && { inFlightCount: task.status.inFlightCount }),
   };
 }
 

@@ -111,17 +111,22 @@ These were intentionally cut from v0.1:
 
 ## Operational env knobs
 
-- `KAGENT_WORKBENCH_PORT` (default 8080) — HTTP listen port
-- `KAGENT_WORKBENCH_HOSTNAME` (default 0.0.0.0)
+- `WORKBENCH_PORT` (default 8080) — HTTP listen port
+- `WORKBENCH_HOSTNAME` (default 0.0.0.0)
 - `KAGENT_NO_INFORMER` — skip informer boot. Used by CI to verify the
   entrypoint resolves without contacting a cluster
+
+`WORKBENCH_*` (no `KAGENT_` prefix) is the chart contract — see
+`packages/operator/charts/kagent-workbench/templates/deployment.yaml`.
+`KAGENT_NO_INFORMER` keeps the prefix because it's a kagent-internal
+test knob, not a chart-managed runtime input.
 
 ## Verifying the entrypoint
 
 The brief asks for a brief no-cluster smoke test. The standard recipe:
 
 ```bash
-KAGENT_NO_INFORMER=1 KAGENT_WORKBENCH_PORT=18999 \
+KAGENT_NO_INFORMER=1 WORKBENCH_PORT=18999 \
   pnpm --filter @kagent/workbench-api start &
 sleep 2
 curl -sS http://127.0.0.1:18999/healthz                # → {"status":"ok"}

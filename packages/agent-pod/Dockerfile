@@ -2,8 +2,10 @@
 # Copyright (c) 2026 Chris Knuteson
 #
 # Multi-stage build for the @kagent/agent-pod runtime image. Final
-# image is `oven/bun:1.1-alpine`-based; Bun executes TypeScript
-# directly, no compile step.
+# image is `node:22-alpine`-based with `tsx` executing TypeScript
+# directly, no compile step. Bun was the original target (still
+# referenced in the runtime stage's comment block below) but reverted
+# in Phase 4.x — see the runtime-stage comment for the full reason.
 #
 # Build context is the REPO ROOT (so the workspace layout + sibling
 # packages get installed together). From the repo root:

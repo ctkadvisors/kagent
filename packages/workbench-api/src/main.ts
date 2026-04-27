@@ -9,10 +9,19 @@
  *
  * Env knobs:
  *
- *   - `KAGENT_WORKBENCH_PORT` (default 8080) — HTTP listen port.
- *   - `KAGENT_WORKBENCH_HOSTNAME` (default 0.0.0.0).
+ *   - `WORKBENCH_PORT` (default 8080) — HTTP listen port.
+ *   - `WORKBENCH_HOSTNAME` (default 0.0.0.0).
+ *   - `WORKBENCH_UI_UPSTREAM` — loopback URL of the workbench-ui
+ *     sidecar (e.g. `http://127.0.0.1:8081`). Enables the non-API
+ *     reverse-proxy path. When unset, non-API routes 404 (intended
+ *     for out-of-cluster + test contexts).
  *   - `KAGENT_NO_INFORMER` — skip informer boot. Useful for smoke-
  *     testing the entrypoint in CI without a live cluster.
+ *
+ * Naming: `WORKBENCH_*` (no `KAGENT_` prefix) is the chart contract —
+ * see packages/operator/charts/kagent-workbench/templates/deployment.yaml.
+ * `KAGENT_NO_INFORMER` keeps the prefix because it's a kagent-internal
+ * test knob, not a chart-managed runtime input.
  *
  * In-cluster boot loads via service-account mount; out-of-cluster
  * falls back to KUBECONFIG / ~/.kube/config (same convention as the
@@ -37,8 +46,8 @@ import { SseBroker } from './sse.js';
 const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 
 async function main(): Promise<void> {
-  const port = Number.parseInt(process.env.KAGENT_WORKBENCH_PORT ?? '8080', 10);
-  const hostname = process.env.KAGENT_WORKBENCH_HOSTNAME ?? '0.0.0.0';
+  const port = Number.parseInt(process.env.WORKBENCH_PORT ?? '8080', 10);
+  const hostname = process.env.WORKBENCH_HOSTNAME ?? '0.0.0.0';
   const skipInformer = process.env.KAGENT_NO_INFORMER === '1';
 
   const cache = new SnapshotCache();
@@ -61,7 +70,13 @@ async function main(): Promise<void> {
     informers = createInformerSet({ kc, customApi, coreApi, listJobs }, cache);
   }
 
-  const app = buildRouter({ cache, broker, ready: () => ready });
+  const uiUpstream = process.env.WORKBENCH_UI_UPSTREAM;
+  const app = buildRouter({
+    cache,
+    broker,
+    ready: () => ready,
+    ...(typeof uiUpstream === 'string' && uiUpstream.length > 0 && { uiUpstream }),
+  });
   const handle = startServer(app, { port, hostname });
 
   if (informers !== undefined) {

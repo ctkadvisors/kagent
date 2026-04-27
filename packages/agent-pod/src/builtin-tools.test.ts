@@ -19,16 +19,27 @@ import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertHostResolvesPublicly,
   assertUrlIsSafe,
   buildBuiltinToolRegistry,
   ENV_ALLOW_DOMAINS,
   EXTRACT_TEXT_MAX_BYTES,
   extractTextFromHtml,
   isHostAllowed,
+  type LookupFn,
   parseAllowedDomains,
   parseFeed,
   resolveBuiltinTools,
 } from './builtin-tools.js';
+
+/**
+ * Stub DNS lookup — returns a hard-coded public IPv4 for any hostname.
+ * Replaces real `dns.promises.lookup` so http_get/rss_fetch tests
+ * exercise the allowlist + redirect logic without going to live DNS.
+ * Tests that need to assert the DNS-rebinding rejection path build a
+ * separate stub inline.
+ */
+const publicLookup: LookupFn = () => Promise.resolve([{ address: '93.184.216.34', family: 4 }]);
 
 const ctx = (signal?: AbortSignal): ToolInvocationContext => ({
   runId: 'test-run',
@@ -197,6 +208,99 @@ describe('assertUrlIsSafe — SSRF + allowlist', () => {
 });
 
 /* =====================================================================
+ * SSRF guard (assertHostResolvesPublicly) — DNS-resolution check
+ * ===================================================================== */
+
+describe('assertHostResolvesPublicly — DNS-aware SSRF check', () => {
+  it('passes when the host resolves to a public IPv4', async () => {
+    const lookup: LookupFn = () => Promise.resolve([{ address: '93.184.216.34', family: 4 }]);
+    await expect(assertHostResolvesPublicly('example.com', lookup)).resolves.toBeUndefined();
+  });
+
+  it('rejects when the host resolves to RFC1918 (DNS rebinding)', async () => {
+    const lookup: LookupFn = () => Promise.resolve([{ address: '10.0.0.5', family: 4 }]);
+    await expect(assertHostResolvesPublicly('rebind.evil.com', lookup)).rejects.toThrow(
+      /policy_denied: host "rebind.evil.com" resolves to a private \/ loopback \/ link-local address \(10\.0\.0\.5\)/,
+    );
+  });
+
+  it('rejects when ANY returned record is private (defense in depth)', async () => {
+    const lookup: LookupFn = () =>
+      Promise.resolve([
+        { address: '93.184.216.34', family: 4 },
+        { address: '127.0.0.1', family: 4 },
+      ]);
+    await expect(assertHostResolvesPublicly('mixed.example.com', lookup)).rejects.toThrow(
+      /127\.0\.0\.1/,
+    );
+  });
+
+  it('rejects link-local (cloud metadata) resolutions', async () => {
+    const lookup: LookupFn = () => Promise.resolve([{ address: '169.254.169.254', family: 4 }]);
+    await expect(assertHostResolvesPublicly('metadata.google.internal', lookup)).rejects.toThrow(
+      /private \/ loopback \/ link-local/,
+    );
+  });
+
+  it('rejects IPv6 records (mirrors the literal-IPv6 stance)', async () => {
+    const lookup: LookupFn = () => Promise.resolve([{ address: '2606:4700::1111', family: 6 }]);
+    await expect(assertHostResolvesPublicly('v6.example.com', lookup)).rejects.toThrow(
+      /resolves to IPv6/,
+    );
+  });
+
+  it('fail-closed when the resolver returns no records', async () => {
+    const lookup: LookupFn = () => Promise.resolve([]);
+    await expect(assertHostResolvesPublicly('void.example.com', lookup)).rejects.toThrow(
+      /returned no addresses/,
+    );
+  });
+
+  it('fail-closed when the resolver throws (ENOTFOUND, etc.)', async () => {
+    const lookup: LookupFn = () => Promise.reject(new Error('ENOTFOUND nope.example.com'));
+    await expect(assertHostResolvesPublicly('nope.example.com', lookup)).rejects.toThrow(
+      /DNS lookup .* failed: ENOTFOUND/,
+    );
+  });
+
+  it('skips the resolver for IPv4 literals (assertUrlIsSafe handled them already)', async () => {
+    let called = false;
+    const lookup: LookupFn = () => {
+      called = true;
+      return Promise.resolve([]);
+    };
+    await expect(assertHostResolvesPublicly('1.1.1.1', lookup)).resolves.toBeUndefined();
+    expect(called).toBe(false);
+  });
+});
+
+/* =====================================================================
+ * http_get tool — DNS-rebinding integration test
+ * ===================================================================== */
+
+describe('http_get tool — DNS rebinding', () => {
+  it('refuses an allowlisted hostname that resolves to a private IP', async () => {
+    const env = { [ENV_ALLOW_DOMAINS]: 'rebind.example.com' };
+    // Hostname IS on the allowlist (operator misconfig OR adversarial DNS)
+    // but resolves to RFC1918. Without the post-resolve check, this would
+    // hit kube-apiserver / NATS / etc.
+    const rebindLookup: LookupFn = () => Promise.resolve([{ address: '10.0.0.5', family: 4 }]);
+    const reg = buildBuiltinToolRegistry({
+      env,
+      fetch: stubFetch({}), // never called — DNS check fails first
+      lookup: rebindLookup,
+    });
+    const def = reg.get('http_get')!;
+    const p = new InProcessToolProvider({ tools: [def] });
+    const r = await p.executeTool(call('http_get', { url: 'https://rebind.example.com/x' }), ctx());
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(
+      /policy_denied: host "rebind.example.com" resolves to a private/,
+    );
+  });
+});
+
+/* =====================================================================
  * extract_text
  * ===================================================================== */
 
@@ -321,7 +425,11 @@ describe('http_get tool', () => {
   const env = { [ENV_ALLOW_DOMAINS]: 'example.com,nytimes.com' };
 
   function makeProviderWith(routes: Record<string, () => Response>): InProcessToolProvider {
-    const reg = buildBuiltinToolRegistry({ env, fetch: stubFetch(routes) });
+    const reg = buildBuiltinToolRegistry({
+      env,
+      fetch: stubFetch(routes),
+      lookup: publicLookup,
+    });
     const httpGet = reg.get('http_get')!;
     return new InProcessToolProvider({ tools: [httpGet] });
   }
@@ -463,6 +571,7 @@ describe('rss_fetch tool', () => {
         'https://feeds.example.com/feed.xml': () =>
           new Response(xml, { status: 200, headers: { 'content-type': 'application/rss+xml' } }),
       }),
+      lookup: publicLookup,
     });
     const def = reg.get('rss_fetch')!;
     const p = new InProcessToolProvider({ tools: [def] });
@@ -486,6 +595,7 @@ describe('rss_fetch tool', () => {
             headers: { 'content-type': 'text/html' },
           }),
       }),
+      lookup: publicLookup,
     });
     const def = reg.get('rss_fetch')!;
     const p = new InProcessToolProvider({ tools: [def] });
@@ -512,6 +622,7 @@ describe('rss_fetch tool', () => {
       fetch: stubFetch({
         'https://feeds.example.com/missing': () => new Response('not found', { status: 404 }),
       }),
+      lookup: publicLookup,
     });
     const def = reg.get('rss_fetch')!;
     const p = new InProcessToolProvider({ tools: [def] });
@@ -521,6 +632,101 @@ describe('rss_fetch tool', () => {
     );
     expect(r.isError).toBe(true);
     expect(contentString(r)).toMatch(/upstream returned status 404/);
+  });
+});
+
+/* =====================================================================
+ * write_artifact tool — inline-mode validation
+ * ===================================================================== */
+
+describe('write_artifact tool — inline mode', () => {
+  // Stub the underlying writer so the inline path can be exercised
+  // without touching real disk. The inline branch never calls the
+  // writer anyway, but a non-inline assertion uses it.
+  const stubWriter = (
+    name: string,
+    content: string,
+    mediaType: string,
+  ): { ref: import('./artifacts.js').ArtifactRef } => ({
+    ref: {
+      uri: `pvc://kagent-artifacts/test-uid/${name}`,
+      name,
+      mediaType,
+      sizeBytes: Buffer.byteLength(content, 'utf8'),
+      checksum: 'sha256:fake',
+      producedAt: '2026-04-27T00:00:00Z',
+    },
+  });
+
+  function makeProvider(): InProcessToolProvider {
+    const reg = buildBuiltinToolRegistry({
+      env: {
+        KAGENT_TASK_ID: 'test-uid',
+        KAGENT_ARTIFACTS_DIR: '/tmp/kagent-test',
+      },
+      writeArtifact: stubWriter as unknown as Parameters<
+        typeof buildBuiltinToolRegistry
+      >[0] extends infer O
+        ? O extends { writeArtifact?: infer W }
+          ? W
+          : never
+        : never,
+      now: () => new Date('2026-04-27T00:00:00Z'),
+    });
+    const def = reg.get('write_artifact')!;
+    return new InProcessToolProvider({ tools: [def] });
+  }
+
+  it('rejects a traversal-looking name in inline mode (validateArtifactName runs)', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: '../../../etc/passwd',
+        mediaType: 'text/plain',
+        content: 'pwned',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/"name" must not contain ".." segments/);
+  });
+
+  it('rejects a name with leading "/" in inline mode', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: '/abs/digest.md',
+        mediaType: 'text/markdown',
+        content: '# hi',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/"name" must not begin with "\/"/);
+  });
+
+  it('happy path — inline mode returns a synthetic ArtifactRef without disk I/O', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: 'digest.md',
+        mediaType: 'text/markdown',
+        content: '# Hello',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    const ref = JSON.parse((r.content as { text: string }[])[0]!.text) as {
+      uri: string;
+      name: string;
+      sizeBytes: number;
+    };
+    expect(ref.uri).toBe('pvc://kagent-artifacts/test-uid/digest.md');
+    expect(ref.name).toBe('digest.md');
+    expect(ref.sizeBytes).toBe(7);
   });
 });
 

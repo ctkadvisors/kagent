@@ -1,13 +1,39 @@
 # Durable Task Graph
 
-**Date:** 2026-04-26
+**Date:** 2026-04-26 (drafted), 2026-04-27 (reconciled with what shipped)
 **Phase:** 5 (substrate primitive — parent/child AgentTask delegation)
-**Status:** Design draft, pre-implementation
+**Status:** v0.1 implementation landed; this doc reconciles design
+intent with the actual CRD/operator shape.
 **License of described code:** MIT
 
 > Read [`DESIGN-V0.1.md`](./DESIGN-V0.1.md) for v0.1 architecture and
 > [`HARNESS-LESSONS.md`](./HARNESS-LESSONS.md) for the failure modes
 > that motivate the envelope contract this builds on.
+
+## Status snapshot — v0.1 vs proposed
+
+The original draft of this document proposed a richer surface (CRD
+`childrenSummary` 6-int counter dict, `Cancelled` phase, `cancellationPolicy`,
+`maxRetries`, etc.). What actually shipped in `v0.0.4-phase4`/`v0.0.5-workbench-mvp`
+is the smaller, more conservative slice:
+
+| Surface | Proposed (early §§ + Appendix A) | Shipped (v0.1) | Where |
+| --- | --- | --- | --- |
+| Children projection | `status.children: ChildTaskRef[]` | `status.children: ChildRef[]` (`name`/`namespace`/`uid?`/`phase?`/`completedAt?`/`error?`) | `crds/agenttask.yaml`, `task-graph.ts` |
+| Aggregate counters | `childrenSummary: { total, pending, running, succeeded, failed, cancelled }` | `aggregatePhase: 'Pending' \| 'Dispatched' \| 'PartiallyComplete' \| 'AllComplete' \| 'AnyFailed'` + `successCount` + `failureCount` + `inFlightCount` | `task-graph.ts:280-320` |
+| `Cancelled` phase | Added to `AgentTaskPhase` union | Deferred — open question in `ROADMAP.md` Phase 5 footer | n/a |
+| `cancellationPolicy` spec | `propagate` (default) / `isolate` | Deferred — `isolate` semantics implicit (no cascade implemented yet) | n/a |
+| `cancellationRequestedAt` | Operator-set marker | Deferred (no in-pod NATS in v0.1) | n/a |
+| `maxRetries` / `retryCount` | Operator-driven retry | Deferred — retry happens at the Job layer when `backoffLimit > 0`, not yet at AgentTask layer | n/a |
+| `childrenTruncated` flag | Cap at 50 + flag | Deferred — no cap; relying on natural fan-out limits in v0.1 | n/a |
+
+When this doc says **"is implemented"**, treat it as v0.1 truth.
+When it says **"proposed"** or **"future"**, treat it as a forward-looking
+sketch that earned the right to be revisited only if a real workload
+demands it.
+
+The §3 reconcile algorithm IS implemented (`reconcileParentFromChildEvent`
+fires on every child status event). The §5 cascade-cancel cycle is NOT.
 
 ---
 
@@ -77,7 +103,7 @@ spec:
         outlive the parent (rare; useful for fire-and-forget fan-out).
 ```
 
-### 2.2 `AgentTask.status` additions
+### 2.2 `AgentTask.status` additions (as shipped, v0.1)
 
 ```yaml
 status:
@@ -94,46 +120,48 @@ status:
         readable surface.
       items:
         type: object
-        required: [taskUid, taskName]
+        required: [name, namespace]
         properties:
-          taskUid: { type: string }
-          taskName: { type: string }
+          name:        { type: string }
+          namespace:   { type: string }
+          uid:         { type: string }
           phase:
             type: string
-            enum: [Pending, Dispatched, Completed, Failed, Cancelled]
+            enum: [Pending, Dispatched, Completed, Failed]
           completedAt: { type: string, format: date-time }
-    childrenSummary:
-      type: object
+          error:       { type: string }
+    aggregatePhase:
+      type: string
       description: |
-        Aggregate counter view, refreshed each reconcile. Source of
-        truth for "is this parent done waiting?" without iterating
-        the children array.
-      properties:
-        total:    { type: integer, minimum: 0 }
-        pending:  { type: integer, minimum: 0 }
-        running:  { type: integer, minimum: 0 } # Dispatched
-        succeeded:{ type: integer, minimum: 0 }
-        failed:   { type: integer, minimum: 0 }
-        cancelled:{ type: integer, minimum: 0 }
-    retryCount:
+        Aggregate phase across `children`, distinct from this task's
+        own `phase` (which describes the parent's own pod-side work).
+        Source of truth for "is this parent done waiting?" without
+        iterating the children array. Computed by precedence in
+        task-graph.ts:
+          - any child Failed → AnyFailed
+          - all children Completed → AllComplete
+          - some Completed, some not → PartiallyComplete
+          - all Pending/unknown phases, none in flight → Pending
+          - otherwise → Dispatched
+      enum: [Pending, Dispatched, PartiallyComplete, AllComplete, AnyFailed]
+    successCount: { type: integer, minimum: 0 }
+    failureCount: { type: integer, minimum: 0 }
+    inFlightCount:
       type: integer
       minimum: 0
-      description: 'Number of attempts so far. 0 on first dispatch.'
-    cancellationRequestedAt:
-      type: string
-      format: date-time
       description: |
-        Set by the operator when this task is cascade-cancelled by a
-        parent, or by a future `kubectl kagent cancel` CLI. The agent
-        pod has no in-pod NATS subscription in v0.1, so it cannot
-        observe this directly — the operator deletes the underlying
-        Job after setting this field. v0.2 will surface it via NATS
-        for graceful shutdown.
+        Children whose phase is Pending, Dispatched, or absent —
+        i.e. anything the parent is still waiting on.
 ```
 
-A new terminal phase `Cancelled` joins `{Pending, Dispatched, Completed,
-Failed}`. Existing reconcile logic skips terminal phases; `Cancelled`
-slots into that set without touching the skip predicate.
+`Cancelled` is **NOT** in the v0.1 phase enum. Cancellation is hard-stop
+via Job/AgentTask deletion; the operator does not set a status marker.
+Adding `Cancelled` is on the v0.2 list; see "Open questions" below and
+the Phase 5 footer of `ROADMAP.md`.
+
+`maxRetries`, `cancellationPolicy`, `cancellationRequestedAt`, and
+`childrenTruncated` from the original draft are likewise **deferred to
+v0.2** — see the table at the top of this doc.
 
 ## 3. Reconcile strategy — how the parent waits
 
@@ -154,14 +182,17 @@ relocated to the operator's reconciler:
    on every status transition. The reconciler reads the changed task,
    notices `spec.parentTask` is set, and **enqueues a reconcile of the
    parent** by parent UID.
-3. The parent's reconcile re-projects `status.children` and
-   `status.childrenSummary` from a `LIST agenttasks
+3. The parent's reconcile re-projects `status.children`,
+   `status.aggregatePhase`, and the `successCount`/`failureCount`/
+   `inFlightCount` triple from a `LIST agenttasks
    --label-selector=kagent.knuteson.io/parent-task-uid=<parent uid>`.
 4. If the summary shows all children are terminal AND the parent's own
    pod-side work is `Completed`, the parent stays `Completed` (no-op).
-   If any child is `Failed` and `cancellationPolicy=propagate`, the
-   parent transitions to `Failed` with `error: "child <uid> failed"`
-   and cascade-cancels remaining non-terminal children.
+   In v0.1, that's the end of the loop — the parent's own pod-side
+   phase is the source of truth for its terminal state. v0.2 will
+   layer cascade-cancellation on top: see §5 for the proposal where
+   `cancellationPolicy=propagate` flips the parent to `Failed` on any
+   child failure and cascade-cancels remaining non-terminal children.
 
 **Why ownerRef-driven informer instead of NATS:**
 
@@ -192,28 +223,34 @@ hold:
 - Every entry in `status.children` is terminal
   (`Completed | Failed | Cancelled`).
 
-Algorithm (operator-side, runs on parent reconcile):
+Algorithm (operator-side, runs on parent reconcile — v0.1 shape):
 
 ```
 def aggregate(parent):
     children = LIST agenttasks WHERE label parent-task-uid == parent.uid
-    summary  = count_by_phase(children)
-    parent.status.children        = project(children)
-    parent.status.childrenSummary = summary
+    successCount  = count(c for c in children if c.phase == 'Completed')
+    failureCount  = count(c for c in children if c.phase == 'Failed')
+    inFlightCount = count(c for c in children if c.phase in {None, 'Pending', 'Dispatched'})
 
-    own_done = parent.status.phase in {Completed, Failed}
-    kids_done = (summary.total
-                 == summary.succeeded + summary.failed + summary.cancelled)
-    if not (own_done and kids_done):
-        return  # still waiting — informer will re-fire
+    aggregatePhase = (
+        'Pending'           if not children else
+        'AnyFailed'         if failureCount > 0 else
+        'AllComplete'       if inFlightCount == 0 and successCount == len(children) else
+        'PartiallyComplete' if successCount > 0 else
+        'Dispatched'
+    )
 
-    if parent.status.phase == Completed and summary.failed == 0:
-        # already correct, nothing to patch
-        return
-    if summary.failed > 0 and parent.spec.cancellationPolicy == 'propagate':
-        patch_status(parent, phase=Failed,
-                     error=f"{summary.failed} child task(s) failed")
-        cascade_cancel(non_terminal_children)
+    parent.status.children       = project(children)
+    parent.status.aggregatePhase = aggregatePhase
+    parent.status.successCount   = successCount
+    parent.status.failureCount   = failureCount
+    parent.status.inFlightCount  = inFlightCount
+
+    # NOTE: v0.1 stops here. Cascade cancellation on AnyFailed is
+    # listed in §5 for v0.2 — the operator does NOT auto-Fail the
+    # parent today. The parent's own pod-side phase is the source
+    # of truth for the parent's terminal state; aggregate fields are
+    # purely a projection for downstream consumers.
 ```
 
 Example — parent with 3 children:
@@ -223,19 +260,27 @@ status:
   phase: Completed
   result: { ... agent's own answer ... }
   children:
-    - { taskUid: c1, taskName: t1-c1, phase: Completed, completedAt: ... }
-    - { taskUid: c2, taskName: t1-c2, phase: Completed, completedAt: ... }
-    - { taskUid: c3, taskName: t1-c3, phase: Failed,    completedAt: ... }
-  childrenSummary: { total: 3, pending: 0, running: 0,
-                     succeeded: 2, failed: 1, cancelled: 0 }
+    - { name: t1-c1, namespace: kagent-system, uid: c1, phase: Completed, completedAt: ... }
+    - { name: t1-c2, namespace: kagent-system, uid: c2, phase: Completed, completedAt: ... }
+    - { name: t1-c3, namespace: kagent-system, uid: c3, phase: Failed,    completedAt: ..., error: '...' }
+  aggregatePhase: AnyFailed
+  successCount: 2
+  failureCount: 1
+  inFlightCount: 0
 ```
 
-Under `cancellationPolicy: propagate` (default), this parent would have
-flipped to `Failed` the moment c3 failed; the example above shows the
-`isolate` case where the parent's own work succeeded and one child
-failed independently.
+In v0.1 this parent stays `Completed` (its own pod-side work succeeded)
+even though `aggregatePhase=AnyFailed`. v0.2's cascade-cancellation
+work would re-introduce the option to flip the parent to `Failed` on
+any child failure — see §5 below; that path is not yet wired.
 
-## 5. Cancellation semantics
+## 5. Cancellation semantics (PROPOSED — v0.2)
+
+> **NOT IN v0.1.** The cascade-cancellation cycle described here is a
+> design proposal. v0.1 ships ownerRef-driven GC only (deleting a
+> parent AgentTask GCs its child AgentTasks transitively), with no
+> operator-managed `cancellationPolicy` and no graceful-shutdown
+> marker. Re-evaluate when a workload demands it.
 
 **OwnerRef cascade for the Job, but NOT controller-mode for the parent
 AgentTask relationship.**
@@ -263,7 +308,13 @@ The agent-pod does not observe `cancellationRequestedAt` in v0.1 (no
 in-pod NATS subscription). Cancellation is hard-stop via Job deletion.
 v0.2 will add a graceful path via NATS `agent.<id>.control.cancel`.
 
-## 6. Retry counting
+## 6. Retry counting (PROPOSED — v0.2)
+
+> **NOT IN v0.1.** `AgentTask.spec.maxRetries` and `status.retryCount`
+> are not in the shipped CRD. Retry today is whatever
+> `Job.spec.backoffLimit` does (currently 0 — single attempt). Lift
+> retry to the AgentTask layer when a workload actually needs
+> traced retry-attempt-per-Pod separation.
 
 **At AgentTask level. `Job.spec.backoffLimit` stays 0.**
 
@@ -289,9 +340,11 @@ attempt = one trace.
 
 1. **Should `status.children` cap at N entries to bound etcd object
    size?** A fan-out of 100 children blows up parent CR size. Proposal:
-   cap projection at 50, surface `childrenSummary.total` truthfully,
-   and add `status.childrenTruncated: true`. Decide by Phase 5
-   start.
+   cap projection at 50, expose total via a new top-level
+   `status.childCountTotal` (or similar), and add
+   `status.childrenTruncated: true`. v0.1 ships uncapped — relying on
+   natural fan-out limits in the researcher workload (≤5 children).
+   Re-evaluate before any wide-fan-out workload lands.
 2. **Cycle detection.** A child cannot create a task with
    `parentTask = its own ancestor`. CRD admission webhook is overkill
    for v0.1. Proposal: reconcile rejects with `Failed` if it walks
@@ -306,11 +359,15 @@ attempt = one trace.
 
 ---
 
-## Appendix A — Proposed TS shape for `packages/operator/src/crds/types.ts`
+## Appendix A — Original proposed TS shape (OBSOLETE)
 
-> **DO NOT EDIT `types.ts` from this design.** Lifecycle work is in
-> flight on the same file. Land this diff as part of Phase 5's first
-> commit, after the lifecycle PR merges.
+> **OBSOLETE — kept for design-history reference only.** This was the
+> initial Phase-5 design proposal. The actual `packages/operator/src/crds/types.ts`
+> that landed (commit `1eef69a` and follow-ups) uses a different,
+> smaller surface — see "Status snapshot" at the top of this file
+> for the shipped shape. The diff below is preserved so future
+> readers can see what was on the table when v0.2 cancellation/retry
+> work picks back up.
 
 ```ts
 // Add to AgentTaskPhase union:

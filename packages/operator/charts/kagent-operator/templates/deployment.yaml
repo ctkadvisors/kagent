@@ -80,6 +80,16 @@ spec:
             - name: KAGENT_ARTIFACT_MOUNT_PATH
               value: {{ .Values.agentPod.artifactStorage.mountPath | quote }}
             {{- end }}
+            {{- with .Values.agentPod.builtinTools.httpAllowDomains }}
+            # Built-in tool HTTP allowlist (Phase 5 / P2). Joined into a
+            # comma-separated KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS env on
+            # the operator; operator's buildJobSpecOptionsFromEnv re-emits
+            # this verbatim as KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS on
+            # every spawned agent Job, which the agent-pod's
+            # builtin-tools.ts parses with default-deny semantics.
+            - name: KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS
+              value: {{ join "," . | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Operator's livenessProbe wired in Phase 3 once a /healthz

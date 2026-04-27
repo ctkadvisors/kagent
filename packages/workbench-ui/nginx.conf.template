@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# nginx config for the workbench-ui sidecar. Templated — the
+# nginx:alpine entrypoint envsubst's ${PORT} from the container env
+# (the workbench Helm chart sets PORT to ui.port, default 8081).
+#
+# The api container is the public surface; this sidecar serves only
+# static assets over loopback, accessed via WORKBENCH_UI_UPSTREAM in
+# the api container.
+
+server {
+    listen ${PORT};
+    listen [::]:${PORT};
+
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # SPA fallback — any client-side route resolves to index.html so
+    # React Router (if added) survives a hard refresh.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Cache the immutable hashed asset bundle aggressively. vite emits
+    # everything under /assets/ with a content hash in the filename.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # index.html itself must NOT be cached so deploys take effect.
+    location = /index.html {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        expires 0;
+    }
+
+    # gzip text/html, json, svg, js, css. Skip already-compressed
+    # binaries.
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        application/javascript
+        application/json
+        application/xml
+        image/svg+xml;
+}

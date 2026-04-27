@@ -41,10 +41,13 @@ api:
   # exposes this as port 80; the Ingress / IngressRoute routes / →
   # this port.
   port: 8080
-  # Liveness/readiness probe path served by workbench-api. The
-  # workbench-api package owns this contract — the chart treats it as
-  # an interface promise from the API package.
-  healthPath: '/api/healthz'
+  # Liveness/readiness probe path served by workbench-api. K8s probes
+  # hit the pod's container port directly (bypassing the Ingress) so
+  # the value is the API's bare HTTP path, not its public Ingress URL.
+  # workbench-api/src/routes/healthz.ts mounts /healthz + /readyz at
+  # the root — readiness probe should ideally use /readyz; v0.1 uses
+  # /healthz for both for simplicity (informer warm-up grace is short).
+  healthPath: '/healthz'
   # Optional — when set, the workbench-api will surface "open trace"
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
@@ -129,14 +132,25 @@ rbac:
   create: true
 
 # ---------------------------------------------------------------------
-# Service. Exposes port 80 → api.port (8080) and port 81 → ui.port
-# (8081). The Ingress / IngressRoute routes everything to port 80
-# (api), which proxies UI requests to port 81 internally.
+# Service. Exposes port `service.port` → api container's `api.port`
+# and port `service.uiPort` → ui sidecar's `ui.port`. Defaults pair
+# 80→8080 (api) and 81→8081 (ui) — the Service-side ports are what
+# any Ingress / IngressRoute / port-forward target connects to. The
+# Ingress in this chart targets the `api` Service port; the api
+# container then proxies non-/api requests to the ui sidecar over
+# loopback (see ui-proxy.ts).
+#
+# Override the Service-side port (e.g. `service.port: 8080`) when
+# something else in the namespace already owns 80; container ports
+# (`api.port` / `ui.port`) are independent and stay 8080 / 8081 by
+# default.
 # ---------------------------------------------------------------------
 service:
   type: ClusterIP
-  port: 8080
-  uiPort: 8081
+  # Cluster-side port for the api container. Targets api.port.
+  port: 80
+  # Cluster-side port for the ui sidecar. Targets ui.port.
+  uiPort: 81
 
 # ---------------------------------------------------------------------
 # Ingress. Two render paths:

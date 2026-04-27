@@ -24,11 +24,15 @@
  *      fetches are refused. Match is exact host OR `.<domain>` suffix.
  *   2. Even if the host is allowed, the URL is run through `assertUrlIsSafe`,
  *      which inspects the host literal and rejects loopback / link-local /
- *      RFC1918 / multicast / 0.0.0.0 destinations. This is the SSRF backstop
- *      against an LLM picking `http://10.0.0.1.allowed.example.com` or a
- *      friendly redirect chain.
- *   3. Redirects are followed manually (`redirect: 'manual'`) and re-checked
- *      against the same allowlist + SSRF rules; up to 5 hops.
+ *      RFC1918 / multicast / 0.0.0.0 destinations. This is the literal-IP
+ *      backstop against an LLM picking `http://10.0.0.1.allowed.example.com`.
+ *   3. After the literal check, hostnames are DNS-resolved
+ *      (`assertHostResolvesPublicly`) and rejected if ANY returned address
+ *      is private/loopback/link-local/IPv6. Catches the case where an
+ *      allowlisted hostname resolves to a private address (intentionally,
+ *      via DNS rebinding, or accidentally via split-horizon DNS).
+ *   4. Redirects are followed manually (`redirect: 'manual'`) and re-checked
+ *      against the same allowlist + literal-IP + DNS rules; up to 5 hops.
  *   4. Bodies are truncated to 1MB to bound trace cost. Headers exposed to
  *      the LLM are an allowlist (`content-type`, `etag`, `last-modified`).
  *   5. `write_artifact` writes ONLY under `<KAGENT_ARTIFACTS_DIR>/<task-uid>/`,
@@ -36,6 +40,8 @@
  *      writes atomically (`<name>.tmp` then rename). No subprocess, no
  *      `eval`, no shell-out anywhere in this file.
  */
+
+import { promises as dns } from 'node:dns';
 
 import type { ContentBlock, ToolInvocationContext, ToolProvider } from '@kagent/agent-loop';
 import { defineInProcessTool, InProcessToolProvider } from '@kagent/in-process-tool-provider';
@@ -45,6 +51,7 @@ import {
   buildPvcUri,
   inlineSafeForArtifact,
   resolveWriterEnv,
+  validateArtifactName,
   writeArtifactToDisk,
   type ArtifactRef,
 } from './artifacts.js';
@@ -229,12 +236,89 @@ function truncateForError(s: string): string {
 }
 
 /* =====================================================================
+ * SSRF guard — DNS-resolution check for hostnames
+ *
+ * `assertUrlIsSafe` only inspects the URL string. A hostname like
+ * `evil.example.com` that resolves to `192.168.0.1` would slip through
+ * (the literal-IP branch is never hit). This second-stage check
+ * resolves the host via the OS resolver and rejects if ANY returned
+ * address is private / loopback / link-local / IPv6.
+ *
+ * TOCTOU: between this lookup and the actual fetch, DNS could change
+ * (DNS rebinding). v0.1 accepts that small window — eliminating it
+ * requires connecting to a pinned IP, which Node's `fetch` doesn't
+ * cleanly support. The realistic exposure surface is "an LLM-supplied
+ * URL whose owner controls the DNS"; pinning would require a custom
+ * `Agent`/`undici.Pool` and a Host-header rewrite. Tracked for v0.2.
+ * ===================================================================== */
+
+/** Optional DNS resolver injection point — mirrors env.fetch for tests. */
+export type LookupFn = (host: string) => Promise<readonly { address: string; family: 4 | 6 }[]>;
+
+const defaultLookup: LookupFn = async (host) => {
+  const records = await dns.lookup(host, { all: true });
+  return records.map((r) => ({ address: r.address, family: r.family as 4 | 6 }));
+};
+
+/**
+ * Resolve `host` and assert every returned address is publicly routable
+ * IPv4. Throws `policy_denied: ...` on:
+ *   - any IPv6 record (matches the existing IPv6-literal stance)
+ *   - any IPv4 in a private / loopback / link-local / multicast range
+ *   - lookup failure (no addresses, ENOTFOUND, etc. — fail-closed)
+ *
+ * The function is async because OS resolution is async; safeFetch runs
+ * it once per hop after the synchronous `assertUrlIsSafe` check.
+ */
+export async function assertHostResolvesPublicly(
+  host: string,
+  lookup: LookupFn = defaultLookup,
+): Promise<void> {
+  // Skip the resolver for IP literals — `assertUrlIsSafe` has already
+  // run the private-range check synchronously for those, and we don't
+  // want to hand `dns.lookup` a literal (some resolvers handle it,
+  // some don't).
+  if (isIPv4Literal(host) || isIPv6Literal(host)) return;
+
+  let records: readonly { address: string; family: 4 | 6 }[];
+  try {
+    records = await lookup(host);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`policy_denied: DNS lookup for "${host}" failed: ${reason}`);
+  }
+
+  if (records.length === 0) {
+    throw new Error(`policy_denied: DNS lookup for "${host}" returned no addresses`);
+  }
+
+  for (const r of records) {
+    if (r.family === 6) {
+      throw new Error(
+        `policy_denied: host "${host}" resolves to IPv6 (${r.address}); IPv6 destinations are not supported`,
+      );
+    }
+    if (isPrivateIPv4(r.address)) {
+      throw new Error(
+        `policy_denied: host "${host}" resolves to a private / loopback / link-local address (${r.address})`,
+      );
+    }
+  }
+}
+
+/* =====================================================================
  * HTTP fetch with manual redirect handling
  * ===================================================================== */
 
 interface FetchEnv {
   readonly allowed: ReadonlySet<string>;
   readonly fetch?: typeof fetch;
+  /**
+   * Test-injectable DNS resolver. Production uses Node's `dns.promises.lookup`
+   * via `defaultLookup`. Tests pass a stub that returns canned address
+   * records, exercising the SSRF rejection paths without going to real DNS.
+   */
+  readonly lookup?: LookupFn;
 }
 
 interface SafeFetchResult {
@@ -260,7 +344,9 @@ async function safeFetch(
   ctx: ToolInvocationContext,
 ): Promise<SafeFetchResult> {
   const fetchImpl = env.fetch ?? fetch;
+  const lookup = env.lookup ?? defaultLookup;
   let target = assertUrlIsSafe(initialUrl, env.allowed);
+  await assertHostResolvesPublicly(target.hostname, lookup);
 
   for (let hop = 0; hop <= HTTP_MAX_REDIRECTS; hop++) {
     const hopTimeout = AbortSignal.timeout(HTTP_FETCH_TIMEOUT_MS);
@@ -284,6 +370,7 @@ async function safeFetch(
       }
       const next = new URL(location, target);
       target = assertUrlIsSafe(next.toString(), env.allowed);
+      await assertHostResolvesPublicly(target.hostname, lookup);
       // Drain the redirect body so the connection can be reused.
       try {
         await response.arrayBuffer();
@@ -537,6 +624,12 @@ interface BuildOpts {
   /** Override the fetch impl — primarily for tests. Defaults to global `fetch`. */
   readonly fetch?: typeof fetch;
   /**
+   * Override the DNS resolver — primarily for tests so the SSRF
+   * post-resolve check can be exercised without going to real DNS.
+   * Defaults to Node's `dns.promises.lookup`.
+   */
+  readonly lookup?: LookupFn;
+  /**
    * Override the artifact writer — primarily for tests so we can assert
    * on the produced ArtifactRef without booting a real PVC mount.
    * Defaults to `writeArtifactToDisk`.
@@ -560,7 +653,11 @@ export function buildBuiltinToolRegistry(
 ): ReadonlyMap<string, InProcessToolDefinition> {
   const env = opts.env ?? process.env;
   const allowed = parseAllowedDomains(env[ENV_ALLOW_DOMAINS]);
-  const fetchEnv: FetchEnv = { allowed, ...(opts.fetch !== undefined && { fetch: opts.fetch }) };
+  const fetchEnv: FetchEnv = {
+    allowed,
+    ...(opts.fetch !== undefined && { fetch: opts.fetch }),
+    ...(opts.lookup !== undefined && { lookup: opts.lookup }),
+  };
 
   const httpGet = defineInProcessTool({
     name: 'http_get',
@@ -681,10 +778,18 @@ export function buildBuiltinToolRegistry(
       // payload qualifies, skip the FS round-trip and return a synthetic
       // ref. Callers that prefer the inline-content-in-status path can
       // see `inlineSafe: true` on the metadata and act accordingly.
+      //
+      // The name validation MUST happen here too — `writeArtifactToDisk`
+      // runs `validateArtifactName` before it touches the filesystem,
+      // but the inline path skips the writer entirely. Without this
+      // call, a name like '../../../etc/passwd' would round-trip into
+      // status.artifacts as a `pvc://...` URI, misleading any consumer
+      // that follows the URI later (Workbench, downstream agents, etc.).
       if (inline && inlineSafeForArtifact(content, mediaType)) {
+        const safeName = validateArtifactName(name);
         const synthetic: ArtifactRef = {
-          uri: buildPvcUri(writerEnv.pvcName, writerEnv.taskUid, name),
-          name,
+          uri: buildPvcUri(writerEnv.pvcName, writerEnv.taskUid, safeName),
+          name: safeName,
           mediaType,
           sizeBytes: Buffer.byteLength(content, 'utf8'),
           producedAt: clock().toISOString(),

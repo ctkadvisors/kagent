@@ -7,7 +7,9 @@
  * `@kagent/agent-pod` — in-pod runtime that hosts `@kagent/agent-loop`,
  * runs a single AgentTask, and writes the result to status. Public
  * surface re-exports the testable building blocks; the pod normally
- * runs via `bun src/main.ts` (Dockerfile entrypoint, Phase 3 C7).
+ * runs via `node --import tsx/esm src/main.ts` (Dockerfile entrypoint;
+ * Bun was the original v0.1 target but reverted in Phase 4.x — see
+ * the agent-pod Dockerfile + main.ts header for the TLS-parity story).
  */
 
 export { parseEnv } from './env.js';

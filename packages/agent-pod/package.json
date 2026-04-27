@@ -2,7 +2,7 @@
   "name": "@kagent/agent-pod",
   "version": "0.0.0",
   "private": true,
-  "description": "Bun-based agent pod runtime — hosts @kagent/agent-loop, subscribes to NATS task subjects, exports OTel traces (Phase 3).",
+  "description": "Node 22 + tsx agent pod runtime — hosts @kagent/agent-loop, runs one task per Pod, patches AgentTask.status, exports OTel traces. Bun was the v0.1 target but @kubernetes/client-node TLS parity against K3s self-signed CAs forced a revert; revisit in v0.2.",
   "license": "MIT",
   "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",

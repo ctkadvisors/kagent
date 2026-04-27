@@ -98,6 +98,46 @@
   color: #92400e;
 }
 
+.countChip {
+  display: inline-block;
+  margin-right: 0.375rem;
+  padding: 0.125rem 0.4rem;
+  border-radius: 0.25rem;
+  background: #edf2f7;
+  color: #4a5568;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.countChipMuted {
+  color: #a0aec0;
+}
+
+.aggregatePill {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: #edf2f7;
+  color: #4a5568;
+}
+
+.aggregateAllComplete {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.aggregateAnyFailed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.aggregatePartiallyComplete {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .empty {
   padding: 2rem;
   text-align: center;

@@ -17,6 +17,17 @@
 
 export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 
+/**
+ * Aggregate phase across child tasks — operator-owned projection.
+ * Mirror of @kagent/dto's `AggregatePhase`.
+ */
+export type AggregatePhase =
+  | 'Pending'
+  | 'Dispatched'
+  | 'PartiallyComplete'
+  | 'AllComplete'
+  | 'AnyFailed';
+
 export interface TaskSummary {
   readonly name: string;
   readonly namespace: string;
@@ -31,6 +42,12 @@ export interface TaskSummary {
   readonly podName?: string;
   readonly error?: string;
   readonly suspicious?: readonly string[];
+  /** Number of artifacts attached to status.artifacts. Undefined = no projection yet. */
+  readonly artifactCount?: number;
+  /** Number of children spawned via task-graph delegation. Undefined = none observed. */
+  readonly childCount?: number;
+  /** Aggregate phase across `children`, distinct from `phase`. */
+  readonly aggregatePhase?: AggregatePhase;
 }
 
 export interface CacheChangeEvent {
