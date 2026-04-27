@@ -3,11 +3,21 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import type { ChatRequest, ChatResult, ChatDelta, LLMClient } from '@kagent/agent-loop';
+import type {
+  ChatRequest,
+  ChatResult,
+  ChatDelta,
+  LLMClient,
+  ToolCall,
+  ToolDescriptor,
+  ToolInvocationContext,
+  ToolProvider,
+  ToolResult,
+} from '@kagent/agent-loop';
 import { describe, expect, it } from 'vitest';
 
 import type { PodConfig } from './env.js';
-import { pickUserMessage, runAgentTask } from './runner.js';
+import { pickUserMessage, resolveToolProviders, runAgentTask } from './runner.js';
 
 const baseConfig: PodConfig = {
   taskId: 'task-uid-1',
@@ -96,5 +106,154 @@ describe('runAgentTask', () => {
     };
     await runAgentTask(baseConfig, { llm, sinks: [sink] });
     expect(captured.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Scripted LLM that returns ONE tool_call on iteration 0, then a final
+ * text on iteration 1. Used to assert the executor actually wires the
+ * tool name through to the registered provider.
+ */
+function toolCallingLlm(toolName: string, args: Record<string, unknown>): LLMClient {
+  let called = 0;
+  return {
+    chat(_req: ChatRequest): Promise<ChatResult> {
+      called += 1;
+      if (called === 1) {
+        return Promise.resolve({
+          content: '',
+          tool_calls: [{ id: 't1', name: toolName, args }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 5, outputTokens: 5 },
+        });
+      }
+      return Promise.resolve({
+        content: 'done.',
+        stopReason: 'end_turn',
+        usage: { inputTokens: 10, outputTokens: 5 },
+      });
+    },
+    async *chatStream(_req: ChatRequest): AsyncIterable<ChatDelta> {
+      yield { content: 'done.', stopReason: 'end_turn' };
+      await Promise.resolve();
+    },
+  };
+}
+
+describe('resolveToolProviders — Agent.spec.tools wiring', () => {
+  it('returns [] when Agent.spec.tools is undefined', () => {
+    const cfg: PodConfig = { ...baseConfig, agentSpec: { ...baseConfig.agentSpec } };
+    expect(resolveToolProviders(cfg, {})).toEqual([]);
+  });
+
+  it('returns [] when Agent.spec.tools is the empty array', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: { ...baseConfig.agentSpec, tools: [] },
+    };
+    expect(resolveToolProviders(cfg, {})).toEqual([]);
+  });
+
+  it('builds one provider exposing exactly the named built-in tools', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: { ...baseConfig.agentSpec, tools: ['http_get', 'extract_text'] },
+    };
+    const providers = resolveToolProviders(cfg, {});
+    expect(providers).toHaveLength(1);
+    const desc = providers[0]!.describeTools() as ToolDescriptor[];
+    const names = desc.map((d) => d.name).sort();
+    expect(names).toEqual(['extract_text', 'http_get']);
+  });
+
+  it('throws on unknown tool name with the unknown name + known list', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: { ...baseConfig.agentSpec, tools: ['shell_exec'] },
+    };
+    expect(() => resolveToolProviders(cfg, {})).toThrow(/unknown built-in tool "shell_exec"/);
+    expect(() => resolveToolProviders(cfg, {})).toThrow(/known built-ins:/);
+  });
+
+  it('honors deps.toolProviders override (test injection wins)', () => {
+    const fake: ToolProvider = {
+      id: 'fake',
+      describeTools: () => [],
+      executeTool: () => Promise.resolve({ content: '', isError: false }),
+    };
+    const cfg: PodConfig = {
+      ...baseConfig,
+      // would otherwise throw on 'unknown_tool'; override means we never resolve.
+      agentSpec: { ...baseConfig.agentSpec, tools: ['unknown_tool'] },
+    };
+    const providers = resolveToolProviders(cfg, { toolProviders: [fake] });
+    expect(providers).toEqual([fake]);
+  });
+});
+
+describe('runAgentTask — tool wiring', () => {
+  it('boot-time error: unknown tool name in Agent.spec.tools propagates', async () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: { ...baseConfig.agentSpec, tools: ['shell_exec'] },
+    };
+    const llm = scriptedLlm('never reached.');
+    await expect(runAgentTask(cfg, { llm, sinks: [] })).rejects.toThrow(
+      /unknown built-in tool "shell_exec"/,
+    );
+  });
+
+  it('routes tool_calls to the resolved provider and emits a tool_call trace', async () => {
+    const observed: ToolCall[] = [];
+    const fake: ToolProvider = {
+      id: 'fake',
+      describeTools: (): ToolDescriptor[] => [
+        {
+          name: 'do_thing',
+          description: '',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      executeTool: (call: ToolCall, _ctx: ToolInvocationContext): Promise<ToolResult> => {
+        observed.push(call);
+        return Promise.resolve({ content: 'thing-done', isError: false });
+      },
+    };
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: { ...baseConfig.agentSpec, tools: ['do_thing'] },
+    };
+    const llm = toolCallingLlm('do_thing', { x: 1 });
+    const captured: { trace_type?: string; tool_name?: string }[] = [];
+    const sink = {
+      emit(entry: unknown): void {
+        captured.push(entry as { trace_type?: string; tool_name?: string });
+      },
+    };
+
+    const result = await runAgentTask(cfg, {
+      llm,
+      sinks: [sink],
+      toolProviders: [fake],
+    });
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.name).toBe('do_thing');
+    expect(observed[0]?.args).toEqual({ x: 1 });
+    expect(result.status).toBe('completed');
+
+    // The executor wraps every executeTool() with a tool_call trace
+    // entry per `executor.ts`; assert that we see it without
+    // reimplementing emission inside the provider.
+    const toolCallTraces = captured.filter((e) => e.trace_type === 'tool_call');
+    expect(toolCallTraces.length).toBeGreaterThanOrEqual(1);
+    expect(toolCallTraces[0]?.tool_name).toBe('do_thing');
+  });
+
+  it('runs in chat-only mode when Agent.spec.tools is unset', async () => {
+    const llm = scriptedLlm('answer with no tools.');
+    const result = await runAgentTask(baseConfig, { llm, sinks: [] });
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toMatch(/no tools/);
   });
 });
