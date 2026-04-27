@@ -167,3 +167,14 @@ export type {
   RunInput,
   AgentExecutorOptions,
 } from './executor.js';
+
+// =====================================================================
+// Run-end detector middleware
+// =====================================================================
+
+/**
+ * Pure-heuristic detectors that earn their keep at run-end (lifted from
+ * the homelab-orchestrator chat-server harness). See the per-function
+ * JSDoc and docs/HARNESS-LESSONS.md for the failure modes they catch.
+ */
+export { computeQualityFlags, detectRefusal } from './detectors/index.js';
