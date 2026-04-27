@@ -57,3 +57,20 @@ export type {
 } from './nats-dispatcher.js';
 export { NatsCapabilityRegistry } from './nats-capability-registry.js';
 export type { AgentLiveEntry, KvBucketFactory, KvBucketLike } from './nats-capability-registry.js';
+
+export {
+  PARENT_TASK_NAME_LABEL,
+  PARENT_TASK_UID_LABEL,
+  aggregateChildren,
+  buildChildTaskManifest,
+  childRef,
+  cycleCheck,
+  parentTaskRefFromChild,
+} from './task-graph.js';
+export type {
+  AggregatePhase,
+  ChildRef,
+  ChildTaskSpec,
+  CycleCheckResult,
+  ParentStatusProjection,
+} from './task-graph.js';
