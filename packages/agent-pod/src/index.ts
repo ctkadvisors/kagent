@@ -30,3 +30,20 @@ export type { RssItem } from './builtin-tools.js';
 
 export { buildStatusPatch, writeStatus, makeCustomObjectsApi } from './status.js';
 export type { StatusPatch } from './status.js';
+
+export {
+  buildPvcUri,
+  inlineSafeForArtifact,
+  isArtifactRefShape,
+  resolveWriterEnv,
+  tryParseArtifactRefFromToolOutput,
+  validateArtifactName,
+  writeArtifactToDisk,
+  DEFAULT_ARTIFACTS_DIR,
+  DEFAULT_PVC_NAME,
+  ENV_ARTIFACTS_DIR,
+  ENV_ARTIFACTS_PVC_NAME,
+  ENV_TASK_ID,
+  INLINE_DEFAULT_MAX_BYTES,
+} from './artifacts.js';
+export type { ArtifactWriterEnv, WriteArtifactResult } from './artifacts.js';

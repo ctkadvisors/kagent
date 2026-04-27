@@ -6,7 +6,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
-import { buildJobSpec, jobNameForTask } from './job-spec.js';
+import {
+  ARTIFACT_VOLUME_NAME,
+  buildJobSpec,
+  DEFAULT_ARTIFACT_MOUNT_PATH,
+  jobNameForTask,
+} from './job-spec.js';
 
 const sampleAgent: Agent = {
   apiVersion: API_GROUP_VERSION,
@@ -183,5 +188,76 @@ describe('buildJobSpec', () => {
     expect(buildJobSpec(sampleAgent, zero).spec?.activeDeadlineSeconds).toBeUndefined();
     const neg = { ...sampleTask, spec: { ...sampleTask.spec, timeoutSeconds: -5 } };
     expect(buildJobSpec(sampleAgent, neg).spec?.activeDeadlineSeconds).toBeUndefined();
+  });
+
+  /* =====================================================================
+   * Artifact PVC plumbing — Phase 5 / Platform-Priorities P3
+   * ===================================================================== */
+
+  it('omits PVC volume / volumeMount / artifact env vars when artifactPvc is unset', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    expect(job.spec?.template?.spec?.volumes).toBeUndefined();
+    const container = job.spec?.template?.spec?.containers?.[0];
+    expect(container?.volumeMounts).toBeUndefined();
+    const env = container?.env ?? [];
+    const names = env.map((e) => e.name);
+    expect(names).not.toContain('KAGENT_ARTIFACTS_DIR');
+    expect(names).not.toContain('KAGENT_ARTIFACT_PVC_NAME');
+  });
+
+  it('mounts the artifact PVC at the default path when artifactPvc.mountPath is omitted', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts' },
+    });
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes).toHaveLength(1);
+    expect(volumes[0]?.name).toBe(ARTIFACT_VOLUME_NAME);
+    expect(volumes[0]?.persistentVolumeClaim?.claimName).toBe('kagent-artifacts');
+
+    const container = job.spec?.template?.spec?.containers?.[0];
+    const mounts = container?.volumeMounts ?? [];
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0]?.name).toBe(ARTIFACT_VOLUME_NAME);
+    expect(mounts[0]?.mountPath).toBe(DEFAULT_ARTIFACT_MOUNT_PATH);
+  });
+
+  it('honors a custom artifactPvc.mountPath override', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts', mountPath: '/mnt/artifacts' },
+    });
+    const mount = job.spec?.template?.spec?.containers?.[0]?.volumeMounts?.[0];
+    expect(mount?.mountPath).toBe('/mnt/artifacts');
+  });
+
+  it('injects KAGENT_ARTIFACTS_DIR + KAGENT_ARTIFACT_PVC_NAME env when PVC is set', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts' },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_ARTIFACTS_DIR')).toBe(DEFAULT_ARTIFACT_MOUNT_PATH);
+    expect(byName.get('KAGENT_ARTIFACT_PVC_NAME')).toBe('kagent-artifacts');
+  });
+
+  it('injects KAGENT_ARTIFACTS_DIR matching the custom mountPath', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts', mountPath: '/mnt/artifacts' },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_ARTIFACTS_DIR')).toBe('/mnt/artifacts');
+    expect(byName.get('KAGENT_ARTIFACT_PVC_NAME')).toBe('kagent-artifacts');
+  });
+
+  it('artifact env vars come BEFORE extraEnv (so operator-level overrides win)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts' },
+      extraEnv: [{ name: 'KAGENT_LITELLM_BASE_URL', value: 'http://litellm:4000/v1' }],
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const idxArtifactDir = env.findIndex((e) => e.name === 'KAGENT_ARTIFACTS_DIR');
+    const idxExtra = env.findIndex((e) => e.name === 'KAGENT_LITELLM_BASE_URL');
+    expect(idxArtifactDir).toBeGreaterThan(-1);
+    expect(idxExtra).toBeGreaterThan(idxArtifactDir);
   });
 });

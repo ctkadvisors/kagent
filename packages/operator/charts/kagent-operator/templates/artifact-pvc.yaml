@@ -1,0 +1,39 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Phase 5 / Platform-Priorities P3 — shared RWX PVC backing the
+artifact writer. Mounted into every agent pod at
+`agentPod.artifactStorage.mountPath`; the in-pod `write_artifact`
+tool persists outputs under `<mountPath>/<task-uid>/<name>`.
+
+Single shared PVC across all Agents in the release namespace per
+ARTIFACTS.md §3 — sufficient for v0.1; per-Agent PVCs are a
+follow-up if mixed-Agent contention shows up. Per-task isolation is
+provided by the `<task-uid>` subdirectory the writer creates.
+
+GC: relies on the AgentTask's existing TTL +
+Job.spec.ttlSecondsAfterFinished + ownerRef cascade per
+ARTIFACTS.md §6. A dedicated sweeper Job is a follow-up; the PVC's
+own lifecycle (Retain via the SMB StorageClass) handles longer-term
+cleanup.
+*/}}
+{{- if .Values.agentPod.artifactStorage.enabled -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.agentPod.artifactStorage.pvcName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: artifact-storage
+spec:
+  accessModes:
+    - {{ .Values.agentPod.artifactStorage.accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.agentPod.artifactStorage.size | quote }}
+  {{- with .Values.agentPod.artifactStorage.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}
