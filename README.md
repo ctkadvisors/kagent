@@ -1,23 +1,23 @@
 # kagent
 
-K3s-native, OSS, MIT-licensed agent farm operator. Composes Kata Containers + NATS JetStream + Bun + LiteLLM + Langfuse into the per-agent-microVM substrate that AWS AgentCore, Cloudflare Agents + Sandbox, and Anthropic Managed Agents all ship proprietarily — and that the OSS world has not yet shipped.
+K3s-native, OSS, MIT-licensed agent farm operator. Composes Kata Containers + NATS JetStream + Node 22/Bun + LiteLLM + Langfuse into the per-agent-microVM substrate that AWS AgentCore, Cloudflare Agents + Sandbox, and Anthropic Managed Agents all ship proprietarily — and that the OSS world has not yet shipped.
 
-**Status:** pre-implementation. The "why" and "what" live in [`docs/`](./docs); the "how" lands in subsequent sessions. v0.1 scope is 4–6 weeks of focused work.
+**Status:** Phase 4 (deploy + smoke) shipped 2026-04-27. AgentTask CR → operator informer → Job → agent-pod → AgentTask.status patched, end-to-end on the homelab K3s cluster against LM Studio in ~11s. Phase 4.x lifecycle hardening (Job/Pod failure reflection, deadline enforcement) follows. v0.1 ships when the comparison-rig in Phase 5 proves no-regression vs the prior `homelab-orchestrator` baseline.
 
 **Deploy target:** K3s (homelab). Same manifests run on GKE / EKS / AKS / any Kubernetes 1.27+.
 
 ## What this is
 
-Every agent runs in its own pod. Agents discover and address each other via NATS JetStream subjects. Inference routes through a self-hosted LiteLLM proxy that fronts homelab Ollama, AWS Bedrock, Cloudflare AI Gateway, or any OpenAI-compatible backend. Every iteration is traced into self-hosted Langfuse with cost attribution. v0.2 adds Kata Containers as a `RuntimeClass` for microVM-grade per-agent isolation.
+Every agent runs in its own pod. Agents discover and address each other via NATS JetStream subjects. Inference routes through a self-hosted LiteLLM proxy that fronts homelab Ollama, AWS Bedrock, Cloudflare AI Gateway, or any OpenAI-compatible backend (the Phase 4 smoke test points directly at LM Studio). Every iteration is traced into self-hosted Langfuse with cost attribution. v0.2 adds Kata Containers as a `RuntimeClass` for microVM-grade per-agent isolation.
 
-The control plane is a small Bun + TypeScript Kubernetes operator that watches `Agent` and `AgentTask` CRDs and materializes pods (Jobs in v0.1; warm pools in v0.2). The agent runtime inside each pod is the AgentExecutor lifted from the prior `@ctkadvisors/agent-runtime` learning-experiment kernel, now repackaged as `@kagent/agent-loop` — a thin in-pod library, not a freestanding governance primitive.
+The control plane is a small TypeScript Kubernetes operator that watches `Agent` and `AgentTask` CRDs and materializes pods (Jobs in v0.1; warm pools in v0.2). Operator + agent-pod runtimes are currently **Node 22 + tsx** — Bun was the original target (see `docs/WHY.md` and CLAUDE.md), but Bun 1.1's TLS handling rejects K3s's self-signed CA in `@kubernetes/client-node`'s Watch + status-PATCH paths; revert to Bun is on the list once that lands. The agent runtime inside each pod is the AgentExecutor lifted from the prior `@ctkadvisors/agent-runtime` learning-experiment kernel, now repackaged as `@kagent/agent-loop` — a thin in-pod library, not a freestanding governance primitive.
 
 ## What this is NOT
 
 - **Not a new agent SDK.** Agents inside pods can run any TypeScript framework (Strands TS, Mastra, the forked AgentExecutor) or a hand-rolled loop. The substrate is framework-agnostic.
 - **Not a new LLM gateway.** LiteLLM does that.
 - **Not a new trace store.** Langfuse does that.
-- **Not a multi-agent framework in the LangGraph/CrewAI sense.** Topology is a property of what you put on top; the substrate ships A2A messaging primitives only.
+- **Not a multi-agent framework in the LangGraph/CrewAI sense.** Topology is a property of what you put on top; the substrate ships A2A messaging primitives only. v0.1 ships the dispatch envelope contract + NATS publish path; in-pod NATS subscription / streaming-cancel / warm-pool delegation lands in v0.2.
 - **Not a governance kernel.** That framing was retired (see [`docs/WHY.md`](./docs/WHY.md) §2). Pre-dispatch policy enforcement, if it lands at all, lands as middleware in `@kagent/agent-loop`, not as a separate runtime concept.
 
 ## Reading order
