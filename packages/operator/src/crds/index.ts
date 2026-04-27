@@ -14,3 +14,18 @@ export type {
   AgentCapability,
   AgentCapabilitySpec,
 } from './types.js';
+
+export {
+  DEFAULT_ARTIFACT_PVC,
+  INLINE_DEFAULT_MAX_BYTES,
+  inlineSafe,
+  isArtifactRef,
+  parseArtifactUri,
+  pvcUri,
+} from './artifact-ref.js';
+export type {
+  ArtifactRef,
+  ArtifactScheme,
+  InlineDecision,
+  ParsedArtifactUri,
+} from './artifact-ref.js';
