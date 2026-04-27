@@ -28,4 +28,28 @@
  * never throw; they degrade missing inputs to `undefined` fields.
  */
 
-export {} from './crds.js';
+export type { EventSummary, PodFailureSummary, TaskDetail, TaskSummary } from './types.js';
+
+export { podFailureSummary, taskDetail, taskSummary } from './map.js';
+
+export type { TaskDetailOptions, TaskSummaryOptions } from './map.js';
+
+// Re-export the canonical FailureVerdict shape so clients don't have to
+// import from @kagent/operator. See packages/dto/src/failure.ts for the
+// rationale on why this lives in @kagent/dto rather than being
+// re-exported from the operator.
+export type { FailureVerdict } from './failure.js';
+export { detectFailure, detectJobFailure, detectPodFailure } from './failure.js';
+
+// CRD shapes — re-exported so a Workbench-side caller can build fixtures
+// without depending on @kagent/operator. See src/crds.ts for the
+// duplication rationale.
+export type {
+  Agent,
+  AgentSpec,
+  AgentTask,
+  AgentTaskPhase,
+  AgentTaskSpec,
+  AgentTaskStatus,
+} from './crds.js';
+export { API_GROUP, API_GROUP_VERSION, API_VERSION } from './crds.js';
