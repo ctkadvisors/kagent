@@ -76,4 +76,60 @@ describe('buildStatusPatch', () => {
     const patch = buildStatusPatch(result, fixedNow);
     expect(patch.structuralVerdict?.suspicious).toEqual(['synthesis_low_yield']);
   });
+
+  it('omits artifacts entirely when RunResult has none (back-compat)', () => {
+    const patch = buildStatusPatch(baseResult, fixedNow);
+    expect(patch.artifacts).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(patch, 'artifacts')).toBe(false);
+  });
+
+  it('omits artifacts when RunResult.artifacts is an empty array', () => {
+    const patch = buildStatusPatch({ ...baseResult, artifacts: [] }, fixedNow);
+    expect(patch.artifacts).toBeUndefined();
+  });
+
+  it('round-trips artifacts on Completed status', () => {
+    const result: RunResult = {
+      ...baseResult,
+      artifacts: [
+        {
+          uri: 'pvc://kagent-artifacts/task-uid-1/digest.md',
+          mediaType: 'text/markdown',
+          sizeBytes: 51284,
+          checksum: 'sha256:abc123',
+          name: 'digest.md',
+          producedAt: '2026-04-26T09:59:00.000Z',
+        },
+      ],
+    };
+    const patch = buildStatusPatch(result, fixedNow);
+    expect(patch.phase).toBe('Completed');
+    expect(patch.artifacts).toHaveLength(1);
+    expect(patch.artifacts?.[0]).toEqual({
+      uri: 'pvc://kagent-artifacts/task-uid-1/digest.md',
+      mediaType: 'text/markdown',
+      sizeBytes: 51284,
+      checksum: 'sha256:abc123',
+      name: 'digest.md',
+      producedAt: '2026-04-26T09:59:00.000Z',
+    });
+  });
+
+  it('round-trips artifacts on Failed status (partial run can produce real outputs)', () => {
+    const result: RunResult = {
+      ...baseResult,
+      status: 'failed',
+      error: { message: 'LLM timeout' },
+      artifacts: [
+        {
+          uri: 'pvc://kagent-artifacts/task-uid-1/partial.md',
+          mediaType: 'text/markdown',
+        },
+      ],
+    };
+    const patch = buildStatusPatch(result, fixedNow);
+    expect(patch.phase).toBe('Failed');
+    expect(patch.artifacts).toHaveLength(1);
+    expect(patch.artifacts?.[0]?.uri).toBe('pvc://kagent-artifacts/task-uid-1/partial.md');
+  });
 });

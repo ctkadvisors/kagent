@@ -16,7 +16,7 @@
 import { CustomObjectsApi, KubeConfig, setHeaderOptions } from '@kubernetes/client-node';
 
 import type { PodConfig } from './env.js';
-import type { RunResult } from './runner.js';
+import type { ArtifactRef, RunResult } from './runner.js';
 
 /**
  * Per-call options forcing the Content-Type to merge-patch. The
@@ -39,6 +39,13 @@ export interface StatusPatch {
   readonly error?: string;
   readonly completedAt: string;
   readonly structuralVerdict?: { readonly suspicious: readonly string[] };
+  /**
+   * Artifact references produced by the agent run, forwarded as-is from
+   * `RunResult.artifacts`. Empty array is omitted (keeps the merge-patch
+   * minimal — no need to clear a field that was never set). See
+   * `docs/ARTIFACTS.md`.
+   */
+  readonly artifacts?: readonly ArtifactRef[];
 }
 
 /**
@@ -48,24 +55,34 @@ export interface StatusPatch {
 export function buildStatusPatch(result: RunResult, now: Date): StatusPatch {
   const completedAt = now.toISOString();
   const verdict = { suspicious: [...result.flags] };
+  // Forward artifacts as-is when present + non-empty. Conditional spread
+  // keeps the patch minimal for the common (no-artifacts) case so it
+  // round-trips identically to pre-P3 behavior.
+  const artifactsPatch =
+    result.artifacts && result.artifacts.length > 0
+      ? { artifacts: [...result.artifacts] }
+      : undefined;
   if (result.status === 'completed') {
     return {
       phase: 'Completed',
       result: { content: result.finalContent },
       completedAt,
       structuralVerdict: verdict,
+      ...(artifactsPatch !== undefined && artifactsPatch),
     };
   }
   // Treat any non-completed terminal status (failed / cancelled /
   // budget_exceeded / timeout) as Failed at the K8s status level —
   // the actual TerminalStatus + error message survive in the trace
-  // for offline replay.
+  // for offline replay. Artifacts produced before the failure still
+  // get surfaced (a partial run can have written real outputs).
   const message = result.error?.message ?? `loop ended with status=${result.status}`;
   return {
     phase: 'Failed',
     error: message,
     completedAt,
     structuralVerdict: verdict,
+    ...(artifactsPatch !== undefined && artifactsPatch),
   };
 }
 
