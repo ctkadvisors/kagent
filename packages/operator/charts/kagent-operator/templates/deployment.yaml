@@ -1,0 +1,71 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Operator Deployment. Single replica in v0.1 — leader election lands
+in v0.2 if multi-replica becomes useful (the watch loop is currently
+not coordination-aware).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "kagent-operator.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: operator
+          image: {{ include "kagent-operator.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            # Plumb agent-pod image config through to reconcile via env
+            # (consumed by future BuildJobSpecOptions wiring).
+            - name: KAGENT_AGENT_POD_IMAGE
+              value: '{{ .Values.agentPod.image.repository }}:{{ .Values.agentPod.image.tag }}'
+            - name: KAGENT_AGENT_POD_IMAGE_PULL_POLICY
+              value: {{ .Values.agentPod.image.pullPolicy | quote }}
+            - name: KAGENT_AGENT_POD_IMAGE_PULL_SECRET
+              value: {{ .Values.agentPod.imagePullSecret | quote }}
+            - name: KAGENT_AGENT_POD_SERVICE_ACCOUNT
+              value: {{ .Values.agentPod.serviceAccountName | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          # Operator's livenessProbe wired in Phase 3 once a /healthz
+          # endpoint exists. For v0.1, restartPolicy + watch retry is
+          # sufficient.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

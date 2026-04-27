@@ -11,3 +11,9 @@ docs/
 README.md
 CLAUDE.md
 LICENSE
+
+# Helm templates — Go templating syntax ({{- ... -}}) is not valid YAML
+# and prettier's YAML parser fails on it. The chart README + values.yaml
+# remain prettier-managed; only templates/ is exempt.
+packages/operator/charts/*/templates/
+packages/operator/charts/*/templates/**

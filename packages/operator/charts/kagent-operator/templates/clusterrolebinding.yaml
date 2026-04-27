@@ -1,0 +1,18 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kagent-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

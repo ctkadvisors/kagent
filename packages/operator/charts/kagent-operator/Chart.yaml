@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+apiVersion: v2
+name: kagent-operator
+description: |
+  K3s-native control plane that watches Agent + AgentTask CRDs
+  (kagent.knuteson.io/v1alpha1) and materializes per-task Jobs running
+  the @kagent/agent-pod runtime. Phase 2 ships dispatcher-as-stub;
+  Phase 3 wires NATS JetStream.
+type: application
+version: 0.0.2
+appVersion: '0.0.2-phase2'
+home: https://github.com/ctkadvisors/kagent
+sources:
+  - https://github.com/ctkadvisors/kagent
+maintainers:
+  - name: Chris Knuteson
+    email: cknuteson@gmail.com
+keywords:
+  - kagent
+  - agents
+  - kubernetes
+  - operator
+  - llm

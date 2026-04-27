@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+
+# kagent-operator default values.
+#
+# Override at install time with `--set` or `-f values.local.yaml`. The
+# operator runs cluster-wide in v0.1; namespaced isolation is a v0.2
+# affordance.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/ctkadvisors/kagent-operator
+  # Defaults to .Chart.appVersion; override here for dev pins.
+  tag: ''
+  pullPolicy: IfNotPresent
+
+# Image pull secret(s) for private registries. Empty = no secret.
+# Example: imagePullSecrets: [{ name: ghcr-pull }]
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  # Set to override the auto-generated SA name.
+  name: ''
+  annotations: {}
+
+# Operator container resources. Defaults are conservative for v0.1
+# (single-replica, low traffic); raise when watching many AgentTasks.
+resources:
+  requests:
+    cpu: '50m'
+    memory: '128Mi'
+  limits:
+    cpu: '500m'
+    memory: '256Mi'
+
+# Container that runs INSIDE the Pods the operator creates. v0.1 ships
+# a placeholder image — Phase 3 builds the real @kagent/agent-pod.
+agentPod:
+  image:
+    repository: ghcr.io/ctkadvisors/kagent-agent-pod
+    tag: 'v0.0.2-phase2-stub'
+    pullPolicy: IfNotPresent
+  imagePullSecret: '' # name of secret in the AgentTask's namespace
+  serviceAccountName: '' # SA the agent pod runs as; empty = default
+
+# Node placement
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod-level extras
+podAnnotations: {}
+podLabels: {}
+
+# Operator log verbosity (info | debug). Surfaces via env LOG_LEVEL.
+logLevel: 'info'
