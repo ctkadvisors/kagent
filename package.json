@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "description": "K3s-native, OSS, MIT-licensed agent farm operator (Bun + NATS JetStream + LiteLLM + Langfuse + Kata).",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ctkadvisors/kagent.git"

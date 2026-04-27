@@ -4,7 +4,7 @@
   "private": true,
   "description": "Pure DTO + read-model helpers — maps raw K8s objects (AgentTask, Job, Pod) into UI-friendly summaries any client (Workbench GUI, CLI, webhook) can consume identically.",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

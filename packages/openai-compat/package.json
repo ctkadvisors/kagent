@@ -4,7 +4,7 @@
   "private": true,
   "description": "OpenAI Chat Completions v1 LLMClient adapter — speaks the protocol against any compatible backend (LiteLLM proxy, Ollama, vLLM, OpenAI direct, Workers AI, Bedrock-via-LiteLLM).",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

@@ -15,7 +15,7 @@ sources:
   - https://github.com/ctkadvisors/kagent
 maintainers:
   - name: Chris Knuteson
-    email: cknuteson@gmail.com
+    email: chris@ctkadvisors.net
 keywords:
   - kagent
   - agents

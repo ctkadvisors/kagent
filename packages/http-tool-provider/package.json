@@ -4,7 +4,7 @@
   "private": true,
   "description": "HTTP REST ToolProvider — calls arbitrary endpoints with configurable auth + path templating; surfaces non-2xx as ToolResult{isError:true} not raw throws.",
   "license": "MIT",
-  "author": "Chris Knuteson <cknuteson@gmail.com>",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
