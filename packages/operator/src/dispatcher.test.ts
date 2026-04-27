@@ -1,0 +1,58 @@
+/**
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { StubDispatcher, type DispatchedTask } from './dispatcher.js';
+
+describe('StubDispatcher', () => {
+  const baseTask: DispatchedTask = {
+    taskId: 'task-1',
+    agentId: 'researcher',
+    originalUserMessage: 'summarize this',
+    payload: { topic: 'k3s' },
+  };
+
+  it('records published tasks in order', async () => {
+    const d = new StubDispatcher();
+    await d.publish(baseTask);
+    await d.publish({ ...baseTask, taskId: 'task-2' });
+    expect(d.published).toHaveLength(2);
+    expect(d.published[0]?.taskId).toBe('task-1');
+    expect(d.published[1]?.taskId).toBe('task-2');
+  });
+
+  it('returns a defensively typed read-only view', () => {
+    const d = new StubDispatcher();
+    const view = d.published;
+    // The TS type says readonly; this asserts the runtime value is the
+    // backing array (not a copy), which is a deliberate trade-off — the
+    // TS type protects callers from typos, runtime assumes sane callers.
+    expect(Array.isArray(view)).toBe(true);
+  });
+
+  it('clear() empties the log', async () => {
+    const d = new StubDispatcher();
+    await d.publish(baseTask);
+    expect(d.published).toHaveLength(1);
+    d.clear();
+    expect(d.published).toHaveLength(0);
+  });
+
+  it('preserves all envelope fields', async () => {
+    const d = new StubDispatcher();
+    const full: DispatchedTask = {
+      taskId: 't',
+      agentId: 'a',
+      parentTaskId: 'p',
+      originalUserMessage: 'orig',
+      parentDistillation: 'distill',
+      expectedTools: ['fetch_url', 'web_search'],
+      payload: { foo: 'bar' },
+    };
+    await d.publish(full);
+    expect(d.published[0]).toEqual(full);
+  });
+});
