@@ -17,7 +17,13 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 import type { PodConfig } from './env.js';
-import { pickUserMessage, resolveToolProviders, runAgentTask } from './runner.js';
+import {
+  collectArtifactsFromTraces,
+  pickUserMessage,
+  resolveToolProviders,
+  runAgentTask,
+} from './runner.js';
+import type { ArtifactRef } from './artifacts.js';
 
 const baseConfig: PodConfig = {
   taskId: 'task-uid-1',
@@ -255,5 +261,179 @@ describe('runAgentTask — tool wiring', () => {
     const result = await runAgentTask(baseConfig, { llm, sinks: [] });
     expect(result.status).toBe('completed');
     expect(result.finalContent).toMatch(/no tools/);
+  });
+});
+
+/* =====================================================================
+ * P3 — collectArtifactsFromTraces + RunResult.artifacts wiring
+ * ===================================================================== */
+
+describe('collectArtifactsFromTraces', () => {
+  const ref: ArtifactRef = {
+    uri: 'pvc://kagent-artifacts/uid-1/digest.md',
+    name: 'digest.md',
+    mediaType: 'text/markdown',
+    sizeBytes: 7,
+    checksum: 'sha256:abc',
+    producedAt: '2026-04-28T00:00:00.000Z',
+  };
+  const blocks = [{ type: 'text', text: JSON.stringify(ref) }];
+
+  it('returns [] for an empty trace stream', () => {
+    expect(collectArtifactsFromTraces([])).toEqual([]);
+  });
+
+  it('extracts the ref from a successful write_artifact tool_call trace', () => {
+    const traces = [
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 0,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'write_artifact',
+        tool_output: JSON.stringify(blocks),
+        is_error: false,
+      },
+    ];
+    expect(collectArtifactsFromTraces(traces)).toEqual([ref]);
+  });
+
+  it('skips error traces (is_error=true)', () => {
+    const traces = [
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 0,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'write_artifact',
+        tool_output: JSON.stringify(blocks),
+        is_error: true,
+      },
+    ];
+    expect(collectArtifactsFromTraces(traces)).toEqual([]);
+  });
+
+  it('skips non-write_artifact tool calls', () => {
+    const traces = [
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 0,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'http_get',
+        tool_output: '"hello"',
+        is_error: false,
+      },
+    ];
+    expect(collectArtifactsFromTraces(traces)).toEqual([]);
+  });
+
+  it('skips llm_call / iteration_boundary traces entirely', () => {
+    const traces = [
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 0,
+        trace_type: 'llm_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+      },
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 1,
+        trace_type: 'iteration_boundary' as const,
+        timestamp_ms: 0,
+        latency_ms: 0,
+      },
+    ];
+    expect(collectArtifactsFromTraces(traces)).toEqual([]);
+  });
+
+  it('aggregates multiple write_artifact traces in trace order', () => {
+    const ref2: ArtifactRef = { ...ref, uri: 'pvc://k/u/two.md', name: 'two.md' };
+    const traces = [
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 0,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'write_artifact',
+        tool_output: JSON.stringify(blocks),
+        is_error: false,
+      },
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 1,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'write_artifact',
+        tool_output: JSON.stringify([{ type: 'text', text: JSON.stringify(ref2) }]),
+        is_error: false,
+      },
+    ];
+    expect(collectArtifactsFromTraces(traces)).toEqual([ref, ref2]);
+  });
+});
+
+describe('runAgentTask — artifacts collation', () => {
+  const ref: ArtifactRef = {
+    uri: 'pvc://kagent-artifacts/uid-1/digest.md',
+    name: 'digest.md',
+    mediaType: 'text/markdown',
+    sizeBytes: 7,
+    checksum: 'sha256:abc',
+    producedAt: '2026-04-28T00:00:00.000Z',
+  };
+
+  it('omits artifacts when no write_artifact tool_call trace is emitted', async () => {
+    const llm = scriptedLlm('chat-only.');
+    const result = await runAgentTask(baseConfig, { llm, sinks: [] });
+    expect(result.artifacts).toBeUndefined();
+  });
+
+  it('threads ArtifactRef through RunResult.artifacts when write_artifact runs', async () => {
+    const fake: ToolProvider = {
+      id: 'fake',
+      describeTools: (): ToolDescriptor[] => [
+        {
+          name: 'write_artifact',
+          description: '',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      executeTool: (_call: ToolCall, _ctx: ToolInvocationContext): Promise<ToolResult> => {
+        return Promise.resolve({
+          content: [{ type: 'text', text: JSON.stringify(ref) }],
+          isError: false,
+        });
+      },
+    };
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: { ...baseConfig.agentSpec, tools: ['write_artifact'] },
+    };
+    const llm = toolCallingLlm('write_artifact', {
+      name: 'digest.md',
+      mediaType: 'text/markdown',
+      content: '# hello',
+    });
+    const result = await runAgentTask(cfg, {
+      llm,
+      sinks: [],
+      toolProviders: [fake],
+    });
+    expect(result.status).toBe('completed');
+    expect(result.artifacts).toEqual([ref]);
   });
 });

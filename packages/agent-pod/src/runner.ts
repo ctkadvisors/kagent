@@ -39,6 +39,7 @@ import {
 import { OpenAICompatibleLLMClient } from '@kagent/openai-compat';
 import { StdoutSink } from '@kagent/trace-sinks';
 
+import { tryParseArtifactRefFromToolOutput } from './artifacts.js';
 import { resolveBuiltinTools } from './builtin-tools.js';
 import type { PodConfig } from './env.js';
 
@@ -170,11 +171,14 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
 
-  // Artifact wiring is additive: v0.1 has no writer plumbed into the
-  // agent loop, so `artifacts` is omitted here. The slot exists in
-  // `RunResult` so a future tool / middleware can populate it without
-  // any substrate change. When that arrives, replace this comment with
-  // a real read from the loop result (or a `RunDeps` injection seam).
+  // P3 — collate ArtifactRefs from `write_artifact` tool_call traces.
+  // The atomic file write already happened inside the tool handler; we
+  // just harvest the structured ref the handler emitted as its tool
+  // result so the operator can thread it into AgentTask.status.artifacts.
+  // Tool errors (isError=true traces) are skipped — a partial run still
+  // surfaces any successful refs.
+  const artifacts = collectArtifactsFromTraces(result.traces);
+
   return {
     runId: result.runId,
     status: result.status,
@@ -183,7 +187,32 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     traces: result.traces,
     budget: result.budget,
     ...(result.error !== undefined && { error: { message: result.error.message } }),
+    ...(artifacts.length > 0 && { artifacts }),
   };
+}
+
+/**
+ * Scan an executor trace stream for `write_artifact` tool_call entries
+ * and parse the ArtifactRef each one returned. Resilient: any trace
+ * that fails the shape guard (truncated tool_output, malformed JSON,
+ * missing `uri`) is silently skipped — the underlying file write
+ * already succeeded, but if the trace is unparseable downstream
+ * consumers will not see the ref. That is preferable to throwing and
+ * failing the entire run for a trace-pipeline edge case.
+ *
+ * Exported for the runner test suite + any future middleware that
+ * wants to inspect the same surface.
+ */
+export function collectArtifactsFromTraces(traces: readonly TraceEntry[]): readonly ArtifactRef[] {
+  const out: ArtifactRef[] = [];
+  for (const t of traces) {
+    if (t.trace_type !== 'tool_call') continue;
+    if (t.tool_name !== 'write_artifact') continue;
+    if (t.is_error === true) continue;
+    const ref = tryParseArtifactRefFromToolOutput(t.tool_output);
+    if (ref !== null) out.push(ref);
+  }
+  return out;
 }
 
 /**
