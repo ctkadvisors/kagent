@@ -52,6 +52,9 @@ importers:
       '@kagent/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
+      '@kagent/in-process-tool-provider':
+        specifier: workspace:*
+        version: link:../in-process-tool-provider
       '@kagent/openai-compat':
         specifier: workspace:*
         version: link:../openai-compat

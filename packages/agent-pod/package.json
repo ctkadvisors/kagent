@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
+    "@kagent/in-process-tool-provider": "workspace:*",
     "@kagent/openai-compat": "workspace:*",
     "@kagent/trace-sinks": "workspace:*",
     "@kubernetes/client-node": "1.4.0"

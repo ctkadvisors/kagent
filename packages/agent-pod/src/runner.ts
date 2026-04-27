@@ -5,10 +5,23 @@
 
 /**
  * Loop runner — wires PodConfig (parsed env) into an `AgentExecutor`
- * and runs a single AgentTask end-to-end. Phase 3 C1 ships the
- * happy-path runner with no tool providers (chat-style agent); tool
- * provider wiring is gated behind concrete agent workloads in later
- * phases.
+ * and runs a single AgentTask end-to-end. Phase 3 C1 shipped the
+ * chat-only happy-path; Platform-Priorities P2 wires `Agent.spec.tools`
+ * into the executor so the researcher workload can fetch.
+ *
+ * Tool resolution rules (P2):
+ *
+ *   - Names in `Agent.spec.tools` are looked up in the built-in tool
+ *     registry (`builtin-tools.ts`).
+ *   - Unknown names fail FAST at boot with a clear error — silently
+ *     dropping a tool the operator declared would mask a misconfigured
+ *     Agent CR.
+ *   - Empty / undefined `tools` yields no `ToolProvider` at all and the
+ *     loop runs in chat-only mode (preserves the v0.1 behavior).
+ *   - The general-purpose `ToolBroker` / `ToolBinding` CRD model lives in
+ *     `docs/TOOL-BROKER.md` and lands at P6; until then the in-pod
+ *     allowlist + SSRF guards in `builtin-tools.ts` are the policy
+ *     boundary.
  */
 
 import {
@@ -19,12 +32,14 @@ import {
   type ExecutionResult,
   type LLMClient,
   type TerminalStatus,
+  type ToolProvider,
   type TraceEntry,
   type TraceSink,
 } from '@kagent/agent-loop';
 import { OpenAICompatibleLLMClient } from '@kagent/openai-compat';
 import { StdoutSink } from '@kagent/trace-sinks';
 
+import { resolveBuiltinTools } from './builtin-tools.js';
 import type { PodConfig } from './env.js';
 
 /**
@@ -44,17 +59,25 @@ export interface RunResult {
 /**
  * Test-injection seam — overrides any of the otherwise-defaulted
  * collaborators. Production caller passes nothing.
+ *
+ * `toolProviders` overrides the built-in resolution path (used by tests
+ * that want to assert a specific provider lineup without going through
+ * `resolveBuiltinTools`). When undefined the runner builds providers
+ * from `config.agentSpec.tools` against the built-in registry.
  */
 export interface RunDeps {
   readonly llm?: LLMClient;
   readonly sinks?: readonly TraceSink[];
+  readonly toolProviders?: readonly ToolProvider[];
 }
 
 /**
  * Run the agent loop against the LiteLLM endpoint configured in the
- * pod's env. No tool providers in v0.1 — the agent gets the user
- * message + system prompt and produces a final response. Run-end
- * detector middleware runs against the resulting trace + final
+ * pod's env. `Agent.spec.tools` (when set) is resolved through the
+ * built-in tool registry into a single `InProcessToolProvider`; the
+ * executor then dispatches model-issued `tool_calls` against that
+ * provider with the same trace + budget envelope as the chat-only path.
+ * Run-end detector middleware runs against the resulting trace + final
  * message to surface F1/F2/F3 + synthesis_low_yield flags.
  */
 export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promise<RunResult> {
@@ -82,10 +105,18 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
 
   const sinks = deps.sinks ?? [new StdoutSink()];
 
+  // Resolve tool providers: tests may inject explicitly via deps; in
+  // production we read `Agent.spec.tools` and look each name up in the
+  // built-in registry. Unknown names throw here at boot — fail fast so
+  // the operator sees a `Failed` AgentTask with a clear runner error
+  // rather than a silently-degraded loop.
+  const toolProviders = resolveToolProviders(config, deps);
+
   const executor = new AgentExecutor({
     registry,
     llm,
     sinks,
+    ...(toolProviders.length > 0 && { toolProviders }),
   });
 
   const userMessage = pickUserMessage(config);
@@ -136,4 +167,18 @@ export function pickUserMessage(config: PodConfig): string {
     return config.taskSpec.originalUserMessage;
   }
   return JSON.stringify(config.taskSpec.payload);
+}
+
+/**
+ * Resolve the providers list the executor will see — `deps.toolProviders`
+ * wins (test injection), otherwise we look up `Agent.spec.tools` against
+ * the built-in registry. Exported for the runner test suite; production
+ * callers go through `runAgentTask`.
+ *
+ * Throws on unknown tool names with a clear, operator-actionable message.
+ */
+export function resolveToolProviders(config: PodConfig, deps: RunDeps): readonly ToolProvider[] {
+  if (deps.toolProviders !== undefined) return deps.toolProviders;
+  const builtin = resolveBuiltinTools(config.agentSpec.tools);
+  return builtin === null ? [] : [builtin];
 }

@@ -13,8 +13,20 @@
 export { parseEnv } from './env.js';
 export type { AgentSpecEnv, PodConfig, TaskSpecEnv } from './env.js';
 
-export { runAgentTask, pickUserMessage } from './runner.js';
+export { runAgentTask, pickUserMessage, resolveToolProviders } from './runner.js';
 export type { RunDeps, RunResult } from './runner.js';
+
+export {
+  buildBuiltinToolRegistry,
+  resolveBuiltinTools,
+  parseAllowedDomains,
+  isHostAllowed,
+  assertUrlIsSafe,
+  extractTextFromHtml,
+  parseFeed,
+  ENV_ALLOW_DOMAINS,
+} from './builtin-tools.js';
+export type { RssItem } from './builtin-tools.js';
 
 export { buildStatusPatch, writeStatus, makeCustomObjectsApi } from './status.js';
 export type { StatusPatch } from './status.js';
