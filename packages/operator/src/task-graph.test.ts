@@ -9,8 +9,10 @@ import { API_GROUP_VERSION, type AgentTask, type AgentTaskPhase } from './crds/i
 import {
   PARENT_TASK_NAME_LABEL,
   PARENT_TASK_UID_LABEL,
+  aggregateChildren,
   buildChildTaskManifest,
   childRef,
+  cycleCheck,
   parentTaskRefFromChild,
   type ChildTaskSpec,
 } from './task-graph.js';
@@ -336,5 +338,234 @@ describe('parentTaskRefFromChild', () => {
       namespace: 'team-b',
       uid: 'rt-uid',
     });
+  });
+});
+
+/* =====================================================================
+ * aggregateChildren — full truth-table coverage.
+ * ===================================================================== */
+
+describe('aggregateChildren', () => {
+  it('returns Pending for an empty list', () => {
+    const result = aggregateChildren([]);
+    expect(result.aggregatePhase).toBe('Pending');
+    expect(result.successCount).toBe(0);
+    expect(result.failureCount).toBe(0);
+    expect(result.inFlightCount).toBe(0);
+    expect(result.children).toEqual([]);
+  });
+
+  it('returns Dispatched when all children are Pending', () => {
+    const result = aggregateChildren([makeChild('a', 'Pending'), makeChild('b', 'Pending')]);
+    expect(result.aggregatePhase).toBe('Dispatched');
+    expect(result.inFlightCount).toBe(2);
+  });
+
+  it('returns Dispatched when all children are Dispatched', () => {
+    const result = aggregateChildren([makeChild('a', 'Dispatched'), makeChild('b', 'Dispatched')]);
+    expect(result.aggregatePhase).toBe('Dispatched');
+    expect(result.inFlightCount).toBe(2);
+  });
+
+  it('returns Dispatched for a mix of Pending + Dispatched (no terminals)', () => {
+    const result = aggregateChildren([makeChild('a', 'Pending'), makeChild('b', 'Dispatched')]);
+    expect(result.aggregatePhase).toBe('Dispatched');
+    expect(result.inFlightCount).toBe(2);
+  });
+
+  it('returns AllComplete when every child is Completed', () => {
+    const result = aggregateChildren([
+      makeChild('a', 'Completed'),
+      makeChild('b', 'Completed'),
+      makeChild('c', 'Completed'),
+    ]);
+    expect(result.aggregatePhase).toBe('AllComplete');
+    expect(result.successCount).toBe(3);
+    expect(result.failureCount).toBe(0);
+    expect(result.inFlightCount).toBe(0);
+  });
+
+  it('returns AnyFailed when any child Failed (even one)', () => {
+    const result = aggregateChildren([
+      makeChild('a', 'Completed'),
+      makeChild('b', 'Failed'),
+      makeChild('c', 'Completed'),
+    ]);
+    expect(result.aggregatePhase).toBe('AnyFailed');
+    expect(result.failureCount).toBe(1);
+    expect(result.successCount).toBe(2);
+  });
+
+  it('returns AnyFailed even when other children are still in flight (cancellationPolicy=propagate fast-fail)', () => {
+    const result = aggregateChildren([
+      makeChild('a', 'Failed'),
+      makeChild('b', 'Pending'),
+      makeChild('c', 'Dispatched'),
+    ]);
+    expect(result.aggregatePhase).toBe('AnyFailed');
+    expect(result.failureCount).toBe(1);
+    expect(result.inFlightCount).toBe(2);
+  });
+
+  it('returns PartiallyComplete when some Completed + some still in flight (no failures)', () => {
+    const result = aggregateChildren([
+      makeChild('a', 'Completed'),
+      makeChild('b', 'Dispatched'),
+      makeChild('c', 'Pending'),
+    ]);
+    expect(result.aggregatePhase).toBe('PartiallyComplete');
+    expect(result.successCount).toBe(1);
+    expect(result.inFlightCount).toBe(2);
+  });
+
+  it('counts a child without status.phase as in-flight', () => {
+    const result = aggregateChildren([makeChild('a', undefined)]);
+    expect(result.inFlightCount).toBe(1);
+    expect(result.aggregatePhase).toBe('Dispatched');
+  });
+
+  it('is order-independent (same set of phases → same result regardless of order)', () => {
+    // Manual property check — every permutation of a representative
+    // multi-phase fixture must produce identical counts + aggregatePhase.
+    const phases: AgentTaskPhase[] = ['Completed', 'Failed', 'Pending', 'Dispatched'];
+    const baseChildren = phases.map((p, i) => makeChild(`c${i}`, p));
+    const baseline = aggregateChildren(baseChildren);
+
+    // Reverse order.
+    const reversed = aggregateChildren([...baseChildren].reverse());
+    expect(reversed.aggregatePhase).toBe(baseline.aggregatePhase);
+    expect(reversed.successCount).toBe(baseline.successCount);
+    expect(reversed.failureCount).toBe(baseline.failureCount);
+    expect(reversed.inFlightCount).toBe(baseline.inFlightCount);
+
+    // Shuffled order (deterministic permutation).
+    const shuffled = [baseChildren[2], baseChildren[0], baseChildren[3], baseChildren[1]];
+    const shuffledResult = aggregateChildren(shuffled);
+    expect(shuffledResult.aggregatePhase).toBe(baseline.aggregatePhase);
+    expect(shuffledResult.successCount).toBe(baseline.successCount);
+    expect(shuffledResult.failureCount).toBe(baseline.failureCount);
+    expect(shuffledResult.inFlightCount).toBe(baseline.inFlightCount);
+  });
+
+  it('order-independent across all 24 permutations of 4 distinct phases', () => {
+    const phases: AgentTaskPhase[] = ['Completed', 'Failed', 'Pending', 'Dispatched'];
+    const children = phases.map((p, i) => makeChild(`c${i}`, p));
+
+    function permutations<T>(arr: readonly T[]): T[][] {
+      if (arr.length <= 1) return [arr.slice()];
+      const out: T[][] = [];
+      for (let i = 0; i < arr.length; i++) {
+        const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
+        for (const tail of permutations(rest)) {
+          out.push([arr[i], ...tail]);
+        }
+      }
+      return out;
+    }
+
+    const baseline = aggregateChildren(children);
+    const perms = permutations(children);
+    expect(perms).toHaveLength(24);
+    for (const perm of perms) {
+      const result = aggregateChildren(perm);
+      expect(result.aggregatePhase).toBe(baseline.aggregatePhase);
+      expect(result.successCount).toBe(baseline.successCount);
+      expect(result.failureCount).toBe(baseline.failureCount);
+      expect(result.inFlightCount).toBe(baseline.inFlightCount);
+    }
+  });
+});
+
+/* =====================================================================
+ * cycleCheck
+ * ===================================================================== */
+
+describe('cycleCheck', () => {
+  /** Build a fake parent-lookup over a fixed graph keyed by uid. */
+  function lookup(graph: Record<string, AgentTask>): (uid: string) => AgentTask | undefined {
+    return (uid) => graph[uid];
+  }
+
+  it('rejects self-as-child (single-node cycle)', () => {
+    const result = cycleCheck('a', 'a', () => undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cycle).toEqual(['a', 'a']);
+    }
+  });
+
+  it('rejects multi-hop cycle (candidate is ancestor 2 hops up)', () => {
+    // Chain: a -> b -> c. Trying to add c as a child of a would close a cycle.
+    const graph: Record<string, AgentTask> = {
+      a: makeChild('a', undefined, 'b'),
+      b: makeChild('b', undefined, 'c'),
+      c: makeChild('c', undefined, ''),
+    };
+    const result = cycleCheck('a', 'c', lookup(graph));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cycle).toEqual(['a', 'b', 'c']);
+    }
+  });
+
+  it('rejects deep cycle (candidate is the chain root)', () => {
+    // Chain: a -> b -> c -> d. Trying to add d as child of a is a cycle.
+    const graph: Record<string, AgentTask> = {
+      a: makeChild('a', undefined, 'b'),
+      b: makeChild('b', undefined, 'c'),
+      c: makeChild('c', undefined, 'd'),
+      d: makeChild('d', undefined, ''),
+    };
+    const result = cycleCheck('a', 'd', lookup(graph));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.cycle).toEqual(['a', 'b', 'c', 'd']);
+    }
+  });
+
+  it('accepts legitimate fan-out (candidate is unrelated)', () => {
+    // Chain: a -> b. Adding x (unrelated) as child of a is fine.
+    const graph: Record<string, AgentTask> = {
+      a: makeChild('a', undefined, 'b'),
+      b: makeChild('b', undefined, ''),
+    };
+    const result = cycleCheck('a', 'x', lookup(graph));
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts when parent has no parentTask (root node fan-out)', () => {
+    const graph: Record<string, AgentTask> = {
+      root: makeChild('root', undefined, ''),
+    };
+    const result = cycleCheck('root', 'newchild', lookup(graph));
+    expect(result.ok).toBe(true);
+  });
+
+  it('treats missing-parent (chain has GC-d ancestor) as no cycle', () => {
+    // a's parentTask points to "b", but b is not in the graph (lookup
+    // returns undefined). Should accept rather than reject.
+    const graph: Record<string, AgentTask> = {
+      a: makeChild('a', undefined, 'b'),
+    };
+    const result = cycleCheck('a', 'newchild', lookup(graph));
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts when getParent returns undefined for the parent itself', () => {
+    // No graph entries at all — parentUid is itself unknown. No cycle possible.
+    const result = cycleCheck('a', 'b', () => undefined);
+    expect(result.ok).toBe(true);
+  });
+
+  it('terminates safely when the existing graph already contains a loop', () => {
+    // Pre-existing corrupt graph: a -> b -> a. Should terminate, not spin.
+    const graph: Record<string, AgentTask> = {
+      a: makeChild('a', undefined, 'b'),
+      b: makeChild('b', undefined, 'a'),
+    };
+    const result = cycleCheck('a', 'newchild', lookup(graph));
+    // The pre-existing loop is its own bug; this edge introduces no cycle
+    // with `newchild`. Helper bails safely rather than infinite-looping.
+    expect(result.ok).toBe(true);
   });
 });

@@ -8,19 +8,20 @@
  * delegation. Implements the Workstream 5 / Phase 5 substrate
  * primitives described in `docs/TASK-GRAPH.md`.
  *
- * This first slice ships the manifest builder + small projection
- * helpers:
+ * Helpers in this module:
  *
  *   - `buildChildTaskManifest`: produce a child AgentTask CR with the
  *     dual ownerRef + label glue the operator's parent re-reconcile
  *     relies on (TASK-GRAPH.md §3 + §5).
  *   - `childRef`: project a child AgentTask down to the compact
  *     ChildRef shape that lives on the parent's `status.children`.
+ *   - `aggregateChildren`: fold a list of children into a single
+ *     ParentStatusProjection (TASK-GRAPH.md §4 algorithm).
  *   - `parentTaskRefFromChild`: read the labels written by
  *     `buildChildTaskManifest`. Symmetric with `parentTaskRef()` in
  *     `job-watch.ts` for Job/Pod resources.
- *
- * The aggregateChildren reducer + cycleCheck land in the next commit.
+ *   - `cycleCheck`: walk the parent chain to refuse a child that
+ *     would close a cycle (TASK-GRAPH.md §7 open question #2).
  *
  * IMPORTANT: this module is pure. No K8s clients, no informers, no
  * NATS. Wire-up (operator re-reconciles parent on child status change,
@@ -99,6 +100,37 @@ export interface ChildRef {
   readonly phase?: AgentTaskPhase;
   readonly completedAt?: string;
   readonly error?: string;
+}
+
+/**
+ * Aggregate phase of a parent over its children. Distinct from the
+ * parent's *own* `status.phase` — a parent whose own pod-side work is
+ * Completed can still be `PartiallyComplete` over its children.
+ *
+ * Truth table — see `aggregateChildren` for the reducer:
+ *
+ *   children                           → aggregatePhase
+ *   ----------------------------------- ----------------------
+ *   []                                  Pending
+ *   all Pending OR all Dispatched OR    Dispatched
+ *     mix of Pending+Dispatched
+ *   all terminal, none Failed           AllComplete
+ *   any Failed                          AnyFailed (overrides all)
+ *   some Completed + some in-flight     PartiallyComplete
+ */
+export type AggregatePhase =
+  | 'Pending'
+  | 'Dispatched'
+  | 'PartiallyComplete'
+  | 'AllComplete'
+  | 'AnyFailed';
+
+export interface ParentStatusProjection {
+  readonly children: readonly ChildRef[];
+  readonly aggregatePhase: AggregatePhase;
+  readonly successCount: number;
+  readonly failureCount: number;
+  readonly inFlightCount: number;
 }
 
 /* =====================================================================
@@ -237,6 +269,70 @@ export function childRef(child: AgentTask): ChildRef {
 }
 
 /* =====================================================================
+ * aggregateChildren
+ * ===================================================================== */
+
+/**
+ * Reduce a list of children to a single ParentStatusProjection per the
+ * truth table in `AggregatePhase`'s docs. Order-independent; the
+ * reducer only counts.
+ *
+ * Algorithm:
+ *
+ *   1. Project each child to a ChildRef (bounded shape).
+ *   2. Count by terminal class:
+ *        - `failureCount`   = children whose phase === 'Failed'
+ *        - `successCount`   = children whose phase === 'Completed'
+ *        - `inFlightCount`  = everything else (Pending, Dispatched, undefined)
+ *   3. Pick aggregatePhase by precedence:
+ *        - empty list                   → Pending
+ *        - any Failed                   → AnyFailed   (cancellationPolicy=propagate
+ *                                                       wants this to fire FAST,
+ *                                                       even if siblings still in flight)
+ *        - all Completed (no Failed)    → AllComplete
+ *        - some Completed + some in-flight → PartiallyComplete
+ *        - all in-flight (no terminal)  → Dispatched
+ *
+ * Note `Dispatched` here is the *aggregate* — covers the case where
+ * children are still `Pending` AND/OR `Dispatched`. The "still
+ * waiting" predicate the operator uses is `aggregatePhase in
+ * {Pending, Dispatched, PartiallyComplete}`.
+ */
+export function aggregateChildren(children: readonly AgentTask[]): ParentStatusProjection {
+  const projected: ChildRef[] = children.map(childRef);
+  let successCount = 0;
+  let failureCount = 0;
+  let inFlightCount = 0;
+  for (const ref of projected) {
+    if (ref.phase === 'Completed') successCount += 1;
+    else if (ref.phase === 'Failed') failureCount += 1;
+    else inFlightCount += 1; // Pending, Dispatched, or absent
+  }
+
+  let aggregatePhase: AggregatePhase;
+  if (projected.length === 0) {
+    aggregatePhase = 'Pending';
+  } else if (failureCount > 0) {
+    aggregatePhase = 'AnyFailed';
+  } else if (inFlightCount === 0) {
+    // No failures + nothing in flight → everything Completed.
+    aggregatePhase = 'AllComplete';
+  } else if (successCount > 0) {
+    aggregatePhase = 'PartiallyComplete';
+  } else {
+    aggregatePhase = 'Dispatched';
+  }
+
+  return {
+    children: projected,
+    aggregatePhase,
+    successCount,
+    failureCount,
+    inFlightCount,
+  };
+}
+
+/* =====================================================================
  * parentTaskRefFromChild
  * ===================================================================== */
 
@@ -268,4 +364,81 @@ export function parentTaskRefFromChild(
     namespace,
     ...(typeof uid === 'string' && uid.length > 0 && { uid }),
   };
+}
+
+/* =====================================================================
+ * cycleCheck
+ * ===================================================================== */
+
+export type CycleCheckResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly cycle: readonly string[] };
+
+/**
+ * Walk up the parent chain from `parentUid` to determine whether
+ * adopting `candidateChildUid` as a child would close a cycle.
+ *
+ * Returns `{ ok: false, cycle: [...] }` when `candidateChildUid` is
+ * already an ancestor of `parentUid` (the new edge would close a
+ * loop). The `cycle` array is the path from `parentUid` upward to
+ * `candidateChildUid` inclusive — useful for logging the offending
+ * delegation chain.
+ *
+ * Returns `{ ok: true }` when no cycle is detected, including when
+ * the chain terminates at a missing ancestor (`getParent(uid) ===
+ * undefined`). A missing ancestor means the chain root has been
+ * GC'd or the label is stale — neither is a cycle, so we accept the
+ * delegation rather than reject on incomplete data.
+ *
+ * The walker uses a visited-set internally to bound runtime to
+ * O(chain depth) and avoid infinite loops if the existing graph is
+ * already corrupt (defense-in-depth — should never happen, but a
+ * helper that itself loops on bad input is worse than one that
+ * returns early).
+ */
+export function cycleCheck(
+  parentUid: string,
+  candidateChildUid: string,
+  getParent: (uid: string) => AgentTask | undefined,
+): CycleCheckResult {
+  // Trivial case — proposing a task as its own child.
+  if (parentUid === candidateChildUid) {
+    return { ok: false, cycle: [parentUid, candidateChildUid] };
+  }
+
+  const visited = new Set<string>();
+  const path: string[] = [parentUid];
+  let cursor: string | undefined = parentUid;
+
+  while (typeof cursor === 'string' && cursor.length > 0) {
+    if (visited.has(cursor)) {
+      // Pre-existing loop in the parent chain — not what we were
+      // looking for, but bail rather than spin forever. Treat as
+      // "no cycle introduced by THIS edge" since the loop existed
+      // before; the operator's broader integrity check (a separate
+      // concern) would surface it.
+      return { ok: true };
+    }
+    visited.add(cursor);
+
+    const node: AgentTask | undefined = getParent(cursor);
+    if (node === undefined) {
+      // Chain root — no more ancestors. Candidate is not an ancestor.
+      return { ok: true };
+    }
+    const nextUid: string | undefined = node.spec.parentTask;
+    if (typeof nextUid !== 'string' || nextUid.length === 0) {
+      // Reached the root of the chain.
+      return { ok: true };
+    }
+    if (nextUid === candidateChildUid) {
+      // The candidate child is an ancestor of the parent — cycle.
+      path.push(nextUid);
+      return { ok: false, cycle: path };
+    }
+    path.push(nextUid);
+    cursor = nextUid;
+  }
+
+  return { ok: true };
 }
