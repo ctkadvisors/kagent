@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+apiVersion: v2
+name: kagent-workbench
+description: |
+  Read-only operator console over the kagent control plane. Deploys the
+  workbench-api facade (thin Kubernetes-watch + DTO layer over Agent /
+  AgentTask / AgentCapability + operator-managed Jobs/Pods) and the
+  workbench-ui Next.js client as a sidecar. RBAC is read-only for the
+  v0.0.5 MVP; write actions (cancel/retry/create-task) ship behind a
+  separate ClusterRole + values flag in v0.2.
+
+  See kagent/docs/WORKBENCH.md (esp. §6 Deployment) and
+  new_localai/docs/kagent-workbench-rbac.md for the full plan.
+type: application
+# Chart version — bump independently of appVersion. The chart shape is
+# expected to churn faster than the workbench images during MVP.
+version: 0.0.1
+# Default workbench-api / workbench-ui image tag. Both images publish
+# from the same Gitea Actions workflow as the operator + agent-pod.
+appVersion: '0.0.5-workbench-mvp'
+home: https://github.com/ctkadvisors/kagent
+sources:
+  - https://github.com/ctkadvisors/kagent
+maintainers:
+  - name: Chris Knuteson
+    email: chris@ctkadvisors.net
+keywords:
+  - kagent
+  - workbench
+  - console
+  - operator-ui
+  - kubernetes
