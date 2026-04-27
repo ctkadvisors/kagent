@@ -12,8 +12,12 @@
  * KUBECONFIG / ~/.kube/config.
  */
 
-import { StubDispatcher } from './dispatcher.js';
+import { connect, type NatsConnection } from 'nats';
+
+import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
+import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
+import { NatsDispatcher } from './nats-dispatcher.js';
 import { reconcileAgentTask, type ReconcileDeps } from './reconcile.js';
 import type { AgentTaskHandler } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
@@ -65,9 +69,43 @@ async function main(): Promise<void> {
   const kc = loadKubeConfig();
   const customApi = makeCustomObjectsApi(kc);
   const batchApi = makeBatchApi(kc);
-  const dispatcher = new StubDispatcher();
 
-  const deps: ReconcileDeps = { customApi, batchApi, dispatcher };
+  // Phase 3: KAGENT_NATS_URL toggles real NATS dispatcher; otherwise
+  // we fall back to StubDispatcher (in-memory, useful for local
+  // out-of-cluster operator testing without a NATS server).
+  const natsUrl = process.env.KAGENT_NATS_URL;
+  let dispatcher: Dispatcher;
+  let capabilityRegistry: CapabilityRegistry;
+  let onShutdownExtra: (() => Promise<void>) | undefined;
+
+  if (typeof natsUrl === 'string' && natsUrl.length > 0) {
+    console.log(`[kagent-operator] connecting NATS dispatcher → ${natsUrl}`);
+    let sharedConnection: NatsConnection | undefined;
+    const getConnection = async (): Promise<NatsConnection> => {
+      if (sharedConnection === undefined) {
+        sharedConnection = await connect({ servers: natsUrl });
+      }
+      return sharedConnection;
+    };
+    dispatcher = new NatsDispatcher({ connect: getConnection });
+    // CapabilityRegistry: Phase 3 ships the interface + stubs; the
+    // NATS KV reader (NatsCapabilityRegistry) needs the agent-pod
+    // heartbeat path (Phase 3 C4+). Until that lands, even the
+    // NATS-enabled operator uses the stub registry — capability
+    // resolution still fails gracefully with a clear error.
+    capabilityRegistry = new StubCapabilityRegistry();
+    onShutdownExtra = async (): Promise<void> => {
+      if (sharedConnection !== undefined) {
+        await sharedConnection.close();
+      }
+    };
+  } else {
+    console.log('[kagent-operator] no KAGENT_NATS_URL set — using StubDispatcher');
+    dispatcher = new StubDispatcher();
+    capabilityRegistry = new StubCapabilityRegistry();
+  }
+
+  const deps: ReconcileDeps = { customApi, batchApi, dispatcher, capabilityRegistry };
   const handler = buildHandler(deps);
   const informer = createAgentTaskInformer(kc, customApi, handler);
 
@@ -79,6 +117,13 @@ async function main(): Promise<void> {
       await informer.stop();
     } catch (err) {
       console.error('[kagent-operator] informer.stop() failed:', err);
+    }
+    if (onShutdownExtra !== undefined) {
+      try {
+        await onShutdownExtra();
+      } catch (err) {
+        console.error('[kagent-operator] NATS shutdown failed:', err);
+      }
     }
     process.exit(0);
   };

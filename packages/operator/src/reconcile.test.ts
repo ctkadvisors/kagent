@@ -31,6 +31,7 @@ function makeDeps(overrides: {
   customApi?: Partial<MockCustomApi>;
   batchApi?: Partial<MockBatchApi>;
   dispatcher?: StubDispatcher;
+  capabilityRegistry?: ReconcileDeps['capabilityRegistry'];
   now?: () => Date;
 }): ReconcileDeps & {
   mocks: { customApi: MockCustomApi; batchApi: MockBatchApi; dispatcher: StubDispatcher };
@@ -49,6 +50,9 @@ function makeDeps(overrides: {
     customApi: customApi as unknown as ReconcileDeps['customApi'],
     batchApi: batchApi as unknown as ReconcileDeps['batchApi'],
     dispatcher,
+    ...(overrides.capabilityRegistry !== undefined && {
+      capabilityRegistry: overrides.capabilityRegistry,
+    }),
     ...(overrides.now !== undefined && { now: overrides.now }),
     mocks: { customApi, batchApi, dispatcher },
   };
@@ -197,18 +201,42 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
   });
 });
 
+describe('reconcileAgentTask — capability resolution', () => {
+  it('dispatches when registry resolves capability → agent', async () => {
+    const { StaticCapabilityRegistry } = await import('./capability-registry.js');
+    const task = makeTask({
+      spec: {
+        targetCapability: 'research',
+        payload: {},
+        originalUserMessage: 'do the thing',
+      },
+    });
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      capabilityRegistry: new StaticCapabilityRegistry({ research: 'researcher' }),
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    expect(deps.mocks.customApi.getNamespacedCustomObject).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'researcher' }),
+    );
+  });
+});
+
 describe('reconcileAgentTask — failure paths', () => {
-  it('marks Failed when targetCapability is the only addressing field (Phase 3 deferred)', async () => {
+  it('marks Failed when targetCapability is set but the registry returns null', async () => {
     const task = makeTask({
       spec: {
         targetCapability: 'researcher',
         payload: {},
       },
     });
-    const deps = makeDeps({});
+    const deps = makeDeps({}); // default: StubCapabilityRegistry → null
     const result = await reconcileAgentTask(task, deps);
     expect(result.action).toBe('failed');
-    expect(result.reason).toMatch(/targetCapability resolution is not implemented/);
+    expect(result.reason).toMatch(/no live agent satisfies capability 'researcher'/);
     expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         body: { status: expect.objectContaining({ phase: 'Failed' }) },

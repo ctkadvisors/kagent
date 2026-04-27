@@ -31,3 +31,14 @@ export type { ReconcileDeps, ReconcileResult } from './reconcile.js';
 export { buildJobSpec, jobNameForTask } from './job-spec.js';
 export type { BuildJobSpecOptions } from './job-spec.js';
 export { buildHandler } from './main.js';
+
+export { StaticCapabilityRegistry, StubCapabilityRegistry } from './capability-registry.js';
+export type { CapabilityRegistry } from './capability-registry.js';
+export { NatsDispatcher, publishSubject } from './nats-dispatcher.js';
+export type {
+  NatsConnectFn,
+  NatsConnectionLike,
+  NatsDispatcherOptions,
+} from './nats-dispatcher.js';
+export { NatsCapabilityRegistry } from './nats-capability-registry.js';
+export type { AgentLiveEntry, KvBucketFactory, KvBucketLike } from './nats-capability-registry.js';

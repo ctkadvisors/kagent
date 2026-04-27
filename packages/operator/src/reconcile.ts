@@ -29,6 +29,8 @@
 import type { BatchV1Api, CustomObjectsApi, V1Job } from '@kubernetes/client-node';
 
 import { API_GROUP, API_VERSION, type Agent, type AgentTask, isAgent } from './crds/index.js';
+import type { CapabilityRegistry } from './capability-registry.js';
+import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
 import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
 
@@ -36,6 +38,12 @@ export interface ReconcileDeps {
   readonly customApi: CustomObjectsApi;
   readonly batchApi: BatchV1Api;
   readonly dispatcher: Dispatcher;
+  /**
+   * Resolves AgentTask.spec.targetCapability → agent name. Optional;
+   * defaults to a stub that always returns null (matches Phase 2
+   * behavior where capability resolution fast-failed).
+   */
+  readonly capabilityRegistry?: CapabilityRegistry;
   readonly jobSpecOptions?: BuildJobSpecOptions;
   /** Override `Date.now()` in tests for deterministic timestamps. */
   readonly now?: () => Date;
@@ -63,9 +71,10 @@ export async function reconcileAgentTask(
   }
 
   // Step 2 — resolve target Agent.
+  const registry = deps.capabilityRegistry ?? new StubCapabilityRegistry();
   let agent: Agent;
   try {
-    agent = await resolveTargetAgent(task, deps.customApi);
+    agent = await resolveTargetAgent(task, deps.customApi, registry);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     await markFailed(task, reason, deps);
@@ -115,34 +124,54 @@ export async function reconcileAgentTask(
 }
 
 /**
- * Fetch the target Agent for a task. v0.1 only supports targetAgent
- * (by name); targetCapability resolution is Phase 3 (NATS KV registry).
+ * Fetch the target Agent for a task. Two paths:
+ *   - `targetAgent` set → fetch by name from the same namespace.
+ *   - `targetCapability` set → ask the CapabilityRegistry to resolve
+ *     it to an agent name, then fetch.
+ *
+ * Per docs/DESIGN-V0.1.md §4.1, exactly one of {targetAgent,
+ * targetCapability} must be set; the CRD's `oneOf` schema enforces
+ * this at admission, but we re-check defensively.
  */
-async function resolveTargetAgent(task: AgentTask, customApi: CustomObjectsApi): Promise<Agent> {
+async function resolveTargetAgent(
+  task: AgentTask,
+  customApi: CustomObjectsApi,
+  registry: CapabilityRegistry,
+): Promise<Agent> {
+  const namespace = task.metadata.namespace ?? 'default';
+  let agentName: string | undefined;
+
   if (typeof task.spec.targetAgent === 'string' && task.spec.targetAgent.length > 0) {
-    const namespace = task.metadata.namespace ?? 'default';
-    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-    const res = await customApi.getNamespacedCustomObject({
-      group: API_GROUP,
-      version: API_VERSION,
-      namespace,
-      plural: 'agents',
-      name: task.spec.targetAgent,
-    });
-    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
-    if (!isAgent(res)) {
-      throw new Error(`Agent ${namespace}/${task.spec.targetAgent} returned malformed shape`);
+    agentName = task.spec.targetAgent;
+  } else if (
+    typeof task.spec.targetCapability === 'string' &&
+    task.spec.targetCapability.length > 0
+  ) {
+    const resolved = await registry.resolveCapability(task.spec.targetCapability);
+    if (resolved === null) {
+      throw new Error(
+        `no live agent satisfies capability '${task.spec.targetCapability}' ` +
+          `(check NATS KV registry; agent pods write heartbeats on boot)`,
+      );
     }
-    return res;
+    agentName = resolved;
+  } else {
+    throw new Error('AgentTask has neither targetAgent nor targetCapability');
   }
 
-  if (typeof task.spec.targetCapability === 'string' && task.spec.targetCapability.length > 0) {
-    throw new Error(
-      `targetCapability resolution is not implemented in v0.1 (Phase 3 wires NATS KV)`,
-    );
+  /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+  const res = await customApi.getNamespacedCustomObject({
+    group: API_GROUP,
+    version: API_VERSION,
+    namespace,
+    plural: 'agents',
+    name: agentName,
+  });
+  /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  if (!isAgent(res)) {
+    throw new Error(`Agent ${namespace}/${agentName} returned malformed shape`);
   }
-
-  throw new Error('AgentTask has neither targetAgent nor targetCapability');
+  return res;
 }
 
 /**
