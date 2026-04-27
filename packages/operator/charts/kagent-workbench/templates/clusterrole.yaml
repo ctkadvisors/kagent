@@ -1,0 +1,63 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+ClusterRole — READ-ONLY surface for the workbench-api. Cluster-scoped
+because the operator watches Agents/AgentTasks across all namespaces
+(see new_localai/docs/kagent-workbench-rbac.md §2.4 for why a Role
+won't do).
+
+EXPLICITLY NO write verbs anywhere in this slice. When v0.2 lands
+write actions (cancel/retry/create-task), they ship in a SEPARATE
+ClusterRole behind an `actions.enabled` values flag — splitting it
+keeps the read-only MVP install accidentally-write-proof.
+
+Pod/Job filtering by `kagent.knuteson.io/managed-by=kagent-operator`
+is enforced in the workbench-api code (RBAC at the Kubernetes layer
+cannot scope by label). The trade-off is documented in §2.2 of the
+RBAC plan: the API code is the trust boundary for selector
+enforcement; RBAC keeps reads read-only.
+*/}}
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-reader
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+rules:
+  # kagent CRDs — the core of the read surface
+  - apiGroups: ['kagent.knuteson.io']
+    resources:
+      - agents
+      - agenttasks
+      - agentcapabilities
+    verbs: ['get', 'list', 'watch']
+  # Status subresources (operator updates these; UI shows them)
+  - apiGroups: ['kagent.knuteson.io']
+    resources:
+      - agents/status
+      - agenttasks/status
+      - agentcapabilities/status
+    verbs: ['get']
+  # Operator-managed Jobs/Pods. Cluster-wide read; the workbench
+  # filters by `kagent.knuteson.io/managed-by=kagent-operator` label
+  # in code (see RBAC plan §2.2).
+  - apiGroups: ['batch']
+    resources: ['jobs']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list', 'watch']
+  # Pod logs for the task-detail panel. Opt-in surface in the API code.
+  - apiGroups: ['']
+    resources: ['pods/log']
+    verbs: ['get']
+  # Events for the per-task event timeline (WORKBENCH.md §3.2)
+  - apiGroups: ['']
+    resources: ['events']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['events.k8s.io']
+    resources: ['events']
+    verbs: ['get', 'list', 'watch']
+{{- end }}
