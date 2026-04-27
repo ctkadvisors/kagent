@@ -38,11 +38,11 @@
 
 ## Phase 2 — Operator + CRDs (~1 week)
 
-- [ ] CRD definitions: `Agent`, `AgentTask`, `AgentCapability` (`packages/operator/src/crds/`)
-- [ ] Operator skeleton: Bun + `@kubernetes/client-node`, watch loop on `AgentTask`
-- [ ] Reconcile logic: `AgentTask` Created → resolve target Agent → create Job → publish to NATS subject → watch for completion → write result to AgentTask status
-- [ ] Smoke test against `kind` cluster
-- [ ] Helm chart for the operator + RBAC
+- [x] CRD definitions: `Agent`, `AgentTask`, `AgentCapability` in `packages/operator/src/crds/` (TS) + `packages/operator/manifests/crds/` (YAML). API group `kagent.knuteson.io/v1alpha1` (knuteson.io subdomain to avoid collision with Solo.io's kagent.dev — see CLAUDE.md naming note; rename pre-public-release).
+- [x] Operator skeleton: Bun + `@kubernetes/client-node` 1.4.0, `makeInformer` cluster-wide watch on `AgentTask`. Graceful SIGTERM/SIGINT shutdown. Entry point: `packages/operator/src/main.ts`.
+- [x] Reconcile logic: AgentTask → resolve target Agent → build Job spec (with ownerRef back to AgentTask) → create Job (409 idempotent) → `Dispatcher.publish` → patch `AgentTask.status.phase=Dispatched`. v0.1 stops at dispatch — Phase 3 wires the completion path (agent pod writes status directly via K8s API; NATS reply pattern is a v0.2 optimization). `targetCapability` resolution defers to Phase 3.
+- [ ] Smoke test against `kind` cluster — **deferred to Phase 5** (E2E + comparison rig). Phase 2 ships unit tests against mocked K8s clients (32 tests on reconcile + job-spec); spinning up kind + NATS to validate end-to-end belongs with the cross-substrate comparison rig where the real workload runs.
+- [x] Helm chart `packages/operator/charts/kagent-operator/`: Deployment + ServiceAccount + ClusterRole + ClusterRoleBinding + the three CRDs in chart's `crds/`. RBAC scoped to the kagent.knuteson.io group + batch/v1 jobs + pods (read) + events (write).
 
 **Tag:** `v0.0.2-phase2`
 
