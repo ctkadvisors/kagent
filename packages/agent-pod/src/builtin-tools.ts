@@ -9,9 +9,10 @@
  * Phase 5 / Platform-Priorities P2 — wire `Agent.spec.tools` to the
  * smallest set of tools the researcher workload needs:
  *
- *   - `http_get`     — HTTP GET with allowlist + SSRF protection
- *   - `rss_fetch`    — RSS / Atom feed fetch + tiny inline parser
- *   - `extract_text` — strip HTML tags, collapse whitespace
+ *   - `http_get`       — HTTP GET with allowlist + SSRF protection
+ *   - `rss_fetch`      — RSS / Atom feed fetch + tiny inline parser
+ *   - `extract_text`   — strip HTML tags, collapse whitespace
+ *   - `write_artifact` — persist outputs to a PVC mount + emit ArtifactRef (P3)
  *
  * This is NOT the `ToolBroker` / `ToolBinding` CRD design from
  * `docs/TOOL-BROKER.md` — that lands in P6 once the policy primitive is
@@ -30,12 +31,23 @@
  *      against the same allowlist + SSRF rules; up to 5 hops.
  *   4. Bodies are truncated to 1MB to bound trace cost. Headers exposed to
  *      the LLM are an allowlist (`content-type`, `etag`, `last-modified`).
- *   5. No subprocess, no `eval`, no shell-out anywhere in this file.
+ *   5. `write_artifact` writes ONLY under `<KAGENT_ARTIFACTS_DIR>/<task-uid>/`,
+ *      refuses path traversal (`..`, leading slash, non-printable chars), and
+ *      writes atomically (`<name>.tmp` then rename). No subprocess, no
+ *      `eval`, no shell-out anywhere in this file.
  */
 
 import type { ContentBlock, ToolInvocationContext, ToolProvider } from '@kagent/agent-loop';
 import { defineInProcessTool, InProcessToolProvider } from '@kagent/in-process-tool-provider';
 import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
+
+import {
+  buildPvcUri,
+  inlineSafeForArtifact,
+  resolveWriterEnv,
+  writeArtifactToDisk,
+  type ArtifactRef,
+} from './artifacts.js';
 
 /* =====================================================================
  * Constants — kept module-scoped for unit-test visibility.
@@ -524,6 +536,17 @@ interface BuildOpts {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Override the fetch impl — primarily for tests. Defaults to global `fetch`. */
   readonly fetch?: typeof fetch;
+  /**
+   * Override the artifact writer — primarily for tests so we can assert
+   * on the produced ArtifactRef without booting a real PVC mount.
+   * Defaults to `writeArtifactToDisk`.
+   */
+  readonly writeArtifact?: typeof writeArtifactToDisk;
+  /**
+   * Override the clock used by `write_artifact`'s `producedAt` field.
+   * Defaults to `() => new Date()`.
+   */
+  readonly now?: () => Date;
 }
 
 /**
@@ -615,10 +638,69 @@ export function buildBuiltinToolRegistry(
     },
   });
 
+  // P3 — write_artifact. Persists outputs to a PVC mount and emits an
+  // ArtifactRef the runner forwards into RunResult.artifacts (which the
+  // operator's status patch threads into AgentTask.status.artifacts).
+  //
+  // env knobs (resolved per call so a test can override either):
+  //   - KAGENT_ARTIFACTS_DIR    (default: /var/kagent/artifacts)
+  //   - KAGENT_ARTIFACT_PVC_NAME (default: kagent-artifacts)
+  //   - KAGENT_TASK_ID          (required; the operator already injects)
+  const writer = opts.writeArtifact ?? writeArtifactToDisk;
+  const clock = opts.now ?? ((): Date => new Date());
+  const writeArtifact = defineInProcessTool({
+    name: 'write_artifact',
+    description:
+      'Persist a UTF-8 string to the per-task PVC mount and return an ' +
+      'ArtifactRef ({uri, name, mediaType, sizeBytes, checksum, producedAt}). ' +
+      'The operator forwards refs into AgentTask.status.artifacts. Names ' +
+      'must be relative (no leading "/" or ".." segments) and must not ' +
+      'contain control characters. When `inline` is true and the content ' +
+      'is small + textual, the tool returns a synthetic ref WITHOUT ' +
+      'touching the filesystem so the caller can choose to embed the ' +
+      'content directly in status.result.content instead.',
+    inputSchema: {
+      type: 'object',
+      required: ['name', 'mediaType', 'content'],
+      properties: {
+        name: { type: 'string' },
+        mediaType: { type: 'string' },
+        content: { type: 'string' },
+        inline: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+    tags: ['write', 'artifacts'],
+    handler: (args) => {
+      const name = requireStringArg(args, 'name');
+      const mediaType = requireStringArg(args, 'mediaType');
+      const content = requireStringArgAllowEmpty(args, 'content');
+      const inline = args.inline === true;
+      const writerEnv = resolveWriterEnv(env);
+      // Inline short-circuit: when the caller asks for inline AND the
+      // payload qualifies, skip the FS round-trip and return a synthetic
+      // ref. Callers that prefer the inline-content-in-status path can
+      // see `inlineSafe: true` on the metadata and act accordingly.
+      if (inline && inlineSafeForArtifact(content, mediaType)) {
+        const synthetic: ArtifactRef = {
+          uri: buildPvcUri(writerEnv.pvcName, writerEnv.taskUid, name),
+          name,
+          mediaType,
+          sizeBytes: Buffer.byteLength(content, 'utf8'),
+          producedAt: clock().toISOString(),
+        };
+        return jsonContent(synthetic);
+      }
+      const result = writer(name, content, mediaType, writerEnv, clock());
+      return jsonContent(result.ref);
+    },
+  });
+
   return new Map<string, InProcessToolDefinition>([
     [httpGet.name, httpGet],
     [rssFetch.name, rssFetch],
     [extractText.name, extractText],
+    [writeArtifact.name, writeArtifact],
   ]);
 }
 
@@ -626,6 +708,19 @@ function requireStringArg(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== 'string' || v.length === 0) {
     throw new Error(`missing or empty required string argument "${key}"`);
+  }
+  return v;
+}
+
+/**
+ * Like `requireStringArg` but allows the empty string. `write_artifact`
+ * legitimately accepts a 0-byte payload (e.g. a sentinel marker file)
+ * so we cannot reject `''` at the arg-parsing layer.
+ */
+function requireStringArgAllowEmpty(args: Record<string, unknown>, key: string): string {
+  const v = args[key];
+  if (typeof v !== 'string') {
+    throw new Error(`missing or wrong-type required string argument "${key}"`);
   }
   return v;
 }
