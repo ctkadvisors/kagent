@@ -50,11 +50,11 @@
 
 ## Phase 3 — NATS A2A bus + agent pod runtime (~1 week)
 
-- [ ] NATS JetStream Helm wiring + KV bucket setup
-- [ ] Agent Pod base image: Bun + agent-loop + downward API for Agent definition
-- [ ] In-pod NATS subscription: `agent.<id>.task.<taskId>` for inbound; `agent.cap.<cap>.task.<id>` for delegation
-- [ ] A2A envelope contract (per [`HARNESS-LESSONS.md`](./HARNESS-LESSONS.md) §6): `taskId, parentTaskId?, originalUserMessage, parentDistillation?, expectedTools?, structuralVerdict`
-- [ ] OTel exporter wired into agent-loop, pointing at Langfuse
+- [x] NATS JetStream Helm reference values (`packages/operator/charts/values-references/nats-jetstream.yaml`) covering single-node JetStream + the `agents-live` KV bucket convention. Operator wires a real `NatsDispatcher` when `KAGENT_NATS_URL` is set; otherwise falls back to `StubDispatcher`. KV-backed `NatsCapabilityRegistry` reads `agents-live`.
+- [x] Agent Pod base image: multi-stage Dockerfile under `packages/agent-pod/Dockerfile` (Node 22 + pnpm install stage → `oven/bun:1.1-alpine` runtime stage). Pod reads task assignment via env vars (operator's job-spec injects KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC as JSON; simpler boot than waiting on NATS). Image not yet published; operator Helm values still point at the v0.0.2 placeholder until CI builds + pushes.
+- [ ] In-pod NATS subscription — **deferred**. v0.1 design pivoted to "operator passes task via env, agent pod patches AgentTask.status via K8s API" since it sidesteps a chain of NATS bootstrap concerns. NATS publish-side is wired (`NatsDispatcher`); subscription is a v0.2 affordance for warm-pool / streaming-cancel signals.
+- [x] A2A envelope contract: `DispatchedTask` carries `taskId, agentId, parentTaskId?, originalUserMessage, parentDistillation?, expectedTools?, payload`. Locked in by `packages/operator/src/envelope.test.ts` (10 contract tests reading the StubDispatcher wire-tap).
+- [x] OTel exporter wired into `@kagent/agent-loop` via `OtelTraceSink` in `@kagent/trace-sinks` (OTLP/HTTP, Langfuse-compatible). Agent-pod main.ts boots the exporter when `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set; silently skips otherwise.
 
 **Tag:** `v0.0.3-phase3`
 
