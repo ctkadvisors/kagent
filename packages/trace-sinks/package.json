@@ -15,6 +15,9 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
+  "dependencies": {
+    "@kagent/agent-loop": "workspace:*"
+  },
   "engines": {
     "node": ">=22.0.0"
   }

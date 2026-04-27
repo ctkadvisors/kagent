@@ -14,17 +14,29 @@ const tsconfigRootDir = dirname(fileURLToPath(import.meta.url));
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'coverage/**', '.tsbuildinfo', 'node_modules/**'],
+    // Skip config files — they are prettier-formatted and aren't deliverable
+    // code. Linting them via `parserOptions.project` requires them in the TS
+    // project, which adds churn for no enforcement payoff.
+    ignores: [
+      'dist/**',
+      'coverage/**',
+      '.tsbuildinfo',
+      'node_modules/**',
+      'eslint.config.js',
+      'vitest.config.ts',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
     languageOptions: {
       parserOptions: {
-        projectService: {
-          defaultProject: 'tsconfig.eslint.json',
-          allowDefaultProject: ['eslint.config.js', 'vitest.config.ts'],
-        },
+        // Legacy `project` form (rather than projectService) — required so
+        // test files + __fixtures__ lint via tsconfig.eslint.json without
+        // typescript-eslint v8's "** glob disallowed in allowDefaultProject"
+        // restriction kicking in. tsconfig.json (build) excludes tests; this
+        // config sees them.
+        project: ['tsconfig.eslint.json'],
         tsconfigRootDir,
       },
     },
