@@ -68,6 +68,26 @@ agentPod:
   # Comma-separated headers (e.g., 'authorization=Bearer%20<pk>').
   otlpHeaders: ''
 
+  # Built-in tool configuration — see packages/agent-pod/src/builtin-tools.ts.
+  # Today this only carries the HTTP-fetch domain allowlist; future
+  # built-ins (rss_fetch, extract_text) honor the same allowlist.
+  builtinTools:
+    # Domain allowlist for `http_get` / `rss_fetch`. DEFAULT-DENY:
+    # an empty list means no outbound HTTP via built-in tools. Each
+    # entry is matched against the request URL's host (case-insensitive
+    # exact match — no glob, no suffix; explicitly enumerate every host).
+    # The chart joins this list with `,` and forwards as the
+    # KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS env var on the operator
+    # Deployment; operator's buildJobSpecOptionsFromEnv re-emits it as
+    # KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS on every spawned Job.
+    #
+    # Example for the homelab researcher workload:
+    #   httpAllowDomains:
+    #     - 'news.ycombinator.com'
+    #     - 'hnrss.org'
+    #     - 'lobste.rs'
+    httpAllowDomains: []
+
   # Artifact storage — Phase 5 / Platform-Priorities P3. When enabled,
   # the chart provisions a single shared RWX PVC the operator mounts
   # into every agent pod at `mountPath`. The in-pod `write_artifact`

@@ -76,6 +76,24 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_AGENT_POD_OTLP_HEADERS,
     });
   }
+  // Built-in tool HTTP allowlist — Helm's chart values
+  // `agentPod.builtinTools.httpAllowDomains` are comma-joined into
+  // KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS on the operator's own
+  // deployment; we forward it verbatim into spawned Jobs as
+  // KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS, which is what
+  // packages/agent-pod/src/builtin-tools.ts reads (default-deny when
+  // unset/empty). Renaming on the way through keeps the env-var
+  // surface stable for the agent-pod and lets operator-side knobs
+  // grow a `KAGENT_AGENT_POD_*` prefix consistently.
+  if (
+    typeof env.KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS === 'string' &&
+    env.KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS',
+      value: env.KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS,
+    });
+  }
   const pullPolicy = env.KAGENT_AGENT_POD_IMAGE_PULL_POLICY;
   // Artifact PVC plumbing — Helm sets KAGENT_ARTIFACT_PVC_NAME +
   // (optionally) KAGENT_ARTIFACT_MOUNT_PATH on the operator deployment;
