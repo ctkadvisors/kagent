@@ -16,11 +16,73 @@ import { connect, type NatsConnection } from 'nats';
 
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
+import type { BuildJobSpecOptions } from './job-spec.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
 import { NatsDispatcher } from './nats-dispatcher.js';
 import { reconcileAgentTask, type ReconcileDeps } from './reconcile.js';
 import type { AgentTaskHandler } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
+
+/**
+ * Build the BuildJobSpecOptions the reconcile loop hands to job-spec
+ * for every Pod it materializes. Reads operator env vars; everything
+ * is optional. Helm values plumb through here.
+ */
+function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
+  const env = process.env;
+  const extraEnv: { name: string; value: string }[] = [];
+  if (
+    typeof env.KAGENT_AGENT_POD_LITELLM_BASE_URL === 'string' &&
+    env.KAGENT_AGENT_POD_LITELLM_BASE_URL.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_LITELLM_BASE_URL',
+      value: env.KAGENT_AGENT_POD_LITELLM_BASE_URL,
+    });
+  }
+  if (
+    typeof env.KAGENT_AGENT_POD_LITELLM_API_KEY === 'string' &&
+    env.KAGENT_AGENT_POD_LITELLM_API_KEY.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_LITELLM_API_KEY',
+      value: env.KAGENT_AGENT_POD_LITELLM_API_KEY,
+    });
+  }
+  if (
+    typeof env.KAGENT_AGENT_POD_OTLP_ENDPOINT === 'string' &&
+    env.KAGENT_AGENT_POD_OTLP_ENDPOINT.length > 0
+  ) {
+    extraEnv.push({
+      name: 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+      value: env.KAGENT_AGENT_POD_OTLP_ENDPOINT,
+    });
+  }
+  if (
+    typeof env.KAGENT_AGENT_POD_OTLP_HEADERS === 'string' &&
+    env.KAGENT_AGENT_POD_OTLP_HEADERS.length > 0
+  ) {
+    extraEnv.push({
+      name: 'OTEL_EXPORTER_OTLP_HEADERS',
+      value: env.KAGENT_AGENT_POD_OTLP_HEADERS,
+    });
+  }
+  return {
+    ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
+      env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
+        image: env.KAGENT_AGENT_POD_IMAGE,
+      }),
+    ...(typeof env.KAGENT_AGENT_POD_IMAGE_PULL_SECRET === 'string' &&
+      env.KAGENT_AGENT_POD_IMAGE_PULL_SECRET.length > 0 && {
+        imagePullSecret: env.KAGENT_AGENT_POD_IMAGE_PULL_SECRET,
+      }),
+    ...(typeof env.KAGENT_AGENT_POD_SERVICE_ACCOUNT === 'string' &&
+      env.KAGENT_AGENT_POD_SERVICE_ACCOUNT.length > 0 && {
+        serviceAccountName: env.KAGENT_AGENT_POD_SERVICE_ACCOUNT,
+      }),
+    ...(extraEnv.length > 0 && { extraEnv }),
+  };
+}
 
 /**
  * Build the watch handler given a set of reconcile dependencies. The
@@ -105,7 +167,14 @@ async function main(): Promise<void> {
     capabilityRegistry = new StubCapabilityRegistry();
   }
 
-  const deps: ReconcileDeps = { customApi, batchApi, dispatcher, capabilityRegistry };
+  const jobSpecOptions = buildJobSpecOptionsFromEnv();
+  const deps: ReconcileDeps = {
+    customApi,
+    batchApi,
+    dispatcher,
+    capabilityRegistry,
+    ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
+  };
   const handler = buildHandler(deps);
   const informer = createAgentTaskInformer(kc, customApi, handler);
 

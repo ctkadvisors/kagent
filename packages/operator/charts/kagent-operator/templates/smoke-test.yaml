@@ -1,0 +1,132 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Smoke-test manifests — applied when .Values.smokeTest.enabled = true.
+Materializes:
+  - Agent CRD `smoke-test`           (the agent definition)
+  - AgentTask CRD `smoke-test`        (the run that exercises the loop)
+  - Job `smoke-test-verify`          (waits for completion + asserts)
+
+The operator picks up the AgentTask via its watch, spawns a pod, the
+pod runs against .Values.agentPod.litellmBaseUrl, and patches status.
+The verification Job runs `kubectl wait` against the AgentTask phase,
+prints the status YAML, and exits 0 on success / 1 on timeout.
+*/}}
+{{- if .Values.smokeTest.enabled -}}
+---
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: smoke-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    kagent.knuteson.io/role: smoke-test
+spec:
+  model: {{ .Values.smokeTest.model | quote }}
+  systemPrompt: 'You are a precise technical assistant. Answer in one sentence.'
+  sandboxProfile: default
+---
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: smoke-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    kagent.knuteson.io/role: smoke-test
+spec:
+  targetAgent: smoke-test
+  payload:
+    smokeTest: true
+  originalUserMessage: {{ .Values.smokeTest.prompt | quote }}
+  timeoutSeconds: 60
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: smoke-test-verify
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: smoke-test-verify
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['get', 'list', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: smoke-test-verify
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: smoke-test-verify
+subjects:
+  - kind: ServiceAccount
+    name: smoke-test-verify
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-test-verify
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    kagent.knuteson.io/role: smoke-test
+  annotations:
+    # Argo: replace + sync on every Application sync so we can re-run
+    # the smoke test by re-syncing.
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+    argocd.argoproj.io/sync-wave: '10'
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        kagent.knuteson.io/role: smoke-test
+    spec:
+      serviceAccountName: smoke-test-verify
+      restartPolicy: Never
+      containers:
+        - name: verify
+          image: {{ .Values.smokeTest.verificationImage | quote }}
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              echo "[smoke-test-verify] waiting for AgentTask/smoke-test to reach a terminal phase…"
+              # Poll instead of `kubectl wait` so we can match either Completed OR Failed.
+              for i in $(seq 1 {{ .Values.smokeTest.timeoutSeconds }}); do
+                phase=$(kubectl get agenttask smoke-test -n {{ .Release.Namespace }} -o jsonpath='{.status.phase}' 2>/dev/null || echo '')
+                if [ "$phase" = "Completed" ] || [ "$phase" = "Failed" ]; then
+                  echo "[smoke-test-verify] phase=$phase after ${i}s"
+                  break
+                fi
+                sleep 1
+              done
+              echo "[smoke-test-verify] final AgentTask status:"
+              kubectl get agenttask smoke-test -n {{ .Release.Namespace }} -o yaml
+              # Exit 0 on Completed, 1 on Failed/timeout — surfaces in
+              # the Job's success-vs-fail signal that ArgoCD picks up.
+              if [ "$phase" = "Completed" ]; then
+                echo "[smoke-test-verify] PASS"
+                exit 0
+              fi
+              echo "[smoke-test-verify] FAIL — phase=${phase:-(unset)}"
+              exit 1
+{{- end }}

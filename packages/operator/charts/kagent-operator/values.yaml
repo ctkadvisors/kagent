@@ -35,15 +35,55 @@ resources:
     cpu: '500m'
     memory: '256Mi'
 
-# Container that runs INSIDE the Pods the operator creates. v0.1 ships
-# a placeholder image — Phase 3 builds the real @kagent/agent-pod.
+# Container that runs INSIDE the Pods the operator creates.
 agentPod:
   image:
     repository: ghcr.io/ctkadvisors/kagent-agent-pod
-    tag: 'v0.0.2-phase2-stub'
+    tag: 'v0.0.4-phase4'
     pullPolicy: IfNotPresent
   imagePullSecret: '' # name of secret in the AgentTask's namespace
-  serviceAccountName: '' # SA the agent pod runs as; empty = default
+  # ServiceAccount the agent pod runs as. The chart creates one named
+  # 'kagent-agent-pod' with RBAC to patch AgentTask.status; set this
+  # to that name (or override) to use it.
+  serviceAccountName: 'kagent-agent-pod'
+  # Create the kagent-agent-pod ServiceAccount + Role/RoleBinding
+  # alongside the operator. The pod uses these to patch its
+  # AgentTask's status subresource.
+  rbac:
+    create: true
+
+  # OpenAI-compat inference endpoint the agent loop calls. When set,
+  # the operator injects this as KAGENT_LITELLM_BASE_URL on every
+  # spawned agent pod. When empty, agent-pod's env.ts default
+  # (`http://litellm.kagent-system.svc.cluster.local:4000/v1`) wins.
+  litellmBaseUrl: ''
+  # Optional API key for the inference endpoint (Bearer in Authorization
+  # header). Plain string for v0.1; v0.2 should plumb via secretKeyRef.
+  litellmApiKey: ''
+
+  # OTLP/HTTP traces endpoint (Langfuse-compatible). When set, the
+  # operator injects OTEL_EXPORTER_OTLP_TRACES_ENDPOINT into every
+  # spawned agent pod, and agent-pod's main wires OtelTraceSink.
+  otlpEndpoint: ''
+  # Comma-separated headers (e.g., 'authorization=Bearer%20<pk>').
+  otlpHeaders: ''
+
+# Smoke-test manifests — Agent + AgentTask + verification Job aimed at
+# the configured agent-pod inference endpoint. Disable in production
+# clusters; ship enabled = true on first install to prove the substrate
+# works end-to-end.
+smokeTest:
+  enabled: false
+  # Model id passed to the agent loop (verbatim into LiteLLM /
+  # OpenAI-compat). For LM Studio: whatever model is loaded
+  # (e.g. 'llama-3.2-3b-instruct'). For OpenRouter: the full slug.
+  model: 'llama-3.2-3b-instruct'
+  # Initial user message the smoke-test agent processes.
+  prompt: 'In one sentence, what is K3s?'
+  # Verification Job image — needs `kubectl wait` + `kubectl get`.
+  verificationImage: 'bitnami/kubectl:latest'
+  # Timeout for the verification Job to wait on AgentTask completion.
+  timeoutSeconds: 300
 
 # Node placement
 nodeSelector: {}

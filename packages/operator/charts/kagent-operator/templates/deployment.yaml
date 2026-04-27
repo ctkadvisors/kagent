@@ -42,8 +42,9 @@ spec:
           env:
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
-            # Plumb agent-pod image config through to reconcile via env
-            # (consumed by future BuildJobSpecOptions wiring).
+            # Plumb agent-pod image + runtime config through to the
+            # reconcile loop, which forwards them as env into every
+            # spawned pod via BuildJobSpecOptions.
             - name: KAGENT_AGENT_POD_IMAGE
               value: '{{ .Values.agentPod.image.repository }}:{{ .Values.agentPod.image.tag }}'
             - name: KAGENT_AGENT_POD_IMAGE_PULL_POLICY
@@ -52,6 +53,22 @@ spec:
               value: {{ .Values.agentPod.imagePullSecret | quote }}
             - name: KAGENT_AGENT_POD_SERVICE_ACCOUNT
               value: {{ .Values.agentPod.serviceAccountName | quote }}
+            {{- with .Values.agentPod.litellmBaseUrl }}
+            - name: KAGENT_AGENT_POD_LITELLM_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agentPod.litellmApiKey }}
+            - name: KAGENT_AGENT_POD_LITELLM_API_KEY
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agentPod.otlpEndpoint }}
+            - name: KAGENT_AGENT_POD_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agentPod.otlpHeaders }}
+            - name: KAGENT_AGENT_POD_OTLP_HEADERS
+              value: {{ . | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Operator's livenessProbe wired in Phase 3 once a /healthz

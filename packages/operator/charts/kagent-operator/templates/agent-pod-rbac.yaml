@@ -1,0 +1,58 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+ServiceAccount + Role + RoleBinding for the agent pods the operator
+spawns. Each agent pod patches its own AgentTask's status subresource
+on completion — that's the only K8s permission it needs.
+
+Scoped to the release namespace (kagent-system by default). Multi-
+namespace AgentTasks would need a ClusterRole; deferred to v0.2.
+*/}}
+{{- if .Values.agentPod.rbac.create -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.agentPod.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-pod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.agentPod.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-pod
+rules:
+  # Patch AgentTask.status — the only thing the agent pod writes.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks/status']
+    verbs: ['get', 'patch', 'update']
+  # Read AgentTask spec — useful for sanity-checks (the operator already
+  # injects KAGENT_TASK_SPEC via env, but a re-read is helpful in
+  # debugging cycles where the env got stale).
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['get']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.agentPod.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-pod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.agentPod.serviceAccountName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.agentPod.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -100,6 +100,26 @@ describe('buildJobSpec', () => {
     });
   });
 
+  it('appends extraEnv after the KAGENT_* defaults', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      extraEnv: [
+        { name: 'KAGENT_LITELLM_BASE_URL', value: 'http://192.168.68.60:1234/v1' },
+        {
+          name: 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
+          value: 'http://langfuse:3000/api/public/otel/v1/traces',
+        },
+      ],
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_LITELLM_BASE_URL')).toBe('http://192.168.68.60:1234/v1');
+    expect(byName.get('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')).toBe(
+      'http://langfuse:3000/api/public/otel/v1/traces',
+    );
+    // KAGENT_* defaults are still present.
+    expect(byName.get('KAGENT_TASK_ID')).toBe('task-uid-12345');
+  });
+
   it('uses placeholder image by default', () => {
     const job = buildJobSpec(sampleAgent, sampleTask);
     const image = job.spec?.template?.spec?.containers?.[0]?.image;

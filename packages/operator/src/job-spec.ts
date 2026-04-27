@@ -31,6 +31,14 @@ export interface BuildJobSpecOptions {
   readonly serviceAccountName?: string;
   /** Set to 'kata' when Agent.spec.sandboxProfile === 'strict' (v0.2). */
   readonly runtimeClassName?: string;
+  /**
+   * Extra env vars appended to the agent-pod container after the
+   * KAGENT_TASK_*, KAGENT_AGENT_* defaults. Used by the operator to
+   * plumb agent-pod runtime config (e.g. KAGENT_LITELLM_BASE_URL,
+   * KAGENT_NATS_URL, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) from its
+   * own env into the spawned pod without per-Agent overrides.
+   */
+  readonly extraEnv?: readonly { readonly name: string; readonly value: string }[];
 }
 
 /**
@@ -69,6 +77,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
     { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
+    ...(opts.extraEnv ?? []).map((e) => ({ name: e.name, value: e.value })),
   ];
 
   const podSpec: V1Job['spec'] = {
