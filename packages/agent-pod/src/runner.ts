@@ -91,10 +91,21 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   const userMessage = pickUserMessage(config);
   const messages: ChatMessage[] = [{ role: 'user', content: userMessage }];
 
+  // Honor AgentTask.spec.timeoutSeconds via AbortSignal so a hung LLM
+  // call (unreachable LiteLLM, model never streams a token, etc.)
+  // surfaces as a `cancelled` terminal status instead of pinning the
+  // pod until the K8s Job's activeDeadlineSeconds fires.
+  const timeoutSeconds = config.taskSpec.timeoutSeconds;
+  const signal =
+    typeof timeoutSeconds === 'number' && timeoutSeconds > 0
+      ? AbortSignal.timeout(timeoutSeconds * 1000)
+      : undefined;
+
   const result = await executor.run({
     agentType: config.agentName,
     messages,
     runId: config.taskId,
+    ...(signal !== undefined && { signal }),
   });
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
