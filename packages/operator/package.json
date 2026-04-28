@@ -14,7 +14,8 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "chart:render-check": "bash scripts/check-runtime-class-render.sh"
   },
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",

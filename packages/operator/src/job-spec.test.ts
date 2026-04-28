@@ -136,11 +136,108 @@ describe('buildJobSpec', () => {
     expect(job.spec?.template?.spec?.containers?.[0]?.image).toBe('custom:tag');
   });
 
-  it('omits runtimeClassName by default; applies kata when supplied', () => {
+  it('omits runtimeClassName by default; deprecated runtimeClassName field still applies kata when supplied', () => {
     const without = buildJobSpec(sampleAgent, sampleTask);
     expect(without.spec?.template?.spec?.runtimeClassName).toBeUndefined();
     const kata = buildJobSpec(sampleAgent, sampleTask, { runtimeClassName: 'kata' });
     expect(kata.spec?.template?.spec?.runtimeClassName).toBe('kata');
+  });
+
+  /* =====================================================================
+   * Per-Agent runtimeClass mapping — WS-C / Kata + sandboxProfile wiring.
+   *
+   * `opts.runtimeClasses` is the canonical path: a profile-keyed map
+   * resolved against `Agent.spec.sandboxProfile`. The deprecated
+   * `opts.runtimeClassName` global override is still honored for tests
+   * but the map wins when both are set.
+   * ===================================================================== */
+
+  it('runtimeClasses absent → no runtimeClassName on the pod spec', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {});
+    expect(job.spec?.template?.spec?.runtimeClassName).toBeUndefined();
+  });
+
+  it('runtimeClasses.strict=kata + Agent.sandboxProfile=strict → runtimeClassName: kata', () => {
+    const strictAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'strict' },
+    };
+    const job = buildJobSpec(strictAgent, sampleTask, {
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('kata');
+  });
+
+  it('runtimeClasses.default=runc + Agent.sandboxProfile=default → runtimeClassName: runc', () => {
+    const defaultAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'default' },
+    };
+    const job = buildJobSpec(defaultAgent, sampleTask, {
+      runtimeClasses: { default: 'runc', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('runc');
+  });
+
+  it('runtimeClasses.default=runc + Agent.sandboxProfile absent → defaults to "default" profile (runc)', () => {
+    const noProfileAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: undefined },
+    };
+    const job = buildJobSpec(noProfileAgent, sampleTask, {
+      runtimeClasses: { default: 'runc', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('runc');
+  });
+
+  it('runtimeClasses.strict=kata + Agent.sandboxProfile=default → does NOT apply kata (no over-application)', () => {
+    const defaultAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'default' },
+    };
+    const job = buildJobSpec(defaultAgent, sampleTask, {
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).not.toBe('kata');
+    // Empty default means cluster-default → omit field entirely.
+    expect(job.spec?.template?.spec?.runtimeClassName).toBeUndefined();
+  });
+
+  it('runtimeClasses.strict=kata + Agent.sandboxProfile absent → does NOT apply kata', () => {
+    const noProfileAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: undefined },
+    };
+    const job = buildJobSpec(noProfileAgent, sampleTask, {
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).not.toBe('kata');
+    expect(job.spec?.template?.spec?.runtimeClassName).toBeUndefined();
+  });
+
+  it('runtimeClasses map wins over deprecated runtimeClassName field when both set', () => {
+    const strictAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'strict' },
+    };
+    const job = buildJobSpec(strictAgent, sampleTask, {
+      runtimeClassName: 'gvisor',
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('kata');
+  });
+
+  it('deprecated runtimeClassName falls through when runtimeClasses entry is empty', () => {
+    const strictAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'strict' },
+    };
+    // map present but strict is empty → fall back to deprecated override.
+    const job = buildJobSpec(strictAgent, sampleTask, {
+      runtimeClassName: 'gvisor',
+      runtimeClasses: { default: '', strict: '' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('gvisor');
   });
 
   it('omits imagePullSecrets / serviceAccountName by default', () => {
