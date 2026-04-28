@@ -14,8 +14,14 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "dependencies": {
     "@kagent/dto": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
