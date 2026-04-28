@@ -103,6 +103,24 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   // added and the tool fails fast at boot if invoked.
   const artifactPvcName = env.KAGENT_ARTIFACT_PVC_NAME;
   const artifactMountPath = env.KAGENT_ARTIFACT_MOUNT_PATH;
+
+  // RuntimeClass mapping per Agent.spec.sandboxProfile (WS-C). Helm
+  // values `agentPod.runtimeClasses.{default,strict}` plumb through as
+  // these env vars on the operator deployment. Empty string means
+  // "not set — omit runtimeClassName for that profile" (cluster default
+  // applies). When NEITHER env var is set the map is omitted entirely;
+  // `buildJobSpec` then falls back to the deprecated
+  // `opts.runtimeClassName` (which `buildJobSpecOptionsFromEnv` itself
+  // never sets, leaving that field as a TS-only escape hatch).
+  const runtimeClassDefault = env.KAGENT_RUNTIME_CLASS_DEFAULT;
+  const runtimeClassStrict = env.KAGENT_RUNTIME_CLASS_STRICT;
+  const runtimeClassesMap =
+    typeof runtimeClassDefault === 'string' || typeof runtimeClassStrict === 'string'
+      ? {
+          default: typeof runtimeClassDefault === 'string' ? runtimeClassDefault : '',
+          strict: typeof runtimeClassStrict === 'string' ? runtimeClassStrict : '',
+        }
+      : undefined;
   return {
     ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
@@ -127,6 +145,7 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
             artifactMountPath.length > 0 && { mountPath: artifactMountPath }),
         },
       }),
+    ...(runtimeClassesMap !== undefined && { runtimeClasses: runtimeClassesMap }),
     ...(extraEnv.length > 0 && { extraEnv }),
   };
 }

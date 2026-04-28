@@ -32,7 +32,31 @@ export interface BuildJobSpecOptions {
   readonly imagePullSecret?: string;
   /** ServiceAccount the agent pod runs under. */
   readonly serviceAccountName?: string;
-  /** Set to 'kata' when Agent.spec.sandboxProfile === 'strict' (v0.2). */
+  /**
+   * Per-sandbox-profile RuntimeClass mapping. Resolved against
+   * `Agent.spec.sandboxProfile` (defaulting to `'default'` when unset).
+   *
+   * - When the resolved profile maps to a non-empty string → that becomes
+   *   `runtimeClassName` on the spawned pod spec.
+   * - When the mapping is absent OR maps to an empty string → no
+   *   `runtimeClassName` is set (cluster default applies).
+   *
+   * This is the canonical path for Kata Containers wiring: set
+   * `runtimeClasses.strict = 'kata'` once Kata is deployed onto the
+   * nodes (see docs/ROADMAP.md Phase 6) and agents that declare
+   * `sandboxProfile: 'strict'` will then land on the `kata` runtime
+   * while agents on `'default'` (or no profile) keep the cluster default
+   * (typically `runc`). Per-Agent — never global.
+   */
+  readonly runtimeClasses?: Readonly<Record<'default' | 'strict', string>>;
+  /**
+   * @deprecated Use `runtimeClasses` instead — that map is per-Agent
+   * (resolved from `Agent.spec.sandboxProfile`) and is the only correct
+   * way to opt INDIVIDUAL agents into Kata. This free-form override
+   * applies the same `runtimeClassName` to EVERY pod the operator
+   * spawns, which is almost never what you want. Kept as a TS-only
+   * test/escape-hatch seam; when both are set, `runtimeClasses` wins.
+   */
   readonly runtimeClassName?: string;
   /**
    * Extra env vars appended to the agent-pod container after the
@@ -140,6 +164,20 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         }
       : undefined;
 
+  // RuntimeClass resolution: map-driven (per-Agent) wins over the
+  // deprecated free-form opts.runtimeClassName. Profile defaults to
+  // 'default' when Agent.spec.sandboxProfile is unset, so the absence of
+  // a profile never accidentally lands on the 'strict' runtime class.
+  // Empty-string entries in the map are treated as "not set" so a
+  // partially-populated map (e.g. only strict='kata' set) cleanly omits
+  // runtimeClassName for the other profile.
+  const profile: 'default' | 'strict' = agent.spec.sandboxProfile ?? 'default';
+  const mappedRuntimeClass = opts.runtimeClasses?.[profile];
+  const resolvedRuntimeClassName: string | undefined =
+    typeof mappedRuntimeClass === 'string' && mappedRuntimeClass.length > 0
+      ? mappedRuntimeClass
+      : opts.runtimeClassName;
+
   // Honor AgentTask.spec.timeoutSeconds via Job.spec.activeDeadlineSeconds
   // so K8s itself terminates the pod when the deadline passes — belt-
   // and-suspenders alongside the agent-pod's AbortSignal.timeout. This
@@ -169,8 +207,8 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         ...(opts.serviceAccountName !== undefined && {
           serviceAccountName: opts.serviceAccountName,
         }),
-        ...(opts.runtimeClassName !== undefined && {
-          runtimeClassName: opts.runtimeClassName,
+        ...(resolvedRuntimeClassName !== undefined && {
+          runtimeClassName: resolvedRuntimeClassName,
         }),
         ...(opts.imagePullSecret !== undefined && {
           imagePullSecrets: [{ name: opts.imagePullSecret }],
@@ -199,10 +237,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     },
   };
 
-  // sandboxProfile: 'strict' will plumb to runtimeClassName: kata in v0.2.
-  // We surface the spec field today so consumers can opt in once Kata
-  // is on the nodes; operator's Helm values then auto-fill the runtime
-  // class.
+  // sandboxProfile → runtimeClassName resolution happens above via
+  // `opts.runtimeClasses[profile]` (Helm values
+  // `agentPod.runtimeClasses.{default,strict}` plumb through main.ts).
+  // Set `strict: kata` on Helm install once Kata Containers is deployed
+  // onto the K3s nodes per docs/ROADMAP.md Phase 6.
 
   return {
     apiVersion: 'batch/v1',
