@@ -10,6 +10,7 @@ export type {
   AgentTask,
   AgentTaskSpec,
   AgentTaskStatus,
+  AgentTaskCondition,
   AgentTaskPhase,
   AgentCapability,
   AgentCapabilitySpec,

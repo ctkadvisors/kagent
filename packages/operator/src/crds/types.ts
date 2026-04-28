@@ -98,6 +98,30 @@ export interface AgentTaskSpec {
   readonly expectedTools?: readonly string[];
 }
 
+/**
+ * Discrete status condition observed for an AgentTask, modeled after
+ * the standard Kubernetes condition pattern (type/status/reason/message
+ * + lastTransitionTime). WS-E uses these for additive failure context
+ * — e.g. an OOMKill detected after the pod already wrote `Completed`
+ * appends a `JobFailedAfterComplete` condition rather than overwriting
+ * the terminal phase.
+ */
+export interface AgentTaskCondition {
+  /**
+   * CamelCase identifier — `Dispatched`, `Failed`, `ImagePullBackOff`,
+   * `OOMKilled`, `DeadlineExceeded`, `JobFailedAfterComplete`, etc.
+   * Free-form by design; consumers match by string.
+   */
+  readonly type: string;
+  readonly status: 'True' | 'False' | 'Unknown';
+  readonly reason?: string;
+  readonly message?: string;
+  /** RFC 3339 timestamp; preserved across no-op condition rewrites. */
+  readonly lastTransitionTime: string;
+  /** `metadata.generation` observed when this condition was emitted. */
+  readonly observedGeneration?: number;
+}
+
 export interface AgentTaskStatus {
   readonly phase?: AgentTaskPhase;
   readonly result?: unknown;
@@ -106,6 +130,22 @@ export interface AgentTaskStatus {
   readonly completedAt?: string;
   /** Pod that ran this task (Job-spawned in v0.1). */
   readonly podName?: string;
+  /**
+   * `metadata.generation` the operator most recently reconciled. WS-E.
+   * Consumers can compare `metadata.generation` vs.
+   * `status.observedGeneration` to tell whether the operator has caught
+   * up to a new spec write. Operator-owned; the agent-pod stamps it
+   * too on its terminal write so observers see the agent's view.
+   */
+  readonly observedGeneration?: number;
+  /**
+   * Append-only list of discrete conditions (Kubernetes pattern). WS-E
+   * uses this to surface failure context that doesn't fit the single
+   * terminal `phase` field — e.g. multiple failure modes within one
+   * task UID, or a Job-level failure detected after the pod's success
+   * write.
+   */
+  readonly conditions?: readonly AgentTaskCondition[];
   /**
    * Detector-emitted verdict envelope per HARNESS-LESSONS §6. Empty
    * `suspicious` = clean run.
