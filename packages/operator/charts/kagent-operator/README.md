@@ -27,7 +27,7 @@ What's **not** wired yet:
 - **Real agent-pod runtime** (Phase 3): the placeholder container exits immediately. Status will not progress past `Dispatched` until Phase 3 ships `@kagent/agent-pod`.
 - **NATS A2A bus** (Phase 3): `StubDispatcher` is in-memory only.
 - **Capability resolution** (Phase 3): `targetCapability` fast-fails today.
-- **Kata Containers** (v0.2): `Agent.spec.sandboxProfile: 'strict'` is parsed but not yet plumbed to `runtimeClassName`.
+- **Kata Containers node-side install** (Phase 6 / v0.2): the operator-side wiring is shipped — `Agent.spec.sandboxProfile: 'strict'` resolves through `agentPod.runtimeClasses.strict` to a per-pod `runtimeClassName`. The remaining work is deploying Kata onto the K3s nodes via the Kata K8s deployer (see `docs/ROADMAP.md` Phase 6); only flip `agentPod.runtimeClasses.strict: 'kata'` once that's done, otherwise strict-profile agents will fail to schedule with a missing-RuntimeClass error.
 
 ## Values
 
@@ -41,6 +41,8 @@ See `values.yaml` for the full surface. Key knobs:
 | `agentPod.image.repository`    | `ghcr.io/ctkadvisors/kagent-agent-pod`               | Container the operator spawns per AgentTask        |
 | `agentPod.image.tag`           | `v0.0.2-phase2-stub`                                 | Placeholder until Phase 3 ships real runtime image |
 | `agentPod.serviceAccountName`  | `''`                                                 | SA each agent pod runs under                       |
+| `agentPod.runtimeClasses.default` | `''`                                              | RuntimeClass for `Agent.spec.sandboxProfile=default` (or absent). `''` = cluster default (typically `runc`). |
+| `agentPod.runtimeClasses.strict`  | `''`                                              | RuntimeClass for `Agent.spec.sandboxProfile=strict`. Set to `'kata'` AFTER Kata is deployed onto the nodes (Phase 6); `''` falls back to cluster default. |
 | `resources.requests`           | `{ cpu: 50m, memory: 128Mi }`                        | Operator-pod requests                              |
 | `resources.limits`             | `{ cpu: 500m, memory: 256Mi }`                       |                                                    |
 | `replicaCount`                 | `1`                                                  | Single-replica only in v0.1                        |

@@ -101,6 +101,26 @@ agentPod:
     #     - 'lobste.rs'
     httpAllowDomains: []
 
+  # RuntimeClass mapping (WS-C / Phase 6 prep) — `Agent.spec.sandboxProfile`
+  # is resolved against this map per-Agent. The operator's reconcile loop
+  # NEVER sets a global runtimeClassName: each spawned Job's pod spec gets
+  # `runtimeClassName: <runtimeClasses[profile]>` only when the matching
+  # entry below is non-empty; an empty string omits the field on the pod
+  # spec (use the cluster default — typically `runc`).
+  #
+  # Operational expectation: Kata Containers must be deployed onto the
+  # K3s nodes (e.g. via the Kata K8s deployer) BEFORE flipping
+  # `strict: kata` here — otherwise pods that opt into the strict
+  # profile will fail to schedule with a missing-RuntimeClass error.
+  # See `docs/ROADMAP.md` Phase 6 for the node-side install task.
+  #
+  # The substrate-side wiring is now done; toggling this value is the
+  # last step on the operator side once Kata is on the cluster.
+  runtimeClasses:
+    default: '' # e.g. 'runc' to be explicit; '' uses the cluster default.
+    strict: '' # set to 'kata' once Kata is deployed; '' = treat strict
+    #             same as default (use this until Phase 6 ships Kata).
+
   # Artifact storage — Phase 5 / Platform-Priorities P3. When enabled,
   # the chart provisions a single shared RWX PVC the operator mounts
   # into every agent pod at `mountPath`. The in-pod `write_artifact`
