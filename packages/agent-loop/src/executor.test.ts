@@ -561,6 +561,190 @@ describe('AgentExecutor — provider-trace-unaware (D-09 / SC2.6)', () => {
   });
 });
 
+describe('AgentExecutor — tool-call ID synthesis (WS-D fix #3)', () => {
+  let registry: AgentRegistry<MyType, MyPhase>;
+  beforeEach(() => {
+    registry = buildRegistry();
+  });
+
+  it('writes synthesized tool-call ID back into the assistant message and reuses it for tool_call_id', async () => {
+    // Stub returns a tool_call with id: undefined (matches some Llama 4
+    // / Workers AI variants). The fix must:
+    //   (a) synthesize a non-empty id
+    //   (b) place it on the assistant message in chat history
+    //   (c) reuse the SAME synthesized id for the tool-result tool_call_id
+    //
+    // We assert by inspecting the SECOND ChatRequest the executor
+    // sends to the LLM — that request's messages array IS the chat
+    // history the model would re-read on a multi-turn flow.
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [
+        { content: '', tool_calls: [{ name: 'echo', args: { msg: 'x' } } as never] },
+        { content: 'done' },
+      ],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'echo', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm, toolProviders: tools });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(recordedRequests).toHaveLength(2);
+
+    // Iteration-1 request: should now contain assistant + tool messages
+    // from iteration 0, both carrying the SAME synthesized id.
+    const secondReqMessages = recordedRequests[1]!.messages;
+    const assistantMsg = secondReqMessages.find((m) => m.role === 'assistant');
+    const toolMsg = secondReqMessages.find((m) => m.role === 'tool' && m.name === 'echo');
+    expect(assistantMsg).toBeDefined();
+    expect(toolMsg).toBeDefined();
+    // (a) the assistant message has a defined, non-empty id
+    expect(assistantMsg!.tool_calls).toHaveLength(1);
+    const assistantId = assistantMsg!.tool_calls![0]!.id;
+    expect(typeof assistantId).toBe('string');
+    expect(assistantId.length).toBeGreaterThan(0);
+    // (b)+(c) the tool-result message uses THE SAME id
+    expect(toolMsg!.tool_call_id).toBe(assistantId);
+  });
+
+  it('synthesized id is stable per-call within an iteration (no double-synthesis drift)', async () => {
+    // Two tool calls in the same iteration, both with empty IDs. Each
+    // must get its OWN synthesized id and the corresponding tool-result
+    // message must reference that exact id (NOT a freshly minted one).
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [
+        {
+          content: '',
+          tool_calls: [{ name: 'a', args: {} } as never, { name: 'b', args: {} } as never],
+        },
+        { content: 'done' },
+      ],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p-a',
+        tools: [{ name: 'a', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'ok-a', isError: false }),
+      }),
+      makeStubToolProvider({
+        id: 'p-b',
+        tools: [{ name: 'b', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'ok-b', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm, toolProviders: tools });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+
+    const secondReqMessages = recordedRequests[1]!.messages;
+    const assistantMsg = secondReqMessages.find((m) => m.role === 'assistant')!;
+    const toolMsgs = secondReqMessages.filter((m) => m.role === 'tool');
+    expect(assistantMsg.tool_calls).toHaveLength(2);
+    expect(toolMsgs).toHaveLength(2);
+    const idA = assistantMsg.tool_calls![0]!.id;
+    const idB = assistantMsg.tool_calls![1]!.id;
+    expect(idA).not.toBe(idB);
+    expect(toolMsgs[0]!.tool_call_id).toBe(idA);
+    expect(toolMsgs[1]!.tool_call_id).toBe(idB);
+  });
+
+  it('preserves caller-supplied IDs verbatim (does not over-synthesize)', async () => {
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [
+        { content: '', tool_calls: [{ id: 'caller-supplied-c1', name: 'echo', args: {} }] },
+        { content: 'done' },
+      ],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'echo', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm, toolProviders: tools });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    const secondReqMessages = recordedRequests[1]!.messages;
+    const assistantMsg = secondReqMessages.find((m) => m.role === 'assistant')!;
+    const toolMsg = secondReqMessages.find((m) => m.role === 'tool')!;
+    expect(assistantMsg.tool_calls![0]!.id).toBe('caller-supplied-c1');
+    expect(toolMsg.tool_call_id).toBe('caller-supplied-c1');
+  });
+
+  it('does not mutate the LLMClient response object (synthesizes a new array)', async () => {
+    // Reach into the stub's scripted response and assert its `id`
+    // remains undefined after the run — proving we mutated a copy
+    // rather than the original (other consumers of llmResult may rely
+    // on reading the unmutated payload).
+    const original: { id?: string; name: string; args: unknown } = { name: 'echo', args: {} };
+    const llm = makeStubLLM({
+      scriptedResponses: [{ content: '', tool_calls: [original as never] }, { content: 'done' }],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'echo', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm, toolProviders: tools });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(original.id).toBeUndefined();
+  });
+
+  it('serializes the SYNTHESIZED tool_calls into output_tool_calls (not the unsynthesized originals)', async () => {
+    // The trace's output_tool_calls field is the structured slot
+    // downstream consumers (Langfuse, Workbench) rely on. After
+    // synthesis it must reflect the IDs we actually wrote into chat
+    // history — not the original undefined ids that would mismatch
+    // the tool-result tool_call_id.
+    const llm = makeStubLLM({
+      scriptedResponses: [
+        { content: '', tool_calls: [{ name: 'echo', args: {} } as never] },
+        { content: 'done' },
+      ],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'echo', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm, toolProviders: tools });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    const firstLlmTrace = result.traces.find((t) => t.trace_type === 'llm_call');
+    expect(firstLlmTrace?.output_tool_calls).toBeDefined();
+    const parsed = JSON.parse(firstLlmTrace!.output_tool_calls!) as { id?: string }[];
+    expect(parsed[0]?.id).toBeDefined();
+    expect((parsed[0]!.id as string).length).toBeGreaterThan(0);
+  });
+});
+
 describe('AgentExecutor — programmer-error throws', () => {
   it('throws AgentNotFoundError when agent type unknown', async () => {
     const reg = new AgentRegistry<MyType, MyPhase>();

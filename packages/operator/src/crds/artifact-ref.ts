@@ -32,11 +32,15 @@ export interface ArtifactRef {
   /**
    * Backend-addressable URI. Substrate-defined schemes per
    * `docs/ARTIFACTS.md` §4:
-   *   - `pvc://kagent-artifacts/<task-uid>/<name>`  (v0.1, shared PVC)
+   *   - `pvc://kagent-artifacts/<task-uid>/<name>`  (v0.1, shared PVC, persisted)
+   *   - `inline://sha256:<hex>`                      (v0.1, NOT persisted; bytes
+   *                                                  live in `status.result.content`)
    *   - `s3://<bucket>/<task-uid>/<name>`           (v0.2, MinIO/S3)
    *   - `minio://<bucket>/<task-uid>/<name>`        (v0.2, MinIO alias)
    *   - `http(s)://...`                              (v0.2, presigned)
    * Treat as opaque at the call site; use `parseArtifactUri` to inspect.
+   * Persistence contract: any scheme EXCEPT `inline://` is followable to
+   * durable bytes; `inline://` is content-addressed only, never durable.
    */
   readonly uri: string;
 
@@ -112,13 +116,13 @@ export function pvcUri(taskUid: string, name: string, pvc: string = DEFAULT_ARTI
   return `pvc://${pvc}/${taskUid}/${name}`;
 }
 
-export type ArtifactScheme = 'pvc' | 'minio' | 'http' | 'https' | 's3';
+export type ArtifactScheme = 'pvc' | 'minio' | 'http' | 'https' | 's3' | 'inline';
 
 export interface ParsedArtifactUri {
   readonly scheme: ArtifactScheme;
-  /** Bucket / PVC name. `undefined` for `http(s)` (host carries that role). */
+  /** Bucket / PVC name. `undefined` for `http(s)` and `inline` (no bucket concept). */
   readonly bucket?: string;
-  /** Path component after the bucket (no leading slash). */
+  /** Path component after the bucket (no leading slash). For `inline://sha256:<hex>` this is `sha256:<hex>`. */
   readonly path: string;
 }
 
@@ -159,6 +163,14 @@ export function parseArtifactUri(uri: string): ParsedArtifactUri | null {
       }
       const path = remainder.slice(slashIdx + 1);
       return { scheme, path };
+    }
+    case 'inline': {
+      // `inline://sha256:<hex>` — the entire remainder is the
+      // content-addressed identifier; no bucket. The bytes are NOT
+      // durable on disk (this is the contract that distinguishes the
+      // scheme from `pvc://`); consumers MUST source the bytes from
+      // `status.result.content` rather than trying to follow the URI.
+      return { scheme, path: remainder };
     }
     default:
       return null;

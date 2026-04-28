@@ -3,11 +3,11 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import type { Span, SpanOptions, Tracer } from '@opentelemetry/api';
+import { trace, type Context, type Span, type SpanOptions, type Tracer } from '@opentelemetry/api';
 import type { TraceEntry } from '@kagent/agent-loop';
 import { describe, expect, it, vi } from 'vitest';
 
-import { OtelTraceSink, isOtelEnabled } from './otel-sink.js';
+import { OtelTraceSink, isOtelEnabled, langfuseTraceUrl, traceIdFromRunId } from './otel-sink.js';
 
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 
@@ -17,22 +17,37 @@ interface RecordedSpan {
   events: { name: string; attributes: Record<string, unknown> }[];
   status?: { code: number; message?: string };
   ended: boolean;
+  /** Trace ID propagated by the parent context that was passed to startSpan(). */
+  parentTraceId?: string;
+  /** Span ID propagated by the parent context that was passed to startSpan(). */
+  parentSpanId?: string;
 }
 
 function makeStubTracer(): Tracer & { recorded: RecordedSpan[] } {
   const recorded: RecordedSpan[] = [];
   const tracer = {
     recorded,
-    startSpan(name: string, options?: SpanOptions, _ctx?: unknown): Span {
+    startSpan(name: string, options?: SpanOptions, ctx?: Context): Span {
+      // Mirror the SDK behavior we care about for these tests: when the
+      // caller hands us a Context with a parent SpanContext, the new
+      // span adopts that trace ID. We capture both `parentTraceId` and
+      // the resulting `spanContext().traceId` so determinism tests can
+      // assert against either surface.
+      const parent = ctx !== undefined ? trace.getSpanContext(ctx) : undefined;
+      const adoptedTraceId = parent?.traceId ?? '0';
       const rec: RecordedSpan = {
         name,
         attributes: { ...(options?.attributes ?? {}) },
         events: [],
         ended: false,
+        ...(parent !== undefined && {
+          parentTraceId: parent.traceId,
+          parentSpanId: parent.spanId,
+        }),
       };
       recorded.push(rec);
       const span: Span = {
-        spanContext: () => ({ traceId: '0', spanId: '0', traceFlags: 0 }),
+        spanContext: () => ({ traceId: adoptedTraceId, spanId: '0', traceFlags: 0 }),
         setAttribute: (k, v) => {
           rec.attributes[k] = v;
           return span;
@@ -217,5 +232,75 @@ describe('OtelTraceSink', () => {
     sink.emit(llmEntry);
     sink.emit({ ...llmEntry, run_id: 'r2' });
     expect(tracer.recorded.filter((s) => s.name === 'agent.run')).toHaveLength(2);
+  });
+});
+
+/* =====================================================================
+ * Deterministic trace-ID derivation — WS-D fix #1.
+ * ===================================================================== */
+
+describe('traceIdFromRunId', () => {
+  it('returns a 32-char lowercase-hex string', () => {
+    const id = traceIdFromRunId('any-run');
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('is deterministic — same runId always produces the same id', () => {
+    expect(traceIdFromRunId('r1')).toBe(traceIdFromRunId('r1'));
+  });
+
+  it('different runIds produce different ids (no trivial collision)', () => {
+    expect(traceIdFromRunId('r1')).not.toBe(traceIdFromRunId('r2'));
+  });
+});
+
+describe('langfuseTraceUrl', () => {
+  it('constructs `<base>/trace/<traceId>` with the derived id', () => {
+    const url = langfuseTraceUrl('https://langfuse.example.com', 'task-uid-1');
+    expect(url).toBe(`https://langfuse.example.com/trace/${traceIdFromRunId('task-uid-1')}`);
+  });
+
+  it('strips trailing slashes from the base URL', () => {
+    const url = langfuseTraceUrl('https://langfuse.example.com///', 'task-uid-1');
+    expect(url).toBe(`https://langfuse.example.com/trace/${traceIdFromRunId('task-uid-1')}`);
+  });
+});
+
+describe('OtelTraceSink — deterministic trace ID', () => {
+  it('hands the derived trace ID to startSpan via a remote parent context', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit(llmEntry); // run_id='r1'
+    const root = tracer.recorded.find((s) => s.name === 'agent.run');
+    expect(root?.parentTraceId).toBe(traceIdFromRunId('r1'));
+    expect(root?.parentSpanId).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('two sink instances emit the SAME traceId for the same runId (proof of determinism)', () => {
+    const tracerA = makeStubTracer();
+    const tracerB = makeStubTracer();
+    const sinkA = new OtelTraceSink({ tracer: tracerA });
+    const sinkB = new OtelTraceSink({ tracer: tracerB });
+    sinkA.emit(llmEntry);
+    sinkB.emit(llmEntry);
+    const rootA = tracerA.recorded.find((s) => s.name === 'agent.run');
+    const rootB = tracerB.recorded.find((s) => s.name === 'agent.run');
+    // Proof line — both sinks adopted the same derived trace ID.
+    expect(rootA?.parentTraceId).toBe(rootB?.parentTraceId);
+    // And it equals what the public helper says.
+    expect(rootA?.parentTraceId).toBe(traceIdFromRunId('r1'));
+  });
+
+  it('traceIdFor() returns the same id used for the root span', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit(llmEntry);
+    expect(sink.traceIdFor('r1')).toBe(traceIdFromRunId('r1'));
+  });
+
+  it('traceIdFor() works without an emit (consumer building a deep-link before any spans flush)', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    expect(sink.traceIdFor('not-yet-emitted')).toBe(traceIdFromRunId('not-yet-emitted'));
   });
 });

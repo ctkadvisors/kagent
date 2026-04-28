@@ -80,19 +80,22 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
     expect('SCAFFOLD_VERSION' in mod).toBe(false);
   });
 
-  it('Test B6 — barrel exports exactly 5 runtime-visible named members', () => {
+  it('Test B6 — barrel exports exactly 7 runtime-visible named members', () => {
     // Runtime-visible exports = 3 classes (StdoutSink, JsonlFileSink,
-    // OtelTraceSink) + 2 functions (isOtelEnabled, setupOtelExporter).
-    // Type-only exports (StdoutSinkOptions, JsonlFileSinkOptions,
-    // OtelTraceSinkOptions) are erased at runtime. Adding a new
-    // runtime export REQUIRES updating this assertion.
+    // OtelTraceSink) + 4 functions (isOtelEnabled, setupOtelExporter,
+    // traceIdFromRunId, langfuseTraceUrl). Type-only exports
+    // (StdoutSinkOptions, JsonlFileSinkOptions, OtelTraceSinkOptions)
+    // are erased at runtime. Adding a new runtime export REQUIRES
+    // updating this assertion.
     const runtimeKeys = Object.keys(mod).sort();
     expect(runtimeKeys).toEqual([
       'JsonlFileSink',
       'OtelTraceSink',
       'StdoutSink',
       'isOtelEnabled',
+      'langfuseTraceUrl',
       'setupOtelExporter',
+      'traceIdFromRunId',
     ]);
   });
 });

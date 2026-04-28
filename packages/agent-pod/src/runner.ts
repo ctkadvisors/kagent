@@ -200,6 +200,14 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
  * consumers will not see the ref. That is preferable to throwing and
  * failing the entire run for a trace-pipeline edge case.
  *
+ * URI-scheme filtering: only refs whose URI begins with `pvc://` are
+ * included in the durable artifact list. `inline://...` refs are
+ * intentionally dropped — the substrate contract is "RunResult.artifacts
+ * MUST be followable to real bytes", and inline refs are explicitly
+ * non-persisted (the bytes live in `status.result.content`, not on a
+ * disk). Schemes other than `pvc://` / `inline://` (e.g. `s3://` for
+ * v0.2 backends) are kept on a forward-compatible basis.
+ *
  * Exported for the runner test suite + any future middleware that
  * wants to inspect the same surface.
  */
@@ -210,7 +218,12 @@ export function collectArtifactsFromTraces(traces: readonly TraceEntry[]): reado
     if (t.tool_name !== 'write_artifact') continue;
     if (t.is_error === true) continue;
     const ref = tryParseArtifactRefFromToolOutput(t.tool_output);
-    if (ref !== null) out.push(ref);
+    if (ref === null) continue;
+    // Drop inline-only refs — they are not durably persisted, so
+    // downstream consumers (operator status patcher, Workbench,
+    // sibling agents) would get a 404 if they tried to follow the URI.
+    if (ref.uri.startsWith('inline://')) continue;
+    out.push(ref);
   }
   return out;
 }
