@@ -49,6 +49,7 @@ export {
   formatRunCompleteAttrs,
   formatToolCallAttrs,
   parseContentMode,
+  toLangfuseJsonString,
   truncatePreservingJson,
 } from './langfuse-otel-format.js';
 export type { ContentMode, RunContext } from './langfuse-otel-format.js';

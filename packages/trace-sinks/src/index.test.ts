@@ -85,9 +85,9 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
     //   3 classes — StdoutSink, JsonlFileSink, OtelTraceSink
     //   4 OTel sink helpers — isOtelEnabled, setupOtelExporter, traceIdFromRunId, langfuseTraceUrl
     //   2 langfuse-otel-format constants — DEFAULT_CONTENT_MODE, DEFAULT_PREVIEW_CHARS
-    //   7 langfuse-otel-format functions — applyContentMode, formatLlmCallAttrs,
+    //   8 langfuse-otel-format functions — applyContentMode, formatLlmCallAttrs,
     //     formatRootSpanAttrs, formatRunCompleteAttrs, formatToolCallAttrs,
-    //     parseContentMode, truncatePreservingJson
+    //     parseContentMode, toLangfuseJsonString, truncatePreservingJson
     // Type-only exports (StdoutSinkOptions, JsonlFileSinkOptions,
     // OtelTraceSinkOptions, ContentMode, RunContext) are erased at
     // runtime. Adding a new runtime export REQUIRES updating this
@@ -108,6 +108,7 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
       'langfuseTraceUrl',
       'parseContentMode',
       'setupOtelExporter',
+      'toLangfuseJsonString',
       'traceIdFromRunId',
       'truncatePreservingJson',
     ]);

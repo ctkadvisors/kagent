@@ -204,13 +204,21 @@ describe('OtelTraceSink — LLM call (Langfuse generation + GenAI chat semconv)'
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     // Langfuse explicit keys.
     expect(llm?.attributes['langfuse.observation.type']).toBe('generation');
+    expect(llm?.attributes['langfuse.observation.name']).toBe('agent.llm.call');
     expect(llm?.attributes['langfuse.observation.model.name']).toBe(
       'workers-ai/@cf/meta/llama-4-scout',
     );
-    expect(llm?.attributes['langfuse.observation.usage_details.input']).toBe(50);
-    expect(llm?.attributes['langfuse.observation.usage_details.output']).toBe(25);
-    expect(llm?.attributes['langfuse.observation.usage_details.total']).toBe(75);
-    expect(llm?.attributes['langfuse.observation.cost_details.total']).toBe(0.001);
+    // usage_details + cost_details ship as JSON-string attributes per the
+    // Langfuse OTel ingestion contract (a single key parsed as a JSON
+    // object, NOT dotted-suffix scalars).
+    expect(JSON.parse(llm?.attributes['langfuse.observation.usage_details'] as string)).toEqual({
+      input: 50,
+      output: 25,
+      total: 75,
+    });
+    expect(JSON.parse(llm?.attributes['langfuse.observation.cost_details'] as string)).toEqual({
+      total: 0.001,
+    });
     // OTel GenAI semconv.
     expect(llm?.attributes['gen_ai.operation.name']).toBe('chat');
     expect(llm?.attributes['gen_ai.request.model']).toBe('workers-ai/@cf/meta/llama-4-scout');
@@ -230,8 +238,11 @@ describe('OtelTraceSink — LLM call (Langfuse generation + GenAI chat semconv)'
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     const input = llm?.attributes['langfuse.observation.input'] as string;
     const output = llm?.attributes['langfuse.observation.output'] as string;
-    expect(input).toContain('"role":"user"');
-    expect(input).toContain('"content":"hello"');
+    // Both bodies MUST be parseable JSON strings — Langfuse only renders
+    // input/output as a structured tree when JSON.parse succeeds.
+    const parsedInput = JSON.parse(input) as Array<{ role: string; content: string }>;
+    expect(parsedInput[0]?.role).toBe('user');
+    expect(parsedInput[0]?.content).toBe('hello');
     // Output is a composed JSON object so the Langfuse Generation viewer
     // can render content + tool_calls side by side.
     expect(JSON.parse(output)).toMatchObject({ content: 'hi there' });
@@ -264,12 +275,23 @@ describe('OtelTraceSink — tool call (GenAI execute_tool semconv)', () => {
     const sink = new OtelTraceSink({ tracer });
     sink.emit(toolEntry);
     const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
+    expect(tool?.attributes['langfuse.observation.type']).toBe('span');
+    expect(tool?.attributes['langfuse.observation.name']).toBe('execute_tool fetch_url');
     expect(tool?.attributes['gen_ai.operation.name']).toBe('execute_tool');
     expect(tool?.attributes['gen_ai.tool.name']).toBe('fetch_url');
+    // gen_ai.tool.call.* ride the raw payload (not wrapped) — they reflect
+    // the tool's literal args/result text, while langfuse.observation.*
+    // is always JSON-string shaped for the Langfuse viewer.
     expect(tool?.attributes['gen_ai.tool.call.arguments']).toBe('{"url":"https://example.com"}');
     expect(tool?.attributes['gen_ai.tool.call.result']).toBe('page body');
-    expect(tool?.attributes['langfuse.observation.input']).toBe('{"url":"https://example.com"}');
-    expect(tool?.attributes['langfuse.observation.output']).toBe('page body');
+    // Already-JSON tool_input passes through (parsed + re-stringified).
+    expect(JSON.parse(tool?.attributes['langfuse.observation.input'] as string)).toEqual({
+      url: 'https://example.com',
+    });
+    // Non-JSON tool_output gets wrapped as { preview: "..." }.
+    expect(JSON.parse(tool?.attributes['langfuse.observation.output'] as string)).toEqual({
+      preview: 'page body',
+    });
     expect(tool?.attributes['kagent.tool_name']).toBe('fetch_url');
   });
 
@@ -438,5 +460,166 @@ describe('OtelTraceSink — deterministic trace ID', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
     expect(sink.traceIdFor('not-yet-emitted')).toBe(traceIdFromRunId('not-yet-emitted'));
+  });
+
+  it('child spans (LLM, tool) inherit the same derived trace ID via the active context', () => {
+    // Spec point 2: prove emitted spans actually use the deterministic
+    // trace ID, not just the cache. Emitting an LLM entry creates the
+    // root under a remote-parent context with our derived ID; the LLM
+    // span starts with `ctx = trace.setSpan(active(), root)`, so its
+    // parent SpanContext IS the root's. We assert the chain end-to-end.
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit(llmEntry);
+    const root = tracer.recorded.find((s) => s.name === 'agent.run');
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    expect(root?.parentTraceId).toBe(traceIdFromRunId('r1'));
+    expect(llm?.parentTraceId).toBe(traceIdFromRunId('r1'));
+  });
+});
+
+/* =====================================================================
+ * Langfuse JSON-string contract — input/output bodies must always be
+ * parseable JSON, even when source data is malformed or non-JSON.
+ * ===================================================================== */
+
+describe('OtelTraceSink — Langfuse JSON-string contract', () => {
+  it('non-JSON input_messages get wrapped as { preview: "<text>" }', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit({ ...llmEntry, input_messages: 'not actual json {' });
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    const input = llm?.attributes['langfuse.observation.input'] as string;
+    // Must parse, must NOT throw — guarantee #1 of point 6.
+    expect(() => {
+      JSON.parse(input);
+    }).not.toThrow();
+    expect(JSON.parse(input) as unknown).toEqual({ preview: 'not actual json {' });
+  });
+
+  it('truncated mid-character input_messages still produce parseable JSON in preview mode', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer, contentMode: 'preview' });
+    // Long JSON string that the formatter walks + truncates per-string-leaf.
+    const messages = [{ role: 'user', content: 'x'.repeat(5000) }];
+    sink.emit({ ...llmEntry, input_messages: JSON.stringify(messages) });
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    const input = llm?.attributes['langfuse.observation.input'] as string;
+    const parsed = JSON.parse(input) as Array<{ role: string; content: string }>;
+    expect(parsed[0]?.role).toBe('user');
+    expect(parsed[0]?.content).toMatch(/truncated/);
+  });
+
+  it('malformed output_tool_calls fragment is wrapped, not raw-concatenated', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit({
+      ...llmEntry,
+      output_content: 'partial',
+      output_tool_calls: '[not valid {',
+    });
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    const output = llm?.attributes['langfuse.observation.output'] as string;
+    const parsed = JSON.parse(output) as { content: string; tool_calls: { preview: string } };
+    expect(parsed.content).toBe('partial');
+    expect(parsed.tool_calls.preview).toBe('[not valid {');
+  });
+
+  it('non-JSON tool_input is wrapped as { preview }', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit({ ...toolEntry, tool_input: 'plain raw text' });
+    const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
+    const input = tool?.attributes['langfuse.observation.input'] as string;
+    expect(JSON.parse(input)).toEqual({ preview: 'plain raw text' });
+    // gen_ai.tool.call.arguments stays as the raw text — different contract.
+    expect(tool?.attributes['gen_ai.tool.call.arguments']).toBe('plain raw text');
+  });
+
+  it('non-JSON tool_output is wrapped as { preview }', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit({ ...toolEntry, tool_output: 'page body' });
+    const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
+    const output = tool?.attributes['langfuse.observation.output'] as string;
+    expect(JSON.parse(output)).toEqual({ preview: 'page body' });
+    expect(tool?.attributes['gen_ai.tool.call.result']).toBe('page body');
+  });
+});
+
+/* =====================================================================
+ * KAGENT_TRACE_CONTENT_MODE — none / preview / full behavior.
+ * ===================================================================== */
+
+describe('OtelTraceSink — KAGENT_TRACE_CONTENT_MODE', () => {
+  it('mode=none: omits Langfuse input/output bodies but keeps metadata, model, usage, cost', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer, contentMode: 'none' });
+    sink.emit(llmEntry);
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    expect(llm?.attributes['langfuse.observation.input']).toBeUndefined();
+    expect(llm?.attributes['langfuse.observation.output']).toBeUndefined();
+    // Metadata + model + usage + cost still present.
+    expect(llm?.attributes['langfuse.observation.type']).toBe('generation');
+    expect(llm?.attributes['langfuse.observation.name']).toBe('agent.llm.call');
+    expect(llm?.attributes['langfuse.observation.model.name']).toBe(
+      'workers-ai/@cf/meta/llama-4-scout',
+    );
+    expect(JSON.parse(llm?.attributes['langfuse.observation.usage_details'] as string)).toEqual({
+      input: 50,
+      output: 25,
+      total: 75,
+    });
+    expect(JSON.parse(llm?.attributes['langfuse.observation.cost_details'] as string)).toEqual({
+      total: 0.001,
+    });
+  });
+
+  it('mode=preview (default): emits bounded valid-JSON previews of input/output', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer }); // default = preview
+    const longMessage = 'x'.repeat(10_000);
+    sink.emit({
+      ...llmEntry,
+      input_messages: JSON.stringify([{ role: 'user', content: longMessage }]),
+    });
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    const input = llm?.attributes['langfuse.observation.input'] as string;
+    const parsed = JSON.parse(input) as Array<{ role: string; content: string }>;
+    expect(parsed[0]?.role).toBe('user');
+    // Bounded — should be much shorter than the original 10k chars.
+    expect(parsed[0]?.content.length).toBeLessThan(2000);
+    expect(parsed[0]?.content).toMatch(/truncated/);
+  });
+
+  it('mode=full: emits full strings currently present in TraceEntry', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer, contentMode: 'full' });
+    const longMessage = 'x'.repeat(10_000);
+    sink.emit({
+      ...llmEntry,
+      input_messages: JSON.stringify([{ role: 'user', content: longMessage }]),
+    });
+    const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+    const input = llm?.attributes['langfuse.observation.input'] as string;
+    const parsed = JSON.parse(input) as Array<{ role: string; content: string }>;
+    expect(parsed[0]?.content).toBe(longMessage);
+    expect(parsed[0]?.content).not.toMatch(/truncated/);
+  });
+
+  it('mode=none on tool spans: omits input/output but keeps metadata + model + ERROR level', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer, contentMode: 'none' });
+    sink.emit(errorToolEntry);
+    const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
+    expect(tool?.attributes['langfuse.observation.input']).toBeUndefined();
+    expect(tool?.attributes['langfuse.observation.output']).toBeUndefined();
+    expect(tool?.attributes['gen_ai.tool.call.arguments']).toBeUndefined();
+    expect(tool?.attributes['gen_ai.tool.call.result']).toBeUndefined();
+    // Metadata + identity stay.
+    expect(tool?.attributes['langfuse.observation.type']).toBe('span');
+    expect(tool?.attributes['langfuse.observation.name']).toBe('execute_tool fetch_url');
+    expect(tool?.attributes['gen_ai.tool.name']).toBe('fetch_url');
+    expect(tool?.attributes['langfuse.observation.level']).toBe('ERROR');
   });
 });

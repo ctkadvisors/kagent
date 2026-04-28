@@ -14,6 +14,7 @@ import {
   formatRunCompleteAttrs,
   formatToolCallAttrs,
   parseContentMode,
+  toLangfuseJsonString,
   truncatePreservingJson,
 } from './langfuse-otel-format.js';
 
@@ -157,14 +158,29 @@ describe('formatLlmCallAttrs', () => {
   it('emits Langfuse generation + GenAI chat attrs', () => {
     const attrs = formatLlmCallAttrs(base, 'preview');
     expect(attrs['langfuse.observation.type']).toBe('generation');
+    expect(attrs['langfuse.observation.name']).toBe('agent.llm.call');
     expect(attrs['langfuse.observation.model.name']).toBe('gpt-4');
-    expect(attrs['langfuse.observation.usage_details.input']).toBe(10);
-    expect(attrs['langfuse.observation.usage_details.output']).toBe(5);
-    expect(attrs['langfuse.observation.usage_details.total']).toBe(15);
-    expect(attrs['langfuse.observation.cost_details.total']).toBe(0.0001);
+    // usage_details + cost_details are JSON-string-shaped per Langfuse OTel ingestion contract.
+    expect(JSON.parse(attrs['langfuse.observation.usage_details'] as string)).toEqual({
+      input: 10,
+      output: 5,
+      total: 15,
+    });
+    expect(JSON.parse(attrs['langfuse.observation.cost_details'] as string)).toEqual({
+      total: 0.0001,
+    });
     expect(attrs['gen_ai.operation.name']).toBe('chat');
     expect(attrs['gen_ai.request.model']).toBe('gpt-4');
+    expect(attrs['gen_ai.response.model']).toBe('gpt-4');
     expect(attrs['gen_ai.usage.input_tokens']).toBe(10);
+    expect(attrs['gen_ai.usage.output_tokens']).toBe(5);
+  });
+
+  it('omits cost_details when entry.cost_usd is null/undefined', () => {
+    const noCost = formatLlmCallAttrs({ ...base, cost_usd: null }, 'preview');
+    expect(noCost['langfuse.observation.cost_details']).toBeUndefined();
+    const undef = formatLlmCallAttrs({ ...base, cost_usd: undefined }, 'preview');
+    expect(undef['langfuse.observation.cost_details']).toBeUndefined();
   });
 
   it('omits content body when contentMode = none', () => {
@@ -216,12 +232,21 @@ describe('formatToolCallAttrs', () => {
 
   it('emits gen_ai.tool.* + langfuse.observation.* attrs', () => {
     const { attributes } = formatToolCallAttrs(base, 'full');
+    expect(attributes['langfuse.observation.type']).toBe('span');
+    expect(attributes['langfuse.observation.name']).toBe('execute_tool fetch_url');
     expect(attributes['gen_ai.operation.name']).toBe('execute_tool');
     expect(attributes['gen_ai.tool.name']).toBe('fetch_url');
+    // gen_ai.tool.call.* ride raw payloads; langfuse.observation.* must
+    // always parse as JSON. Already-JSON tool_input passes through; raw
+    // text tool_output gets wrapped as { preview }.
     expect(attributes['gen_ai.tool.call.arguments']).toBe('{"url":"https://x"}');
     expect(attributes['gen_ai.tool.call.result']).toBe('page');
-    expect(attributes['langfuse.observation.input']).toBe('{"url":"https://x"}');
-    expect(attributes['langfuse.observation.output']).toBe('page');
+    expect(JSON.parse(attributes['langfuse.observation.input'] as string)).toEqual({
+      url: 'https://x',
+    });
+    expect(JSON.parse(attributes['langfuse.observation.output'] as string)).toEqual({
+      preview: 'page',
+    });
   });
 
   it('flags errors with langfuse.observation.level=ERROR', () => {
@@ -272,5 +297,140 @@ describe('formatRunCompleteAttrs', () => {
     const attrs = formatRunCompleteAttrs({ ...base, cumulative_cost_usd: null }, 'full');
     expect(attrs['langfuse.trace.metadata.cumulative_cost_usd']).toBeUndefined();
     expect(attrs['kagent.cumulative_cost_usd']).toBeUndefined();
+  });
+});
+
+describe('toLangfuseJsonString — JSON-string contract', () => {
+  it('returns undefined for missing or empty values', () => {
+    expect(toLangfuseJsonString(undefined, 'full')).toBeUndefined();
+    expect(toLangfuseJsonString(null, 'full')).toBeUndefined();
+    expect(toLangfuseJsonString('', 'full')).toBeUndefined();
+  });
+
+  it('returns undefined when mode = none', () => {
+    expect(toLangfuseJsonString('anything', 'none')).toBeUndefined();
+    expect(toLangfuseJsonString('{"k":"v"}', 'none')).toBeUndefined();
+  });
+
+  it('throws on artifact-ref (defensive — parseContentMode rejects upstream)', () => {
+    expect(() => toLangfuseJsonString('x', 'artifact-ref')).toThrow(/not implemented/);
+  });
+
+  it('parses + re-stringifies JSON-shaped input (full mode)', () => {
+    const out = toLangfuseJsonString('{"a":1,"b":[true,false]}', 'full');
+    expect(out).toBeDefined();
+    // Round-trip preserves shape (whitespace not guaranteed identical).
+    expect(JSON.parse(out!)).toEqual({ a: 1, b: [true, false] });
+  });
+
+  it('walks + truncates JSON leaves in preview mode', () => {
+    const big = JSON.stringify({ msg: 'x'.repeat(2000) });
+    const out = toLangfuseJsonString(big, 'preview', 50);
+    expect(out).toBeDefined();
+    const parsed = JSON.parse(out!) as { msg: string };
+    expect(parsed.msg.length).toBeLessThan(2000);
+    expect(parsed.msg).toMatch(/truncated 1950 chars/);
+  });
+
+  it('wraps non-JSON text as { preview: <text> } (full mode)', () => {
+    const out = toLangfuseJsonString('plain raw text', 'full');
+    expect(JSON.parse(out!)).toEqual({ preview: 'plain raw text' });
+  });
+
+  it('wraps non-JSON text as { preview: <truncated text> } (preview mode)', () => {
+    const long = 'a'.repeat(1000);
+    const out = toLangfuseJsonString(long, 'preview', 100);
+    const parsed = JSON.parse(out!) as { preview: string };
+    expect(parsed.preview.length).toBeLessThan(1000);
+    expect(parsed.preview).toMatch(/truncated 900 chars/);
+  });
+
+  it('always produces a valid JSON string for malformed JSON-looking input', () => {
+    // Common case: stringification was truncated mid-character so
+    // JSON.parse fails. Spec point 6: still must produce a valid JSON string.
+    const malformed = '{"role":"user","content":"abc'; // no closing quote/brace
+    const out = toLangfuseJsonString(malformed, 'preview');
+    expect(() => {
+      JSON.parse(out!);
+    }).not.toThrow();
+    expect(JSON.parse(out!) as unknown).toEqual({ preview: malformed });
+  });
+});
+
+describe('formatLlmCallAttrs — JSON-string contract for input/output', () => {
+  const base: TraceEntry = {
+    schema_version: '1',
+    run_id: 'r1',
+    sequence: 1,
+    trace_type: 'llm_call',
+    timestamp_ms: 0,
+    latency_ms: 100,
+    model: 'gpt-4',
+    input_tokens_est: 10,
+    output_tokens_est: 5,
+  };
+
+  it('langfuse.observation.input is always parseable JSON, even for non-JSON input_messages', () => {
+    const attrs = formatLlmCallAttrs({ ...base, input_messages: 'not json at all' }, 'preview');
+    const v = attrs['langfuse.observation.input'] as string;
+    expect(() => {
+      JSON.parse(v);
+    }).not.toThrow();
+    expect(JSON.parse(v) as unknown).toEqual({ preview: 'not json at all' });
+  });
+
+  it('output_tool_calls that fail to parse are wrapped, not raw-concatenated', () => {
+    const attrs = formatLlmCallAttrs(
+      {
+        ...base,
+        output_content: 'partial',
+        output_tool_calls: '[malformed {',
+      },
+      'full',
+    );
+    const v = attrs['langfuse.observation.output'] as string;
+    const parsed = JSON.parse(v) as { content: string; tool_calls: { preview: string } };
+    expect(parsed.content).toBe('partial');
+    expect(parsed.tool_calls.preview).toBe('[malformed {');
+  });
+});
+
+describe('formatToolCallAttrs — JSON-string contract for input/output', () => {
+  const base: TraceEntry = {
+    schema_version: '1',
+    run_id: 'r1',
+    sequence: 2,
+    trace_type: 'tool_call',
+    timestamp_ms: 0,
+    latency_ms: 50,
+    tool_name: 'fetch_url',
+    tool_input: '{"url":"https://x"}',
+    tool_output: 'page',
+  };
+
+  it('non-JSON tool_input wraps as { preview }, gen_ai stays raw', () => {
+    const { attributes } = formatToolCallAttrs({ ...base, tool_input: 'plain text args' }, 'full');
+    expect(JSON.parse(attributes['langfuse.observation.input'] as string)).toEqual({
+      preview: 'plain text args',
+    });
+    expect(attributes['gen_ai.tool.call.arguments']).toBe('plain text args');
+  });
+
+  it('non-JSON tool_output wraps as { preview }, gen_ai stays raw', () => {
+    const { attributes } = formatToolCallAttrs(base, 'full');
+    expect(JSON.parse(attributes['langfuse.observation.output'] as string)).toEqual({
+      preview: 'page',
+    });
+    expect(attributes['gen_ai.tool.call.result']).toBe('page');
+  });
+
+  it('truncated mid-string JSON tool_input still produces parseable JSON', () => {
+    const malformed = '{"url":"https://x","body":"abc'; // truncated mid-char
+    const { attributes } = formatToolCallAttrs({ ...base, tool_input: malformed }, 'preview');
+    const v = attributes['langfuse.observation.input'] as string;
+    expect(() => {
+      JSON.parse(v);
+    }).not.toThrow();
+    expect(JSON.parse(v) as unknown).toEqual({ preview: malformed });
   });
 });

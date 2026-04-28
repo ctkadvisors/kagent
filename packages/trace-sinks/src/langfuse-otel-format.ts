@@ -165,10 +165,18 @@ export function formatLlmCallAttrs(
 
   const attrs: Record<string, string | number | boolean> = {
     // Langfuse explicit keys (highest precedence in their OTel ingestion).
+    // Per Langfuse OTel ingestion docs, `usage_details` and `cost_details`
+    // are JSON-string-shaped attributes — Langfuse parses them and renders
+    // each sub-key as a row in the Generation viewer. Emitting them as
+    // dotted-suffix scalars (`usage_details.input`) historically rendered
+    // as opaque OTel attribute keys, not first-class generation usage.
     'langfuse.observation.type': 'generation',
-    'langfuse.observation.usage_details.input': inputTokens,
-    'langfuse.observation.usage_details.output': outputTokens,
-    'langfuse.observation.usage_details.total': totalTokens,
+    'langfuse.observation.name': 'agent.llm.call',
+    'langfuse.observation.usage_details': JSON.stringify({
+      input: inputTokens,
+      output: outputTokens,
+      total: totalTokens,
+    }),
     // Portable OTel GenAI semconv.
     'gen_ai.operation.name': 'chat',
     'gen_ai.usage.input_tokens': inputTokens,
@@ -188,17 +196,21 @@ export function formatLlmCallAttrs(
     attrs['kagent.model'] = entry.model;
   }
   if (entry.cost_usd !== undefined && entry.cost_usd !== null) {
-    attrs['langfuse.observation.cost_details.total'] = entry.cost_usd;
+    attrs['langfuse.observation.cost_details'] = JSON.stringify({ total: entry.cost_usd });
     attrs['kagent.cost_usd'] = entry.cost_usd;
   }
   if (entry.stop_reason !== undefined) {
     attrs['kagent.stop_reason'] = entry.stop_reason;
   }
 
-  // Content body (input messages + output content/tool_calls). Combined
-  // into single Langfuse input/output JSON strings for legibility in
-  // the Langfuse UI, with the outer JSON shape preserved.
-  const inputBody = applyContentMode(entry.input_messages, contentMode);
+  // Content body (input messages + output content/tool_calls). Both halves
+  // are serialized through `toLangfuseJsonString`, which guarantees the
+  // attribute is ALWAYS a valid JSON string (parses-as-JSON when the
+  // source data is JSON-shaped; wraps as `{"preview":"<text>"}` otherwise)
+  // — Langfuse's Generation viewer only renders input/output as a
+  // structured tree when the value parses, so emitting raw text would
+  // collapse to an opaque blob.
+  const inputBody = toLangfuseJsonString(entry.input_messages, contentMode);
   if (inputBody !== undefined) {
     attrs['langfuse.observation.input'] = inputBody;
   }
@@ -221,8 +233,10 @@ export function formatToolCallAttrs(
   contentMode: ContentMode,
 ): { spanName: string; attributes: Record<string, string | number | boolean> } {
   const toolName = entry.tool_name ?? 'unknown';
+  const spanName = `execute_tool ${toolName}`;
   const attrs: Record<string, string | number | boolean> = {
     'langfuse.observation.type': 'span',
+    'langfuse.observation.name': spanName,
     'gen_ai.operation.name': 'execute_tool',
     'gen_ai.tool.name': toolName,
     // Secondary kagent.* metadata.
@@ -241,18 +255,29 @@ export function formatToolCallAttrs(
     }
   }
 
-  const inputBody = applyContentMode(entry.tool_input, contentMode);
-  if (inputBody !== undefined) {
-    attrs['langfuse.observation.input'] = inputBody;
-    attrs['gen_ai.tool.call.arguments'] = inputBody;
+  // langfuse.observation.input/output MUST be valid JSON strings for the
+  // Langfuse viewer to render them as structured trees. gen_ai.tool.call.*
+  // ride the raw (content-mode-applied) payload — OTel GenAI semconv
+  // doesn't require a JSON string and existing collectors expect the
+  // tool's literal arg/result text.
+  const langfuseInput = toLangfuseJsonString(entry.tool_input, contentMode);
+  if (langfuseInput !== undefined) {
+    attrs['langfuse.observation.input'] = langfuseInput;
   }
-  const outputBody = applyContentMode(entry.tool_output, contentMode);
-  if (outputBody !== undefined) {
-    attrs['langfuse.observation.output'] = outputBody;
-    attrs['gen_ai.tool.call.result'] = outputBody;
+  const langfuseOutput = toLangfuseJsonString(entry.tool_output, contentMode);
+  if (langfuseOutput !== undefined) {
+    attrs['langfuse.observation.output'] = langfuseOutput;
+  }
+  const rawInput = applyContentMode(entry.tool_input, contentMode);
+  if (rawInput !== undefined) {
+    attrs['gen_ai.tool.call.arguments'] = rawInput;
+  }
+  const rawOutput = applyContentMode(entry.tool_output, contentMode);
+  if (rawOutput !== undefined) {
+    attrs['gen_ai.tool.call.result'] = rawOutput;
   }
 
-  return { spanName: `execute_tool ${toolName}`, attributes: attrs };
+  return { spanName, attributes: attrs };
 }
 
 /**
@@ -373,6 +398,13 @@ function walkAndTruncate(node: unknown, perStringLimit: number): unknown {
  * Combine an LLM-call entry's `output_content` + `output_tool_calls`
  * into a single JSON-string Langfuse output payload. Either or both
  * may be absent; returns undefined when both are.
+ *
+ * The result is ALWAYS a valid JSON string — `output_content` is
+ * placed under a `content` key, `output_tool_calls` is parsed
+ * structurally when it parses (otherwise wrapped as
+ * `{preview: "..."}` to preserve the JSON-string guarantee for
+ * downstream Langfuse rendering, never raw-concatenated into the
+ * outer JSON).
  */
 function formatLlmOutput(entry: TraceEntry, contentMode: ContentMode): string | undefined {
   if (contentMode === 'none') return undefined;
@@ -384,16 +416,15 @@ function formatLlmOutput(entry: TraceEntry, contentMode: ContentMode): string | 
   ) {
     return undefined;
   }
-  // Try to compose as `{ content?, tool_calls? }` so Langfuse's
-  // Generation viewer can render both halves. Tool calls are stored as
-  // a JSON-stringified array; parse to nest as a real object when we
-  // can, otherwise pass the string through.
   let parsedToolCalls: unknown;
   if (toolCallsRaw !== undefined && toolCallsRaw !== null && toolCallsRaw !== '') {
     try {
       parsedToolCalls = JSON.parse(toolCallsRaw);
     } catch {
-      parsedToolCalls = toolCallsRaw;
+      // Non-JSON tool_calls fragment — wrap as a `{preview}` object so
+      // the outer JSON shape stays parseable. This is per spec point 6:
+      // "Do not concatenate raw fragments into JSON."
+      parsedToolCalls = { preview: toolCallsRaw };
     }
   }
   const composed: Record<string, unknown> = {};
@@ -407,4 +438,55 @@ function formatLlmOutput(entry: TraceEntry, contentMode: ContentMode): string | 
   return contentMode === 'full'
     ? stringified
     : truncatePreservingJson(stringified, DEFAULT_PREVIEW_CHARS);
+}
+
+/**
+ * Serialize an arbitrary input/output payload as a Langfuse-friendly
+ * JSON string. The Langfuse Generation/Span viewer only renders
+ * input/output as a structured tree when the value parses as JSON;
+ * arbitrary text collapses to an opaque blob. To make every emitted
+ * `langfuse.observation.input` and `langfuse.observation.output`
+ * uniformly viewer-friendly:
+ *
+ *   - JSON-shaped sources are parsed and re-stringified (with
+ *     {@link walkAndTruncate} for `'preview'`) so the outer shape
+ *     survives truncation.
+ *   - Non-JSON sources are wrapped as `{"preview": "<text>"}` so the
+ *     attribute is always a parseable JSON string. The `preview`-key
+ *     wrapping is a deliberate marker for the Langfuse UI: it tells
+ *     the reader the body wasn't structured.
+ *
+ * Returns `undefined` when the value is missing OR mode is `'none'`
+ * (caller should NOT attach the attribute in that case).
+ */
+export function toLangfuseJsonString(
+  value: string | null | undefined,
+  mode: ContentMode,
+  perStringLimit = DEFAULT_PREVIEW_CHARS,
+): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (mode === 'none') return undefined;
+  if (mode === 'artifact-ref') {
+    throw new Error(
+      "toLangfuseJsonString: 'artifact-ref' mode is not implemented; depends on Phase 5 P3 artifact writer",
+    );
+  }
+  // Try JSON first — re-stringify so output is canonical (no whitespace
+  // / dangling input artifacts) and so preview mode can walk + truncate.
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (mode === 'full') return JSON.stringify(parsed);
+    return JSON.stringify(walkAndTruncate(parsed, perStringLimit));
+  } catch {
+    // Non-JSON: wrap as { "preview": "<text>" } so the attribute remains
+    // a valid JSON string. Apply preview truncation to the inner text so
+    // the wrapper stays bounded.
+    const text =
+      mode === 'full'
+        ? value
+        : value.length <= perStringLimit
+          ? value
+          : `${value.slice(0, perStringLimit)}…(truncated ${value.length - perStringLimit} chars)`;
+    return JSON.stringify({ preview: text });
+  }
 }
