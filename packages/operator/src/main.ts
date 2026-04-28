@@ -83,6 +83,22 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_AGENT_POD_OTLP_HEADERS,
     });
   }
+  // Trace content-capture mode — controls whether OtelTraceSink ships
+  // input messages / output content / tool args+results as Langfuse
+  // observation bodies. `none|preview|full`; default `preview`. Operator
+  // env is `KAGENT_AGENT_POD_TRACE_CONTENT_MODE` (Helm-set); forwarded
+  // into the agent-pod as `KAGENT_TRACE_CONTENT_MODE`. `artifact-ref`
+  // is reserved (depends on the Phase 5 P3 artifact writer); the
+  // agent-pod's env parser rejects it explicitly.
+  if (
+    typeof env.KAGENT_AGENT_POD_TRACE_CONTENT_MODE === 'string' &&
+    env.KAGENT_AGENT_POD_TRACE_CONTENT_MODE.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_TRACE_CONTENT_MODE',
+      value: env.KAGENT_AGENT_POD_TRACE_CONTENT_MODE,
+    });
+  }
   // Built-in tool HTTP allowlist — Helm's chart values
   // `agentPod.builtinTools.httpAllowDomains` are comma-joined into
   // KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS on the operator's own

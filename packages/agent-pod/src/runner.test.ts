@@ -41,6 +41,7 @@ const baseConfig: PodConfig = {
   },
   litellmBaseUrl: 'http://litellm.test:4000/v1',
   logLevel: 'info',
+  traceContentMode: 'preview',
 };
 
 /**

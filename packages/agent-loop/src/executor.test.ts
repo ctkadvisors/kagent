@@ -70,6 +70,7 @@ describe('AgentExecutor — loop semantics', () => {
       'tool_call',
       'iteration_boundary',
       'llm_call',
+      'run_complete',
     ]);
   });
 

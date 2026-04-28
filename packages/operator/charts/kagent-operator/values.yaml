@@ -100,10 +100,31 @@ agentPod:
   # 'authorization=Bearer%20<pk>'). Same secret-ref shape as
   # litellmApiKey above — prefer secretName + secretKey; `value` is
   # deprecated.
+  #
+  # For Langfuse 4.x, include `x-langfuse-ingestion-version=4` so the
+  # OTel ingester routes through the v4 schema path. The full header
+  # string typically looks like:
+  #   'authorization=Bearer%20<pk>,x-langfuse-ingestion-version=4'
+  # OTel parses comma-separated headers and URL-decodes each value, so
+  # pre-encode any spaces (`%20`) in the bearer token.
   otlpHeaders:
     secretName: ''
     secretKey: ''
     value: ''
+
+  # Trace content-capture mode — governs whether the OtelTraceSink
+  # attaches input messages / output content / tool arguments + results
+  # to spans. One of `none|preview|full`. Default is `preview` (per-
+  # string head-truncation; outer JSON shape preserved). `full` emits
+  # complete bodies — opt in only when you need full-fidelity debugging
+  # in Langfuse and accept the storage + privacy implications. `none`
+  # keeps only token usage + metadata on the spans.
+  #
+  # `artifact-ref` is reserved for a future mode that writes full
+  # bodies to the kagent-artifacts PVC and emits an `inline://` ref;
+  # the agent-pod env parser rejects it until the Phase 5 P3 artifact
+  # writer ships.
+  traceContentMode: 'preview'
 
   # Built-in tool configuration — see packages/agent-pod/src/builtin-tools.ts.
   # Today this only carries the HTTP-fetch domain allowlist; future

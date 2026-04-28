@@ -39,3 +39,16 @@ export {
   traceIdFromRunId,
 } from './otel-sink.js';
 export type { OtelTraceSinkOptions } from './otel-sink.js';
+
+export {
+  DEFAULT_CONTENT_MODE,
+  DEFAULT_PREVIEW_CHARS,
+  applyContentMode,
+  formatLlmCallAttrs,
+  formatRootSpanAttrs,
+  formatRunCompleteAttrs,
+  formatToolCallAttrs,
+  parseContentMode,
+  truncatePreservingJson,
+} from './langfuse-otel-format.js';
+export type { ContentMode, RunContext } from './langfuse-otel-format.js';

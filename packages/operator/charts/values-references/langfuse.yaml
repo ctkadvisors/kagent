@@ -21,6 +21,21 @@
 # OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20<pk> in the agent
 # pod env (operator's Helm values plumb this through; pre-encode the
 # space as %20 since OTel parses comma-separated headers).
+#
+# Langfuse 4.x ingestion-version header: include
+# `x-langfuse-ingestion-version=4` so the OTel ingester routes through
+# the v4 schema path. Combined header string typically looks like:
+#   authorization=Bearer%20<pk>,x-langfuse-ingestion-version=4
+# Plumb via the operator's `agentPod.otlpHeaders.{secretName,secretKey}`
+# so the value lives in a Secret, not in plain Helm values.
+#
+# Trace observation shape: OtelTraceSink emits explicit Langfuse +
+# OTel-GenAI semconv attributes (langfuse.observation.type, gen_ai.*,
+# langfuse.trace.metadata.*) so spans render as first-class Generations
+# and Tool calls in the Langfuse UI rather than opaque generic spans.
+# Content capture is governed by the operator Helm value
+# `agentPod.traceContentMode` (`none|preview|full`); see
+# packages/trace-sinks/src/langfuse-otel-format.ts.
 
 # Single-replica web + worker; HA waits for v0.2.
 deployment:

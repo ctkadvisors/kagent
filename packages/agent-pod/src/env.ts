@@ -60,6 +60,16 @@ export interface PodConfig {
   readonly litellmBaseUrl: string;
   readonly litellmApiKey?: string;
   readonly logLevel: 'debug' | 'info';
+  /**
+   * Content-capture policy for OTel/Langfuse traces, parsed from
+   * `KAGENT_TRACE_CONTENT_MODE`. Defaults to `'preview'` so production
+   * traces don't silently ship full prompts to Langfuse — opt into
+   * `'full'` explicitly when debugging. Reserved value `'artifact-ref'`
+   * (depends on Phase 5 P3 artifact writer) is rejected at parse time.
+   * Stored as the raw parsed string; `OtelTraceSink` re-parses via
+   * `parseContentMode` to keep the env contract in one place.
+   */
+  readonly traceContentMode: 'none' | 'preview' | 'full';
 }
 
 const DEFAULT_LITELLM_BASE_URL = 'http://litellm.kagent-system.svc.cluster.local:4000/v1';
@@ -86,6 +96,7 @@ export function parseEnv(env: Readonly<Record<string, string | undefined>>): Pod
 
   const litellmBaseUrl = env.KAGENT_LITELLM_BASE_URL ?? DEFAULT_LITELLM_BASE_URL;
   const logLevel = env.LOG_LEVEL === 'debug' ? 'debug' : 'info';
+  const traceContentMode = parseTraceContentMode(env.KAGENT_TRACE_CONTENT_MODE);
 
   const config: PodConfig = {
     taskId,
@@ -99,8 +110,31 @@ export function parseEnv(env: Readonly<Record<string, string | undefined>>): Pod
       litellmApiKey: env.KAGENT_LITELLM_API_KEY,
     }),
     logLevel,
+    traceContentMode,
   };
   return config;
+}
+
+/**
+ * Parse `KAGENT_TRACE_CONTENT_MODE`. Centralized here (rather than
+ * delegated to `parseContentMode` from `@kagent/trace-sinks`) to keep
+ * env-parsing failures surfacing through the same `parseEnv` channel
+ * the operator + Helm chart contract is built around. The trace-sinks
+ * helper is the runtime authority for the env value's semantic
+ * mapping into a `ContentMode` and is re-applied inside `OtelTraceSink`
+ * — this fn just rejects malformed values fast at boot.
+ */
+function parseTraceContentMode(raw: string | undefined): 'none' | 'preview' | 'full' {
+  if (raw === undefined || raw === '') return 'preview';
+  if (raw === 'none' || raw === 'preview' || raw === 'full') return raw;
+  if (raw === 'artifact-ref') {
+    throw new Error(
+      "KAGENT_TRACE_CONTENT_MODE='artifact-ref' is reserved — depends on the Phase 5 P3 artifact writer (write_artifact tool + kagent-artifacts PVC), not yet wired. Use 'preview' or 'full' until then.",
+    );
+  }
+  throw new Error(
+    `KAGENT_TRACE_CONTENT_MODE='${raw}' is not a valid value; expected one of: none, preview, full`,
+  );
 }
 
 function requireEnv(env: Readonly<Record<string, string | undefined>>, key: string): string {

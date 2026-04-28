@@ -14,18 +14,43 @@
  *
  *   - One root span per run (`agent.run`), keyed by `runId`. Every
  *     trace entry becomes a child span underneath it.
- *   - LLM calls map to spans named `agent.llm.call` with model + usage
- *     attributes (input/output tokens, cost when reported).
- *   - Tool calls map to `agent.tool.call.<name>` spans with input +
- *     output snippets + isError as attributes.
+ *   - LLM calls map to spans named `agent.llm.call` carrying the
+ *     Langfuse + OTel-GenAI semconv attributes
+ *     (`langfuse.observation.type='generation'`,
+ *     `gen_ai.operation.name='chat'`, model + usage + cost) so
+ *     Langfuse renders them as first-class generations rather than
+ *     opaque generic spans.
+ *   - Tool calls map to `execute_tool <toolName>` spans (per OTel
+ *     GenAI semconv) with `gen_ai.tool.*` + `langfuse.observation.*`
+ *     attributes.
+ *   - The `run_complete` finalization entry stamps trace-level
+ *     Langfuse fields (final output, totals, terminal status) onto
+ *     the root span and ends it.
  *   - Iteration boundaries map to span events on the root span, NOT
  *     separate spans (they're zero-duration markers).
+ *   - Per-run trace-level metadata (agent name, task uid, namespace,
+ *     sandbox profile) is sourced via the `runContext` constructor
+ *     option — the executor itself doesn't know these, so the
+ *     agent-pod (which constructs the sink) feeds them in.
+ *   - Content capture is governed by `contentMode`
+ *     (`none|preview|full`); see `langfuse-otel-format.ts` for the
+ *     truncation policy. `artifact-ref` mode is reserved (depends on
+ *     Phase 5 P3 artifact writer).
  *   - The provider is created lazily on first emit so unit tests can
  *     inject a stubbed processor; production uses the OTel SDK's
  *     `BatchSpanProcessor` + `OTLPTraceExporter`.
  *   - When `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is unset, the sink
  *     no-ops (emits nothing) — keeps local dev silent without forcing
  *     callers to gate the sink behind their own conditional.
+ *
+ * Reshape rationale (was the WS-D follow-up "second red item"):
+ * pre-reshape, the sink emitted only `kagent.*`-keyed attributes,
+ * which Langfuse rendered as opaque generic spans — not first-class
+ * generations / tool executions. WS-D landed deterministic trace IDs
+ * (navigation primitive); this reshape lands the *payload shape* so
+ * the trace itself is useful evidence. `kagent.*` attributes still
+ * ship as secondary debug metadata so existing log-grep workflows +
+ * the WS-D determinism tests remain valid.
  */
 
 import {
@@ -38,6 +63,15 @@ import {
 } from '@opentelemetry/api';
 import { createHash, randomBytes } from 'node:crypto';
 import type { TraceEntry, TraceSink } from '@kagent/agent-loop';
+import {
+  DEFAULT_CONTENT_MODE,
+  formatLlmCallAttrs,
+  formatRootSpanAttrs,
+  formatRunCompleteAttrs,
+  formatToolCallAttrs,
+  type ContentMode,
+  type RunContext,
+} from './langfuse-otel-format.js';
 
 const TRACER_NAME = '@kagent/agent-loop';
 
@@ -82,6 +116,20 @@ export interface OtelTraceSinkOptions {
    * name when supplied; otherwise OTel's resource detection wins.
    */
   readonly serviceName?: string;
+  /**
+   * Per-run metadata stamped onto the root `agent.run` span as
+   * Langfuse trace-level fields. Sourced from the agent-pod's
+   * operator-injected env (agent name, task uid, namespace, sandbox
+   * profile).
+   */
+  readonly runContext?: RunContext;
+  /**
+   * Content-capture policy for input/output bodies attached to
+   * generation + tool spans. Defaults to `'preview'` so production
+   * traces aren't silently shipping full prompts to Langfuse — opt
+   * into `'full'` explicitly via env when you want them.
+   */
+  readonly contentMode?: ContentMode;
 }
 
 /**
@@ -100,6 +148,8 @@ export function isOtelEnabled(env: Readonly<Record<string, string | undefined>>)
 
 export class OtelTraceSink implements TraceSink {
   private readonly tracer: Tracer;
+  private readonly runContext: RunContext | undefined;
+  private readonly contentMode: ContentMode;
   private readonly rootSpans = new Map<string, Span>();
   /**
    * Cache of the deterministic trace IDs we hand to OTel. Used as the
@@ -113,6 +163,8 @@ export class OtelTraceSink implements TraceSink {
 
   constructor(options: OtelTraceSinkOptions) {
     this.tracer = options.tracer;
+    this.runContext = options.runContext;
+    this.contentMode = options.contentMode ?? DEFAULT_CONTENT_MODE;
   }
 
   /**
@@ -144,51 +196,35 @@ export class OtelTraceSink implements TraceSink {
       return;
     }
 
+    if (entry.trace_type === 'run_complete') {
+      // Stamp final-state attrs on the root span and end it. The
+      // executor's flush loop still calls flush() afterwards; that's
+      // a safe no-op once the root is closed (Span.end() is
+      // idempotent in the OTel SDK and flush() simply iterates open
+      // root spans).
+      const attrs = formatRunCompleteAttrs(entry, this.contentMode);
+      root.setAttributes(attrs);
+      if (entry.final_status !== undefined && entry.final_status !== 'completed') {
+        root.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: `run ${entry.final_status}`,
+        });
+      }
+      root.end();
+      this.rootSpans.delete(entry.run_id);
+      return;
+    }
+
     if (entry.trace_type === 'llm_call') {
-      const span = this.tracer.startSpan(
-        'agent.llm.call',
-        {
-          attributes: {
-            'kagent.run_id': entry.run_id,
-            'kagent.sequence': entry.sequence,
-            'kagent.latency_ms': entry.latency_ms,
-            'kagent.input_tokens': entry.input_tokens_est ?? 0,
-            'kagent.output_tokens': entry.output_tokens_est ?? 0,
-            ...(entry.model !== undefined && { 'kagent.model': entry.model }),
-            ...(entry.cost_usd !== undefined &&
-              entry.cost_usd !== null && {
-                'kagent.cost_usd': entry.cost_usd,
-              }),
-            ...(entry.stop_reason !== undefined && { 'kagent.stop_reason': entry.stop_reason }),
-          },
-        },
-        ctx,
-      );
+      const attrs = formatLlmCallAttrs(entry, this.contentMode);
+      const span = this.tracer.startSpan('agent.llm.call', { attributes: attrs }, ctx);
       span.end();
       return;
     }
 
     if (entry.trace_type === 'tool_call') {
-      const name = entry.tool_name ?? 'unknown';
-      const span = this.tracer.startSpan(
-        `agent.tool.call.${name}`,
-        {
-          attributes: {
-            'kagent.run_id': entry.run_id,
-            'kagent.sequence': entry.sequence,
-            'kagent.latency_ms': entry.latency_ms,
-            'kagent.tool_name': name,
-            ...(entry.tool_input !== undefined && {
-              'kagent.tool_input.preview': previewString(entry.tool_input),
-            }),
-            ...(entry.tool_output !== undefined && {
-              'kagent.tool_output.preview': previewString(entry.tool_output),
-            }),
-            ...(entry.is_error !== undefined && { 'kagent.is_error': entry.is_error }),
-          },
-        },
-        ctx,
-      );
+      const { spanName, attributes } = formatToolCallAttrs(entry, this.contentMode);
+      const span = this.tracer.startSpan(spanName, { attributes }, ctx);
       if (entry.is_error === true) {
         span.setStatus({
           code: SpanStatusCode.ERROR,
@@ -239,7 +275,7 @@ export class OtelTraceSink implements TraceSink {
       root = this.tracer.startSpan(
         'agent.run',
         {
-          attributes: { 'kagent.run_id': runId },
+          attributes: formatRootSpanAttrs(runId, this.runContext),
         },
         parentCtx,
       );
@@ -247,11 +283,6 @@ export class OtelTraceSink implements TraceSink {
     }
     return root;
   }
-}
-
-function previewString(s: string, limit = 256): string {
-  if (s.length <= limit) return s;
-  return `${s.slice(0, limit)}…(truncated ${s.length - limit} chars)`;
 }
 
 /**

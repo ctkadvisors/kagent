@@ -80,22 +80,36 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
     expect('SCAFFOLD_VERSION' in mod).toBe(false);
   });
 
-  it('Test B6 — barrel exports exactly 7 runtime-visible named members', () => {
-    // Runtime-visible exports = 3 classes (StdoutSink, JsonlFileSink,
-    // OtelTraceSink) + 4 functions (isOtelEnabled, setupOtelExporter,
-    // traceIdFromRunId, langfuseTraceUrl). Type-only exports
-    // (StdoutSinkOptions, JsonlFileSinkOptions, OtelTraceSinkOptions)
-    // are erased at runtime. Adding a new runtime export REQUIRES
-    // updating this assertion.
+  it('Test B6 — barrel exports exactly the documented runtime-visible named members', () => {
+    // Runtime-visible exports:
+    //   3 classes — StdoutSink, JsonlFileSink, OtelTraceSink
+    //   4 OTel sink helpers — isOtelEnabled, setupOtelExporter, traceIdFromRunId, langfuseTraceUrl
+    //   2 langfuse-otel-format constants — DEFAULT_CONTENT_MODE, DEFAULT_PREVIEW_CHARS
+    //   7 langfuse-otel-format functions — applyContentMode, formatLlmCallAttrs,
+    //     formatRootSpanAttrs, formatRunCompleteAttrs, formatToolCallAttrs,
+    //     parseContentMode, truncatePreservingJson
+    // Type-only exports (StdoutSinkOptions, JsonlFileSinkOptions,
+    // OtelTraceSinkOptions, ContentMode, RunContext) are erased at
+    // runtime. Adding a new runtime export REQUIRES updating this
+    // assertion.
     const runtimeKeys = Object.keys(mod).sort();
     expect(runtimeKeys).toEqual([
+      'DEFAULT_CONTENT_MODE',
+      'DEFAULT_PREVIEW_CHARS',
       'JsonlFileSink',
       'OtelTraceSink',
       'StdoutSink',
+      'applyContentMode',
+      'formatLlmCallAttrs',
+      'formatRootSpanAttrs',
+      'formatRunCompleteAttrs',
+      'formatToolCallAttrs',
       'isOtelEnabled',
       'langfuseTraceUrl',
+      'parseContentMode',
       'setupOtelExporter',
       'traceIdFromRunId',
+      'truncatePreservingJson',
     ]);
   });
 });

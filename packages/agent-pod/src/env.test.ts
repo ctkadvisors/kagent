@@ -94,4 +94,26 @@ describe('parseEnv', () => {
       /AGENT_SPEC.model is required/,
     );
   });
+
+  describe('KAGENT_TRACE_CONTENT_MODE', () => {
+    it('defaults to preview when unset', () => {
+      expect(parseEnv(baseEnv).traceContentMode).toBe('preview');
+    });
+
+    it.each(['none', 'preview', 'full'] as const)('accepts %s', (mode) => {
+      expect(parseEnv({ ...baseEnv, KAGENT_TRACE_CONTENT_MODE: mode }).traceContentMode).toBe(mode);
+    });
+
+    it('rejects artifact-ref explicitly (depends on Phase 5 P3 writer)', () => {
+      expect(() => parseEnv({ ...baseEnv, KAGENT_TRACE_CONTENT_MODE: 'artifact-ref' })).toThrow(
+        /artifact-ref.*reserved/,
+      );
+    });
+
+    it('rejects unknown values', () => {
+      expect(() => parseEnv({ ...baseEnv, KAGENT_TRACE_CONTENT_MODE: 'huh' })).toThrow(
+        /not a valid value/,
+      );
+    });
+  });
 });

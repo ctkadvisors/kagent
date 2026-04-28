@@ -515,6 +515,31 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     // Iteration-cap detection (RESEARCH §7 Pitfall 7).
     const hitIterationCap = !completedNaturally && status === 'completed';
 
+    // Emit a `run_complete` finalization entry so sinks that model a
+    // per-run lifecycle (OtelTraceSink → Langfuse trace; future
+    // batched sinks) can stamp final-state attributes onto their
+    // root-of-run representation BEFORE flush ends the underlying
+    // span / connection. Sinks that don't care no-op naturally on the
+    // unfamiliar trace_type. Stays in `traces[]` so consumers
+    // inspecting the in-memory transcript see the same finalization
+    // record as the on-wire sinks.
+    const runCompleteEntry: TraceEntry = {
+      schema_version: '1',
+      run_id: runId,
+      sequence: seq++,
+      trace_type: 'run_complete',
+      timestamp_ms: Date.now(),
+      latency_ms: 0,
+      final_content: finalContent,
+      final_status: status,
+      cumulative_input_tokens: budget.cumulativeInputTokens,
+      cumulative_output_tokens: budget.cumulativeOutputTokens,
+      cumulative_cost_usd: budget.cumulativeCostUsd,
+      hit_iteration_cap: hitIterationCap,
+    };
+    traces.push(runCompleteEntry);
+    await this.emitToSinks(runCompleteEntry);
+
     // Flush sinks that opted in (D-19) — swallow errors.
     for (const sink of this.sinks) {
       if (sink.flush) {

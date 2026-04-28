@@ -40,11 +40,20 @@ export interface TraceEntry {
   run_id: string;
   /** Monotonic sequence within the run; assigned by the executor. */
   sequence: number;
-  /** Discriminator. */
-  trace_type: 'llm_call' | 'tool_call' | 'iteration_boundary';
+  /**
+   * Discriminator.
+   *
+   * `'run_complete'` is the post-loop finalization entry: emitted ONCE
+   * per run, just before sinks are flushed, carrying final-state data
+   * sinks need to seal their root-of-run representation (Langfuse
+   * trace output, total token usage, terminal status). Sinks that
+   * don't model a per-run lifecycle ignore it; OtelTraceSink stamps
+   * the trace-level Langfuse fields onto the root span and ends it.
+   */
+  trace_type: 'llm_call' | 'tool_call' | 'iteration_boundary' | 'run_complete';
   /** Unix milliseconds when the trace was emitted. */
   timestamp_ms: number;
-  /** Operation duration in ms; 0 for `iteration_boundary` (instantaneous). */
+  /** Operation duration in ms; 0 for `iteration_boundary` and `run_complete` (instantaneous). */
   latency_ms: number;
   /** M2 delegation forward-compat slot (D-29). Always undefined in M1. */
   parent_run_id?: string;
@@ -84,6 +93,23 @@ export interface TraceEntry {
   // ─── iteration_boundary fields ─────────────────────────────────────
   /** 0-indexed iteration number. */
   iteration?: number;
+
+  // ─── run_complete fields ───────────────────────────────────────────
+  /**
+   * Final assistant content from the run; mirror of `ExecutionResult.finalContent`.
+   * Subject to {@link ContentMode} truncation when consumed by `OtelTraceSink`.
+   */
+  final_content?: string | null;
+  /** Mirror of `ExecutionResult.status` (`completed | failed | timeout | budget_exceeded | cancelled`). */
+  final_status?: string;
+  /** Mirror of `ExecutionResult.budget.cumulativeInputTokens`. */
+  cumulative_input_tokens?: number;
+  /** Mirror of `ExecutionResult.budget.cumulativeOutputTokens`. */
+  cumulative_output_tokens?: number;
+  /** Mirror of `ExecutionResult.budget.cumulativeCostUsd` (`null` when no backend reported cost). */
+  cumulative_cost_usd?: number | null;
+  /** Mirror of `ExecutionResult.hitIterationCap`. */
+  hit_iteration_cap?: boolean;
 
   /** Surface for caught exceptions; populated when an LLM or tool call threw. */
   error?: string;

@@ -97,16 +97,36 @@ async function main(): Promise<void> {
   // OTel exporter — pointed at Langfuse via OTEL_EXPORTER_OTLP_TRACES_ENDPOINT.
   // When unset, we silently skip OTel and only use StdoutSink. Keeps local
   // dev silent without forcing the operator to thread an opt-out flag.
+  //
+  // The sink takes per-run metadata (`runContext`) so Langfuse renders
+  // each trace with a stable agent + task identity, and a content
+  // capture policy (`contentMode`) so production prompts don't ship
+  // unconditionally. Both come from the operator-injected env via
+  // PodConfig — see `env.ts` for the env-var contract.
   const sinks: TraceSink[] = [new StdoutSink()];
   let otelShutdown: (() => Promise<void>) | undefined;
   if (isOtelEnabled(process.env)) {
     const { tracer, shutdown } = await setupOtelExporter({
       serviceName: `kagent-agent-pod/${config.agentName}`,
     });
-    sinks.push(new OtelTraceSink({ tracer }));
+    sinks.push(
+      new OtelTraceSink({
+        tracer,
+        runContext: {
+          agentName: config.agentName,
+          taskUid: config.taskId,
+          taskName: config.taskName,
+          namespace: config.taskNamespace,
+          ...(config.agentSpec.sandboxProfile !== undefined && {
+            sandboxProfile: config.agentSpec.sandboxProfile,
+          }),
+        },
+        contentMode: config.traceContentMode,
+      }),
+    );
     otelShutdown = shutdown;
     console.log(
-      `[kagent-agent-pod] OTel exporter wired → ${process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '(default)'}`,
+      `[kagent-agent-pod] OTel exporter wired → ${process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '(default)'} (contentMode=${config.traceContentMode})`,
     );
   }
 
