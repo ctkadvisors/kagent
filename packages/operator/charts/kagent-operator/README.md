@@ -48,6 +48,59 @@ See `values.yaml` for the full surface. Key knobs:
 | `resources.limits`             | `{ cpu: 500m, memory: 256Mi }`                       |                                                    |
 | `replicaCount`                 | `1`                                                  | Single-replica only in v0.1                        |
 
+## Secret refs for the LiteLLM API key + OTLP headers
+
+WS-A (security baseline) flips both `agentPod.litellmApiKey` and
+`agentPod.otlpHeaders` from plain strings to a `{secretName, secretKey, value}` shape. Prefer secret-ref:
+
+```yaml
+agentPod:
+  litellmApiKey:
+    secretName: cloudflare-ai-gateway
+    secretKey: api-key
+  otlpHeaders:
+    secretName: langfuse-otlp-headers
+    secretKey: headers # comma-joined: 'authorization=Bearer%20<pk>,...'
+```
+
+Provision the underlying Secrets via `kubectl create secret generic` or
+Sealed-Secrets (Argo-friendly). The operator container env is sourced
+via `valueFrom.secretKeyRef`, so the plaintext never lands in the
+operator's PodSpec.
+
+The `value` (plaintext) field still renders the env directly and keeps
+back-compat working. Setting `value` triggers a deprecation warning in
+`helm install` / `helm upgrade` output (NOTES.txt).
+
+## NetworkPolicy (WS-A)
+
+The chart renders a default-deny NetworkPolicy at
+`templates/networkpolicy.yaml` for the operator pod. Allowed egress
+covers DNS + the Kubernetes API server; ingress is fully denied (the
+operator runs no listening port). Extend via:
+
+```yaml
+networkPolicy:
+  enabled: true
+  extraEgress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nats
+      ports:
+        - port: 4222
+          protocol: TCP
+```
+
+**CNI requirement.** K3s with the default `flannel` backend does NOT
+enforce NetworkPolicies — the resource installs cleanly but is a
+no-op. To get enforcement, install K3s with `--flannel-backend=none`
+and add Calico/Cilium, or run on a cloud K8s cluster whose default
+CNI enforces.
+
+Disable with `--set networkPolicy.enabled=false` if you've accepted
+the risk on a non-enforcing CNI.
+
 ## Uninstall
 
 ```bash

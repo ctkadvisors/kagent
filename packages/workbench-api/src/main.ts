@@ -15,6 +15,11 @@
  *     sidecar (e.g. `http://127.0.0.1:8081`). Enables the non-API
  *     reverse-proxy path. When unset, non-API routes 404 (intended
  *     for out-of-cluster + test contexts).
+ *   - `WORKBENCH_AUTH_REQUIRED` — fail-closed auth gate. Default
+ *     (unset / any value other than the literal `"false"`) requires
+ *     `X-Forwarded-User` on every non-probe request. Setting this to
+ *     `"false"` disables enforcement and logs a loud warning at boot.
+ *     See `auth.ts` for the trust model.
  *   - `KAGENT_NO_INFORMER` — skip informer boot. Useful for smoke-
  *     testing the entrypoint in CI without a live cluster.
  *
@@ -37,6 +42,7 @@ import {
   type V1Job,
 } from '@kubernetes/client-node';
 
+import { resolveAuthRequired } from './auth.js';
 import { SnapshotCache } from './cache.js';
 import { createInformerSet, type InformerSet } from './informer.js';
 import { buildRouter } from './router.js';
@@ -71,10 +77,19 @@ async function main(): Promise<void> {
   }
 
   const uiUpstream = process.env.WORKBENCH_UI_UPSTREAM;
+  const authRequired = resolveAuthRequired();
+  if (!authRequired) {
+    console.warn(
+      '[workbench-api] WORKBENCH_AUTH_REQUIRED=false — auth is DISABLED. ' +
+        'Anyone with network access to this pod can reach every API route. ' +
+        'Re-enable by unsetting WORKBENCH_AUTH_REQUIRED or setting it to anything other than "false".',
+    );
+  }
   const app = buildRouter({
     cache,
     broker,
     ready: () => ready,
+    authRequired,
     ...(typeof uiUpstream === 'string' && uiUpstream.length > 0 && { uiUpstream }),
   });
   const handle = startServer(app, { port, hostname });

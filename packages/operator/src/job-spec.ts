@@ -14,7 +14,7 @@
  * StatefulSet is a v0.2 affordance once cold-start latency matters.
  */
 
-import type { V1Job } from '@kubernetes/client-node';
+import type { V1Job, V1PodSecurityContext, V1SecurityContext } from '@kubernetes/client-node';
 
 import type { Agent, AgentTask } from './crds/index.js';
 
@@ -61,7 +61,47 @@ export interface BuildJobSpecOptions {
     /** Container path the PVC mounts at. Defaults to `/var/kagent/artifacts`. */
     readonly mountPath?: string;
   };
+  /**
+   * Pod-level security context. Defaults (WS-A baseline) to:
+   *   { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000,
+   *     seccompProfile: { type: 'RuntimeDefault' } }
+   * Pass `null` to OMIT the pod security context entirely (escape
+   * hatch — only useful for runtimes that reject the field). Pass a
+   * partial object to override individual fields; the defaults are
+   * not deep-merged.
+   */
+  readonly podSecurityContext?: V1PodSecurityContext | null;
+  /**
+   * Container-level security context. Defaults (WS-A baseline) to:
+   *   { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] },
+   *     readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 1000 }
+   * Pass `null` to OMIT entirely. Note that `readOnlyRootFilesystem:
+   * true` requires the agent-pod to write only under writable mounts
+   * (e.g., the artifact PVC + the always-present `/tmp` emptyDir).
+   */
+  readonly containerSecurityContext?: V1SecurityContext | null;
 }
+
+/** Default pod security context applied when caller doesn't override. */
+export const DEFAULT_POD_SECURITY_CONTEXT: V1PodSecurityContext = {
+  runAsNonRoot: true,
+  runAsUser: 1000,
+  fsGroup: 1000,
+  seccompProfile: { type: 'RuntimeDefault' },
+};
+
+/** Default container security context. */
+export const DEFAULT_CONTAINER_SECURITY_CONTEXT: V1SecurityContext = {
+  allowPrivilegeEscalation: false,
+  capabilities: { drop: ['ALL'] },
+  readOnlyRootFilesystem: true,
+  runAsNonRoot: true,
+  runAsUser: 1000,
+};
+
+/** Volume name for the writable /tmp emptyDir mounted under
+ * readOnlyRootFilesystem. Exported for tests. */
+export const TMP_VOLUME_NAME = 'tmp';
 
 /** Default mount path for the artifact PVC inside the agent-pod. */
 export const DEFAULT_ARTIFACT_MOUNT_PATH = '/var/kagent/artifacts';
@@ -140,6 +180,35 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         }
       : undefined;
 
+  // WS-A — security baseline. Default-deny on the container surface:
+  // non-root, no privilege escalation, drop all caps, read-only root
+  // FS. Because the root FS is read-only, we mount an emptyDir at /tmp
+  // so the agent-pod runtime (and any subprocess it spawns — MCP
+  // servers via npx, etc.) can write there.
+  const podSecurityContext: V1PodSecurityContext | undefined =
+    opts.podSecurityContext === null
+      ? undefined
+      : (opts.podSecurityContext ?? DEFAULT_POD_SECURITY_CONTEXT);
+  const containerSecurityContext: V1SecurityContext | undefined =
+    opts.containerSecurityContext === null
+      ? undefined
+      : (opts.containerSecurityContext ?? DEFAULT_CONTAINER_SECURITY_CONTEXT);
+  // /tmp emptyDir is included whenever the container security context
+  // sets readOnlyRootFilesystem true (the default). Cheap insurance —
+  // adding the volume when not strictly needed has no observable cost.
+  const needsTmpVolume = containerSecurityContext?.readOnlyRootFilesystem === true;
+  const tmpVolume = needsTmpVolume
+    ? { name: TMP_VOLUME_NAME, emptyDir: {} as Record<string, never> }
+    : undefined;
+  const tmpVolumeMount = needsTmpVolume ? { name: TMP_VOLUME_NAME, mountPath: '/tmp' } : undefined;
+
+  const podVolumes = [artifactVolume, tmpVolume].filter(
+    (v): v is NonNullable<typeof v> => v !== undefined,
+  );
+  const containerVolumeMounts = [artifactVolumeMount, tmpVolumeMount].filter(
+    (v): v is NonNullable<typeof v> => v !== undefined,
+  );
+
   // Honor AgentTask.spec.timeoutSeconds via Job.spec.activeDeadlineSeconds
   // so K8s itself terminates the pod when the deadline passes — belt-
   // and-suspenders alongside the agent-pod's AbortSignal.timeout. This
@@ -175,7 +244,8 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         ...(opts.imagePullSecret !== undefined && {
           imagePullSecrets: [{ name: opts.imagePullSecret }],
         }),
-        ...(artifactVolume !== undefined && { volumes: [artifactVolume] }),
+        ...(podSecurityContext !== undefined && { securityContext: podSecurityContext }),
+        ...(podVolumes.length > 0 && { volumes: podVolumes }),
         containers: [
           {
             name: 'agent',
@@ -184,8 +254,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
             ...(opts.imagePullPolicy !== undefined && {
               imagePullPolicy: opts.imagePullPolicy,
             }),
-            ...(artifactVolumeMount !== undefined && {
-              volumeMounts: [artifactVolumeMount],
+            ...(containerSecurityContext !== undefined && {
+              securityContext: containerSecurityContext,
+            }),
+            ...(containerVolumeMounts.length > 0 && {
+              volumeMounts: containerVolumeMounts,
             }),
             // Resources are tunable via Helm values in operator chart;
             // the spec here is a defensible default for v0.1.

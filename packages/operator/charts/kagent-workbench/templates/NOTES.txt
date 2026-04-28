@@ -72,3 +72,17 @@ port-forward. Two recipes:
 ServiceAccount + RBAC are READ-ONLY by design. To audit:
 
   kubectl get clusterrole {{ include "kagent-workbench.fullname" . }}-reader -o yaml
+
+{{- if eq (lower (toString .Values.api.authRequired)) "false" }}
+
+WARNING: api.authRequired=false — workbench-api will accept requests
+WITHOUT an X-Forwarded-User header. Anyone with network access to the
+Service can reach every API route. Re-enable by setting
+`api.authRequired: true` (the chart default).
+{{- else }}
+
+Auth: header-trust is ENABLED. The workbench-api requires every non-probe
+request to carry `X-Forwarded-User`. Wire Traefik forward-auth (or
+equivalent) so that header is set upstream. /healthz + /readyz are
+exempt so kubelet probes still work.
+{{- end }}

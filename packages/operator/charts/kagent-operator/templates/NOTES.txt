@@ -1,0 +1,60 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+*/}}
+kagent-operator {{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }}) installed.
+
+The operator runs cluster-wide watching Agent + AgentTask CRs and
+spawning per-task Jobs in the AgentTask's namespace.
+
+Resources installed:
+  - Deployment    {{ include "kagent-operator.fullname" . }}
+  - ServiceAccount {{ include "kagent-operator.serviceAccountName" . }}
+  - ClusterRole / ClusterRoleBinding (cluster-wide watch on Agents/AgentTasks)
+  {{- if .Values.agentPod.rbac.create }}
+  - ServiceAccount + Role + RoleBinding {{ .Values.agentPod.serviceAccountName }}
+    (release-namespace; per-task pods patch their AgentTask.status)
+  {{- end }}
+  {{- if .Values.agentPod.artifactStorage.enabled }}
+  - PersistentVolumeClaim {{ .Values.agentPod.artifactStorage.pvcName }}
+    (artifact storage, mounted into every spawned agent pod)
+  {{- end }}
+
+{{- /*
+WS-A — security-baseline deprecation warnings. Plaintext values in
+agentPod.litellmApiKey.value / agentPod.otlpHeaders.value still WORK
+(the deployment renders the plaintext env), but the secret-ref form
+is strongly preferred so the operator's PodSpec never carries the
+plaintext.
+*/}}
+{{- if .Values.agentPod.litellmApiKey.value }}
+
+WARNING: agentPod.litellmApiKey.value (plaintext) is set. This renders
+the LiteLLM API key directly into the operator's PodSpec, where it
+shows up in `kubectl get deploy -o yaml` and in any GitOps audit
+trail. Migrate to the secret-ref form:
+
+  agentPod:
+    litellmApiKey:
+      secretName: <existing-secret-in-{{ .Release.Namespace }}>
+      secretKey:  <key-within-that-secret>
+
+(Then `kubectl create secret generic` / Sealed-Secret as appropriate.)
+{{- end }}
+{{- if .Values.agentPod.otlpHeaders.value }}
+
+WARNING: agentPod.otlpHeaders.value (plaintext) is set — same caveat
+as litellmApiKey above. Migrate to:
+
+  agentPod:
+    otlpHeaders:
+      secretName: <existing-secret>
+      secretKey:  <key>
+{{- end }}
+
+To inspect the operator's effective env (and confirm the secret-ref
+plumbing took effect):
+
+  kubectl --namespace {{ .Release.Namespace }} \
+    get deploy {{ include "kagent-operator.fullname" . }} \
+    -o jsonpath='{.spec.template.spec.containers[0].env}' | jq

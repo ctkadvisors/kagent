@@ -73,8 +73,23 @@ export interface McpToolProviderOptions {
   command: string;
   /** Arguments to pass to the executable. */
   args?: string[];
-  /** Environment variables — merged OVER `process.env` per D-14 (consumer keys win on conflict). */
+  /**
+   * Environment variables — explicit overrides handed verbatim to the
+   * child process. Combined with `envAllowlist` below: the final env
+   * map is `{ ...filteredProcessEnv, ...env }`.
+   */
   env?: Record<string, string>;
+  /**
+   * WS-A baseline: instead of inheriting all of `process.env`, the
+   * caller declares which keys to forward. Default (omitted / empty
+   * array) forwards NOTHING — only `env` overrides reach the child.
+   * Pass an explicit list (e.g. `['PATH', 'HOME', 'LITELLM_API_KEY']`)
+   * to forward those keys verbatim. The special wildcard `['*']`
+   * preserves the legacy "forward everything" behavior; constructing
+   * with that pattern logs a warning so callers notice they're opting
+   * out of the secure default.
+   */
+  envAllowlist?: readonly string[];
   /** Working directory for the child process. */
   cwd?: string;
   /** Identifies this client to the MCP server during the initialize handshake. */
@@ -85,11 +100,44 @@ export interface McpToolProviderOptions {
 
 const DEFAULT_CLIENT_INFO = { name: '@ctkadvisors/mcp-tool-provider', version: '0.0.0' };
 
+/**
+ * Keys the SDK's `getDefaultEnvironment()` always inherits when an
+ * `env` map is passed to `StdioClientTransport`. Mirrored here so
+ * `ensureConnected()` can mask them when the consumer hasn't
+ * allowlisted them. Source: `@modelcontextprotocol/sdk` →
+ * `dist/esm/client/stdio.js` → `DEFAULT_INHERITED_ENV_VARS`.
+ *
+ * If the SDK's list grows in a future version we'd start leaking
+ * those new keys; that's a known, accepted trade-off — the alternative
+ * is a private fork of the transport.
+ */
+const SDK_SAFE_INHERIT_KEYS = [
+  'HOME',
+  'LOGNAME',
+  'PATH',
+  'SHELL',
+  'TERM',
+  'USER',
+  // Windows
+  'APPDATA',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'PROCESSOR_ARCHITECTURE',
+  'SYSTEMDRIVE',
+  'SYSTEMROOT',
+  'TEMP',
+  'USERNAME',
+  'USERPROFILE',
+  'PROGRAMFILES',
+] as const;
+
 export class McpToolProvider implements ToolProvider {
   public readonly id: string;
   private readonly command: string;
   private readonly spawnArgs: string[];
   private readonly envOverride?: Record<string, string>;
+  private readonly envAllowlist: readonly string[];
   private readonly cwd?: string;
   private readonly clientInfo: { name: string; version: string };
   private client: Client | null = null;
@@ -104,6 +152,15 @@ export class McpToolProvider implements ToolProvider {
     this.command = opts.command;
     this.spawnArgs = opts.args ?? [];
     if (opts.env !== undefined) this.envOverride = opts.env;
+    this.envAllowlist = opts.envAllowlist ?? [];
+    if (this.envAllowlist.length === 1 && this.envAllowlist[0] === '*') {
+      // WS-A: warn loudly when callers opt out of the secure default.
+      console.warn(
+        `[mcp-tool-provider] McpToolProvider(id=${this.id}) constructed with envAllowlist:['*'] — ` +
+          'forwarding ALL of process.env to the MCP subprocess. This is the legacy/back-compat ' +
+          'mode; for production prefer an explicit allowlist of env keys (or pass them via `env`).',
+      );
+    }
     if (opts.cwd !== undefined) this.cwd = opts.cwd;
     this.clientInfo = opts.clientInfo ?? DEFAULT_CLIENT_INFO;
   }
@@ -169,10 +226,36 @@ export class McpToolProvider implements ToolProvider {
     }
     if (this.client !== null) return this.client;
 
-    // D-14: env merge (SDK uses verbatim — see RESEARCH §Pitfall 3).
-    const mergedEnv = this.envOverride
-      ? { ...processEnvAsRecord(), ...this.envOverride }
-      : undefined;
+    // WS-A + D-14: env merge. Allowlist gate (default empty = forward
+    // nothing from process.env; consumer-provided `env` is the only
+    // input). The legacy "forward everything" mode is reachable via
+    // `envAllowlist: ['*']` (constructor logs a warning).
+    //
+    // Note on SDK behavior: StdioClientTransport ALWAYS prepends a
+    // hard-coded "safe inherit" set (HOME, PATH, USER, ...) when the
+    // caller passes an `env` map. To honor a strict allowlist (and
+    // make the secure default actually withhold those keys), we always
+    // pass an `env` map AND we explicitly clear any safe-inherit key
+    // that the allowlist doesn't list — the empty-string entries
+    // override the SDK's defaults at the spawn boundary. The wildcard
+    // mode skips this (the SDK baseline is fine when forwarding
+    // everything).
+    const wildcardMode = this.envAllowlist.length === 1 && this.envAllowlist[0] === '*';
+    const inheritedEnv = filterProcessEnv(this.envAllowlist);
+    let mergedEnv: Record<string, string> | undefined;
+    if (wildcardMode) {
+      mergedEnv = { ...inheritedEnv, ...(this.envOverride ?? {}) };
+    } else {
+      // Force the SDK's safe-inherit keys to '' unless the allowlist
+      // (or the user's `env`) includes them.
+      const hardCleared: Record<string, string> = {};
+      for (const k of SDK_SAFE_INHERIT_KEYS) {
+        if (!(k in inheritedEnv) && !(this.envOverride !== undefined && k in this.envOverride)) {
+          hardCleared[k] = '';
+        }
+      }
+      mergedEnv = { ...hardCleared, ...inheritedEnv, ...(this.envOverride ?? {}) };
+    }
 
     const transport = new StdioClientTransport({
       command: this.command,
@@ -249,13 +332,31 @@ function classifyMcpError(err: unknown, signalAborted: boolean): Error {
 }
 
 /**
- * `process.env` is `NodeJS.ProcessEnv` (string | undefined values).
- * Filter undefined values so the merge yields a clean Record<string, string>.
+ * Filter `process.env` against an allowlist.
+ *
+ * - Empty allowlist (the secure default) → returns `{}`.
+ * - Allowlist containing `'*'` → returns every defined entry of
+ *   `process.env` (legacy back-compat mode; constructor logs a warning).
+ * - Otherwise → returns only the listed keys that are defined.
+ *
+ * Exported (with underscore prefix) for direct testability.
  */
-function processEnvAsRecord(): Record<string, string> {
+export function _filterProcessEnvForTests(allowlist: readonly string[]): Record<string, string> {
+  return filterProcessEnv(allowlist);
+}
+
+function filterProcessEnv(allowlist: readonly string[]): Record<string, string> {
+  if (allowlist.length === 0) return {};
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string') out[k] = v;
+  if (allowlist.length === 1 && allowlist[0] === '*') {
+    for (const [k, v] of Object.entries(process.env)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    return out;
+  }
+  for (const key of allowlist) {
+    const v = process.env[key];
+    if (typeof v === 'string') out[key] = v;
   }
   return out;
 }

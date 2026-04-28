@@ -1,0 +1,81 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+WS-A — default-deny NetworkPolicy for the workbench Pod.
+
+Ingress: only from the ingress controller pods (Traefik in the
+homelab). Configurable via `networkPolicy.ingressFrom` — defaults
+match Traefik's standard label `app.kubernetes.io/name: traefik` in
+the `ingress-controller` namespace.
+
+Egress:
+  - DNS to kube-system (UDP/TCP 53)
+  - Kubernetes API server (TCP 443) — required for informer watches.
+  - extraEgress passthrough.
+
+NOTE: K3s with the default flannel CNI does NOT enforce
+NetworkPolicies. Deploy with Calico/Cilium for enforcement.
+*/}}
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kagent-workbench.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- with .Values.networkPolicy.ingressFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: {{ $.Values.api.port }}
+          protocol: TCP
+        - port: {{ $.Values.ui.port }}
+          protocol: TCP
+    {{- else }}
+    # No `networkPolicy.ingressFrom` configured — emit a default
+    # Traefik-friendly rule. Override in values.yaml if your cluster's
+    # ingress controller uses a different label/namespace.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-controller
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - port: {{ .Values.api.port }}
+          protocol: TCP
+        - port: {{ .Values.ui.port }}
+          protocol: TCP
+    {{- end }}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Kubernetes API server — required for informer watches.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

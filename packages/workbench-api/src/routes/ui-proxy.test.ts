@@ -17,6 +17,11 @@ function deps(extra: { uiUpstream?: string; proxyFetch?: typeof fetch } = {}) {
     cache,
     broker,
     ready: () => true,
+    // These tests target the proxy's path resolution + upstream stub
+    // wiring; auth is exercised in `auth.test.ts`. Disable enforcement
+    // here so requests without `X-Forwarded-User` aren't 401'd before
+    // they reach the route under test.
+    authRequired: false,
     ...extra,
   };
 }
