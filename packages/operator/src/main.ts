@@ -13,7 +13,7 @@
  */
 
 import { CoreV1Api, type V1Job, type V1JobList, type V1Pod } from '@kubernetes/client-node';
-import { connect, type NatsConnection } from 'nats';
+import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
@@ -254,7 +254,15 @@ async function main(): Promise<void> {
       }
       return sharedConnection;
     };
-    dispatcher = new NatsDispatcher({ connect: getConnection });
+    dispatcher = new NatsDispatcher({
+      connect: getConnection,
+      // WS-F: wire JetStream's `Nats-Msg-Id` dedupe header. The
+      // reconcile loop passes `task.metadata.uid` as `dedupeId` on
+      // every publish; JetStream's per-stream `duplicate_window`
+      // (default 2m) drops the second one when the operator
+      // re-reconciles after a mid-flight crash.
+      headersFactory: () => natsHeaders(),
+    });
     // CapabilityRegistry: Phase 3 ships the interface + stubs; the
     // NATS KV reader (NatsCapabilityRegistry) needs the agent-pod
     // heartbeat path (Phase 3 C4+). Until that lands, even the
