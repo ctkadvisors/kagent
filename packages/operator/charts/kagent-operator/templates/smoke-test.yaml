@@ -57,7 +57,12 @@ spec:
   payload:
     smokeTest: true
   originalUserMessage: {{ .Values.smokeTest.prompt | quote }}
-  timeoutSeconds: {{ .Values.smokeTest.timeoutSeconds | default 60 }}
+  # WS-G: prefer runConfig over the deprecated top-level timeoutSeconds
+  # so the smoke test exercises the new shape end-to-end. The agent-pod
+  # resolves runConfig.timeoutSeconds with precedence over the
+  # legacy top-level field.
+  runConfig:
+    timeoutSeconds: {{ .Values.smokeTest.timeoutSeconds | default 60 }}
 ---
 apiVersion: v1
 kind: ServiceAccount

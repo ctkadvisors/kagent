@@ -124,12 +124,24 @@ export interface ToolInvocationContext {
  *
  * Provider stays TRACE-UNAWARE — executor wraps every call with timing
  * and emits the trace entry. Provider focuses solely on tool execution.
+ *
+ * `describeTools(ctx?)` accepts an OPTIONAL `ToolInvocationContext` (WS-G).
+ * Most providers ignore it — their descriptors are statically known and
+ * cancellation isn't meaningful (in-process / http enumerate from a Map).
+ * Subprocess-backed providers (e.g. `McpToolProvider`) forward `ctx.abortSignal`
+ * to their underlying `tools/list` RPC so a slow MCP server can't pin the
+ * agent loop forever — without the signal, the SDK's default 60s timeout
+ * is the only escape hatch.
  */
 export interface ToolProvider {
   /** Stable provider id — kebab-case ('http', 'mcp-stdio', 'in-process'). Used by registry for attribution. */
   readonly id: string;
-  /** Returns the tools this provider offers. Sync or async; called once at executor construction (and on demand). */
-  describeTools(): ToolDescriptor[] | Promise<ToolDescriptor[]>;
+  /**
+   * Returns the tools this provider offers. Sync or async; called once at
+   * executor construction (and on demand). Optional `ctx` carries the
+   * run's `abortSignal` so subprocess providers can cancel slow lookups.
+   */
+  describeTools(ctx?: ToolInvocationContext): ToolDescriptor[] | Promise<ToolDescriptor[]>;
   /** Executes a tool call. Provider stays trace-unaware (D-09); executor wraps with timing. */
   executeTool(call: ToolCall, ctx: ToolInvocationContext): Promise<ToolResult>;
 }
@@ -228,11 +240,16 @@ export class ToolProviderRegistry {
    * `toolToProvider` is fully populated before federation. Without this,
    * `providerFor(toolName)` called mid-run could observe a partial map
    * for async providers (the pre-D-13 race window).
+   *
+   * Optional `ctx` (WS-G) is forwarded to each provider's
+   * `describeTools()`. Subprocess providers (e.g. MCP) wire
+   * `ctx.abortSignal` into their underlying `tools/list` RPC so a slow
+   * server can't pin the loop. Most providers ignore the argument.
    */
-  async describeAll(): Promise<ToolDescriptor[]> {
+  async describeAll(ctx?: ToolInvocationContext): Promise<ToolDescriptor[]> {
     await this.ready();
     const results = await Promise.all(
-      Array.from(this.providers.values()).map((p) => Promise.resolve(p.describeTools())),
+      Array.from(this.providers.values()).map((p) => Promise.resolve(p.describeTools(ctx))),
     );
     return results.flat();
   }

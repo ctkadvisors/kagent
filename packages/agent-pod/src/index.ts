@@ -13,10 +13,13 @@
  */
 
 export { parseEnv } from './env.js';
-export type { AgentSpecEnv, PodConfig, TaskSpecEnv } from './env.js';
+export type { AgentSpecEnv, AgentTaskRunConfigEnv, PodConfig, TaskSpecEnv } from './env.js';
 
-export { runAgentTask, pickUserMessage, resolveToolProviders } from './runner.js';
+export { composeSignals, pickUserMessage, resolveToolProviders, runAgentTask } from './runner.js';
 export type { ArtifactRef, RunDeps, RunResult } from './runner.js';
+
+export { buildCancelledResult, buildShutdownPlan } from './main.js';
+export type { ShutdownPlan } from './main.js';
 
 export {
   buildBuiltinToolRegistry,

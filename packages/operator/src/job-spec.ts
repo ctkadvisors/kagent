@@ -209,15 +209,20 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     (v): v is NonNullable<typeof v> => v !== undefined,
   );
 
-  // Honor AgentTask.spec.timeoutSeconds via Job.spec.activeDeadlineSeconds
-  // so K8s itself terminates the pod when the deadline passes — belt-
-  // and-suspenders alongside the agent-pod's AbortSignal.timeout. This
-  // catches the case where the agent-pod is wedged BEFORE the executor
-  // arms its signal (e.g. crashed during boot, hung on K8s API client
-  // init), or where the AbortSignal fires but the runtime doesn't honor
-  // the cancel for some reason. The Job's failure then surfaces via
-  // job-watch.ts → markAgentTaskFailedFromExternal as DeadlineExceeded.
-  const timeoutSeconds = task.spec.timeoutSeconds;
+  // Honor the resolved AgentTask wall-clock deadline via
+  // Job.spec.activeDeadlineSeconds so K8s itself terminates the pod
+  // when the deadline passes — belt-and-suspenders alongside the
+  // agent-pod's AbortSignal.timeout. This catches the case where the
+  // agent-pod is wedged BEFORE the executor arms its signal (e.g.
+  // crashed during boot, hung on K8s API client init), or where the
+  // AbortSignal fires but the runtime doesn't honor the cancel for
+  // some reason. The Job's failure then surfaces via job-watch.ts →
+  // markAgentTaskFailedFromExternal as DeadlineExceeded.
+  //
+  // WS-G: resolution rule mirrors the agent-pod runner —
+  // `runConfig.timeoutSeconds` wins over the deprecated top-level
+  // `timeoutSeconds` field when both are present.
+  const timeoutSeconds = task.spec.runConfig?.timeoutSeconds ?? task.spec.timeoutSeconds;
   const activeDeadlineSeconds =
     typeof timeoutSeconds === 'number' && timeoutSeconds > 0 ? timeoutSeconds : undefined;
 

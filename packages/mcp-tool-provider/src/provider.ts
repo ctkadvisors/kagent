@@ -165,15 +165,33 @@ export class McpToolProvider implements ToolProvider {
     this.clientInfo = opts.clientInfo ?? DEFAULT_CLIENT_INFO;
   }
 
-  async describeTools(): Promise<ToolDescriptor[]> {
+  async describeTools(ctx?: ToolInvocationContext): Promise<ToolDescriptor[]> {
     if (this.toolsCache !== null) return this.toolsCache;
+
+    // WS-G — pre-fetch abort guard mirrors `executeTool`. If the run was
+    // cancelled before we even spawned the subprocess, surface the abort
+    // immediately instead of paying for the spawn + initialize round-trip.
+    const abortSignal = ctx?.abortSignal;
+    if (abortSignal?.aborted) {
+      throw new McpToolProviderAbortError();
+    }
+
     const client = await this.ensureConnected();
     let listed;
     try {
-      listed = await client.listTools();
+      // Forward the run's AbortSignal into the SDK's `RequestOptions`
+      // so a slow MCP server can't pin tools/list. The SDK's default
+      // 60s `RequestTimeout` still applies as a safety net; consumers
+      // wanting tighter bounds wire it via the signal.
+      listed =
+        abortSignal !== undefined
+          ? await client.listTools(undefined, { signal: abortSignal })
+          : await client.listTools();
     } catch (err) {
-      // tools/list is not user-cancellable here — signalAborted=false
-      throw classifyMcpError(err, false);
+      // If the abort fired mid-RPC the SDK raises RequestTimeout, which
+      // classifyMcpError maps to McpToolProviderAbortError when
+      // signalAborted=true.
+      throw classifyMcpError(err, abortSignal?.aborted === true);
     }
     const descriptors: ToolDescriptor[] = listed.tools.map((t) => ({
       name: t.name,
