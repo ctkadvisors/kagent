@@ -234,8 +234,13 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       currentMessages.unshift({ role: 'system', content: agentDef.systemPrompt });
     }
 
-    // Federate tool descriptors across all providers (D-11).
-    const toolDescriptors: ToolDescriptor[] = await this.toolProviders.describeAll();
+    // Federate tool descriptors across all providers (D-11). Pass the
+    // run's `runId` + `signal` (WS-G) so subprocess-backed providers
+    // (e.g. MCP) can wire `tools/list` cancellation through to their
+    // underlying RPC — without this, a slow MCP server's listTools()
+    // pins the loop until the SDK default 60s timeout fires.
+    const describeCtx: ToolInvocationContext = { runId, abortSignal: signal };
+    const toolDescriptors: ToolDescriptor[] = await this.toolProviders.describeAll(describeCtx);
 
     let finalContent: string | null = null;
     let status: TerminalStatus = 'completed';
