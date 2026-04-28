@@ -88,6 +88,14 @@ describe('parseArtifactUri', () => {
     });
   });
 
+  it('parses inline://sha256:<hex> (content-addressed, NOT persisted)', () => {
+    const hex = 'a'.repeat(64);
+    expect(parseArtifactUri(`inline://sha256:${hex}`)).toEqual({
+      scheme: 'inline',
+      path: `sha256:${hex}`,
+    });
+  });
+
   it('lowercases the scheme so PVC:// parses', () => {
     const parsed = parseArtifactUri('PVC://kagent-artifacts/uid/file.md');
     expect(parsed?.scheme).toBe('pvc');

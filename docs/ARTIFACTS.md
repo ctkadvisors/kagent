@@ -76,10 +76,16 @@ Proposed addition to `packages/operator/src/crds/types.ts` (do **not** edit yet 
 export interface ArtifactRef {
   /**
    * Backend-addressable URI. Substrate-defined schemes:
-   *   pvc://<pvc-name>/<task-uid>/<artifact-name>     (v0.1 — shared PVC)
+   *   pvc://<pvc-name>/<task-uid>/<artifact-name>     (v0.1 — shared PVC, persisted)
+   *   inline://sha256:<hex>                           (v0.1 — content-addressed,
+   *                                                   NOT persisted; bytes live in
+   *                                                   status.result.content)
    *   s3://<bucket>/<task-uid>/<artifact-name>        (v0.2 — MinIO/S3)
-   * Agents MUST treat the URI as opaque and round-trip via the
-   * @kagent/agent-loop artifact helpers; never parse the path.
+   * Persistence contract: any scheme EXCEPT `inline://` is followable to
+   * durable bytes; `inline://` refs are dropped from
+   * `RunResult.artifacts` so durable consumers never see a URI they
+   * can't follow. Agents MUST treat the URI as opaque and round-trip
+   * via the @kagent/agent-loop artifact helpers; never parse the path.
    */
   readonly uri: string;
 

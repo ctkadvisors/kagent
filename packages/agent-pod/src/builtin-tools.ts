@@ -48,12 +48,11 @@ import { defineInProcessTool, InProcessToolProvider } from '@kagent/in-process-t
 import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 
 import {
-  buildPvcUri,
+  inlineArtifactRef,
   inlineSafeForArtifact,
   resolveWriterEnv,
   validateArtifactName,
   writeArtifactToDisk,
-  type ArtifactRef,
 } from './artifacts.js';
 
 /* =====================================================================
@@ -776,25 +775,26 @@ export function buildBuiltinToolRegistry(
       const writerEnv = resolveWriterEnv(env);
       // Inline short-circuit: when the caller asks for inline AND the
       // payload qualifies, skip the FS round-trip and return a synthetic
-      // ref. Callers that prefer the inline-content-in-status path can
-      // see `inlineSafe: true` on the metadata and act accordingly.
+      // ref under the `inline://sha256:<hex>` scheme. The previous
+      // implementation returned a `pvc://...` URI from this branch
+      // even though no bytes were written — which lied to anyone who
+      // tried to follow the URI later. The substrate contract is now:
+      //   `pvc://`    ⟹ bytes ARE durably on disk (followable)
+      //   `inline://` ⟹ bytes are NOT persisted (caller must inline)
+      // The runner's `collectArtifactsFromTraces` drops `inline://`
+      // refs from `RunResult.artifacts` so durable consumers don't see
+      // them.
       //
-      // The name validation MUST happen here too — `writeArtifactToDisk`
-      // runs `validateArtifactName` before it touches the filesystem,
-      // but the inline path skips the writer entirely. Without this
-      // call, a name like '../../../etc/passwd' would round-trip into
-      // status.artifacts as a `pvc://...` URI, misleading any consumer
-      // that follows the URI later (Workbench, downstream agents, etc.).
+      // The name validation runs only as a sanity check — the inline
+      // ref does not embed `name` in its URI (the URI is content-
+      // addressed via the sha256 hex), but we still want to refuse
+      // path-traversal early so the same input is not subsequently
+      // accepted by the disk writer if the LLM retries without
+      // `inline:true`.
       if (inline && inlineSafeForArtifact(content, mediaType)) {
-        const safeName = validateArtifactName(name);
-        const synthetic: ArtifactRef = {
-          uri: buildPvcUri(writerEnv.pvcName, writerEnv.taskUid, safeName),
-          name: safeName,
-          mediaType,
-          sizeBytes: Buffer.byteLength(content, 'utf8'),
-          producedAt: clock().toISOString(),
-        };
-        return jsonContent(synthetic);
+        validateArtifactName(name);
+        const synthetic = inlineArtifactRef(content, mediaType, clock());
+        return jsonContent({ ...synthetic, name });
       }
       const result = writer(name, content, mediaType, writerEnv, clock());
       return jsonContent(result.ref);

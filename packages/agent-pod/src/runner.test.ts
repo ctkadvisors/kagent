@@ -384,6 +384,45 @@ describe('collectArtifactsFromTraces', () => {
     ];
     expect(collectArtifactsFromTraces(traces)).toEqual([ref, ref2]);
   });
+
+  it('drops inline:// refs (non-durable; not followable from RunResult.artifacts)', () => {
+    // The inline-only path returns an `inline://sha256:<hex>` URI; the
+    // collator must NOT include those in the durable artifact list,
+    // because `RunResult.artifacts` is contracted to be followable.
+    const inlineRef: ArtifactRef = {
+      uri: 'inline://sha256:abc123',
+      mediaType: 'text/markdown',
+      sizeBytes: 5,
+      checksum: 'sha256:abc123',
+      producedAt: '2026-04-28T00:00:00.000Z',
+    };
+    const traces = [
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 0,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'write_artifact',
+        tool_output: JSON.stringify([{ type: 'text', text: JSON.stringify(inlineRef) }]),
+        is_error: false,
+      },
+      {
+        schema_version: '1' as const,
+        run_id: 'r1',
+        sequence: 1,
+        trace_type: 'tool_call' as const,
+        timestamp_ms: 0,
+        latency_ms: 1,
+        tool_name: 'write_artifact',
+        tool_output: JSON.stringify(blocks),
+        is_error: false,
+      },
+    ];
+    // Only the pvc:// ref survives.
+    expect(collectArtifactsFromTraces(traces)).toEqual([ref]);
+  });
 });
 
 describe('runAgentTask — artifacts collation', () => {
