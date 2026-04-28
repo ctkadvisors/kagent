@@ -135,6 +135,19 @@ spec:
             - name: KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT
               value: {{ .Values.agentPodSecurityContext.container | toJson | quote }}
             {{- end }}
+            {{- with .Values.agentPod.runtimeClasses.default }}
+            # RuntimeClass mapping (WS-C). The operator's
+            # buildJobSpecOptionsFromEnv reads these and resolves
+            # Agent.spec.sandboxProfile per-task. Empty values are
+            # omitted entirely so the pod spec falls back to the
+            # cluster default RuntimeClass.
+            - name: KAGENT_RUNTIME_CLASS_DEFAULT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agentPod.runtimeClasses.strict }}
+            - name: KAGENT_RUNTIME_CLASS_STRICT
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.agentPod.builtinTools.httpAllowDomains }}
             # Built-in tool HTTP allowlist (Phase 5 / P2). Joined into a
             # comma-separated KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS env on
