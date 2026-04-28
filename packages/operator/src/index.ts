@@ -22,6 +22,7 @@ export type {
   AgentTaskSpec,
   AgentTaskStatus,
   AgentTaskPhase,
+  AgentTaskRunConfig,
   AgentCapability,
   AgentCapabilitySpec,
 } from './crds/index.js';

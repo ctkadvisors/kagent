@@ -11,6 +11,7 @@ export type {
   AgentTaskSpec,
   AgentTaskStatus,
   AgentTaskPhase,
+  AgentTaskRunConfig,
   AgentCapability,
   AgentCapabilitySpec,
 } from './types.js';

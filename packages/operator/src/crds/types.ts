@@ -65,6 +65,29 @@ export interface Agent {
 
 export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 
+/**
+ * Per-run knobs surfaced to the agent loop. Mirrors `RunInput`'s
+ * budget surface in `@kagent/agent-loop` (`tokenLimit`, `costLimitUsd`,
+ * `maxIterations`) plus the wall-clock `timeoutSeconds`. Additive on
+ * top of (and preferred over) the deprecated top-level
+ * `AgentTaskSpec.timeoutSeconds` field — when both timeouts are set,
+ * `runConfig.timeoutSeconds` wins.
+ *
+ * The CRD schema mirror lives at
+ * `packages/operator/manifests/crds/agenttask.yaml` under
+ * `spec.properties.runConfig`. Keep both in sync.
+ */
+export interface AgentTaskRunConfig {
+  /** Hard cap on cumulative input+output tokens; exit with `budget_exceeded`. */
+  readonly tokenLimit?: number;
+  /** Hard cap on cumulative backend-reported cost (USD); exit with `budget_exceeded`. */
+  readonly costLimitUsd?: number;
+  /** Override the executor's default `maxIterations` (8). 1..100. */
+  readonly maxIterations?: number;
+  /** Wall-clock deadline; same semantics as the deprecated top-level field. */
+  readonly timeoutSeconds?: number;
+}
+
 export interface AgentTaskSpec {
   /** Target Agent's `metadata.name`. Mutually exclusive with `targetCapability`. */
   readonly targetAgent?: string;
@@ -75,8 +98,20 @@ export interface AgentTaskSpec {
   /** Free-form payload the agent loop receives. Substrate-opaque. */
   readonly payload: unknown;
 
-  /** Soft time limit. Operator does not enforce; agent loop honors via RunBudget. */
+  /**
+   * Soft time limit.
+   *
+   * @deprecated Prefer `runConfig.timeoutSeconds`. Kept for backward
+   * compatibility; resolution: when both are set, `runConfig.timeoutSeconds`
+   * wins. Operator + pod still honor this when `runConfig` is absent.
+   */
   readonly timeoutSeconds?: number;
+
+  /**
+   * Per-run knobs surfaced to the agent loop. Additive over the
+   * deprecated top-level `timeoutSeconds`; see `AgentTaskRunConfig`.
+   */
+  readonly runConfig?: AgentTaskRunConfig;
 
   /** UID of the AgentTask that delegated this task. */
   readonly parentTask?: string;

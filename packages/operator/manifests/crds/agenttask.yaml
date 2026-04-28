@@ -54,6 +54,35 @@ spec:
                   type: integer
                   minimum: 1
                   maximum: 86400
+                  description: |
+                    DEPRECATED — prefer `runConfig.timeoutSeconds`. Kept for
+                    backward compatibility; resolution: when both are set,
+                    `runConfig.timeoutSeconds` wins.
+                runConfig:
+                  type: object
+                  description: |
+                    Per-run knobs surfaced to the agent loop. Additive on
+                    top of (and preferred over) the top-level
+                    `timeoutSeconds` field.
+                  properties:
+                    tokenLimit:
+                      type: integer
+                      minimum: 1
+                      description: 'Hard cap on cumulative input+output tokens. Loop exits with status=budget_exceeded.'
+                    costLimitUsd:
+                      type: number
+                      minimum: 0
+                      description: 'Hard cap on cumulative backend-reported cost (USD). Loop exits with status=budget_exceeded.'
+                    maxIterations:
+                      type: integer
+                      minimum: 1
+                      maximum: 100
+                      description: 'Override the executor default of 8.'
+                    timeoutSeconds:
+                      type: integer
+                      minimum: 1
+                      maximum: 86400
+                      description: 'Wall-clock deadline. Same semantics as the deprecated top-level field; wins when both are set.'
                 parentTask:
                   type: string
                   description: UID of the AgentTask that delegated this one.
