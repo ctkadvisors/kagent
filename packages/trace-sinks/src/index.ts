@@ -31,5 +31,11 @@ export { JsonlFileSink } from './jsonl-file-sink.js';
 export type { StdoutSinkOptions } from './stdout-sink.js';
 export type { JsonlFileSinkOptions } from './jsonl-file-sink.js';
 
-export { OtelTraceSink, isOtelEnabled, setupOtelExporter } from './otel-sink.js';
+export {
+  OtelTraceSink,
+  isOtelEnabled,
+  langfuseTraceUrl,
+  setupOtelExporter,
+  traceIdFromRunId,
+} from './otel-sink.js';
 export type { OtelTraceSinkOptions } from './otel-sink.js';

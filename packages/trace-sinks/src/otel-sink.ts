@@ -28,10 +28,48 @@
  *     callers to gate the sink behind their own conditional.
  */
 
-import { context, SpanStatusCode, trace, type Span, type Tracer } from '@opentelemetry/api';
+import {
+  context,
+  SpanStatusCode,
+  trace,
+  TraceFlags,
+  type Span,
+  type Tracer,
+} from '@opentelemetry/api';
+import { createHash, randomBytes } from 'node:crypto';
 import type { TraceEntry, TraceSink } from '@kagent/agent-loop';
 
 const TRACER_NAME = '@kagent/agent-loop';
+
+/**
+ * Derive a deterministic 32-char lowercase-hex OTel trace ID from a
+ * substrate `runId`. Stable across processes, sink instances, and
+ * restarts so that "View trace in Langfuse / Tempo / Jaeger" links the
+ * Workbench builds from a `runId` always resolve to the same span tree
+ * the agent pod actually emitted.
+ *
+ * Construction: `sha256(runId)` truncated to the first 16 bytes (32
+ * hex chars) — that's the OTel trace-ID width. SHA-256's avalanche
+ * property gives effectively-zero collision risk inside a single
+ * deployment's runId namespace (UUID-shaped task-uids).
+ */
+export function traceIdFromRunId(runId: string): string {
+  return createHash('sha256').update(runId).digest('hex').slice(0, 32);
+}
+
+/**
+ * Build the canonical Langfuse 4.x trace URL for a given runId.
+ *
+ * Langfuse 4.x routes by trace ID under
+ * `<base>/trace/<traceId>` where `traceId` is the 32-char hex OTel
+ * trace ID we derive from `runId` via `traceIdFromRunId`. Workbench
+ * (and any other "View trace" link surface) constructs this URL on
+ * the fly so consumers don't have to look up the cached span.
+ */
+export function langfuseTraceUrl(baseUrl: string, runId: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  return `${trimmed}/trace/${traceIdFromRunId(runId)}`;
+}
 
 export interface OtelTraceSinkOptions {
   /**
@@ -63,9 +101,33 @@ export function isOtelEnabled(env: Readonly<Record<string, string | undefined>>)
 export class OtelTraceSink implements TraceSink {
   private readonly tracer: Tracer;
   private readonly rootSpans = new Map<string, Span>();
+  /**
+   * Cache of the deterministic trace IDs we hand to OTel. Used as the
+   * source of truth for `traceIdFor()` because some OTel SDK builds
+   * silently drop a non-recording remote parent and re-mint a fresh
+   * trace ID on `startSpan()`. Reading from this map (instead of
+   * `root.spanContext().traceId`) makes provider-link construction
+   * robust regardless of which SDK build the host happens to load.
+   */
+  private readonly derivedTraceIds = new Map<string, string>();
 
   constructor(options: OtelTraceSinkOptions) {
     this.tracer = options.tracer;
+  }
+
+  /**
+   * Public: look up the deterministic OTel trace ID we used (or would
+   * use) for a given `runId`. Callers building "View trace" URLs from
+   * a runId go through this method so they always get the same id the
+   * span tree was emitted under, regardless of whether the SDK
+   * honored the remote-parent context we passed to `startSpan()`.
+   */
+  traceIdFor(runId: string): string {
+    const cached = this.derivedTraceIds.get(runId);
+    if (cached !== undefined) return cached;
+    const id = traceIdFromRunId(runId);
+    this.derivedTraceIds.set(runId, id);
+    return id;
   }
 
   emit(entry: TraceEntry): void {
@@ -155,9 +217,32 @@ export class OtelTraceSink implements TraceSink {
   private ensureRootSpan(runId: string): Span {
     let root = this.rootSpans.get(runId);
     if (root === undefined) {
-      root = this.tracer.startSpan('agent.run', {
-        attributes: { 'kagent.run_id': runId },
+      // Derive (and cache) a deterministic trace ID so the same runId
+      // ALWAYS resolves to the same trace in Langfuse / Tempo / Jaeger,
+      // regardless of which sink instance / pod / process emitted it.
+      // We construct a "remote" parent SpanContext with the derived
+      // trace ID and a fresh random 16-char-hex span ID, then start the
+      // root span under that context so the SDK adopts the trace ID.
+      //
+      // Some OTel SDK builds reject non-recording remote parents and
+      // mint a fresh trace ID anyway; the `traceIdFor()` cache below is
+      // the source of truth for provider-link construction in that
+      // case (Plan B per the WS-D brief).
+      const traceId = this.traceIdFor(runId);
+      const spanId = randomBytes(8).toString('hex');
+      const parentCtx = trace.setSpanContext(context.active(), {
+        traceId,
+        spanId,
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: true,
       });
+      root = this.tracer.startSpan(
+        'agent.run',
+        {
+          attributes: { 'kagent.run_id': runId },
+        },
+        parentCtx,
+      );
       this.rootSpans.set(runId, root);
     }
     return root;
