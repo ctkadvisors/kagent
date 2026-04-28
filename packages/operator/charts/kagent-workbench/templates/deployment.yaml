@@ -55,10 +55,32 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # WS-A pod security baseline. Both containers run as non-root
+      # under a RuntimeDefault seccomp profile.
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Writable mounts under readOnlyRootFilesystem=true:
+      #   - tmp:    used by Node + tsx for transient files
+      #   - nginx-cache + nginx-run: nginx-alpine's default config
+      #     writes /var/cache/nginx + /var/run/nginx.pid; both must
+      #     be writable for the ui sidecar to start.
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
       containers:
         - name: api
           image: {{ include "kagent-workbench.api.image" . }}
           imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          # WS-A container security baseline.
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           ports:
             - name: api
               containerPort: {{ .Values.api.port }}
@@ -106,6 +128,19 @@ spec:
         - name: ui
           image: {{ include "kagent-workbench.ui.image" . }}
           imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+          # WS-A container security baseline. nginx-alpine writes its
+          # cache to /var/cache/nginx + a pid to /var/run/nginx.pid;
+          # both are mounted as emptyDirs below so the readOnly root
+          # FS doesn't break boot.
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
           ports:
             - name: ui
               containerPort: {{ .Values.ui.port }}

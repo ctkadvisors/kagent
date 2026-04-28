@@ -10,7 +10,10 @@ import {
   ARTIFACT_VOLUME_NAME,
   buildJobSpec,
   DEFAULT_ARTIFACT_MOUNT_PATH,
+  DEFAULT_CONTAINER_SECURITY_CONTEXT,
+  DEFAULT_POD_SECURITY_CONTEXT,
   jobNameForTask,
+  TMP_VOLUME_NAME,
 } from './job-spec.js';
 
 const sampleAgent: Agent = {
@@ -196,9 +199,15 @@ describe('buildJobSpec', () => {
 
   it('omits PVC volume / volumeMount / artifact env vars when artifactPvc is unset', () => {
     const job = buildJobSpec(sampleAgent, sampleTask);
-    expect(job.spec?.template?.spec?.volumes).toBeUndefined();
+    // WS-A: a /tmp emptyDir is added under the default
+    // readOnlyRootFilesystem=true container security context, so
+    // volumes is no longer undefined when artifactPvc is unset. Assert
+    // specifically that no PVC-backed volume is present.
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === ARTIFACT_VOLUME_NAME)).toBe(false);
     const container = job.spec?.template?.spec?.containers?.[0];
-    expect(container?.volumeMounts).toBeUndefined();
+    const mounts = container?.volumeMounts ?? [];
+    expect(mounts.some((m) => m.name === ARTIFACT_VOLUME_NAME)).toBe(false);
     const env = container?.env ?? [];
     const names = env.map((e) => e.name);
     expect(names).not.toContain('KAGENT_ARTIFACTS_DIR');
@@ -210,15 +219,15 @@ describe('buildJobSpec', () => {
       artifactPvc: { claimName: 'kagent-artifacts' },
     });
     const volumes = job.spec?.template?.spec?.volumes ?? [];
-    expect(volumes).toHaveLength(1);
-    expect(volumes[0]?.name).toBe(ARTIFACT_VOLUME_NAME);
-    expect(volumes[0]?.persistentVolumeClaim?.claimName).toBe('kagent-artifacts');
+    const artifactVolume = volumes.find((v) => v.name === ARTIFACT_VOLUME_NAME);
+    expect(artifactVolume).toBeDefined();
+    expect(artifactVolume?.persistentVolumeClaim?.claimName).toBe('kagent-artifacts');
 
     const container = job.spec?.template?.spec?.containers?.[0];
     const mounts = container?.volumeMounts ?? [];
-    expect(mounts).toHaveLength(1);
-    expect(mounts[0]?.name).toBe(ARTIFACT_VOLUME_NAME);
-    expect(mounts[0]?.mountPath).toBe(DEFAULT_ARTIFACT_MOUNT_PATH);
+    const artifactMount = mounts.find((m) => m.name === ARTIFACT_VOLUME_NAME);
+    expect(artifactMount).toBeDefined();
+    expect(artifactMount?.mountPath).toBe(DEFAULT_ARTIFACT_MOUNT_PATH);
   });
 
   it('honors a custom artifactPvc.mountPath override', () => {
@@ -259,5 +268,73 @@ describe('buildJobSpec', () => {
     const idxExtra = env.findIndex((e) => e.name === 'KAGENT_LITELLM_BASE_URL');
     expect(idxArtifactDir).toBeGreaterThan(-1);
     expect(idxExtra).toBeGreaterThan(idxArtifactDir);
+  });
+
+  /* =====================================================================
+   * Security context — WS-A baseline
+   * ===================================================================== */
+
+  it('applies the WS-A default pod + container security context', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const podSpec = job.spec?.template?.spec;
+    expect(podSpec?.securityContext).toEqual(DEFAULT_POD_SECURITY_CONTEXT);
+    const container = podSpec?.containers?.[0];
+    expect(container?.securityContext).toEqual(DEFAULT_CONTAINER_SECURITY_CONTEXT);
+  });
+
+  it('mounts a writable /tmp emptyDir under readOnlyRootFilesystem=true', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    const tmpVolume = volumes.find((v) => v.name === TMP_VOLUME_NAME);
+    expect(tmpVolume).toBeDefined();
+    expect(tmpVolume?.emptyDir).toBeDefined();
+
+    const container = job.spec?.template?.spec?.containers?.[0];
+    const mounts = container?.volumeMounts ?? [];
+    const tmpMount = mounts.find((m) => m.name === TMP_VOLUME_NAME);
+    expect(tmpMount?.mountPath).toBe('/tmp');
+  });
+
+  it('honors a caller-provided podSecurityContext override (not deep-merged)', () => {
+    const custom = { runAsUser: 2000, fsGroup: 2000 };
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      podSecurityContext: custom,
+    });
+    expect(job.spec?.template?.spec?.securityContext).toEqual(custom);
+  });
+
+  it('omits the pod security context when caller passes null', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { podSecurityContext: null });
+    expect(job.spec?.template?.spec?.securityContext).toBeUndefined();
+  });
+
+  it('omits the /tmp emptyDir when readOnlyRootFilesystem is overridden to false', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      containerSecurityContext: {
+        ...DEFAULT_CONTAINER_SECURITY_CONTEXT,
+        readOnlyRootFilesystem: false,
+      },
+    });
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === TMP_VOLUME_NAME)).toBe(false);
+  });
+
+  it('omits the container security context when caller passes null', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { containerSecurityContext: null });
+    const container = job.spec?.template?.spec?.containers?.[0];
+    expect(container?.securityContext).toBeUndefined();
+    // /tmp emptyDir is also omitted (no readOnlyRootFilesystem flag in
+    // the container security context to gate it).
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === TMP_VOLUME_NAME)).toBe(false);
+  });
+
+  it('preserves the artifact volume + adds the /tmp emptyDir under default security ctx', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts' },
+    });
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    const names = volumes.map((v) => v.name).sort();
+    expect(names).toEqual([ARTIFACT_VOLUME_NAME, TMP_VOLUME_NAME].sort());
   });
 });

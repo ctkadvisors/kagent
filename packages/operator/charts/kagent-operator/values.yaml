@@ -179,3 +179,43 @@ podLabels: {}
 
 # Operator log verbosity (info | debug). Surfaces via env LOG_LEVEL.
 logLevel: 'info'
+
+# ---------------------------------------------------------------------
+# WS-A pod + container security context defaults. Applied to the
+# operator Deployment (and via Helm-side overrides, agent pods spawned
+# at runtime). Override sub-fields by passing the full object via
+# `--set-json` or values overlay. See WS-A spec for rationale.
+# ---------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ['ALL']
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Security context applied to spawned agent-pod Jobs (per AgentTask).
+# Defaults match the operator's, but the agent-pod runtime spawns
+# subprocesses (MCP servers via npx, etc.), so these are kept editable
+# so a workload can opt out of e.g. readOnlyRootFilesystem if its
+# tool subprocesses need writable HOME paths beyond /tmp.
+agentPodSecurityContext:
+  pod:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  container:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ['ALL']
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000

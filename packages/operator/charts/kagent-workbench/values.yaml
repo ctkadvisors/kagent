@@ -212,6 +212,26 @@ podLabels: {}
 # the workbench-api container.
 logLevel: 'info'
 
+# ---------------------------------------------------------------------
+# WS-A pod + container security context defaults. Applied to both the
+# api and ui sidecar containers in the workbench Deployment. Override
+# sub-fields by passing the full object via `--set-json` or values
+# overlay.
+# ---------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ['ALL']
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
 # Optional name + fullname overrides — standard Helm idiom.
 nameOverride: ''
 fullnameOverride: ''

@@ -12,7 +12,14 @@
  * KUBECONFIG / ~/.kube/config.
  */
 
-import { CoreV1Api, type V1Job, type V1JobList, type V1Pod } from '@kubernetes/client-node';
+import {
+  CoreV1Api,
+  type V1Job,
+  type V1JobList,
+  type V1Pod,
+  type V1PodSecurityContext,
+  type V1SecurityContext,
+} from '@kubernetes/client-node';
 import { connect, type NatsConnection } from 'nats';
 
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
@@ -103,6 +110,20 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   // added and the tool fails fast at boot if invoked.
   const artifactPvcName = env.KAGENT_ARTIFACT_PVC_NAME;
   const artifactMountPath = env.KAGENT_ARTIFACT_MOUNT_PATH;
+
+  // WS-A — security contexts for spawned agent pods. Helm's
+  // `agentPodSecurityContext.pod` / `.container` are JSON-encoded
+  // into env vars; we parse them here and forward into
+  // BuildJobSpecOptions. Parse failure logs and falls back to
+  // job-spec.ts defaults.
+  const podSecurityContext = parseSecurityContextEnv<V1PodSecurityContext>(
+    'KAGENT_AGENT_POD_SECURITY_CONTEXT',
+    env.KAGENT_AGENT_POD_SECURITY_CONTEXT,
+  );
+  const containerSecurityContext = parseSecurityContextEnv<V1SecurityContext>(
+    'KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT',
+    env.KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT,
+  );
   return {
     ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
@@ -127,8 +148,36 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
             artifactMountPath.length > 0 && { mountPath: artifactMountPath }),
         },
       }),
+    ...(podSecurityContext !== undefined && { podSecurityContext }),
+    ...(containerSecurityContext !== undefined && { containerSecurityContext }),
     ...(extraEnv.length > 0 && { extraEnv }),
   };
+}
+
+/**
+ * Parse a JSON-encoded security-context env var. Returns the parsed
+ * object on success; logs + returns undefined on parse failure (so the
+ * caller falls back to job-spec.ts defaults instead of erroring at
+ * operator boot).
+ */
+function parseSecurityContextEnv<T>(varName: string, raw: string | undefined): T | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.warn(
+        `[kagent-operator] ${varName} is not a JSON object — falling back to job-spec defaults`,
+      );
+      return undefined;
+    }
+    return parsed as T;
+  } catch (err) {
+    console.warn(
+      `[kagent-operator] failed to parse ${varName} as JSON (falling back to job-spec defaults):`,
+      err,
+    );
+    return undefined;
+  }
 }
 
 /**

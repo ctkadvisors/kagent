@@ -121,9 +121,37 @@ spec:
     spec:
       serviceAccountName: smoke-test-verify
       restartPolicy: Never
+      # WS-A pod security baseline.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # /tmp + kubectl cache emptyDirs — required because the verify
+      # container runs with readOnlyRootFilesystem=true. bitnami/kubectl
+      # writes its cache to ~/.kube and /tmp.
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: kube-cache
+          emptyDir: {}
       containers:
         - name: verify
           image: {{ .Values.smokeTest.verificationImage | quote }}
+          # WS-A container security baseline.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: kube-cache
+              mountPath: /.kube
           env:
             - name: AGENT_TASK_NAME
               value: smoke-test-r{{ .Release.Revision }}
@@ -131,6 +159,10 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: TIMEOUT_SECONDS
               value: {{ .Values.smokeTest.timeoutSeconds | default 300 | quote }}
+            - name: KUBECONFIG
+              value: /.kube/config
+            - name: HOME
+              value: /.kube
           command:
             - /bin/bash
             - -ec
