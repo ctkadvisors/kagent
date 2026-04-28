@@ -57,16 +57,35 @@ agentPod:
   # spawned agent pod. When empty, agent-pod's env.ts default
   # (`http://litellm.kagent-system.svc.cluster.local:4000/v1`) wins.
   litellmBaseUrl: ''
-  # Optional API key for the inference endpoint (Bearer in Authorization
-  # header). Plain string for v0.1; v0.2 should plumb via secretKeyRef.
-  litellmApiKey: ''
+  # API key for the inference endpoint (Bearer in Authorization header).
+  # WS-A security baseline: prefer `secretName` + `secretKey` (so the
+  # operator never reads the plaintext into its own memory; instead
+  # K8s injects the env via secretKeyRef and the operator passes
+  # process.env.KAGENT_AGENT_POD_LITELLM_API_KEY through unchanged).
+  # `value` (plaintext) still works but renders a deprecation warning
+  # in NOTES.txt. When all three fields are empty, the env is omitted.
+  #
+  # Example:
+  #   litellmApiKey:
+  #     secretName: cloudflare-ai-gateway
+  #     secretKey: api-key
+  litellmApiKey:
+    secretName: ''
+    secretKey: ''
+    value: ''
 
   # OTLP/HTTP traces endpoint (Langfuse-compatible). When set, the
   # operator injects OTEL_EXPORTER_OTLP_TRACES_ENDPOINT into every
   # spawned agent pod, and agent-pod's main wires OtelTraceSink.
   otlpEndpoint: ''
-  # Comma-separated headers (e.g., 'authorization=Bearer%20<pk>').
-  otlpHeaders: ''
+  # OTLP/HTTP comma-separated headers (e.g.,
+  # 'authorization=Bearer%20<pk>'). Same secret-ref shape as
+  # litellmApiKey above — prefer secretName + secretKey; `value` is
+  # deprecated.
+  otlpHeaders:
+    secretName: ''
+    secretKey: ''
+    value: ''
 
   # Built-in tool configuration — see packages/agent-pod/src/builtin-tools.ts.
   # Today this only carries the HTTP-fetch domain allowlist; future

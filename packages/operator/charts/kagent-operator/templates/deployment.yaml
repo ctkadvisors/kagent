@@ -57,17 +57,36 @@ spec:
             - name: KAGENT_AGENT_POD_LITELLM_BASE_URL
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.agentPod.litellmApiKey }}
+            # WS-A: prefer secret-ref over plaintext for the LiteLLM API
+            # key. When `secretName` is set, env is sourced from a Secret
+            # so the operator never holds the plaintext at rest in its
+            # spec. When only `value` is set, render the plaintext env
+            # (deprecated; NOTES.txt prints a loud warning). Otherwise
+            # omit the env entirely.
+            {{- if .Values.agentPod.litellmApiKey.secretName }}
             - name: KAGENT_AGENT_POD_LITELLM_API_KEY
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentPod.litellmApiKey.secretName | quote }}
+                  key: {{ .Values.agentPod.litellmApiKey.secretKey | quote }}
+            {{- else if .Values.agentPod.litellmApiKey.value }}
+            - name: KAGENT_AGENT_POD_LITELLM_API_KEY
+              value: {{ .Values.agentPod.litellmApiKey.value | quote }}
             {{- end }}
             {{- with .Values.agentPod.otlpEndpoint }}
             - name: KAGENT_AGENT_POD_OTLP_ENDPOINT
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.agentPod.otlpHeaders }}
+            # OTLP headers — same secret-ref shape as litellmApiKey.
+            {{- if .Values.agentPod.otlpHeaders.secretName }}
             - name: KAGENT_AGENT_POD_OTLP_HEADERS
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentPod.otlpHeaders.secretName | quote }}
+                  key: {{ .Values.agentPod.otlpHeaders.secretKey | quote }}
+            {{- else if .Values.agentPod.otlpHeaders.value }}
+            - name: KAGENT_AGENT_POD_OTLP_HEADERS
+              value: {{ .Values.agentPod.otlpHeaders.value | quote }}
             {{- end }}
             {{- if .Values.agentPod.artifactStorage.enabled }}
             # Artifact PVC plumbing (Phase 5 / P3) — operator's

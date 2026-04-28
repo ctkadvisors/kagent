@@ -45,6 +45,30 @@ See `values.yaml` for the full surface. Key knobs:
 | `resources.limits`             | `{ cpu: 500m, memory: 256Mi }`                       |                                                    |
 | `replicaCount`                 | `1`                                                  | Single-replica only in v0.1                        |
 
+## Secret refs for the LiteLLM API key + OTLP headers
+
+WS-A (security baseline) flips both `agentPod.litellmApiKey` and
+`agentPod.otlpHeaders` from plain strings to a `{secretName, secretKey, value}` shape. Prefer secret-ref:
+
+```yaml
+agentPod:
+  litellmApiKey:
+    secretName: cloudflare-ai-gateway
+    secretKey: api-key
+  otlpHeaders:
+    secretName: langfuse-otlp-headers
+    secretKey: headers # comma-joined: 'authorization=Bearer%20<pk>,...'
+```
+
+Provision the underlying Secrets via `kubectl create secret generic` or
+Sealed-Secrets (Argo-friendly). The operator container env is sourced
+via `valueFrom.secretKeyRef`, so the plaintext never lands in the
+operator's PodSpec.
+
+The `value` (plaintext) field still renders the env directly and keeps
+back-compat working. Setting `value` triggers a deprecation warning in
+`helm install` / `helm upgrade` output (NOTES.txt).
+
 ## Uninstall
 
 ```bash
