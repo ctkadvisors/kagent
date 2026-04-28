@@ -7,23 +7,43 @@
  * Reconcile loop — the core operator behavior. Called by watch.ts on
  * every AgentTask add/update event.
  *
- * Steps (all idempotent; reconcile is safe to invoke multiple times
- * for the same task):
+ * WS-F suspended-publish ordering. The dispatch sequence is split into
+ * three durable steps so a crash anywhere is recoverable without
+ * double-firing the bus or orphaning work:
  *
  *   1. Skip if status.phase is already terminal (Completed | Failed)
  *      OR already 'Dispatched' (Phase 2 stops at dispatch; Phase 3
  *      will resume to watch for completion).
- *   2. Resolve the target Agent. If targetAgent is set, fetch by name.
- *      If targetCapability is set, Phase 2 fails fast (capability
- *      resolution lands in Phase 3 with the NATS KV registry).
- *   3. Build the Job spec, create it. AlreadyExists is treated as a
- *      successful idempotent path.
- *   4. Call Dispatcher.publish to put the task assignment on the bus.
- *      (Phase 2 is StubDispatcher; Phase 3 is real NATS.)
- *   5. Update AgentTask.status: phase=Dispatched, podName=<job>,
- *      startedAt=now.
+ *   2. Resolve the target Agent.
+ *   3. Build a SUSPENDED Job spec (`spec.suspend: true`) and create
+ *      it. K8s holds off scheduling the pod. AlreadyExists (409) on
+ *      retry is treated as success — the Job's annotations carry the
+ *      "did we publish?" marker, not its existence.
+ *   4. Re-read the Job by name and inspect its annotations:
+ *      - If `kagent.knuteson.io/dispatch-published: "true"` is set,
+ *        skip the publish (this is a re-reconcile after an earlier
+ *        successful publish; we just need to unsuspend).
+ *      - Otherwise, publish to the bus with `dedupeId = task.uid`
+ *        so the broker's dedupe (JetStream `Nats-Msg-Id`) drops any
+ *        duplicate from a re-reconcile after annotation-patch failure.
+ *   5. Stamp `dispatch-published: "true"` on the Job. Failure here
+ *      is non-fatal (the bus already has the message; broker dedupe
+ *      handles the re-publish on retry — see step 4).
+ *   6. Patch `spec.suspend: false` to release K8s scheduling.
+ *   7. Patch AgentTask.status: phase=Dispatched, podName, startedAt.
  *
- * On any failure: status.phase = Failed with error message.
+ * Failure-mode behavior:
+ *   - Step 4 publish fails  → leave Job suspended; mark AgentTask
+ *     Failed with reason "publish failed"; operator recovers via a
+ *     fresh AgentTask or external Failed-status clear.
+ *   - Step 5 mark fails     → log loudly; treat as success (the
+ *     message is on the bus; re-reconcile re-publishes; broker dedupe
+ *     drops it — see WS-F dedupeId design).
+ *   - Step 6 unsuspend fails → log loudly; status stays as-is;
+ *     informer relist re-fires reconcile and retries.
+ *
+ * On any earlier failure (Agent resolution, Job creation): status.phase
+ * = Failed with error message.
  */
 
 import type { BatchV1Api, CustomObjectsApi, V1Job } from '@kubernetes/client-node';
@@ -39,6 +59,7 @@ import {
 import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
+import { isDispatchPublished, markJobPublished, readJob, unsuspendJob } from './job-annotator.js';
 import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
 import { mergePatchOptions } from './k8s.js';
 import { mergeCondition, nextPhase } from './status-transitions.js';
@@ -96,8 +117,15 @@ export async function reconcileAgentTask(
     return { action: 'failed', reason };
   }
 
-  // Step 3 — build + create the Job.
-  const job = buildJobSpec(agent, task, deps.jobSpecOptions);
+  // Step 3 — build + create the Job, SUSPENDED. K8s won't schedule
+  // the pod until step 6 patches `spec.suspend: false`. The reconcile
+  // loop forwards the operator's `jobSpecOptions` (image/env/PVC/etc)
+  // and sets `suspend: true` over the top — operators stay free to
+  // override the rest, but the suspended-create invariant is owned by
+  // reconcile.
+  const job = buildJobSpec(agent, task, { ...deps.jobSpecOptions, suspend: true });
+  const namespace = task.metadata.namespace ?? 'default';
+  const jobName = jobNameForTask(task);
   try {
     await createJobIdempotent(job, deps.batchApi);
   } catch (err) {
@@ -106,30 +134,91 @@ export async function reconcileAgentTask(
     return { action: 'failed', reason };
   }
 
-  // Step 4 — publish to the bus.
+  // Step 4 — decide whether to publish. The Job's
+  // `dispatch-published: "true"` annotation is the durable "we already
+  // published" marker; absence means publish was either never attempted
+  // (first reconcile) or failed mid-flight (retry path). Re-read the
+  // Job (not the cached `job` we just built) so a 409 retry sees the
+  // server's annotations.
+  let alreadyPublished = false;
   try {
-    await deps.dispatcher.publish({
-      taskId: task.metadata.uid ?? '',
-      agentId: agent.metadata.name ?? '',
-      ...(task.spec.parentTask !== undefined && { parentTaskId: task.spec.parentTask }),
-      originalUserMessage: task.spec.originalUserMessage ?? '',
-      ...(task.spec.parentDistillation !== undefined && {
-        parentDistillation: task.spec.parentDistillation,
-      }),
-      ...(task.spec.expectedTools !== undefined && {
-        expectedTools: task.spec.expectedTools,
-      }),
-      payload: task.spec.payload,
-    });
+    const live = await readJob(deps.batchApi, namespace, jobName);
+    alreadyPublished = isDispatchPublished(live);
   } catch (err) {
-    const reason = err instanceof Error ? `dispatch failed: ${err.message}` : String(err);
-    await markFailed(task, reason, deps);
-    return { action: 'failed', reason };
+    // A read failure here is non-fatal — we'd rather re-publish (broker
+    // dedupe handles it) than leave the Job suspended forever. Log and
+    // proceed with `alreadyPublished = false`.
+    console.error(
+      `[kagent-operator] failed to re-read Job ${namespace}/${jobName} for annotation check; proceeding with publish:`,
+      err,
+    );
   }
 
-  // Step 5 — update status. Routed through the conflict-aware retry
-  // helper so a stale informer object can't dispatch over the top of
-  // a terminal phase that landed between the relist and this point.
+  // Step 5 — publish the dispatch envelope to the bus, with a
+  // deterministic dedupe ID (task UID). When the Job's
+  // `dispatch-published` annotation is already set, skip — a previous
+  // reconcile already published and broker dedupe doesn't need to be
+  // retested. On publish failure, the Job stays SUSPENDED (never
+  // scheduled), and the task is marked Failed.
+  if (!alreadyPublished) {
+    try {
+      await deps.dispatcher.publish(
+        {
+          taskId: task.metadata.uid ?? '',
+          agentId: agent.metadata.name ?? '',
+          ...(task.spec.parentTask !== undefined && { parentTaskId: task.spec.parentTask }),
+          originalUserMessage: task.spec.originalUserMessage ?? '',
+          ...(task.spec.parentDistillation !== undefined && {
+            parentDistillation: task.spec.parentDistillation,
+          }),
+          ...(task.spec.expectedTools !== undefined && {
+            expectedTools: task.spec.expectedTools,
+          }),
+          payload: task.spec.payload,
+        },
+        { dedupeId: task.metadata.uid ?? '' },
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? `dispatch failed: ${err.message}` : String(err);
+      // Job stays suspended — never scheduled. Mark task Failed.
+      await markFailed(task, reason, deps);
+      return { action: 'failed', reason };
+    }
+
+    // Step 6 — annotate the Job so a future reconcile knows publish
+    // already happened. Best-effort: the message is already on the bus,
+    // and broker dedupe (Nats-Msg-Id = task.uid) handles the
+    // re-publish on retry if this annotation patch fails.
+    try {
+      await markJobPublished(deps.batchApi, namespace, jobName);
+    } catch (err) {
+      console.error(
+        `[kagent-operator] published task ${namespace}/${task.metadata.name ?? '?'} but FAILED to stamp dispatch-published annotation; broker dedupe will protect a re-publish:`,
+        err,
+      );
+    }
+  }
+
+  // Step 7 — unsuspend so K8s schedules the pod. On failure, leave
+  // status alone; the informer relist will re-fire reconcile and step 4
+  // will see the published annotation, skip publish, and retry the
+  // unsuspend.
+  try {
+    await unsuspendJob(deps.batchApi, namespace, jobName);
+  } catch (err) {
+    console.error(
+      `[kagent-operator] failed to unsuspend Job ${namespace}/${jobName}; informer relist will retry:`,
+      err,
+    );
+    // Don't mark Failed — this is recoverable. Don't mark Dispatched
+    // either — the pod hasn't started.
+    return { action: 'failed', reason: 'unsuspend failed' };
+  }
+
+  // Step 8 — update AgentTask status to Dispatched. Routed through the
+  // WS-E conflict-aware retry helper so a stale informer object can't
+  // dispatch over the top of a terminal phase that landed between the
+  // relist and this point. Append a `Dispatched` condition.
   const now = deps.now ?? (() => new Date());
   const ts = now().toISOString();
   await patchStatusWithRetry(task, deps.customApi, (current) => {
@@ -137,14 +226,14 @@ export async function reconcileAgentTask(
     if (proposed === null) return null;
     return {
       phase: proposed,
-      podName: jobNameForTask(task),
+      podName: jobName,
       startedAt: ts,
       observedGeneration: current.metadata.generation ?? 0,
       conditions: mergeCondition(current.status?.conditions, {
         type: 'Dispatched',
         status: 'True',
         reason: 'JobCreated',
-        message: `Job ${jobNameForTask(task)} created`,
+        message: `Job ${jobName} created`,
         lastTransitionTime: ts,
         ...(current.metadata.generation !== undefined && {
           observedGeneration: current.metadata.generation,
@@ -153,7 +242,7 @@ export async function reconcileAgentTask(
     };
   });
 
-  return { action: 'dispatched', jobName: jobNameForTask(task) };
+  return { action: 'dispatched', jobName };
 }
 
 /**

@@ -7,7 +7,7 @@
 // then propagates `any` through the test surface. Typing every fn() call
 // against the K8s API shapes is more churn than payoff for a reconcile test
 // — the intent is mock-call assertions, not type-level coverage.
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,6 +31,8 @@ interface MockCustomApi {
 }
 interface MockBatchApi {
   createNamespacedJob: ReturnType<typeof vi.fn>;
+  readNamespacedJob: ReturnType<typeof vi.fn>;
+  patchNamespacedJob: ReturnType<typeof vi.fn>;
 }
 
 function makeDeps(overrides: {
@@ -47,8 +49,17 @@ function makeDeps(overrides: {
     patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
     ...overrides.customApi,
   };
+  // WS-F default: Job exists post-create, no `dispatch-published`
+  // annotation yet → publish path runs. Tests that exercise the
+  // re-reconcile path override readNamespacedJob to return a Job
+  // carrying the annotation.
   const batchApi: MockBatchApi = {
     createNamespacedJob: vi.fn().mockResolvedValue({}),
+    readNamespacedJob: vi.fn().mockResolvedValue({
+      metadata: { name: 'kat-task-uid-1', namespace: 'default', annotations: {} },
+      spec: { suspend: true },
+    }),
+    patchNamespacedJob: vi.fn().mockResolvedValue({}),
     ...overrides.batchApi,
   };
   const dispatcher = overrides.dispatcher ?? new StubDispatcher();
@@ -159,6 +170,76 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
         }),
       }),
     );
+  });
+
+  it('creates the Job in suspended state (WS-F)', async () => {
+    await reconcileAgentTask(task, deps);
+    const callBody = deps.mocks.batchApi.createNamespacedJob.mock.calls[0]?.[0]?.body as {
+      spec?: { suspend?: boolean };
+    };
+    expect(callBody?.spec?.suspend).toBe(true);
+  });
+
+  it('passes a dedupeId equal to the task UID on publish', async () => {
+    const dispatcher = new StubDispatcher();
+    const publishSpy = vi.spyOn(dispatcher, 'publish');
+    const localDeps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      dispatcher,
+    });
+    await reconcileAgentTask(task, localDeps);
+    expect(publishSpy).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-uid-1' }), {
+      dedupeId: 'task-uid-1',
+    });
+  });
+
+  it('annotates the Job with dispatch-published="true" after publish', async () => {
+    await reconcileAgentTask(task, deps);
+    expect(deps.mocks.batchApi.patchNamespacedJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: 'default',
+        name: 'kat-task-uid-1',
+        body: expect.objectContaining({
+          metadata: expect.objectContaining({
+            annotations: expect.objectContaining({
+              'kagent.knuteson.io/dispatch-published': 'true',
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('unsuspends the Job (spec.suspend=false) after publish + annotation', async () => {
+    await reconcileAgentTask(task, deps);
+    const calls = deps.mocks.batchApi.patchNamespacedJob.mock.calls;
+    const unsuspendCall = calls.find((c: unknown[]) => {
+      const arg = c[0] as { body?: { spec?: { suspend?: boolean } } };
+      return arg?.body?.spec?.suspend === false;
+    });
+    expect(unsuspendCall).toBeDefined();
+  });
+
+  it('orders annotation BEFORE unsuspend (so a crash mid-flight strands a suspended-but-published Job, not a running-but-unmarked one)', async () => {
+    const callOrder: string[] = [];
+    const customDeps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        patchNamespacedJob: vi.fn().mockImplementation((arg: { body: unknown }) => {
+          const body = arg.body as { metadata?: unknown; spec?: unknown };
+          if (body.metadata !== undefined) callOrder.push('annotate');
+          if (body.spec !== undefined) callOrder.push('unsuspend');
+          return Promise.resolve({});
+        }),
+      },
+      now: () => fixedNow,
+    });
+    await reconcileAgentTask(task, customDeps);
+    expect(callOrder).toEqual(['annotate', 'unsuspend']);
   });
 
   it('publishes a DispatchedTask envelope with the originalUserMessage + payload', async () => {
@@ -347,6 +428,254 @@ describe('reconcileAgentTask — failure paths', () => {
     const result = await reconcileAgentTask(task, deps);
     expect(result.action).toBe('failed');
     expect(result.reason).toMatch(/dispatch failed.*bus down/);
+  });
+});
+
+/* =====================================================================
+ * WS-F: suspended-publish dispatch ordering races. The reconcile flow
+ * is publish-then-annotate-then-unsuspend; each scenario below pins
+ * down a specific failure mode that the audit flagged.
+ * ===================================================================== */
+
+describe('reconcileAgentTask — WS-F dispatch ordering races', () => {
+  /**
+   * Re-reconcile after a successful publish: the Job already carries
+   * the `dispatch-published: "true"` annotation. The reconcile must
+   * SKIP publish (don't double-fire) and proceed straight to unsuspend.
+   */
+  it('skips publish when the Job already carries dispatch-published="true"', async () => {
+    const task = makeTask();
+    const dispatcher = new StubDispatcher();
+    const publishSpy = vi.spyOn(dispatcher, 'publish');
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        // Job exists and was already published — re-reconcile path.
+        readNamespacedJob: vi.fn().mockResolvedValue({
+          metadata: {
+            name: 'kat-task-uid-1',
+            namespace: 'default',
+            annotations: { 'kagent.knuteson.io/dispatch-published': 'true' },
+          },
+          spec: { suspend: true },
+        }),
+      },
+      dispatcher,
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    expect(publishSpy).not.toHaveBeenCalled();
+    // Annotation patch is also skipped (we already have it).
+    const annotationPatchCalls = deps.mocks.batchApi.patchNamespacedJob.mock.calls.filter(
+      (c: unknown[]) => {
+        const body = (c[0] as { body?: { metadata?: unknown } })?.body;
+        return body?.metadata !== undefined;
+      },
+    );
+    expect(annotationPatchCalls).toHaveLength(0);
+    // Unsuspend still runs.
+    const unsuspendCalls = deps.mocks.batchApi.patchNamespacedJob.mock.calls.filter(
+      (c: unknown[]) => {
+        const body = (c[0] as { body?: { spec?: { suspend?: boolean } } })?.body;
+        return body?.spec?.suspend === false;
+      },
+    );
+    expect(unsuspendCalls).toHaveLength(1);
+  });
+
+  /**
+   * Crash between Job-create and publish: re-reconcile sees Job exists
+   * (409 idempotent) and no `dispatch-published` annotation → publishes
+   * with dedupeId = task.uid. Validates the dedupeId is stable across
+   * reconcile retries (the broker takes care of deduping the actual
+   * second publish; we just have to pin that the operator passes the
+   * SAME id).
+   */
+  it('re-reconcile after Job-create crash → publishes with task-uid dedupeId (broker-side dedupe is the safety net)', async () => {
+    const task = makeTask();
+    const dispatcher = new StubDispatcher();
+    const publishSpy = vi.spyOn(dispatcher, 'publish');
+    const conflict = Object.assign(new Error('exists'), { code: 409 });
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        // Job-create returns 409 — already exists from a prior reconcile.
+        createNamespacedJob: vi.fn().mockRejectedValue(conflict),
+        // No annotation yet — prior reconcile crashed before publish or
+        // before annotation-patch.
+        readNamespacedJob: vi.fn().mockResolvedValue({
+          metadata: { name: 'kat-task-uid-1', namespace: 'default', annotations: {} },
+          spec: { suspend: true },
+        }),
+      },
+      dispatcher,
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(publishSpy).toHaveBeenCalledWith(expect.anything(), { dedupeId: 'task-uid-1' });
+  });
+
+  /**
+   * Annotation-patch failure post-publish must NOT mark the AgentTask
+   * Failed — the message is on the bus. Operator returns dispatched;
+   * the next reconcile would re-publish (broker dedupe drops it).
+   */
+  it('annotation-patch failure is logged but treated as success (broker dedupe handles re-publish)', async () => {
+    const task = makeTask();
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        patchNamespacedJob: vi.fn().mockImplementation((arg: { body: unknown }) => {
+          const body = arg.body as { metadata?: unknown; spec?: unknown };
+          if (body.metadata !== undefined) {
+            return Promise.reject(new Error('apiserver flaky'));
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    expect(consoleErr).toHaveBeenCalledWith(
+      expect.stringContaining('FAILED to stamp dispatch-published annotation'),
+      expect.anything(),
+    );
+    // Status was still patched to Dispatched (best-effort marker for
+    // user visibility; the in-cluster source of truth is the Job
+    // annotation + the bus dedupe).
+    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: { status: expect.objectContaining({ phase: 'Dispatched' }) },
+      }),
+      expect.anything(),
+    );
+    consoleErr.mockRestore();
+  });
+
+  /**
+   * Unsuspend failure leaves the Job suspended. AgentTask is NOT marked
+   * Failed (recoverable on next reconcile) and NOT marked Dispatched
+   * (the pod hasn't run). Reconcile returns 'failed' so the caller can
+   * record metrics/log noise, but the status stays untouched.
+   */
+  it('unsuspend failure returns action=failed and leaves AgentTask status untouched (informer relist retries)', async () => {
+    const task = makeTask();
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        patchNamespacedJob: vi.fn().mockImplementation((arg: { body: unknown }) => {
+          const body = arg.body as { metadata?: unknown; spec?: { suspend?: boolean } };
+          if (body.spec?.suspend === false) {
+            return Promise.reject(new Error('forbidden'));
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('failed');
+    expect(result.reason).toMatch(/unsuspend failed/);
+    // Status NOT marked Failed (we want a relist to retry, not a sticky terminal).
+    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    expect(consoleErr).toHaveBeenCalledWith(
+      expect.stringContaining('failed to unsuspend Job'),
+      expect.anything(),
+    );
+    consoleErr.mockRestore();
+  });
+
+  /**
+   * Publish failure pre-annotation: the Job is suspended and was
+   * never told to run. Mark AgentTask Failed with reason "dispatch
+   * failed" so the user sees a clear error.
+   */
+  it('publish failure marks Failed and never unsuspends the Job', async () => {
+    const task = makeTask();
+    const dispatcher = new StubDispatcher();
+    vi.spyOn(dispatcher, 'publish').mockRejectedValueOnce(new Error('bus down'));
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      dispatcher,
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('failed');
+    expect(result.reason).toMatch(/dispatch failed.*bus down/);
+    // Never unsuspended — the Job stays asleep.
+    const unsuspendCalls = deps.mocks.batchApi.patchNamespacedJob.mock.calls.filter(
+      (c: unknown[]) => {
+        const body = (c[0] as { body?: { spec?: { suspend?: boolean } } })?.body;
+        return body?.spec?.suspend === false;
+      },
+    );
+    expect(unsuspendCalls).toHaveLength(0);
+  });
+
+  /**
+   * StubDispatcher invariants: the same dedupeId across two reconcile
+   * passes results in a single bus publish. This is the contract the
+   * production NatsDispatcher inherits via JetStream's `Nats-Msg-Id`
+   * header — we test it on the stub because that's where the operator's
+   * unit tests live, but the broker behavior is the real safety net.
+   */
+  it('StubDispatcher: two reconciles with the same task UID produce ONE publish', async () => {
+    const task = makeTask();
+    const dispatcher = new StubDispatcher();
+    // First reconcile: simulate annotation-patch failure so the second
+    // reconcile takes the re-publish path.
+    const deps1 = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        patchNamespacedJob: vi.fn().mockImplementation((arg: { body: unknown }) => {
+          const body = arg.body as { metadata?: unknown };
+          if (body.metadata !== undefined) {
+            return Promise.reject(new Error('flaky annotation-patch'));
+          }
+          return Promise.resolve({});
+        }),
+      },
+      dispatcher,
+    });
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await reconcileAgentTask(task, deps1);
+    expect(dispatcher.published).toHaveLength(1);
+
+    // Second reconcile: Job exists, annotation still absent (because
+    // patch failed). Operator passes the same dedupeId; StubDispatcher
+    // drops the duplicate, mirroring JetStream's behavior.
+    const conflict = Object.assign(new Error('exists'), { code: 409 });
+    const deps2 = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        createNamespacedJob: vi.fn().mockRejectedValue(conflict),
+        readNamespacedJob: vi.fn().mockResolvedValue({
+          metadata: { name: 'kat-task-uid-1', namespace: 'default', annotations: {} },
+          spec: { suspend: true },
+        }),
+      },
+      dispatcher,
+    });
+    await reconcileAgentTask(task, deps2);
+    // Still ONE published task — the dedupeId protected the bus.
+    expect(dispatcher.published).toHaveLength(1);
+    expect(dispatcher.seenDedupeIds.has('task-uid-1')).toBe(true);
+    consoleErr.mockRestore();
   });
 });
 

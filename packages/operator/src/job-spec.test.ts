@@ -355,6 +355,28 @@ describe('buildJobSpec', () => {
     expect(byName.get('KAGENT_ARTIFACT_PVC_NAME')).toBe('kagent-artifacts');
   });
 
+  /* =====================================================================
+   * Suspended Job creation — WS-F (suspended publish + dispatch ordering)
+   * ===================================================================== */
+
+  it('omits spec.suspend by default (back-compat with non-WS-F callers)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    expect(job.spec?.suspend).toBeUndefined();
+  });
+
+  it('sets spec.suspend=true when BuildJobSpecOptions.suspend is set', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { suspend: true });
+    expect(job.spec?.suspend).toBe(true);
+  });
+
+  it('omits spec.suspend when BuildJobSpecOptions.suspend is explicitly false', () => {
+    // Defensive: only `=== true` flips the bit; `false` falls through to
+    // the K8s default (unsuspended). This avoids surfacing `suspend: false`
+    // on the API which is technically equivalent but clutters the diff.
+    const job = buildJobSpec(sampleAgent, sampleTask, { suspend: false });
+    expect(job.spec?.suspend).toBeUndefined();
+  });
+
   it('artifact env vars come BEFORE extraEnv (so operator-level overrides win)', () => {
     const job = buildJobSpec(sampleAgent, sampleTask, {
       artifactPvc: { claimName: 'kagent-artifacts' },

@@ -50,6 +50,8 @@ interface MockCustomApi {
 }
 interface MockBatchApi {
   createNamespacedJob: ReturnType<typeof vi.fn>;
+  readNamespacedJob: ReturnType<typeof vi.fn>;
+  patchNamespacedJob: ReturnType<typeof vi.fn>;
 }
 
 function makeDeps(overrides: {
@@ -65,8 +67,17 @@ function makeDeps(overrides: {
     patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
     ...overrides.customApi,
   };
+  // WS-F: reconcile reads the live Job to check the dispatch-published
+  // annotation, then patches the Job to mark published / unsuspend.
+  // Default mocks let the suspended-publish flow complete: read returns
+  // a fresh Job (no annotation → publish proceeds); patch is a no-op.
   const batchApi: MockBatchApi = {
     createNamespacedJob: vi.fn().mockResolvedValue({}),
+    readNamespacedJob: vi.fn().mockResolvedValue({
+      metadata: { name: 'kat-task-uid', namespace: 'default', annotations: {} },
+      spec: { suspend: true },
+    }),
+    patchNamespacedJob: vi.fn().mockResolvedValue({}),
     ...overrides.batchApi,
   };
   const dispatcher = overrides.dispatcher ?? new StubDispatcher();

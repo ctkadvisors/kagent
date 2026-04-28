@@ -55,4 +55,51 @@ describe('StubDispatcher', () => {
     await d.publish(full);
     expect(d.published[0]).toEqual(full);
   });
+
+  /* =====================================================================
+   * WS-F: dedupe ID semantics. Crash-and-retry must not double-fire.
+   * ===================================================================== */
+
+  describe('dedupeId', () => {
+    it('drops a second publish with the same dedupeId', async () => {
+      const d = new StubDispatcher();
+      await d.publish(baseTask, { dedupeId: 'task-uid-1' });
+      await d.publish(baseTask, { dedupeId: 'task-uid-1' });
+      expect(d.published).toHaveLength(1);
+      expect(d.seenDedupeIds.has('task-uid-1')).toBe(true);
+    });
+
+    it('keeps both when dedupeIds differ', async () => {
+      const d = new StubDispatcher();
+      await d.publish(baseTask, { dedupeId: 'task-uid-1' });
+      await d.publish({ ...baseTask, taskId: 'task-2' }, { dedupeId: 'task-uid-2' });
+      expect(d.published).toHaveLength(2);
+    });
+
+    it('falls through to no-dedupe when dedupeId is empty string', async () => {
+      const d = new StubDispatcher();
+      await d.publish(baseTask, { dedupeId: '' });
+      await d.publish(baseTask, { dedupeId: '' });
+      expect(d.published).toHaveLength(2);
+      expect(d.seenDedupeIds.size).toBe(0);
+    });
+
+    it('a bare publish (no opts) is independent of dedupeId tracking', async () => {
+      const d = new StubDispatcher();
+      await d.publish(baseTask, { dedupeId: 'x' });
+      await d.publish(baseTask); // no dedupe — admitted
+      expect(d.published).toHaveLength(2);
+      expect(d.seenDedupeIds.has('x')).toBe(true);
+    });
+
+    it('clear() also empties the seen-dedupe-id set', async () => {
+      const d = new StubDispatcher();
+      await d.publish(baseTask, { dedupeId: 'x' });
+      d.clear();
+      expect(d.seenDedupeIds.size).toBe(0);
+      // Same dedupe ID admitted after clear.
+      await d.publish(baseTask, { dedupeId: 'x' });
+      expect(d.published).toHaveLength(1);
+    });
+  });
 });

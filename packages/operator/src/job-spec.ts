@@ -104,6 +104,18 @@ export interface BuildJobSpecOptions {
    * (e.g., the artifact PVC + the always-present `/tmp` emptyDir).
    */
   readonly containerSecurityContext?: V1SecurityContext | null;
+  /**
+   * Create the Job in suspended state (`spec.suspend: true`). Used by
+   * the WS-F suspended-publish dispatch path so the operator can publish
+   * the dispatch envelope to the bus BEFORE K8s schedules the pod —
+   * preventing the orphan-on-publish-failure case where the agent-pod
+   * would boot without ever seeing its task assignment.
+   *
+   * Default `false` (job runs immediately on create) for backward
+   * compatibility with callers / tests that don't opt into the
+   * publish-then-unsuspend ordering.
+   */
+  readonly suspend?: boolean;
 }
 
 /** Default pod security context applied when caller doesn't override. */
@@ -268,6 +280,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     backoffLimit: DEFAULT_BACKOFF_LIMIT,
     ttlSecondsAfterFinished: DEFAULT_TTL_SECONDS_AFTER_FINISHED,
     ...(activeDeadlineSeconds !== undefined && { activeDeadlineSeconds }),
+    // WS-F: opt-in suspended creation. When set, K8s won't schedule the
+    // pod until reconcile.ts publishes the dispatch envelope and patches
+    // the Job to `spec.suspend: false`. This makes the publish step the
+    // ordering dependency rather than the Job-create step.
+    ...(opts.suspend === true && { suspend: true }),
     template: {
       metadata: {
         labels: {

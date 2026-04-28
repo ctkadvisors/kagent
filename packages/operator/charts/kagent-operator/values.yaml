@@ -9,6 +9,13 @@
 # local. Set watchAllNamespaces=true only if you provision equivalent
 # ServiceAccounts/PVCs in every workload namespace.
 
+# MUST be 1 in v0.1. The chart's deployment template hard-fails at
+# `helm template` time on any other value because the reconcile loop
+# isn't coordination-aware — two replicas would race the WS-F suspended-
+# publish dispatch sequence. Multi-replica deployments require leader
+# election, which lands in v0.2. Until then, the deployment also pins
+# `strategy: Recreate` so rolling updates can't briefly have two
+# replicas live.
 replicaCount: 1
 
 image:

@@ -5,7 +5,28 @@ Copyright (c) 2026 Chris Knuteson
 Operator Deployment. Single replica in v0.1 — leader election lands
 in v0.2 if multi-replica becomes useful (the watch loop is currently
 not coordination-aware).
+
+WS-F single-replica enforcement:
+  - `replicaCount` MUST be 1 (asserted at template-time below).
+  - `strategy: Recreate` so a rolling update never has two operator
+    replicas live concurrently.
+
+Why we need both: the reconcile loop is informer-driven; if two
+replicas were ever both watching, both would race the dispatch
+sequence (suspended-create → publish → annotate → unsuspend). The
+NATS-Msg-Id dedupe in NatsDispatcher protects the bus, but the
+Job-create / patch sequence still doesn't tolerate true concurrency.
+Until leader election (v0.2) lands, single-replica is the only safe
+deployment.
 */}}
+
+{{/* Hard-fail at template time on any replicaCount != 1. The audit
+flagged that operators sometimes hand-edit values to scale up; this
+turns that into a clear, actionable error rather than a silent race. */}}
+{{- if ne (.Values.replicaCount | int) 1 }}
+{{- fail "kagent-operator: replicaCount must be 1 in v0.1; multi-replica requires leader election (v0.2)" }}
+{{- end }}
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +36,13 @@ metadata:
     {{- include "kagent-operator.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # Recreate (not RollingUpdate). A rolling update would briefly run
+  # two replicas; with no leader election in v0.1 that means two
+  # reconcilers racing each other on the same AgentTask. Recreate
+  # accepts a brief downtime window in exchange for never having two
+  # operators alive at once.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
