@@ -77,10 +77,14 @@ spec:
             - name: LANGFUSE_BASE_URL
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.api.authRequired }}
+            # Header-trust auth gate (X-Forwarded-User from Traefik
+            # forward-auth). Default is 'true' (fail-closed); only the
+            # literal string 'false' disables enforcement. workbench-api
+            # logs a loud warning at boot when disabled. See
+            # values.yaml `api.authRequired` and
+            # packages/workbench-api/src/auth.ts.
             - name: WORKBENCH_AUTH_REQUIRED
-              value: {{ . | quote }}
-            {{- end }}
+              value: {{ .Values.api.authRequired | quote }}
           livenessProbe:
             httpGet:
               path: {{ .Values.api.healthPath }}

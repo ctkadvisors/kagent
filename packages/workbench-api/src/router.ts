@@ -9,13 +9,15 @@
  * exercise the route surface against an in-memory cache without
  * booting a Node HTTP server.
  *
- * Auth note: this slice is unauthenticated. Header-trust integration
- * (X-Forwarded-User from the homelab Traefik+OAuth pattern) is
- * documented in `IMPLEMENTATION-NOTES.md` for the next phase.
+ * Auth: header-trust (X-Forwarded-User from Traefik forward-auth). See
+ * `auth.ts` — fail-closed by default; only `WORKBENCH_AUTH_REQUIRED=false`
+ * disables enforcement. `/healthz` and `/readyz` always bypass the
+ * middleware so kubelet probes work regardless of upstream shim health.
  */
 
 import { Hono } from 'hono';
 
+import { buildAuthMiddleware } from './auth.js';
 import type { SnapshotCache } from './cache.js';
 import type { SseBroker } from './sse.js';
 import { agentsRoute } from './routes/agents.js';
@@ -39,10 +41,24 @@ export interface RouterDeps {
    * Test-injectable fetch for the UI proxy. Defaults to global fetch.
    */
   readonly proxyFetch?: typeof fetch;
+  /**
+   * When true (default), all routes other than `/healthz` and
+   * `/readyz` require an `X-Forwarded-User` header. Setting this to
+   * false disables enforcement (header still threaded through to
+   * handlers when present). Resolve from `WORKBENCH_AUTH_REQUIRED`
+   * via `resolveAuthRequired()` in `auth.ts`.
+   */
+  readonly authRequired?: boolean;
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
   const app = new Hono();
+
+  // Auth middleware — runs FIRST so unauthenticated requests never
+  // reach the route handlers. The middleware itself short-circuits on
+  // /healthz and /readyz, so probes always pass.
+  const authRequired = deps.authRequired ?? true;
+  app.use('*', buildAuthMiddleware({ required: authRequired }));
 
   // Liveness/readiness — mounted at the root. Probes hit the pod
   // port directly (not via Ingress).

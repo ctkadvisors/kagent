@@ -53,11 +53,17 @@ api:
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
   langfuseBaseUrl: ''
-  # Optional — set to 'true' to require the workbench-api to enforce
-  # auth itself (e.g. session cookies). Default unset → the API trusts
-  # the in-cluster network boundary + whatever sits in front of the
-  # Ingress (Tailscale, Traefik basicAuth middleware, future SSO).
-  authRequired: ''
+  # Header-trust auth gate. The workbench-api requires every non-probe
+  # request to carry an `X-Forwarded-User` header (set upstream by
+  # Traefik forward-auth or oauth2-proxy). The default is `true` —
+  # fail-closed; only the literal string `false` disables enforcement.
+  # Disabling logs a loud warning at workbench-api boot. See WS-A
+  # security baseline + packages/workbench-api/src/auth.ts for the
+  # trust model.
+  #
+  # `/healthz` and `/readyz` ALWAYS bypass auth so kubelet probes
+  # work regardless of upstream auth-shim health.
+  authRequired: 'true'
   # Per-container resource budget. Conservative MVP defaults — bump
   # when you start watching many AgentTasks (the in-memory cache scales
   # with the count of objects under watch).
