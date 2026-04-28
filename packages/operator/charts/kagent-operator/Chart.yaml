@@ -5,11 +5,10 @@ name: kagent-operator
 description: |
   K3s-native control plane that watches Agent + AgentTask CRDs
   (kagent.knuteson.io/v1alpha1) and materializes per-task Jobs running
-  the @kagent/agent-pod runtime. Phase 2 ships dispatcher-as-stub;
-  Phase 3 wires NATS JetStream.
+  the @kagent/agent-pod runtime.
 type: application
-version: 0.0.2
-appVersion: '0.0.2-phase2'
+version: 0.0.5
+appVersion: 'v0.0.5-workbench-mvp'
 home: https://github.com/ctkadvisors/kagent
 sources:
   - https://github.com/ctkadvisors/kagent

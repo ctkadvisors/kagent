@@ -12,8 +12,15 @@
  * KUBECONFIG / ~/.kube/config.
  */
 
-import { CoreV1Api, type V1Job, type V1JobList, type V1Pod } from '@kubernetes/client-node';
-import { connect, type NatsConnection } from 'nats';
+import {
+  CoreV1Api,
+  type V1Job,
+  type V1JobList,
+  type V1Pod,
+  type V1PodSecurityContext,
+  type V1SecurityContext,
+} from '@kubernetes/client-node';
+import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
@@ -103,6 +110,38 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   // added and the tool fails fast at boot if invoked.
   const artifactPvcName = env.KAGENT_ARTIFACT_PVC_NAME;
   const artifactMountPath = env.KAGENT_ARTIFACT_MOUNT_PATH;
+
+  // WS-A — security contexts for spawned agent pods. Helm's
+  // `agentPodSecurityContext.pod` / `.container` are JSON-encoded
+  // into env vars; we parse them here and forward into
+  // BuildJobSpecOptions. Parse failure logs and falls back to
+  // job-spec.ts defaults.
+  const podSecurityContext = parseSecurityContextEnv<V1PodSecurityContext>(
+    'KAGENT_AGENT_POD_SECURITY_CONTEXT',
+    env.KAGENT_AGENT_POD_SECURITY_CONTEXT,
+  );
+  const containerSecurityContext = parseSecurityContextEnv<V1SecurityContext>(
+    'KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT',
+    env.KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT,
+  );
+
+  // RuntimeClass mapping per Agent.spec.sandboxProfile (WS-C). Helm
+  // values `agentPod.runtimeClasses.{default,strict}` plumb through as
+  // these env vars on the operator deployment. Empty string means
+  // "not set — omit runtimeClassName for that profile" (cluster default
+  // applies). When NEITHER env var is set the map is omitted entirely;
+  // `buildJobSpec` then falls back to the deprecated
+  // `opts.runtimeClassName` (which `buildJobSpecOptionsFromEnv` itself
+  // never sets, leaving that field as a TS-only escape hatch).
+  const runtimeClassDefault = env.KAGENT_RUNTIME_CLASS_DEFAULT;
+  const runtimeClassStrict = env.KAGENT_RUNTIME_CLASS_STRICT;
+  const runtimeClassesMap =
+    typeof runtimeClassDefault === 'string' || typeof runtimeClassStrict === 'string'
+      ? {
+          default: typeof runtimeClassDefault === 'string' ? runtimeClassDefault : '',
+          strict: typeof runtimeClassStrict === 'string' ? runtimeClassStrict : '',
+        }
+      : undefined;
   return {
     ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
@@ -127,8 +166,37 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
             artifactMountPath.length > 0 && { mountPath: artifactMountPath }),
         },
       }),
+    ...(podSecurityContext !== undefined && { podSecurityContext }),
+    ...(containerSecurityContext !== undefined && { containerSecurityContext }),
+    ...(runtimeClassesMap !== undefined && { runtimeClasses: runtimeClassesMap }),
     ...(extraEnv.length > 0 && { extraEnv }),
   };
+}
+
+/**
+ * Parse a JSON-encoded security-context env var. Returns the parsed
+ * object on success; logs + returns undefined on parse failure (so the
+ * caller falls back to job-spec.ts defaults instead of erroring at
+ * operator boot).
+ */
+function parseSecurityContextEnv<T>(varName: string, raw: string | undefined): T | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.warn(
+        `[kagent-operator] ${varName} is not a JSON object — falling back to job-spec defaults`,
+      );
+      return undefined;
+    }
+    return parsed as T;
+  } catch (err) {
+    console.warn(
+      `[kagent-operator] failed to parse ${varName} as JSON (falling back to job-spec defaults):`,
+      err,
+    );
+    return undefined;
+  }
 }
 
 /**
@@ -143,8 +211,8 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
  *
  *   1. ALWAYS run `reconcileAgentTask(task)` — the existing dispatch
  *      path. Idempotent for terminal/Dispatched phases.
- *   2. WHEN the event resource carries the `parent-task-name` label
- *      (i.e. it's a child AgentTask), ALSO run
+ *   2. WHEN the event resource carries parent-task metadata written by
+ *      `buildChildTaskManifest` (label/annotation/ownerRef), ALSO run
  *      `reconcileParentFromChildEvent(parentRef)` so the parent's
  *      `status.children` / `status.aggregatePhase` projection stays
  *      live. This is the Workstream 5 / Phase 5 wire-up — see
@@ -236,6 +304,7 @@ async function main(): Promise<void> {
   const kc = loadKubeConfig();
   const customApi = makeCustomObjectsApi(kc);
   const batchApi = makeBatchApi(kc);
+  const watchNamespace = normalizeOptionalEnv(process.env.KAGENT_WATCH_NAMESPACE);
 
   // Phase 3: KAGENT_NATS_URL toggles real NATS dispatcher; otherwise
   // we fall back to StubDispatcher (in-memory, useful for local
@@ -254,7 +323,15 @@ async function main(): Promise<void> {
       }
       return sharedConnection;
     };
-    dispatcher = new NatsDispatcher({ connect: getConnection });
+    dispatcher = new NatsDispatcher({
+      connect: getConnection,
+      // WS-F: wire JetStream's `Nats-Msg-Id` dedupe header. The
+      // reconcile loop passes `task.metadata.uid` as `dedupeId` on
+      // every publish; JetStream's per-stream `duplicate_window`
+      // (default 2m) drops the second one when the operator
+      // re-reconciles after a mid-flight crash.
+      headersFactory: () => natsHeaders(),
+    });
     // CapabilityRegistry: Phase 3 ships the interface + stubs; the
     // NATS KV reader (NatsCapabilityRegistry) needs the agent-pod
     // heartbeat path (Phase 3 C4+). Until that lands, even the
@@ -281,16 +358,26 @@ async function main(): Promise<void> {
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
   };
   const handler = buildHandler(deps);
-  const informer = createAgentTaskInformer(kc, customApi, handler);
+  // Single informer-opts object reused for both the AgentTask and the
+  // Job/Pod informers — keeps the namespace toggle in lockstep so a
+  // misconfiguration can't scope one watch but not the other.
+  const informerOpts: { namespace?: string } =
+    watchNamespace !== undefined ? { namespace: watchNamespace } : {};
+  const informer = createAgentTaskInformer(kc, customApi, handler, informerOpts);
 
   // Phase 4.x — Job/Pod failure watcher. The agent-pod owns success-
   // path status writeback; this watcher closes the loop on failures
   // the pod can't report (image pull, OOMKill, unschedulable, etc).
   const coreApi = kc.makeApiClient(CoreV1Api);
   const jobListFn = async (): Promise<V1JobList> => {
-    return await batchApi.listJobForAllNamespaces({
-      labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
-    });
+    return watchNamespace !== undefined
+      ? await batchApi.listNamespacedJob({
+          namespace: watchNamespace,
+          labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
+        })
+      : await batchApi.listJobForAllNamespaces({
+          labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
+        });
   };
   const surfaceFailure = async (
     ref: { namespace: string; name: string },
@@ -308,23 +395,29 @@ async function main(): Promise<void> {
       console.error(`[kagent-operator] failed to mark ${ref.namespace}/${ref.name} Failed:`, err);
     }
   };
-  const jobPodInformer = createJobPodInformer(kc, coreApi, jobListFn, {
-    async onJob(job: V1Job): Promise<void> {
-      const ref = parentTaskRef(job);
-      if (ref === null) return;
-      const verdict = detectJobFailure(job);
-      if (verdict !== null) await surfaceFailure(ref, verdict);
+  const jobPodInformer = createJobPodInformer(
+    kc,
+    coreApi,
+    jobListFn,
+    {
+      async onJob(job: V1Job): Promise<void> {
+        const ref = parentTaskRef(job);
+        if (ref === null) return;
+        const verdict = detectJobFailure(job);
+        if (verdict !== null) await surfaceFailure(ref, verdict);
+      },
+      async onPod(pod: V1Pod): Promise<void> {
+        const ref = parentTaskRef(pod);
+        if (ref === null) return;
+        const verdict = detectPodFailure(pod);
+        if (verdict !== null) await surfaceFailure(ref, verdict);
+      },
+      onError(err) {
+        console.error('[kagent-operator] job/pod watch error:', err);
+      },
     },
-    async onPod(pod: V1Pod): Promise<void> {
-      const ref = parentTaskRef(pod);
-      if (ref === null) return;
-      const verdict = detectPodFailure(pod);
-      if (verdict !== null) await surfaceFailure(ref, verdict);
-    },
-    onError(err) {
-      console.error('[kagent-operator] job/pod watch error:', err);
-    },
-  });
+    informerOpts,
+  );
 
   // Graceful shutdown — stop the informer cleanly on SIGTERM/SIGINT
   // so K8s can drain the operator pod without orphaning the watch.
@@ -352,10 +445,17 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
-  console.log('[kagent-operator] starting informers on AgentTask + Job + Pod');
+  const scope = watchNamespace ?? 'all namespaces';
+  console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
   await informer.start();
   await jobPodInformer.start();
   console.log('[kagent-operator] informers started');
+}
+
+function normalizeOptionalEnv(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // Only run main() when this module is the entrypoint — unit tests

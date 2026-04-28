@@ -5,7 +5,28 @@ Copyright (c) 2026 Chris Knuteson
 Operator Deployment. Single replica in v0.1 — leader election lands
 in v0.2 if multi-replica becomes useful (the watch loop is currently
 not coordination-aware).
+
+WS-F single-replica enforcement:
+  - `replicaCount` MUST be 1 (asserted at template-time below).
+  - `strategy: Recreate` so a rolling update never has two operator
+    replicas live concurrently.
+
+Why we need both: the reconcile loop is informer-driven; if two
+replicas were ever both watching, both would race the dispatch
+sequence (suspended-create → publish → annotate → unsuspend). The
+NATS-Msg-Id dedupe in NatsDispatcher protects the bus, but the
+Job-create / patch sequence still doesn't tolerate true concurrency.
+Until leader election (v0.2) lands, single-replica is the only safe
+deployment.
 */}}
+
+{{/* Hard-fail at template time on any replicaCount != 1. The audit
+flagged that operators sometimes hand-edit values to scale up; this
+turns that into a clear, actionable error rather than a silent race. */}}
+{{- if ne (.Values.replicaCount | int) 1 }}
+{{- fail "kagent-operator: replicaCount must be 1 in v0.1; multi-replica requires leader election (v0.2)" }}
+{{- end }}
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +36,13 @@ metadata:
     {{- include "kagent-operator.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # Recreate (not RollingUpdate). A rolling update would briefly run
+  # two replicas; with no leader election in v0.1 that means two
+  # reconcilers racing each other on the same AgentTask. Recreate
+  # accepts a brief downtime window in exchange for never having two
+  # operators alive at once.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
@@ -35,18 +63,40 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # WS-A pod security baseline. Overrideable via
+      # `.Values.podSecurityContext`; defaults to non-root + RuntimeDefault
+      # seccomp + fsGroup so the operator can read its in-cluster CA bundle.
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # /tmp emptyDir — required because the container runs with
+      # readOnlyRootFilesystem=true (see container-level securityContext
+      # below). Node 22 + tsx and @kubernetes/client-node both write
+      # transient files (token cache, npm cache) under /tmp.
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: operator
           image: {{ include "kagent-operator.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # WS-A container security baseline. drop ALL caps,
+          # readOnlyRootFilesystem, no privilege escalation. Override
+          # via `.Values.containerSecurityContext`.
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           env:
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            - name: KAGENT_WATCH_NAMESPACE
+              value: {{ ternary "" (.Values.watchNamespace | default .Release.Namespace) .Values.watchAllNamespaces | quote }}
             # Plumb agent-pod image + runtime config through to the
             # reconcile loop, which forwards them as env into every
             # spawned pod via BuildJobSpecOptions.
             - name: KAGENT_AGENT_POD_IMAGE
-              value: '{{ .Values.agentPod.image.repository }}:{{ .Values.agentPod.image.tag }}'
+              value: {{ include "kagent-operator.agentPod.image" . | quote }}
             - name: KAGENT_AGENT_POD_IMAGE_PULL_POLICY
               value: {{ .Values.agentPod.image.pullPolicy | quote }}
             - name: KAGENT_AGENT_POD_IMAGE_PULL_SECRET
@@ -57,17 +107,36 @@ spec:
             - name: KAGENT_AGENT_POD_LITELLM_BASE_URL
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.agentPod.litellmApiKey }}
+            # WS-A: prefer secret-ref over plaintext for the LiteLLM API
+            # key. When `secretName` is set, env is sourced from a Secret
+            # so the operator never holds the plaintext at rest in its
+            # spec. When only `value` is set, render the plaintext env
+            # (deprecated; NOTES.txt prints a loud warning). Otherwise
+            # omit the env entirely.
+            {{- if .Values.agentPod.litellmApiKey.secretName }}
             - name: KAGENT_AGENT_POD_LITELLM_API_KEY
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentPod.litellmApiKey.secretName | quote }}
+                  key: {{ .Values.agentPod.litellmApiKey.secretKey | quote }}
+            {{- else if .Values.agentPod.litellmApiKey.value }}
+            - name: KAGENT_AGENT_POD_LITELLM_API_KEY
+              value: {{ .Values.agentPod.litellmApiKey.value | quote }}
             {{- end }}
             {{- with .Values.agentPod.otlpEndpoint }}
             - name: KAGENT_AGENT_POD_OTLP_ENDPOINT
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.agentPod.otlpHeaders }}
+            # OTLP headers — same secret-ref shape as litellmApiKey.
+            {{- if .Values.agentPod.otlpHeaders.secretName }}
             - name: KAGENT_AGENT_POD_OTLP_HEADERS
-              value: {{ . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agentPod.otlpHeaders.secretName | quote }}
+                  key: {{ .Values.agentPod.otlpHeaders.secretKey | quote }}
+            {{- else if .Values.agentPod.otlpHeaders.value }}
+            - name: KAGENT_AGENT_POD_OTLP_HEADERS
+              value: {{ .Values.agentPod.otlpHeaders.value | quote }}
             {{- end }}
             {{- if .Values.agentPod.artifactStorage.enabled }}
             # Artifact PVC plumbing (Phase 5 / P3) — operator's
@@ -79,6 +148,33 @@ spec:
               value: {{ .Values.agentPod.artifactStorage.pvcName | quote }}
             - name: KAGENT_ARTIFACT_MOUNT_PATH
               value: {{ .Values.agentPod.artifactStorage.mountPath | quote }}
+            {{- end }}
+            # WS-A — security context defaults for spawned agent pods.
+            # Operator's main.ts buildJobSpecOptionsFromEnv parses these
+            # JSON envs and threads them into BuildJobSpecOptions so
+            # every Job rendered by the operator carries the same
+            # security baseline. Cluster operators override via
+            # `agentPodSecurityContext.{pod,container}` in values.yaml.
+            {{- if .Values.agentPodSecurityContext.pod }}
+            - name: KAGENT_AGENT_POD_SECURITY_CONTEXT
+              value: {{ .Values.agentPodSecurityContext.pod | toJson | quote }}
+            {{- end }}
+            {{- if .Values.agentPodSecurityContext.container }}
+            - name: KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT
+              value: {{ .Values.agentPodSecurityContext.container | toJson | quote }}
+            {{- end }}
+            {{- with .Values.agentPod.runtimeClasses.default }}
+            # RuntimeClass mapping (WS-C). The operator's
+            # buildJobSpecOptionsFromEnv reads these and resolves
+            # Agent.spec.sandboxProfile per-task. Empty values are
+            # omitted entirely so the pod spec falls back to the
+            # cluster default RuntimeClass.
+            - name: KAGENT_RUNTIME_CLASS_DEFAULT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.agentPod.runtimeClasses.strict }}
+            - name: KAGENT_RUNTIME_CLASS_STRICT
+              value: {{ . | quote }}
             {{- end }}
             {{- with .Values.agentPod.builtinTools.httpAllowDomains }}
             # Built-in tool HTTP allowlist (Phase 5 / P2). Joined into a

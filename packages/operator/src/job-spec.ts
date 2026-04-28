@@ -14,7 +14,7 @@
  * StatefulSet is a v0.2 affordance once cold-start latency matters.
  */
 
-import type { V1Job } from '@kubernetes/client-node';
+import type { V1Job, V1PodSecurityContext, V1SecurityContext } from '@kubernetes/client-node';
 
 import type { Agent, AgentTask } from './crds/index.js';
 
@@ -32,7 +32,31 @@ export interface BuildJobSpecOptions {
   readonly imagePullSecret?: string;
   /** ServiceAccount the agent pod runs under. */
   readonly serviceAccountName?: string;
-  /** Set to 'kata' when Agent.spec.sandboxProfile === 'strict' (v0.2). */
+  /**
+   * Per-sandbox-profile RuntimeClass mapping. Resolved against
+   * `Agent.spec.sandboxProfile` (defaulting to `'default'` when unset).
+   *
+   * - When the resolved profile maps to a non-empty string → that becomes
+   *   `runtimeClassName` on the spawned pod spec.
+   * - When the mapping is absent OR maps to an empty string → no
+   *   `runtimeClassName` is set (cluster default applies).
+   *
+   * This is the canonical path for Kata Containers wiring: set
+   * `runtimeClasses.strict = 'kata'` once Kata is deployed onto the
+   * nodes (see docs/ROADMAP.md Phase 6) and agents that declare
+   * `sandboxProfile: 'strict'` will then land on the `kata` runtime
+   * while agents on `'default'` (or no profile) keep the cluster default
+   * (typically `runc`). Per-Agent — never global.
+   */
+  readonly runtimeClasses?: Readonly<Record<'default' | 'strict', string>>;
+  /**
+   * @deprecated Use `runtimeClasses` instead — that map is per-Agent
+   * (resolved from `Agent.spec.sandboxProfile`) and is the only correct
+   * way to opt INDIVIDUAL agents into Kata. This free-form override
+   * applies the same `runtimeClassName` to EVERY pod the operator
+   * spawns, which is almost never what you want. Kept as a TS-only
+   * test/escape-hatch seam; when both are set, `runtimeClasses` wins.
+   */
   readonly runtimeClassName?: string;
   /**
    * Extra env vars appended to the agent-pod container after the
@@ -61,7 +85,59 @@ export interface BuildJobSpecOptions {
     /** Container path the PVC mounts at. Defaults to `/var/kagent/artifacts`. */
     readonly mountPath?: string;
   };
+  /**
+   * Pod-level security context. Defaults (WS-A baseline) to:
+   *   { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000,
+   *     seccompProfile: { type: 'RuntimeDefault' } }
+   * Pass `null` to OMIT the pod security context entirely (escape
+   * hatch — only useful for runtimes that reject the field). Pass a
+   * partial object to override individual fields; the defaults are
+   * not deep-merged.
+   */
+  readonly podSecurityContext?: V1PodSecurityContext | null;
+  /**
+   * Container-level security context. Defaults (WS-A baseline) to:
+   *   { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] },
+   *     readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 1000 }
+   * Pass `null` to OMIT entirely. Note that `readOnlyRootFilesystem:
+   * true` requires the agent-pod to write only under writable mounts
+   * (e.g., the artifact PVC + the always-present `/tmp` emptyDir).
+   */
+  readonly containerSecurityContext?: V1SecurityContext | null;
+  /**
+   * Create the Job in suspended state (`spec.suspend: true`). Used by
+   * the WS-F suspended-publish dispatch path so the operator can publish
+   * the dispatch envelope to the bus BEFORE K8s schedules the pod —
+   * preventing the orphan-on-publish-failure case where the agent-pod
+   * would boot without ever seeing its task assignment.
+   *
+   * Default `false` (job runs immediately on create) for backward
+   * compatibility with callers / tests that don't opt into the
+   * publish-then-unsuspend ordering.
+   */
+  readonly suspend?: boolean;
 }
+
+/** Default pod security context applied when caller doesn't override. */
+export const DEFAULT_POD_SECURITY_CONTEXT: V1PodSecurityContext = {
+  runAsNonRoot: true,
+  runAsUser: 1000,
+  fsGroup: 1000,
+  seccompProfile: { type: 'RuntimeDefault' },
+};
+
+/** Default container security context. */
+export const DEFAULT_CONTAINER_SECURITY_CONTEXT: V1SecurityContext = {
+  allowPrivilegeEscalation: false,
+  capabilities: { drop: ['ALL'] },
+  readOnlyRootFilesystem: true,
+  runAsNonRoot: true,
+  runAsUser: 1000,
+};
+
+/** Volume name for the writable /tmp emptyDir mounted under
+ * readOnlyRootFilesystem. Exported for tests. */
+export const TMP_VOLUME_NAME = 'tmp';
 
 /** Default mount path for the artifact PVC inside the agent-pod. */
 export const DEFAULT_ARTIFACT_MOUNT_PATH = '/var/kagent/artifacts';
@@ -140,15 +216,63 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         }
       : undefined;
 
-  // Honor AgentTask.spec.timeoutSeconds via Job.spec.activeDeadlineSeconds
-  // so K8s itself terminates the pod when the deadline passes — belt-
-  // and-suspenders alongside the agent-pod's AbortSignal.timeout. This
-  // catches the case where the agent-pod is wedged BEFORE the executor
-  // arms its signal (e.g. crashed during boot, hung on K8s API client
-  // init), or where the AbortSignal fires but the runtime doesn't honor
-  // the cancel for some reason. The Job's failure then surfaces via
-  // job-watch.ts → markAgentTaskFailedFromExternal as DeadlineExceeded.
-  const timeoutSeconds = task.spec.timeoutSeconds;
+  // WS-A — security baseline. Default-deny on the container surface:
+  // non-root, no privilege escalation, drop all caps, read-only root
+  // FS. Because the root FS is read-only, we mount an emptyDir at /tmp
+  // so the agent-pod runtime (and any subprocess it spawns — MCP
+  // servers via npx, etc.) can write there.
+  const podSecurityContext: V1PodSecurityContext | undefined =
+    opts.podSecurityContext === null
+      ? undefined
+      : (opts.podSecurityContext ?? DEFAULT_POD_SECURITY_CONTEXT);
+  const containerSecurityContext: V1SecurityContext | undefined =
+    opts.containerSecurityContext === null
+      ? undefined
+      : (opts.containerSecurityContext ?? DEFAULT_CONTAINER_SECURITY_CONTEXT);
+  // /tmp emptyDir is included whenever the container security context
+  // sets readOnlyRootFilesystem true (the default). Cheap insurance —
+  // adding the volume when not strictly needed has no observable cost.
+  const needsTmpVolume = containerSecurityContext?.readOnlyRootFilesystem === true;
+  const tmpVolume = needsTmpVolume
+    ? { name: TMP_VOLUME_NAME, emptyDir: {} as Record<string, never> }
+    : undefined;
+  const tmpVolumeMount = needsTmpVolume ? { name: TMP_VOLUME_NAME, mountPath: '/tmp' } : undefined;
+
+  const podVolumes = [artifactVolume, tmpVolume].filter(
+    (v): v is NonNullable<typeof v> => v !== undefined,
+  );
+  const containerVolumeMounts = [artifactVolumeMount, tmpVolumeMount].filter(
+    (v): v is NonNullable<typeof v> => v !== undefined,
+  );
+
+  // WS-C — RuntimeClass resolution: map-driven (per-Agent) wins over
+  // the deprecated free-form `opts.runtimeClassName`. Profile defaults
+  // to 'default' when Agent.spec.sandboxProfile is unset, so the
+  // absence of a profile never accidentally lands on the 'strict'
+  // runtime class. Empty-string entries in the map are treated as
+  // "not set" so a partially-populated map (e.g. only strict='kata'
+  // set) cleanly omits runtimeClassName for the other profile.
+  const profile: 'default' | 'strict' = agent.spec.sandboxProfile ?? 'default';
+  const mappedRuntimeClass = opts.runtimeClasses?.[profile];
+  const resolvedRuntimeClassName: string | undefined =
+    typeof mappedRuntimeClass === 'string' && mappedRuntimeClass.length > 0
+      ? mappedRuntimeClass
+      : opts.runtimeClassName;
+
+  // Honor the resolved AgentTask wall-clock deadline via
+  // Job.spec.activeDeadlineSeconds so K8s itself terminates the pod
+  // when the deadline passes — belt-and-suspenders alongside the
+  // agent-pod's AbortSignal.timeout. This catches the case where the
+  // agent-pod is wedged BEFORE the executor arms its signal (e.g.
+  // crashed during boot, hung on K8s API client init), or where the
+  // AbortSignal fires but the runtime doesn't honor the cancel for
+  // some reason. The Job's failure then surfaces via job-watch.ts →
+  // markAgentTaskFailedFromExternal as DeadlineExceeded.
+  //
+  // WS-G: resolution rule mirrors the agent-pod runner —
+  // `runConfig.timeoutSeconds` wins over the deprecated top-level
+  // `timeoutSeconds` field when both are present.
+  const timeoutSeconds = task.spec.runConfig?.timeoutSeconds ?? task.spec.timeoutSeconds;
   const activeDeadlineSeconds =
     typeof timeoutSeconds === 'number' && timeoutSeconds > 0 ? timeoutSeconds : undefined;
 
@@ -156,6 +280,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     backoffLimit: DEFAULT_BACKOFF_LIMIT,
     ttlSecondsAfterFinished: DEFAULT_TTL_SECONDS_AFTER_FINISHED,
     ...(activeDeadlineSeconds !== undefined && { activeDeadlineSeconds }),
+    // WS-F: opt-in suspended creation. When set, K8s won't schedule the
+    // pod until reconcile.ts publishes the dispatch envelope and patches
+    // the Job to `spec.suspend: false`. This makes the publish step the
+    // ordering dependency rather than the Job-create step.
+    ...(opts.suspend === true && { suspend: true }),
     template: {
       metadata: {
         labels: {
@@ -169,13 +298,14 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         ...(opts.serviceAccountName !== undefined && {
           serviceAccountName: opts.serviceAccountName,
         }),
-        ...(opts.runtimeClassName !== undefined && {
-          runtimeClassName: opts.runtimeClassName,
+        ...(resolvedRuntimeClassName !== undefined && {
+          runtimeClassName: resolvedRuntimeClassName,
         }),
         ...(opts.imagePullSecret !== undefined && {
           imagePullSecrets: [{ name: opts.imagePullSecret }],
         }),
-        ...(artifactVolume !== undefined && { volumes: [artifactVolume] }),
+        ...(podSecurityContext !== undefined && { securityContext: podSecurityContext }),
+        ...(podVolumes.length > 0 && { volumes: podVolumes }),
         containers: [
           {
             name: 'agent',
@@ -184,8 +314,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
             ...(opts.imagePullPolicy !== undefined && {
               imagePullPolicy: opts.imagePullPolicy,
             }),
-            ...(artifactVolumeMount !== undefined && {
-              volumeMounts: [artifactVolumeMount],
+            ...(containerSecurityContext !== undefined && {
+              securityContext: containerSecurityContext,
+            }),
+            ...(containerVolumeMounts.length > 0 && {
+              volumeMounts: containerVolumeMounts,
             }),
             // Resources are tunable via Helm values in operator chart;
             // the spec here is a defensible default for v0.1.
@@ -199,10 +332,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     },
   };
 
-  // sandboxProfile: 'strict' will plumb to runtimeClassName: kata in v0.2.
-  // We surface the spec field today so consumers can opt in once Kata
-  // is on the nodes; operator's Helm values then auto-fill the runtime
-  // class.
+  // sandboxProfile → runtimeClassName resolution happens above via
+  // `opts.runtimeClasses[profile]` (Helm values
+  // `agentPod.runtimeClasses.{default,strict}` plumb through main.ts).
+  // Set `strict: kata` on Helm install once Kata Containers is deployed
+  // onto the K3s nodes per docs/ROADMAP.md Phase 6.
 
   return {
     apiVersion: 'batch/v1',

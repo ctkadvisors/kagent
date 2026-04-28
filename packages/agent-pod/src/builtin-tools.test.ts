@@ -707,7 +707,7 @@ describe('write_artifact tool — inline mode', () => {
     expect(contentString(r)).toMatch(/"name" must not begin with "\/"/);
   });
 
-  it('happy path — inline mode returns a synthetic ArtifactRef without disk I/O', async () => {
+  it('happy path — inline mode returns an inline:// ArtifactRef without disk I/O', async () => {
     const p = makeProvider();
     const r = await p.executeTool(
       call('write_artifact', {
@@ -724,7 +724,11 @@ describe('write_artifact tool — inline mode', () => {
       name: string;
       sizeBytes: number;
     };
-    expect(ref.uri).toBe('pvc://kagent-artifacts/test-uid/digest.md');
+    // The inline path now returns an `inline://sha256:<hex>` URI (NOT
+    // `pvc://`) so consumers can tell durable from non-durable refs at
+    // the URI scheme — see WS-D fix #2 / docs/ARTIFACTS.md.
+    expect(ref.uri).toMatch(/^inline:\/\/sha256:[0-9a-f]{64}$/);
+    expect(ref.uri.startsWith('pvc://')).toBe(false);
     expect(ref.name).toBe('digest.md');
     expect(ref.sizeBytes).toBe(7);
   });

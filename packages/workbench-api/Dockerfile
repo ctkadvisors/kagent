@@ -1,21 +1,23 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Chris Knuteson
 #
-# Multi-stage build for the @kagent/workbench-api image. Mirrors the
-# operator Dockerfile shape — Node 22 + pnpm install, then Node 22 +
-# tsx runtime. The workbench-api uses @kubernetes/client-node, so the
-# same TLS/Bun parity reasoning that pinned the operator to Node 22
-# applies here.
+# Multi-stage build for the @kagent/workbench-api image. Stage 1
+# installs the full pnpm workspace + compiles every transitive TS dep
+# to JS. Stage 2 ships a `node:22-alpine`-only runtime that runs
+# `node dist/main.js` — no `tsx`, no compile-on-run.
 #
 # Build context = REPO ROOT (so the workspace install can pull the
 # @kagent/dto sibling package + any future workspace deps):
-#   docker build -t ghcr.io/ctkadvisors/kagent-workbench-api:<tag> \
-#     -f packages/workbench-api/Dockerfile .
+#   docker buildx build \
+#     -t ghcr.io/ctkadvisors/kagent-workbench-api:<tag> \
+#     -f packages/workbench-api/Dockerfile \
+#     --platform linux/amd64,linux/arm64 .
 
 # ---------------------------------------------------------------------
-# Stage 1: install — pnpm-driven workspace install.
+# Stage 1: build — pnpm install (full devDeps), tsc emit, exports
+# rewrite, prod-only re-install.
 # ---------------------------------------------------------------------
-FROM node:22-alpine AS install
+FROM node:22-alpine AS build
 
 RUN corepack enable
 
@@ -38,25 +40,39 @@ COPY packages/workbench-ui/package.json packages/workbench-ui/
 RUN pnpm install --frozen-lockfile --prod=false
 
 # Source after install so node_modules layer survives source edits.
-# Only the packages this image actually exercises at runtime.
-COPY packages/dto/src packages/dto/src
-COPY packages/workbench-api/src packages/workbench-api/src
+# Only the packages the workbench-api transitively needs.
 COPY tsconfig.base.json ./
+COPY scripts ./scripts
+COPY packages/dto packages/dto
+COPY packages/workbench-api packages/workbench-api
+
+# Compile @kagent/workbench-api + transitive deps.
+RUN pnpm --filter @kagent/workbench-api... build
+
+# Rewrite each workspace package's exports map from src/.ts to dist/.js.
+RUN node scripts/rewrite-exports-to-dist.mjs
+
+# Sanity: fail the build if compilation didn't produce the entrypoint.
+RUN node -e "require('fs').accessSync('packages/workbench-api/dist/main.js')"
+
+# Drop devDeps from node_modules.
+RUN pnpm install --frozen-lockfile --prod
 
 # ---------------------------------------------------------------------
-# Stage 2: runtime — Node 22. tsx executes TypeScript directly.
-# Runtime kept on Node (not Bun) for @kubernetes/client-node TLS parity
-# against K3s self-signed CAs — same constraint as the operator. See
-# packages/operator/Dockerfile for the original rationale.
+# Stage 2: runtime — Node 22. tsx is gone in this image; we run
+# `node dist/main.js` directly. Runtime kept on Node (not Bun) for
+# @kubernetes/client-node TLS parity against K3s self-signed CAs —
+# same constraint as the operator. See packages/operator/Dockerfile
+# for the original rationale.
 # ---------------------------------------------------------------------
 FROM node:22-alpine AS runtime
 
 USER node
 WORKDIR /app
 
-COPY --from=install --chown=node:node /repo /app
+COPY --from=build --chown=node:node /repo /app
 
 WORKDIR /app/packages/workbench-api
 
-# tsx (devDep) executes TypeScript directly under Node 22.
-ENTRYPOINT ["node", "--import", "tsx/esm", "src/main.ts"]
+# Plain Node 22 — no tsx loader, no transpile on start.
+ENTRYPOINT ["node", "dist/main.js"]

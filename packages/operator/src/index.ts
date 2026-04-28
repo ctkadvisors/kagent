@@ -22,6 +22,7 @@ export type {
   AgentTaskSpec,
   AgentTaskStatus,
   AgentTaskPhase,
+  AgentTaskRunConfig,
   AgentCapability,
   AgentCapabilitySpec,
 } from './crds/index.js';
@@ -41,13 +42,22 @@ export type {
   ParsedArtifactUri,
 } from './crds/index.js';
 
-export { reconcileAgentTask, reconcileParentFromChildEvent } from './reconcile.js';
+export {
+  markAgentTaskFailedFromExternal,
+  patchStatusWithRetry,
+  reconcileAgentTask,
+  reconcileParentFromChildEvent,
+} from './reconcile.js';
 export type {
+  MarkFailureAction,
+  MarkFailureDeps,
+  PatchStatusResult,
   ReconcileDeps,
   ReconcileParentFromChildAction,
   ReconcileParentFromChildDeps,
   ReconcileResult,
 } from './reconcile.js';
+export { mergeCondition, nextPhase } from './status-transitions.js';
 export { buildJobSpec, jobNameForTask } from './job-spec.js';
 export type { BuildJobSpecOptions } from './job-spec.js';
 export { buildHandler } from './main.js';
@@ -65,6 +75,7 @@ export type { AgentLiveEntry, KvBucketFactory, KvBucketLike } from './nats-capab
 
 export {
   PARENT_TASK_NAME_LABEL,
+  PARENT_TASK_NAME_ANNOTATION,
   PARENT_TASK_UID_LABEL,
   aggregateChildren,
   buildChildTaskManifest,

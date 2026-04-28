@@ -234,8 +234,13 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       currentMessages.unshift({ role: 'system', content: agentDef.systemPrompt });
     }
 
-    // Federate tool descriptors across all providers (D-11).
-    const toolDescriptors: ToolDescriptor[] = await this.toolProviders.describeAll();
+    // Federate tool descriptors across all providers (D-11). Pass the
+    // run's `runId` + `signal` (WS-G) so subprocess-backed providers
+    // (e.g. MCP) can wire `tools/list` cancellation through to their
+    // underlying RPC — without this, a slow MCP server's listTools()
+    // pins the loop until the SDK default 60s timeout fires.
+    const describeCtx: ToolInvocationContext = { runId, abortSignal: signal };
+    const toolDescriptors: ToolDescriptor[] = await this.toolProviders.describeAll(describeCtx);
 
     let finalContent: string | null = null;
     let status: TerminalStatus = 'completed';
@@ -305,6 +310,27 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         break;
       }
 
+      // Synthesize stable tool-call IDs BEFORE recording the LLM trace
+      // and BEFORE pushing the assistant message into chat history.
+      // Some Llama 4 / Workers AI variants omit `id` entirely; if we
+      // left those undefined on the assistant message and only
+      // substituted a fallback when building the tool-result
+      // `tool_call_id`, the model would re-read history with
+      // mismatched (or absent) IDs and the multi-turn flow would
+      // confuse it.
+      //
+      // Mutate a NEW array (do NOT mutate the LLMClient's response
+      // object — callers may inspect or replay it). The synthesized
+      // IDs are reused below for `tool_call_id` so assistant ↔ tool
+      // message correlation always agrees, and the trace serializes
+      // the synthesized version (not the under-specified original).
+      const synthesizedToolCalls = llmResult.tool_calls
+        ? llmResult.tool_calls.map((tc, idx) => ({
+            ...tc,
+            id: tc.id && tc.id.length > 0 ? tc.id : `call_${tc.name}_${seq + idx + 1}`,
+          }))
+        : undefined;
+
       // (2) Record LLM trace + token + cost accounting
       const llmEntry: TraceEntry = {
         schema_version: '1',
@@ -316,8 +342,8 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         ...(agentDef.defaultModel !== undefined && { model: agentDef.defaultModel }),
         input_messages: truncateMessages(currentMessages),
         output_content: truncateForStorage(llmResult.content),
-        ...(llmResult.tool_calls && {
-          output_tool_calls: truncateForStorage(JSON.stringify(llmResult.tool_calls)),
+        ...(synthesizedToolCalls && {
+          output_tool_calls: truncateForStorage(JSON.stringify(synthesizedToolCalls)),
         }),
         input_tokens_est:
           llmResult.usage?.inputTokens ??
@@ -368,22 +394,22 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       }
 
       // (4) Tool dispatch OR loop exit
-      if (!llmResult.tool_calls || llmResult.tool_calls.length === 0) {
+      if (!synthesizedToolCalls || synthesizedToolCalls.length === 0) {
         finalContent = llmResult.content;
         completedNaturally = true;
         break;
       }
 
-      // Append assistant message with tool_calls to history.
+      // Append assistant message with the synthesized-id tool_calls.
       currentMessages.push({
         role: 'assistant',
         content: llmResult.content,
-        tool_calls: llmResult.tool_calls,
+        tool_calls: synthesizedToolCalls,
       });
 
       // Tool dispatch loop (one iteration per tool_call).
       let cancelledMidTool = false;
-      for (const toolCall of llmResult.tool_calls) {
+      for (const toolCall of synthesizedToolCalls) {
         // Invariant 2.d — abort check between tool calls.
         if (signal.aborted) {
           status = 'cancelled';
@@ -391,7 +417,8 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           break;
         }
 
-        const callId = toolCall.id || `call_${toolCall.name}_${seq}`;
+        // Synthesis already happened above; reuse the (now non-empty) id.
+        const callId = toolCall.id;
         const provider = this.toolProviders.providerFor(toolCall.name);
 
         if (!provider) {

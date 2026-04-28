@@ -4,9 +4,18 @@
 # kagent-operator default values.
 #
 # Override at install time with `--set` or `-f values.local.yaml`. The
-# operator runs cluster-wide in v0.1; namespaced isolation is a v0.2
-# affordance.
+# default chart installation watches the release namespace because the
+# chart-managed agent-pod ServiceAccount + artifact PVC are namespace-
+# local. Set watchAllNamespaces=true only if you provision equivalent
+# ServiceAccounts/PVCs in every workload namespace.
 
+# MUST be 1 in v0.1. The chart's deployment template hard-fails at
+# `helm template` time on any other value because the reconcile loop
+# isn't coordination-aware — two replicas would race the WS-F suspended-
+# publish dispatch sequence. Multi-replica deployments require leader
+# election, which lands in v0.2. Until then, the deployment also pins
+# `strategy: Recreate` so rolling updates can't briefly have two
+# replicas live.
 replicaCount: 1
 
 image:
@@ -18,6 +27,14 @@ image:
 # Image pull secret(s) for private registries. Empty = no secret.
 # Example: imagePullSecrets: [{ name: ghcr-pull }]
 imagePullSecrets: []
+
+# Namespace to watch for Agent / AgentTask resources. Empty defaults to
+# the Helm release namespace in the deployment template.
+watchNamespace: ''
+# Set true only after provisioning agent-pod ServiceAccounts and artifact
+# PVCs in every workload namespace. When true, KAGENT_WATCH_NAMESPACE is
+# intentionally empty and the operator uses cluster-wide watch/list paths.
+watchAllNamespaces: false
 
 serviceAccount:
   create: true
@@ -39,7 +56,8 @@ resources:
 agentPod:
   image:
     repository: ghcr.io/ctkadvisors/kagent-agent-pod
-    tag: 'v0.0.4-phase4'
+    # Defaults to .Chart.appVersion; override here for dev pins.
+    tag: ''
     pullPolicy: IfNotPresent
   imagePullSecret: '' # name of secret in the AgentTask's namespace
   # ServiceAccount the agent pod runs as. The chart creates one named
@@ -57,16 +75,35 @@ agentPod:
   # spawned agent pod. When empty, agent-pod's env.ts default
   # (`http://litellm.kagent-system.svc.cluster.local:4000/v1`) wins.
   litellmBaseUrl: ''
-  # Optional API key for the inference endpoint (Bearer in Authorization
-  # header). Plain string for v0.1; v0.2 should plumb via secretKeyRef.
-  litellmApiKey: ''
+  # API key for the inference endpoint (Bearer in Authorization header).
+  # WS-A security baseline: prefer `secretName` + `secretKey` (so the
+  # operator never reads the plaintext into its own memory; instead
+  # K8s injects the env via secretKeyRef and the operator passes
+  # process.env.KAGENT_AGENT_POD_LITELLM_API_KEY through unchanged).
+  # `value` (plaintext) still works but renders a deprecation warning
+  # in NOTES.txt. When all three fields are empty, the env is omitted.
+  #
+  # Example:
+  #   litellmApiKey:
+  #     secretName: cloudflare-ai-gateway
+  #     secretKey: api-key
+  litellmApiKey:
+    secretName: ''
+    secretKey: ''
+    value: ''
 
   # OTLP/HTTP traces endpoint (Langfuse-compatible). When set, the
   # operator injects OTEL_EXPORTER_OTLP_TRACES_ENDPOINT into every
   # spawned agent pod, and agent-pod's main wires OtelTraceSink.
   otlpEndpoint: ''
-  # Comma-separated headers (e.g., 'authorization=Bearer%20<pk>').
-  otlpHeaders: ''
+  # OTLP/HTTP comma-separated headers (e.g.,
+  # 'authorization=Bearer%20<pk>'). Same secret-ref shape as
+  # litellmApiKey above — prefer secretName + secretKey; `value` is
+  # deprecated.
+  otlpHeaders:
+    secretName: ''
+    secretKey: ''
+    value: ''
 
   # Built-in tool configuration — see packages/agent-pod/src/builtin-tools.ts.
   # Today this only carries the HTTP-fetch domain allowlist; future
@@ -100,6 +137,26 @@ agentPod:
     #     - 'hnrss.org'
     #     - 'lobste.rs'
     httpAllowDomains: []
+
+  # RuntimeClass mapping (WS-C / Phase 6 prep) — `Agent.spec.sandboxProfile`
+  # is resolved against this map per-Agent. The operator's reconcile loop
+  # NEVER sets a global runtimeClassName: each spawned Job's pod spec gets
+  # `runtimeClassName: <runtimeClasses[profile]>` only when the matching
+  # entry below is non-empty; an empty string omits the field on the pod
+  # spec (use the cluster default — typically `runc`).
+  #
+  # Operational expectation: Kata Containers must be deployed onto the
+  # K3s nodes (e.g. via the Kata K8s deployer) BEFORE flipping
+  # `strict: kata` here — otherwise pods that opt into the strict
+  # profile will fail to schedule with a missing-RuntimeClass error.
+  # See `docs/ROADMAP.md` Phase 6 for the node-side install task.
+  #
+  # The substrate-side wiring is now done; toggling this value is the
+  # last step on the operator side once Kata is on the cluster.
+  runtimeClasses:
+    default: '' # e.g. 'runc' to be explicit; '' uses the cluster default.
+    strict: '' # set to 'kata' once Kata is deployed; '' = treat strict
+    #             same as default (use this until Phase 6 ships Kata).
 
   # Artifact storage — Phase 5 / Platform-Priorities P3. When enabled,
   # the chart provisions a single shared RWX PVC the operator mounts
@@ -160,3 +217,69 @@ podLabels: {}
 
 # Operator log verbosity (info | debug). Surfaces via env LOG_LEVEL.
 logLevel: 'info'
+
+# ---------------------------------------------------------------------
+# WS-A pod + container security context defaults. Applied to the
+# operator Deployment (and via Helm-side overrides, agent pods spawned
+# at runtime). Override sub-fields by passing the full object via
+# `--set-json` or values overlay. See WS-A spec for rationale.
+# ---------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ['ALL']
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Security context applied to spawned agent-pod Jobs (per AgentTask).
+# Defaults match the operator's, but the agent-pod runtime spawns
+# subprocesses (MCP servers via npx, etc.), so these are kept editable
+# so a workload can opt out of e.g. readOnlyRootFilesystem if its
+# tool subprocesses need writable HOME paths beyond /tmp.
+# ---------------------------------------------------------------------
+# WS-A — default-deny NetworkPolicy. See `templates/networkpolicy.yaml`.
+# REQUIRES a CNI that enforces NetworkPolicies (Calico, Cilium,
+# Weave, ...). K3s with the default flannel backend ignores this
+# resource — deploy K3s with `--flannel-backend=none` + install Calico
+# if you want enforcement.
+# ---------------------------------------------------------------------
+networkPolicy:
+  # Default true — fail-closed posture. Disable only when running on a
+  # cluster whose CNI does not enforce policies AND you've accepted
+  # that risk.
+  enabled: true
+  # Extra egress rules merged into the rendered policy. Use to allow
+  # outbound traffic to LiteLLM, Langfuse, NATS, or any other endpoint
+  # the operator + (transitively) the spawned agent pods need.
+  # Example:
+  #   extraEgress:
+  #     - to:
+  #         - namespaceSelector:
+  #             matchLabels:
+  #               kubernetes.io/metadata.name: nats
+  #       ports:
+  #         - port: 4222
+  #           protocol: TCP
+  extraEgress: []
+
+agentPodSecurityContext:
+  pod:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  container:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ['ALL']
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000

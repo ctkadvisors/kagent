@@ -18,7 +18,34 @@
  * connection factory.
  */
 
-import type { Dispatcher, DispatchedTask } from './dispatcher.js';
+import type { Dispatcher, DispatchedTask, PublishOptions } from './dispatcher.js';
+
+/**
+ * Per-publish options forwarded to NATS. Today only `headers` matters
+ * for `Nats-Msg-Id` dedupe (WS-F). Wider option surface (e.g. `reply`,
+ * `expectStream`) lands in v0.2 when JetStream-pull-consumer support
+ * lands.
+ */
+export interface NatsPublishOptionsLike {
+  readonly headers?: NatsHeadersLike;
+}
+
+/**
+ * Subset of `nats.js`'s `MsgHdrs` we use. The real implementation comes
+ * from `headers()` in nats.js; tests pass a stub that mimics the shape.
+ */
+export interface NatsHeadersLike {
+  set(key: string, value: string): void;
+}
+
+/**
+ * Factory for the per-publish headers object. Production wires this to
+ * `headers()` from `nats`; tests inject a stub. We accept a factory
+ * (instead of importing from nats directly) for the same reason the
+ * connection is constructor-injected: keep this module unit-testable
+ * without the nats peer.
+ */
+export type NatsHeadersFactory = () => NatsHeadersLike;
 
 /**
  * Narrow subset of nats.js's `NatsConnection` we actually use. Lets
@@ -26,7 +53,7 @@ import type { Dispatcher, DispatchedTask } from './dispatcher.js';
  * type surface.
  */
 export interface NatsConnectionLike {
-  publish(subject: string, data: Uint8Array): void;
+  publish(subject: string, data: Uint8Array, opts?: NatsPublishOptionsLike): void;
   flush(): Promise<void>;
   close(): Promise<void>;
 }
@@ -46,6 +73,20 @@ export interface NatsDispatcherOptions {
    * `${prefix}.${agentId}.task.${taskId}`.
    */
   readonly subjectPrefix?: string;
+  /**
+   * Factory for per-publish header objects, used to attach
+   * `Nats-Msg-Id` for JetStream's built-in dedupe (WS-F). Production
+   * wires this to nats.js's `headers()`; tests pass a stub. Optional —
+   * when absent (e.g. tests that don't care about dedupe), publish
+   * still works but the dedupe header is silently skipped.
+   *
+   * The `Nats-Msg-Id` header tells JetStream to drop a publish if
+   * another with the same ID landed within the stream's
+   * `duplicate_window` (default 2 minutes; configured in the stream
+   * itself, not here). See:
+   * https://docs.nats.io/nats-concepts/jetstream/streams#message-deduplication
+   */
+  readonly headersFactory?: NatsHeadersFactory;
 }
 
 const DEFAULT_PREFIX = 'agent';
@@ -62,18 +103,37 @@ export function publishSubject(task: DispatchedTask, prefix: string = DEFAULT_PR
 export class NatsDispatcher implements Dispatcher {
   private readonly connectFn: NatsConnectFn;
   private readonly subjectPrefix: string;
+  private readonly headersFactory: NatsHeadersFactory | undefined;
   private connection: NatsConnectionLike | undefined;
 
   constructor(options: NatsDispatcherOptions) {
     this.connectFn = options.connect;
     this.subjectPrefix = options.subjectPrefix ?? DEFAULT_PREFIX;
+    this.headersFactory = options.headersFactory;
   }
 
-  async publish(task: DispatchedTask): Promise<void> {
+  async publish(task: DispatchedTask, opts?: PublishOptions): Promise<void> {
     const conn = await this.ensureConnection();
     const subject = publishSubject(task, this.subjectPrefix);
     const payload = encoder.encode(JSON.stringify(task));
-    conn.publish(subject, payload);
+
+    // WS-F: when the operator passes a `dedupeId`, attach it as the
+    // `Nats-Msg-Id` header. JetStream consults its `duplicate_window`
+    // (per-stream config; default 2m) and silently drops re-publishes.
+    // No header → no dedupe (back-compat with non-WS-F callers).
+    const dedupeId = opts?.dedupeId;
+    let publishOpts: NatsPublishOptionsLike | undefined;
+    if (typeof dedupeId === 'string' && dedupeId.length > 0 && this.headersFactory !== undefined) {
+      const h = this.headersFactory();
+      h.set('Nats-Msg-Id', dedupeId);
+      publishOpts = { headers: h };
+    }
+
+    if (publishOpts !== undefined) {
+      conn.publish(subject, payload, publishOpts);
+    } else {
+      conn.publish(subject, payload);
+    }
     // flush() resolves once the message is in-flight — important for
     // operator status writeback ordering: we don't want to mark
     // AgentTask.status=Dispatched before the bus has actually accepted

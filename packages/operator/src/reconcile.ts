@@ -7,33 +7,62 @@
  * Reconcile loop — the core operator behavior. Called by watch.ts on
  * every AgentTask add/update event.
  *
- * Steps (all idempotent; reconcile is safe to invoke multiple times
- * for the same task):
+ * WS-F suspended-publish ordering. The dispatch sequence is split into
+ * three durable steps so a crash anywhere is recoverable without
+ * double-firing the bus or orphaning work:
  *
  *   1. Skip if status.phase is already terminal (Completed | Failed)
  *      OR already 'Dispatched' (Phase 2 stops at dispatch; Phase 3
  *      will resume to watch for completion).
- *   2. Resolve the target Agent. If targetAgent is set, fetch by name.
- *      If targetCapability is set, Phase 2 fails fast (capability
- *      resolution lands in Phase 3 with the NATS KV registry).
- *   3. Build the Job spec, create it. AlreadyExists is treated as a
- *      successful idempotent path.
- *   4. Call Dispatcher.publish to put the task assignment on the bus.
- *      (Phase 2 is StubDispatcher; Phase 3 is real NATS.)
- *   5. Update AgentTask.status: phase=Dispatched, podName=<job>,
- *      startedAt=now.
+ *   2. Resolve the target Agent.
+ *   3. Build a SUSPENDED Job spec (`spec.suspend: true`) and create
+ *      it. K8s holds off scheduling the pod. AlreadyExists (409) on
+ *      retry is treated as success — the Job's annotations carry the
+ *      "did we publish?" marker, not its existence.
+ *   4. Re-read the Job by name and inspect its annotations:
+ *      - If `kagent.knuteson.io/dispatch-published: "true"` is set,
+ *        skip the publish (this is a re-reconcile after an earlier
+ *        successful publish; we just need to unsuspend).
+ *      - Otherwise, publish to the bus with `dedupeId = task.uid`
+ *        so the broker's dedupe (JetStream `Nats-Msg-Id`) drops any
+ *        duplicate from a re-reconcile after annotation-patch failure.
+ *   5. Stamp `dispatch-published: "true"` on the Job. Failure here
+ *      is non-fatal (the bus already has the message; broker dedupe
+ *      handles the re-publish on retry — see step 4).
+ *   6. Patch `spec.suspend: false` to release K8s scheduling.
+ *   7. Patch AgentTask.status: phase=Dispatched, podName, startedAt.
  *
- * On any failure: status.phase = Failed with error message.
+ * Failure-mode behavior:
+ *   - Step 4 publish fails  → leave Job suspended; mark AgentTask
+ *     Failed with reason "publish failed"; operator recovers via a
+ *     fresh AgentTask or external Failed-status clear.
+ *   - Step 5 mark fails     → log loudly; treat as success (the
+ *     message is on the bus; re-reconcile re-publishes; broker dedupe
+ *     drops it — see WS-F dedupeId design).
+ *   - Step 6 unsuspend fails → log loudly; status stays as-is;
+ *     informer relist re-fires reconcile and retries.
+ *
+ * On any earlier failure (Agent resolution, Job creation): status.phase
+ * = Failed with error message.
  */
 
 import type { BatchV1Api, CustomObjectsApi, V1Job } from '@kubernetes/client-node';
 
-import { API_GROUP, API_VERSION, type Agent, type AgentTask, isAgent } from './crds/index.js';
+import {
+  API_GROUP,
+  API_VERSION,
+  type Agent,
+  type AgentTask,
+  type AgentTaskCondition,
+  isAgent,
+} from './crds/index.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
+import { isDispatchPublished, markJobPublished, readJob, unsuspendJob } from './job-annotator.js';
 import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
 import { mergePatchOptions } from './k8s.js';
+import { mergeCondition, nextPhase } from './status-transitions.js';
 import {
   PARENT_TASK_UID_LABEL,
   aggregateChildren,
@@ -88,8 +117,15 @@ export async function reconcileAgentTask(
     return { action: 'failed', reason };
   }
 
-  // Step 3 — build + create the Job.
-  const job = buildJobSpec(agent, task, deps.jobSpecOptions);
+  // Step 3 — build + create the Job, SUSPENDED. K8s won't schedule
+  // the pod until step 6 patches `spec.suspend: false`. The reconcile
+  // loop forwards the operator's `jobSpecOptions` (image/env/PVC/etc)
+  // and sets `suspend: true` over the top — operators stay free to
+  // override the rest, but the suspended-create invariant is owned by
+  // reconcile.
+  const job = buildJobSpec(agent, task, { ...deps.jobSpecOptions, suspend: true });
+  const namespace = task.metadata.namespace ?? 'default';
+  const jobName = jobNameForTask(task);
   try {
     await createJobIdempotent(job, deps.batchApi);
   } catch (err) {
@@ -98,36 +134,115 @@ export async function reconcileAgentTask(
     return { action: 'failed', reason };
   }
 
-  // Step 4 — publish to the bus.
+  // Step 4 — decide whether to publish. The Job's
+  // `dispatch-published: "true"` annotation is the durable "we already
+  // published" marker; absence means publish was either never attempted
+  // (first reconcile) or failed mid-flight (retry path). Re-read the
+  // Job (not the cached `job` we just built) so a 409 retry sees the
+  // server's annotations.
+  let alreadyPublished = false;
   try {
-    await deps.dispatcher.publish({
-      taskId: task.metadata.uid ?? '',
-      agentId: agent.metadata.name ?? '',
-      ...(task.spec.parentTask !== undefined && { parentTaskId: task.spec.parentTask }),
-      originalUserMessage: task.spec.originalUserMessage ?? '',
-      ...(task.spec.parentDistillation !== undefined && {
-        parentDistillation: task.spec.parentDistillation,
-      }),
-      ...(task.spec.expectedTools !== undefined && {
-        expectedTools: task.spec.expectedTools,
-      }),
-      payload: task.spec.payload,
-    });
+    const live = await readJob(deps.batchApi, namespace, jobName);
+    alreadyPublished = isDispatchPublished(live);
   } catch (err) {
-    const reason = err instanceof Error ? `dispatch failed: ${err.message}` : String(err);
-    await markFailed(task, reason, deps);
-    return { action: 'failed', reason };
+    // A read failure here is non-fatal — we'd rather re-publish (broker
+    // dedupe handles it) than leave the Job suspended forever. Log and
+    // proceed with `alreadyPublished = false`.
+    console.error(
+      `[kagent-operator] failed to re-read Job ${namespace}/${jobName} for annotation check; proceeding with publish:`,
+      err,
+    );
   }
 
-  // Step 5 — update status.
+  // Step 5 — publish the dispatch envelope to the bus, with a
+  // deterministic dedupe ID (task UID). When the Job's
+  // `dispatch-published` annotation is already set, skip — a previous
+  // reconcile already published and broker dedupe doesn't need to be
+  // retested. On publish failure, the Job stays SUSPENDED (never
+  // scheduled), and the task is marked Failed.
+  if (!alreadyPublished) {
+    try {
+      await deps.dispatcher.publish(
+        {
+          taskId: task.metadata.uid ?? '',
+          agentId: agent.metadata.name ?? '',
+          ...(task.spec.parentTask !== undefined && { parentTaskId: task.spec.parentTask }),
+          originalUserMessage: task.spec.originalUserMessage ?? '',
+          ...(task.spec.parentDistillation !== undefined && {
+            parentDistillation: task.spec.parentDistillation,
+          }),
+          ...(task.spec.expectedTools !== undefined && {
+            expectedTools: task.spec.expectedTools,
+          }),
+          payload: task.spec.payload,
+        },
+        { dedupeId: task.metadata.uid ?? '' },
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? `dispatch failed: ${err.message}` : String(err);
+      // Job stays suspended — never scheduled. Mark task Failed.
+      await markFailed(task, reason, deps);
+      return { action: 'failed', reason };
+    }
+
+    // Step 6 — annotate the Job so a future reconcile knows publish
+    // already happened. Best-effort: the message is already on the bus,
+    // and broker dedupe (Nats-Msg-Id = task.uid) handles the
+    // re-publish on retry if this annotation patch fails.
+    try {
+      await markJobPublished(deps.batchApi, namespace, jobName);
+    } catch (err) {
+      console.error(
+        `[kagent-operator] published task ${namespace}/${task.metadata.name ?? '?'} but FAILED to stamp dispatch-published annotation; broker dedupe will protect a re-publish:`,
+        err,
+      );
+    }
+  }
+
+  // Step 7 — unsuspend so K8s schedules the pod. On failure, leave
+  // status alone; the informer relist will re-fire reconcile and step 4
+  // will see the published annotation, skip publish, and retry the
+  // unsuspend.
+  try {
+    await unsuspendJob(deps.batchApi, namespace, jobName);
+  } catch (err) {
+    console.error(
+      `[kagent-operator] failed to unsuspend Job ${namespace}/${jobName}; informer relist will retry:`,
+      err,
+    );
+    // Don't mark Failed — this is recoverable. Don't mark Dispatched
+    // either — the pod hasn't started.
+    return { action: 'failed', reason: 'unsuspend failed' };
+  }
+
+  // Step 8 — update AgentTask status to Dispatched. Routed through the
+  // WS-E conflict-aware retry helper so a stale informer object can't
+  // dispatch over the top of a terminal phase that landed between the
+  // relist and this point. Append a `Dispatched` condition.
   const now = deps.now ?? (() => new Date());
-  await patchStatus(task, deps.customApi, {
-    phase: 'Dispatched',
-    podName: jobNameForTask(task),
-    startedAt: now().toISOString(),
+  const ts = now().toISOString();
+  await patchStatusWithRetry(task, deps.customApi, (current) => {
+    const proposed = nextPhase(current.status?.phase, 'Dispatched');
+    if (proposed === null) return null;
+    return {
+      phase: proposed,
+      podName: jobName,
+      startedAt: ts,
+      observedGeneration: current.metadata.generation ?? 0,
+      conditions: mergeCondition(current.status?.conditions, {
+        type: 'Dispatched',
+        status: 'True',
+        reason: 'JobCreated',
+        message: `Job ${jobName} created`,
+        lastTransitionTime: ts,
+        ...(current.metadata.generation !== undefined && {
+          observedGeneration: current.metadata.generation,
+        }),
+      }),
+    };
   });
 
-  return { action: 'dispatched', jobName: jobNameForTask(task) };
+  return { action: 'dispatched', jobName };
 }
 
 /**
@@ -209,11 +324,45 @@ function isAlreadyExists(err: unknown): boolean {
 
 async function markFailed(task: AgentTask, reason: string, deps: ReconcileDeps): Promise<void> {
   const now = deps.now ?? (() => new Date());
+  const ts = now().toISOString();
   try {
-    await patchStatus(task, deps.customApi, {
-      phase: 'Failed',
-      error: reason,
-      completedAt: now().toISOString(),
+    await patchStatusWithRetry(task, deps.customApi, (current) => {
+      const proposed = nextPhase(current.status?.phase, 'Failed');
+      // If the task is already Completed, never overwrite — the agent-pod
+      // wrote success between the dispatch error and this fallback. The
+      // outer reconcile error path is the cause; conditions[] still gets
+      // an entry for visibility.
+      if (proposed === null) {
+        return {
+          observedGeneration: current.metadata.generation ?? 0,
+          conditions: mergeCondition(current.status?.conditions, {
+            type: 'ReconcileError',
+            status: 'True',
+            reason: 'ReconcileFailedAfterTerminal',
+            message: reason,
+            lastTransitionTime: ts,
+            ...(current.metadata.generation !== undefined && {
+              observedGeneration: current.metadata.generation,
+            }),
+          }),
+        };
+      }
+      return {
+        phase: proposed,
+        error: reason,
+        completedAt: ts,
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, {
+          type: 'Failed',
+          status: 'True',
+          reason: 'ReconcileError',
+          message: reason,
+          lastTransitionTime: ts,
+          ...(current.metadata.generation !== undefined && {
+            observedGeneration: current.metadata.generation,
+          }),
+        }),
+      };
     });
   } catch (err) {
     // Status patch is best-effort; surface but don't propagate.
@@ -230,6 +379,10 @@ interface StatusPatch {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  /** WS-E — see status-transitions.ts. */
+  observedGeneration?: number;
+  /** WS-E — append-only conditions list. */
+  conditions?: readonly AgentTaskCondition[];
   /* ---- Workstream 5 / Phase 5 — child-aggregation projection.
    * Operator-owned (NOT agent-pod-owned). `reconcileParentFromChildEvent`
    * is the only writer. Carved out separately from `phase` so terminal
@@ -265,6 +418,120 @@ async function patchStatus(
   );
 }
 
+/* =====================================================================
+ * patchStatusWithRetry — WS-E.
+ *
+ * Read-build-write cycle that gives every status writer a fresh view of
+ * the cluster's current state before computing the patch. The `build`
+ * closure is invoked on each attempt with the freshly fetched object;
+ * if it returns `null` the patch is treated as a no-op regression and
+ * skipped (caller gets `{kind:'skipped', reason:'regression'}`).
+ *
+ * On a 409 conflict (concurrent writer) we retry up to `maxRetries`
+ * times, re-reading the object on each attempt. On 404 we surface
+ * `{kind:'skipped', reason:'not-found'}` (the AgentTask was deleted out
+ * from under us — owner-GC race or operator-issued DELETE).
+ *
+ * ## Why a read-build-write cycle and not server-side
+ * `replace-status` with metadata.resourceVersion?
+ *
+ * Kubernetes' merge-patch on the status subresource doesn't honor a
+ * caller-supplied `metadata.resourceVersion` the way `replace-status`
+ * (PUT) does. Switching every status writer to PUT would force us to
+ * resend the full status object every time — including fields owned by
+ * other writers (the agent-pod's `result`, the parent re-reconcile's
+ * `children/aggregatePhase`). That couples writers we explicitly want
+ * to keep loosely coupled. Read-build-write gives us the same effective
+ * regression guard (the build closure inspects `current.status.phase`
+ * and refuses backward transitions) while keeping each writer's patch
+ * narrowly scoped to the fields it owns.
+ *
+ * The cost is a small race window between GET and PATCH where another
+ * writer can land first. The 409 retry loop closes most of it; the
+ * `nextPhase()` regression check inside the build closure closes the
+ * rest (a write that races a terminal phase is rejected on the next
+ * attempt's GET).
+ * ===================================================================== */
+
+export type PatchStatusResult =
+  | { kind: 'patched' }
+  | { kind: 'skipped'; reason: 'regression' | 'not-found' }
+  | { kind: 'failed'; error: Error };
+
+export async function patchStatusWithRetry(
+  task: AgentTask,
+  customApi: CustomObjectsApi,
+  build: (current: AgentTask) => StatusPatch | null,
+  maxRetries = 3,
+): Promise<PatchStatusResult> {
+  const namespace = task.metadata.namespace ?? 'default';
+  const name = task.metadata.name;
+  if (typeof name !== 'string' || name.length === 0) {
+    return { kind: 'failed', error: new Error('AgentTask is missing metadata.name') };
+  }
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let current: AgentTask;
+    try {
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+      const res = await customApi.getNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace,
+        plural: 'agenttasks',
+        name,
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+      current = res as AgentTask;
+    } catch (err) {
+      if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
+      lastErr = err;
+      // GET failures are not retryable except for transient errors —
+      // surface immediately to keep behavior simple.
+      throw err;
+    }
+
+    const patch = build(current);
+    if (patch === null) {
+      return { kind: 'skipped', reason: 'regression' };
+    }
+
+    try {
+      await customApi.patchNamespacedCustomObjectStatus(
+        {
+          group: API_GROUP,
+          version: API_VERSION,
+          namespace,
+          plural: 'agenttasks',
+          name,
+          body: { status: patch },
+        },
+        mergePatchOptions,
+      );
+      return { kind: 'patched' };
+    } catch (err) {
+      lastErr = err;
+      if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
+      if (!isConflict(err)) {
+        throw err;
+      }
+      // 409 — loop and re-read.
+    }
+  }
+  // Exhausted retries — surface the last conflict as a thrown error so
+  // callers (markFailed's catch, etc.) can log + move on.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`patchStatusWithRetry: exhausted ${maxRetries} retries`);
+}
+
+function isConflict(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: unknown; statusCode?: unknown };
+  return e.code === 409 || e.statusCode === 409;
+}
+
 /**
  * External entry point — used by the Job/Pod watcher to mark an
  * AgentTask Failed when its underlying K8s primitives died before the
@@ -282,42 +549,124 @@ export interface MarkFailureDeps {
 
 export type MarkFailureAction =
   | { kind: 'marked-failed'; previousPhase: string }
-  | { kind: 'skipped'; reason: 'already-completed' | 'already-failed' | 'not-found' };
+  | { kind: 'condition-appended'; previousPhase: 'Completed' | 'Failed' }
+  | { kind: 'skipped'; reason: 'not-found' };
 
+/**
+ * WS-E behavior:
+ *   - Pending / Dispatched / unset → write `phase=Failed` AND append a
+ *     condition with the failure context.
+ *   - Completed → DO NOT overwrite phase. Append a
+ *     `JobFailedAfterComplete` condition so the post-success failure
+ *     stays visible without erasing the success signal.
+ *   - Failed → append a fresh condition (multiple failure modes — image
+ *     pull → OOM → etc — all stay observable).
+ *
+ * Both branches go through `patchStatusWithRetry`; the build closure
+ * uses `nextPhase()` to enforce monotonicity and re-reads on 409.
+ */
 export async function markAgentTaskFailedFromExternal(
   ref: { readonly namespace: string; readonly name: string },
   failure: { readonly reason: string; readonly message: string; readonly source: 'job' | 'pod' },
   deps: MarkFailureDeps,
 ): Promise<MarkFailureAction> {
   const now = deps.now ?? (() => new Date());
-  let current: AgentTask | undefined;
-  try {
-    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-    const res = await deps.customApi.getNamespacedCustomObject({
-      group: API_GROUP,
-      version: API_VERSION,
-      namespace: ref.namespace,
-      plural: 'agenttasks',
-      name: ref.name,
-    });
-    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
-    current = res as AgentTask;
-  } catch (err) {
-    if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
-    throw err;
+  const ts = now().toISOString();
+  const errorPrefix = `[${failure.source}/${failure.reason}] `;
+
+  // Probe for the not-found case so the early-return contract still
+  // holds. `patchStatusWithRetry` re-fetches inside its loop, so a
+  // disappearing object between this probe and the loop is handled too.
+  // Carrying the synthetic AgentTask shape avoids a redundant GET when
+  // the object is present (the helper does its own fresh GET inside).
+  const probeTask: AgentTask = {
+    apiVersion: 'kagent.knuteson.io/v1alpha1',
+    kind: 'AgentTask',
+    metadata: { namespace: ref.namespace, name: ref.name },
+    spec: { payload: null },
+  };
+
+  // Tracked across the build closure invocation. Annotate the union
+  // explicitly so TS doesn't narrow on the seed value.
+  type ResolvedKind = 'marked-failed' | 'condition-appended';
+  const state: { previousPhase: string | undefined; kind: ResolvedKind } = {
+    previousPhase: undefined,
+    kind: 'marked-failed',
+  };
+
+  const result = await patchStatusWithRetry(probeTask, deps.customApi, (current) => {
+    const phase = current.status?.phase;
+    state.previousPhase = phase;
+
+    const conditionType =
+      phase === 'Completed'
+        ? 'JobFailedAfterComplete'
+        : phase === 'Failed'
+          ? failure.reason || 'AdditionalFailure'
+          : 'Failed';
+
+    const newCondition: AgentTaskCondition = {
+      type: conditionType,
+      status: 'True',
+      reason: failure.reason,
+      message: errorPrefix + failure.message,
+      lastTransitionTime: ts,
+      ...(current.metadata.generation !== undefined && {
+        observedGeneration: current.metadata.generation,
+      }),
+    };
+
+    if (phase === 'Completed' || phase === 'Failed') {
+      // Additive only — never overwrite a terminal phase.
+      state.kind = 'condition-appended';
+      return {
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, newCondition),
+      };
+    }
+
+    // Pending / Dispatched / unset → mark Failed AND record condition.
+    const proposed = nextPhase(phase, 'Failed');
+    if (proposed === null) {
+      // Defensive — shouldn't be reachable given the branch above.
+      state.kind = 'condition-appended';
+      return {
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, newCondition),
+      };
+    }
+    state.kind = 'marked-failed';
+    return {
+      phase: proposed,
+      error: errorPrefix + failure.message,
+      completedAt: ts,
+      observedGeneration: current.metadata.generation ?? 0,
+      conditions: mergeCondition(current.status?.conditions, newCondition),
+    };
+  });
+
+  if (result.kind === 'skipped' && result.reason === 'not-found') {
+    return { kind: 'skipped', reason: 'not-found' };
+  }
+  if (result.kind === 'skipped' && result.reason === 'regression') {
+    // Build closure refused — the append-only branches always return a
+    // patch so this is unreachable in practice. Surface a condition-
+    // appended verdict so callers never see an unhandled case.
+    const prior = state.previousPhase;
+    return {
+      kind: 'condition-appended',
+      previousPhase: prior === 'Completed' || prior === 'Failed' ? prior : 'Failed',
+    };
   }
 
-  const phase = current?.status?.phase;
-  if (phase === 'Completed') return { kind: 'skipped', reason: 'already-completed' };
-  if (phase === 'Failed') return { kind: 'skipped', reason: 'already-failed' };
-
-  const errorPrefix = `[${failure.source}/${failure.reason}] `;
-  await patchStatus(current, deps.customApi, {
-    phase: 'Failed',
-    error: errorPrefix + failure.message,
-    completedAt: now().toISOString(),
-  });
-  return { kind: 'marked-failed', previousPhase: phase ?? '(unset)' };
+  if (state.kind === 'condition-appended') {
+    const prior = state.previousPhase;
+    return {
+      kind: 'condition-appended',
+      previousPhase: prior === 'Completed' || prior === 'Failed' ? prior : 'Failed',
+    };
+  }
+  return { kind: 'marked-failed', previousPhase: state.previousPhase ?? '(unset)' };
 }
 
 function isNotFound(err: unknown): boolean {
@@ -330,10 +679,11 @@ function isNotFound(err: unknown): boolean {
  * reconcileParentFromChildEvent
  *
  * External entry point — called by the AgentTask informer in `main.ts`
- * whenever a child AgentTask event fires (any AgentTask carrying the
- * `kagent.knuteson.io/parent-task-name` label). Mirrors the shape of
- * `markAgentTaskFailedFromExternal`: read the parent, decide an action,
- * patch a NARROWLY-SCOPED slice of status, return an action verdict.
+ * whenever an AgentTask event resolves to a parent ref via
+ * `parentTaskRefFromChild` (label, annotation, or ownerRef). Mirrors
+ * the shape of `markAgentTaskFailedFromExternal`: read the parent,
+ * decide an action, patch a NARROWLY-SCOPED slice of status, return an
+ * action verdict.
  *
  * Responsibility split (parallel to failure-detector ↔ reconcile):
  *

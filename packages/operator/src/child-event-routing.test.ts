@@ -30,7 +30,11 @@ import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
 import { StubDispatcher } from './dispatcher.js';
 import { buildHandler } from './main.js';
 import type { ReconcileDeps } from './reconcile.js';
-import { PARENT_TASK_NAME_LABEL, PARENT_TASK_UID_LABEL } from './task-graph.js';
+import {
+  PARENT_TASK_NAME_ANNOTATION,
+  PARENT_TASK_NAME_LABEL,
+  PARENT_TASK_UID_LABEL,
+} from './task-graph.js';
 
 interface MockCustomApi {
   getNamespacedCustomObject: ReturnType<typeof vi.fn>;
@@ -201,6 +205,50 @@ describe('buildHandler — child-event routing', () => {
     // the spy itself is wired in beforeEach for routing-side logging
     // we don't want to assert against, but vitest GCs it on its own.
     expect(consoleLogSpy).toBeDefined();
+  });
+
+  it('long parent name (annotation only, no name label) still routes to parent re-aggregate', async () => {
+    const longParentName = `parent-${'a'.repeat(70)}`;
+    const parent: AgentTask = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: { name: longParentName, namespace: 'default', uid: 'parent-uid-long' },
+      spec: { targetAgent: 'researcher', payload: {}, originalUserMessage: 'long' },
+      status: { phase: 'Dispatched' },
+    };
+    const { deps, mocks } = buildDeps(parent);
+    const handler = buildHandler(deps);
+
+    // Child built the way `buildChildTaskManifest` actually emits it for a
+    // long parent name: UID label + full-name annotation, NO name label.
+    const child: AgentTask = makeChildTask({
+      metadata: {
+        name: 'child-long',
+        namespace: 'default',
+        uid: 'child-uid-long',
+        labels: { [PARENT_TASK_UID_LABEL]: 'parent-uid-long' },
+        annotations: { [PARENT_TASK_NAME_ANNOTATION]: longParentName },
+      },
+      status: { phase: 'Completed' },
+    });
+    await handler.onUpdate(child);
+
+    // Parent ref recovered from the annotation, then GET'd by name.
+    expect(mocks.customApi.getNamespacedCustomObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        plural: 'agenttasks',
+        namespace: 'default',
+        name: longParentName,
+      }),
+    );
+    // Children listed by UID (not name), so long names don't break the
+    // label-selector watch path.
+    expect(mocks.customApi.listNamespacedCustomObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labelSelector: 'kagent.knuteson.io/parent-task-uid=parent-uid-long',
+      }),
+    );
+    expect(mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
   });
 
   it('a failure in the parent re-aggregate path is logged but does NOT throw', async () => {

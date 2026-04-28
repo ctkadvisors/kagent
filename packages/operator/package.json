@@ -14,8 +14,17 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "start": "tsx src/main.ts"
+    "start": "tsx src/main.ts",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo",
+    "crd:check": "tsx scripts/check-crd-drift.ts",
+    "chart:render-check": "bash scripts/check-runtime-class-render.sh"
   },
+  "files": [
+    "dist",
+    "src",
+    "manifests"
+  ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
     "@kubernetes/client-node": "1.4.0",

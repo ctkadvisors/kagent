@@ -14,8 +14,10 @@
  * own: image pull failures, OOMKills before status patch, scheduling
  * failures, container config errors.
  *
- * Cluster-wide watch in v0.1, label-selected to only see resources the
- * operator manages (`kagent.knuteson.io/managed-by=kagent-operator`).
+ * Namespace-scoped by default via the operator chart, label-selected to
+ * only see resources the operator manages
+ * (`kagent.knuteson.io/managed-by=kagent-operator`). Advanced installs
+ * can pass no namespace for a cluster-wide watch.
  */
 
 import {
@@ -63,11 +65,17 @@ export interface JobPodInformerSet {
   stop(): Promise<void>;
 }
 
+export interface JobPodInformerOptions {
+  /** Namespace to watch. Undefined = cluster-wide watch. */
+  readonly namespace?: string;
+}
+
 export function createJobPodInformer(
   kc: KubeConfig,
   coreApi: CoreV1Api,
   batchListFn: () => Promise<V1JobList>,
   handler: JobPodHandler,
+  opts: JobPodInformerOptions = {},
 ): JobPodInformerSet {
   const jobListWrapper = async (): Promise<KubernetesListObject<V1Job>> => {
     const res = await batchListFn();
@@ -75,23 +83,31 @@ export function createJobPodInformer(
   };
 
   const podListWrapper = async (): Promise<KubernetesListObject<V1Pod>> => {
-    const res = await coreApi.listPodForAllNamespaces({
-      labelSelector: MANAGED_BY_LABEL,
-    });
+    const res =
+      opts.namespace !== undefined
+        ? await coreApi.listNamespacedPod({
+            namespace: opts.namespace,
+            labelSelector: MANAGED_BY_LABEL,
+          })
+        : await coreApi.listPodForAllNamespaces({
+            labelSelector: MANAGED_BY_LABEL,
+          });
     return res;
   };
 
-  const jobInformer: Informer<V1Job> = makeInformer<V1Job>(
-    kc,
-    `/apis/batch/v1/jobs?labelSelector=${encodeURIComponent(MANAGED_BY_LABEL)}`,
-    jobListWrapper,
-  );
+  const labelQuery = `labelSelector=${encodeURIComponent(MANAGED_BY_LABEL)}`;
+  const jobWatchPath =
+    opts.namespace !== undefined
+      ? `/apis/batch/v1/namespaces/${encodeURIComponent(opts.namespace)}/jobs?${labelQuery}`
+      : `/apis/batch/v1/jobs?${labelQuery}`;
+  const podWatchPath =
+    opts.namespace !== undefined
+      ? `/api/v1/namespaces/${encodeURIComponent(opts.namespace)}/pods?${labelQuery}`
+      : `/api/v1/pods?${labelQuery}`;
 
-  const podInformer: Informer<V1Pod> = makeInformer<V1Pod>(
-    kc,
-    `/api/v1/pods?labelSelector=${encodeURIComponent(MANAGED_BY_LABEL)}`,
-    podListWrapper,
-  );
+  const jobInformer: Informer<V1Job> = makeInformer<V1Job>(kc, jobWatchPath, jobListWrapper);
+
+  const podInformer: Informer<V1Pod> = makeInformer<V1Pod>(kc, podWatchPath, podListWrapper);
 
   // Wire add + update through the same handler — failure verdicts are
   // idempotent (markFailed skips terminal AgentTasks), so re-firing on

@@ -31,6 +31,7 @@ import {
   ENV_ARTIFACTS_DIR,
   ENV_ARTIFACTS_PVC_NAME,
   ENV_TASK_ID,
+  inlineArtifactRef,
   inlineSafeForArtifact,
   isArtifactRefShape,
   resolveWriterEnv,
@@ -296,6 +297,60 @@ describe('writeArtifactToDisk', () => {
     expect(readFileSync(join(tmpRoot, 'uid-A', 'shared.md'), 'utf8')).toBe('A version');
     expect(readFileSync(join(tmpRoot, 'uid-B', 'shared.md'), 'utf8')).toBe('B version');
   });
+
+  it('regression: pvc:// URI is ALWAYS followable to a real file (persistence invariant)', () => {
+    // The whole point of the WS-D scheme split: any returned `pvc://`
+    // URI must round-trip to a stat-able file on disk. The inline path
+    // returns `inline://` exactly so this assertion can never lie.
+    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const r = writeArtifactToDisk('digest.md', 'hello', 'text/markdown', env);
+    expect(r.ref.uri.startsWith('pvc://')).toBe(true);
+    // Reverse-map the URI back to the on-disk path. We mirror the
+    // canonical `pvc://<pvc>/<task-uid>/<name>` layout to prove the
+    // contract holds end-to-end.
+    const matched = /^pvc:\/\/([^/]+)\/(.+)$/.exec(r.ref.uri);
+    expect(matched).not.toBeNull();
+    const pathPart = matched![2]!;
+    const onDisk = join(tmpRoot, pathPart);
+    expect(statSync(onDisk).isFile()).toBe(true);
+    expect(readFileSync(onDisk, 'utf8')).toBe('hello');
+  });
+});
+
+/* =====================================================================
+ * inlineArtifactRef — non-persisting counterpart contract
+ * ===================================================================== */
+
+describe('inlineArtifactRef', () => {
+  it('returns an inline://sha256:<hex> URI', () => {
+    const ref = inlineArtifactRef('hello', 'text/markdown');
+    expect(ref.uri).toMatch(/^inline:\/\/sha256:[0-9a-f]{64}$/);
+  });
+
+  it('checksum + URI hash agree (content-addressed)', () => {
+    const ref = inlineArtifactRef('hello', 'text/markdown');
+    const expected = createHash('sha256').update('hello').digest('hex');
+    expect(ref.checksum).toBe(`sha256:${expected}`);
+    expect(ref.uri).toBe(`inline://sha256:${expected}`);
+  });
+
+  it('sets sizeBytes to UTF-8 byte length', () => {
+    const ref = inlineArtifactRef('rapport-français-🚀', 'text/markdown');
+    expect(ref.sizeBytes).toBe(Buffer.byteLength('rapport-français-🚀', 'utf8'));
+  });
+
+  it('honors injected clock for producedAt', () => {
+    const fixedNow = new Date('2026-04-28T14:23:11Z');
+    const ref = inlineArtifactRef('x', 'text/plain', fixedNow);
+    expect(ref.producedAt).toBe('2026-04-28T14:23:11.000Z');
+  });
+
+  it('refuses non-string content + empty mediaType', () => {
+    expect(() => inlineArtifactRef(undefined as unknown as string, 'text/plain')).toThrow(
+      /content/,
+    );
+    expect(() => inlineArtifactRef('x', '')).toThrow(/mediaType/);
+  });
 });
 
 /* =====================================================================
@@ -402,7 +457,7 @@ describe('write_artifact tool', () => {
     expect(written).toBe('# hello world');
   });
 
-  it('inline:true short-circuits the write for small text payloads', async () => {
+  it('inline:true short-circuits the write and returns an inline:// URI (not pvc://)', async () => {
     const taskUid = `uid-${randomUUID().slice(0, 8)}`;
     const env = {
       [ENV_TASK_ID]: taskUid,
@@ -424,8 +479,12 @@ describe('write_artifact tool', () => {
     expect(r.isError).toBe(false);
     const blocks = r.content as { type: string; text: string }[];
     const ref = JSON.parse(blocks[0]!.text) as ArtifactRef;
-    expect(ref.uri).toBe(`pvc://kagent-artifacts/${taskUid}/short.md`);
-    // No file should exist on disk.
+    // The substrate contract: inline-only refs use the inline:// scheme
+    // so consumers can tell durable from non-durable refs at a glance.
+    expect(ref.uri).toMatch(/^inline:\/\/sha256:[0-9a-f]{64}$/);
+    expect(ref.uri.startsWith('pvc://')).toBe(false);
+    // No file should exist on disk (this is the persistence invariant
+    // a `pvc://` URI would otherwise lie about).
     expect(existsSync(join(tmpRoot, taskUid, 'short.md'))).toBe(false);
   });
 

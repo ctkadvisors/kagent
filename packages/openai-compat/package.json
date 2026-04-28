@@ -13,8 +13,14 @@
     "typecheck": "tsc -p . --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests"
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*"
   },

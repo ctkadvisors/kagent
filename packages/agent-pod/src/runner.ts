@@ -94,11 +94,17 @@ export interface RunResult {
  * that want to assert a specific provider lineup without going through
  * `resolveBuiltinTools`). When undefined the runner builds providers
  * from `config.agentSpec.tools` against the built-in registry.
+ *
+ * `signal` is an externally-owned cancellation handle (e.g.
+ * agent-pod's SIGTERM-driven shutdown controller — see `main.ts`).
+ * When supplied, it is composed with the timeout-derived signal via
+ * `AbortSignal.any` so EITHER source can cancel the run.
  */
 export interface RunDeps {
   readonly llm?: LLMClient;
   readonly sinks?: readonly TraceSink[];
   readonly toolProviders?: readonly ToolProvider[];
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -152,21 +158,36 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   const userMessage = pickUserMessage(config);
   const messages: ChatMessage[] = [{ role: 'user', content: userMessage }];
 
-  // Honor AgentTask.spec.timeoutSeconds via AbortSignal so a hung LLM
-  // call (unreachable LiteLLM, model never streams a token, etc.)
-  // surfaces as a `cancelled` terminal status instead of pinning the
-  // pod until the K8s Job's activeDeadlineSeconds fires.
-  const timeoutSeconds = config.taskSpec.timeoutSeconds;
-  const signal =
-    typeof timeoutSeconds === 'number' && timeoutSeconds > 0
-      ? AbortSignal.timeout(timeoutSeconds * 1000)
+  // WS-G — resolve the per-run knobs from `runConfig` if present,
+  // falling back to the deprecated top-level `timeoutSeconds`.
+  // `runConfig.timeoutSeconds` wins on conflict (per CRD docstring).
+  const rc = config.taskSpec.runConfig;
+  const effectiveTimeoutSeconds = rc?.timeoutSeconds ?? config.taskSpec.timeoutSeconds;
+  const effectiveTokenLimit = rc?.tokenLimit;
+  const effectiveCostLimit = rc?.costLimitUsd;
+  const effectiveMaxIter = rc?.maxIterations;
+
+  // Honor the resolved timeout via AbortSignal so a hung LLM call
+  // (unreachable LiteLLM, model never streams a token, etc.) surfaces
+  // as a `cancelled` terminal status instead of pinning the pod until
+  // the K8s Job's activeDeadlineSeconds fires. Compose with the
+  // caller-supplied `deps.signal` (used by main.ts's SIGTERM
+  // controller) via Node 22 native `AbortSignal.any` so EITHER source
+  // can cancel the run.
+  const timeoutSignal =
+    typeof effectiveTimeoutSeconds === 'number' && effectiveTimeoutSeconds > 0
+      ? AbortSignal.timeout(effectiveTimeoutSeconds * 1000)
       : undefined;
+  const signal = composeSignals(deps.signal, timeoutSignal);
 
   const result = await executor.run({
     agentType: config.agentName,
     messages,
     runId: config.taskId,
     ...(signal !== undefined && { signal }),
+    ...(effectiveTokenLimit !== undefined && { tokenLimit: effectiveTokenLimit }),
+    ...(effectiveCostLimit !== undefined && { costLimitUsd: effectiveCostLimit }),
+    ...(effectiveMaxIter !== undefined && { maxIterations: effectiveMaxIter }),
   });
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
@@ -200,6 +221,14 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
  * consumers will not see the ref. That is preferable to throwing and
  * failing the entire run for a trace-pipeline edge case.
  *
+ * URI-scheme filtering: only refs whose URI begins with `pvc://` are
+ * included in the durable artifact list. `inline://...` refs are
+ * intentionally dropped — the substrate contract is "RunResult.artifacts
+ * MUST be followable to real bytes", and inline refs are explicitly
+ * non-persisted (the bytes live in `status.result.content`, not on a
+ * disk). Schemes other than `pvc://` / `inline://` (e.g. `s3://` for
+ * v0.2 backends) are kept on a forward-compatible basis.
+ *
  * Exported for the runner test suite + any future middleware that
  * wants to inspect the same surface.
  */
@@ -210,7 +239,12 @@ export function collectArtifactsFromTraces(traces: readonly TraceEntry[]): reado
     if (t.tool_name !== 'write_artifact') continue;
     if (t.is_error === true) continue;
     const ref = tryParseArtifactRefFromToolOutput(t.tool_output);
-    if (ref !== null) out.push(ref);
+    if (ref === null) continue;
+    // Drop inline-only refs — they are not durably persisted, so
+    // downstream consumers (operator status patcher, Workbench,
+    // sibling agents) would get a 404 if they tried to follow the URI.
+    if (ref.uri.startsWith('inline://')) continue;
+    out.push(ref);
   }
   return out;
 }
@@ -244,4 +278,23 @@ export function resolveToolProviders(config: PodConfig, deps: RunDeps): readonly
   if (deps.toolProviders !== undefined) return deps.toolProviders;
   const builtin = resolveBuiltinTools(config.agentSpec.tools);
   return builtin === null ? [] : [builtin];
+}
+
+/**
+ * Compose two optional `AbortSignal` sources into one — used by
+ * `runAgentTask` to merge the caller-supplied shutdown signal with the
+ * timeout-derived signal. Returns undefined when neither is set;
+ * returns the single source when only one is set; uses Node 22's
+ * native `AbortSignal.any` when both are set.
+ *
+ * Exported for the runner test suite.
+ */
+export function composeSignals(
+  caller: AbortSignal | undefined,
+  timeout: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (caller === undefined && timeout === undefined) return undefined;
+  if (caller === undefined) return timeout;
+  if (timeout === undefined) return caller;
+  return AbortSignal.any([caller, timeout]);
 }

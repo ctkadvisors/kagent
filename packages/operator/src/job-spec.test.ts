@@ -10,7 +10,10 @@ import {
   ARTIFACT_VOLUME_NAME,
   buildJobSpec,
   DEFAULT_ARTIFACT_MOUNT_PATH,
+  DEFAULT_CONTAINER_SECURITY_CONTEXT,
+  DEFAULT_POD_SECURITY_CONTEXT,
   jobNameForTask,
+  TMP_VOLUME_NAME,
 } from './job-spec.js';
 
 const sampleAgent: Agent = {
@@ -136,11 +139,108 @@ describe('buildJobSpec', () => {
     expect(job.spec?.template?.spec?.containers?.[0]?.image).toBe('custom:tag');
   });
 
-  it('omits runtimeClassName by default; applies kata when supplied', () => {
+  it('omits runtimeClassName by default; deprecated runtimeClassName field still applies kata when supplied', () => {
     const without = buildJobSpec(sampleAgent, sampleTask);
     expect(without.spec?.template?.spec?.runtimeClassName).toBeUndefined();
     const kata = buildJobSpec(sampleAgent, sampleTask, { runtimeClassName: 'kata' });
     expect(kata.spec?.template?.spec?.runtimeClassName).toBe('kata');
+  });
+
+  /* =====================================================================
+   * Per-Agent runtimeClass mapping — WS-C / Kata + sandboxProfile wiring.
+   *
+   * `opts.runtimeClasses` is the canonical path: a profile-keyed map
+   * resolved against `Agent.spec.sandboxProfile`. The deprecated
+   * `opts.runtimeClassName` global override is still honored for tests
+   * but the map wins when both are set.
+   * ===================================================================== */
+
+  it('runtimeClasses absent → no runtimeClassName on the pod spec', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {});
+    expect(job.spec?.template?.spec?.runtimeClassName).toBeUndefined();
+  });
+
+  it('runtimeClasses.strict=kata + Agent.sandboxProfile=strict → runtimeClassName: kata', () => {
+    const strictAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'strict' },
+    };
+    const job = buildJobSpec(strictAgent, sampleTask, {
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('kata');
+  });
+
+  it('runtimeClasses.default=runc + Agent.sandboxProfile=default → runtimeClassName: runc', () => {
+    const defaultAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'default' },
+    };
+    const job = buildJobSpec(defaultAgent, sampleTask, {
+      runtimeClasses: { default: 'runc', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('runc');
+  });
+
+  it('runtimeClasses.default=runc + Agent.sandboxProfile absent → defaults to "default" profile (runc)', () => {
+    const noProfileAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: undefined },
+    };
+    const job = buildJobSpec(noProfileAgent, sampleTask, {
+      runtimeClasses: { default: 'runc', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('runc');
+  });
+
+  it('runtimeClasses.strict=kata + Agent.sandboxProfile=default → does NOT apply kata (no over-application)', () => {
+    const defaultAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'default' },
+    };
+    const job = buildJobSpec(defaultAgent, sampleTask, {
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).not.toBe('kata');
+    // Empty default means cluster-default → omit field entirely.
+    expect(job.spec?.template?.spec?.runtimeClassName).toBeUndefined();
+  });
+
+  it('runtimeClasses.strict=kata + Agent.sandboxProfile absent → does NOT apply kata', () => {
+    const noProfileAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: undefined },
+    };
+    const job = buildJobSpec(noProfileAgent, sampleTask, {
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).not.toBe('kata');
+    expect(job.spec?.template?.spec?.runtimeClassName).toBeUndefined();
+  });
+
+  it('runtimeClasses map wins over deprecated runtimeClassName field when both set', () => {
+    const strictAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'strict' },
+    };
+    const job = buildJobSpec(strictAgent, sampleTask, {
+      runtimeClassName: 'gvisor',
+      runtimeClasses: { default: '', strict: 'kata' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('kata');
+  });
+
+  it('deprecated runtimeClassName falls through when runtimeClasses entry is empty', () => {
+    const strictAgent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, sandboxProfile: 'strict' },
+    };
+    // map present but strict is empty → fall back to deprecated override.
+    const job = buildJobSpec(strictAgent, sampleTask, {
+      runtimeClassName: 'gvisor',
+      runtimeClasses: { default: '', strict: '' },
+    });
+    expect(job.spec?.template?.spec?.runtimeClassName).toBe('gvisor');
   });
 
   it('omits imagePullSecrets / serviceAccountName by default', () => {
@@ -196,9 +296,15 @@ describe('buildJobSpec', () => {
 
   it('omits PVC volume / volumeMount / artifact env vars when artifactPvc is unset', () => {
     const job = buildJobSpec(sampleAgent, sampleTask);
-    expect(job.spec?.template?.spec?.volumes).toBeUndefined();
+    // WS-A: a /tmp emptyDir is added under the default
+    // readOnlyRootFilesystem=true container security context, so
+    // volumes is no longer undefined when artifactPvc is unset. Assert
+    // specifically that no PVC-backed volume is present.
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === ARTIFACT_VOLUME_NAME)).toBe(false);
     const container = job.spec?.template?.spec?.containers?.[0];
-    expect(container?.volumeMounts).toBeUndefined();
+    const mounts = container?.volumeMounts ?? [];
+    expect(mounts.some((m) => m.name === ARTIFACT_VOLUME_NAME)).toBe(false);
     const env = container?.env ?? [];
     const names = env.map((e) => e.name);
     expect(names).not.toContain('KAGENT_ARTIFACTS_DIR');
@@ -210,15 +316,15 @@ describe('buildJobSpec', () => {
       artifactPvc: { claimName: 'kagent-artifacts' },
     });
     const volumes = job.spec?.template?.spec?.volumes ?? [];
-    expect(volumes).toHaveLength(1);
-    expect(volumes[0]?.name).toBe(ARTIFACT_VOLUME_NAME);
-    expect(volumes[0]?.persistentVolumeClaim?.claimName).toBe('kagent-artifacts');
+    const artifactVolume = volumes.find((v) => v.name === ARTIFACT_VOLUME_NAME);
+    expect(artifactVolume).toBeDefined();
+    expect(artifactVolume?.persistentVolumeClaim?.claimName).toBe('kagent-artifacts');
 
     const container = job.spec?.template?.spec?.containers?.[0];
     const mounts = container?.volumeMounts ?? [];
-    expect(mounts).toHaveLength(1);
-    expect(mounts[0]?.name).toBe(ARTIFACT_VOLUME_NAME);
-    expect(mounts[0]?.mountPath).toBe(DEFAULT_ARTIFACT_MOUNT_PATH);
+    const artifactMount = mounts.find((m) => m.name === ARTIFACT_VOLUME_NAME);
+    expect(artifactMount).toBeDefined();
+    expect(artifactMount?.mountPath).toBe(DEFAULT_ARTIFACT_MOUNT_PATH);
   });
 
   it('honors a custom artifactPvc.mountPath override', () => {
@@ -249,6 +355,28 @@ describe('buildJobSpec', () => {
     expect(byName.get('KAGENT_ARTIFACT_PVC_NAME')).toBe('kagent-artifacts');
   });
 
+  /* =====================================================================
+   * Suspended Job creation — WS-F (suspended publish + dispatch ordering)
+   * ===================================================================== */
+
+  it('omits spec.suspend by default (back-compat with non-WS-F callers)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    expect(job.spec?.suspend).toBeUndefined();
+  });
+
+  it('sets spec.suspend=true when BuildJobSpecOptions.suspend is set', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { suspend: true });
+    expect(job.spec?.suspend).toBe(true);
+  });
+
+  it('omits spec.suspend when BuildJobSpecOptions.suspend is explicitly false', () => {
+    // Defensive: only `=== true` flips the bit; `false` falls through to
+    // the K8s default (unsuspended). This avoids surfacing `suspend: false`
+    // on the API which is technically equivalent but clutters the diff.
+    const job = buildJobSpec(sampleAgent, sampleTask, { suspend: false });
+    expect(job.spec?.suspend).toBeUndefined();
+  });
+
   it('artifact env vars come BEFORE extraEnv (so operator-level overrides win)', () => {
     const job = buildJobSpec(sampleAgent, sampleTask, {
       artifactPvc: { claimName: 'kagent-artifacts' },
@@ -259,5 +387,73 @@ describe('buildJobSpec', () => {
     const idxExtra = env.findIndex((e) => e.name === 'KAGENT_LITELLM_BASE_URL');
     expect(idxArtifactDir).toBeGreaterThan(-1);
     expect(idxExtra).toBeGreaterThan(idxArtifactDir);
+  });
+
+  /* =====================================================================
+   * Security context — WS-A baseline
+   * ===================================================================== */
+
+  it('applies the WS-A default pod + container security context', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const podSpec = job.spec?.template?.spec;
+    expect(podSpec?.securityContext).toEqual(DEFAULT_POD_SECURITY_CONTEXT);
+    const container = podSpec?.containers?.[0];
+    expect(container?.securityContext).toEqual(DEFAULT_CONTAINER_SECURITY_CONTEXT);
+  });
+
+  it('mounts a writable /tmp emptyDir under readOnlyRootFilesystem=true', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    const tmpVolume = volumes.find((v) => v.name === TMP_VOLUME_NAME);
+    expect(tmpVolume).toBeDefined();
+    expect(tmpVolume?.emptyDir).toBeDefined();
+
+    const container = job.spec?.template?.spec?.containers?.[0];
+    const mounts = container?.volumeMounts ?? [];
+    const tmpMount = mounts.find((m) => m.name === TMP_VOLUME_NAME);
+    expect(tmpMount?.mountPath).toBe('/tmp');
+  });
+
+  it('honors a caller-provided podSecurityContext override (not deep-merged)', () => {
+    const custom = { runAsUser: 2000, fsGroup: 2000 };
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      podSecurityContext: custom,
+    });
+    expect(job.spec?.template?.spec?.securityContext).toEqual(custom);
+  });
+
+  it('omits the pod security context when caller passes null', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { podSecurityContext: null });
+    expect(job.spec?.template?.spec?.securityContext).toBeUndefined();
+  });
+
+  it('omits the /tmp emptyDir when readOnlyRootFilesystem is overridden to false', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      containerSecurityContext: {
+        ...DEFAULT_CONTAINER_SECURITY_CONTEXT,
+        readOnlyRootFilesystem: false,
+      },
+    });
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === TMP_VOLUME_NAME)).toBe(false);
+  });
+
+  it('omits the container security context when caller passes null', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { containerSecurityContext: null });
+    const container = job.spec?.template?.spec?.containers?.[0];
+    expect(container?.securityContext).toBeUndefined();
+    // /tmp emptyDir is also omitted (no readOnlyRootFilesystem flag in
+    // the container security context to gate it).
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === TMP_VOLUME_NAME)).toBe(false);
+  });
+
+  it('preserves the artifact volume + adds the /tmp emptyDir under default security ctx', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts' },
+    });
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    const names = volumes.map((v) => v.name).sort();
+    expect(names).toEqual([ARTIFACT_VOLUME_NAME, TMP_VOLUME_NAME].sort());
   });
 });

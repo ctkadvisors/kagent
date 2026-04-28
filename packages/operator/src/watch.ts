@@ -5,11 +5,9 @@
 
 /**
  * AgentTask watch loop — wraps `@kubernetes/client-node`'s `makeInformer`
- * around the cluster-wide AgentTask collection. Phase 2 only ships the
- * pipeline; the reconcile body lands in C4.
- *
- * Cluster-wide watch in v0.1; namespace scoping is a v0.2 affordance
- * once multi-tenant becomes a real workload concern.
+ * around the AgentTask collection. The operator can watch one namespace
+ * (chart default) or the cluster-wide endpoint (advanced deployments
+ * that provision agent-pod prerequisites in every workload namespace).
  */
 
 import {
@@ -23,7 +21,12 @@ import {
 import { API_GROUP, API_VERSION, type AgentTask, isAgentTask } from './crds/index.js';
 
 const PLURAL = 'agenttasks' as const;
-const WATCH_PATH = `/apis/${API_GROUP}/${API_VERSION}/${PLURAL}` as const;
+const CLUSTER_WATCH_PATH = `/apis/${API_GROUP}/${API_VERSION}/${PLURAL}` as const;
+
+export interface AgentTaskInformerOptions {
+  /** Namespace to watch. Undefined = cluster-wide watch. */
+  readonly namespace?: string;
+}
 
 /**
  * Reconcile-handler contract. The watch loop calls one of these per
@@ -38,33 +41,44 @@ export interface AgentTaskHandler {
 }
 
 /**
- * Construct (but do not start) an Informer for AgentTasks across all
- * namespaces. Caller invokes `informer.start()` and is responsible for
- * lifecycle (`stop()` on shutdown). Errors emitted by the underlying
- * watch trigger the handler's optional `onError` plus an automatic
- * 5-second restart — matches the resilience pattern documented in
- * @kubernetes/client-node README.
+ * Construct (but do not start) an Informer for AgentTasks. Caller
+ * invokes `informer.start()` and is responsible for lifecycle (`stop()`
+ * on shutdown). Errors emitted by the underlying watch trigger the
+ * handler's optional `onError` plus an automatic 5-second restart.
  */
 export function createAgentTaskInformer(
   kc: KubeConfig,
   api: CustomObjectsApi,
   handler: AgentTaskHandler,
+  opts: AgentTaskInformerOptions = {},
 ): Informer<AgentTask> {
   // CustomObjectsApi.listClusterCustomObject returns Promise<any> by design —
   // CRDs aren't in the OpenAPI schema the client was generated against.
   // Casting at the call site is the documented v1.x pattern for typed CRs.
   const listFn = async (): Promise<KubernetesListObject<AgentTask>> => {
     /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-    const res = await api.listClusterCustomObject({
-      group: API_GROUP,
-      version: API_VERSION,
-      plural: PLURAL,
-    });
+    const res =
+      opts.namespace !== undefined
+        ? await api.listNamespacedCustomObject({
+            group: API_GROUP,
+            version: API_VERSION,
+            namespace: opts.namespace,
+            plural: PLURAL,
+          })
+        : await api.listClusterCustomObject({
+            group: API_GROUP,
+            version: API_VERSION,
+            plural: PLURAL,
+          });
     return res as KubernetesListObject<AgentTask>;
     /* eslint-enable @typescript-eslint/no-unsafe-assignment */
   };
 
-  const informer = makeInformer<AgentTask>(kc, WATCH_PATH, listFn);
+  const watchPath =
+    opts.namespace !== undefined
+      ? `/apis/${API_GROUP}/${API_VERSION}/namespaces/${encodeURIComponent(opts.namespace)}/${PLURAL}`
+      : CLUSTER_WATCH_PATH;
+  const informer = makeInformer<AgentTask>(kc, watchPath, listFn);
 
   informer.on('add', (obj) => {
     if (!isAgentTask(obj)) return;

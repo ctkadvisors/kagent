@@ -53,11 +53,17 @@ api:
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
   langfuseBaseUrl: ''
-  # Optional — set to 'true' to require the workbench-api to enforce
-  # auth itself (e.g. session cookies). Default unset → the API trusts
-  # the in-cluster network boundary + whatever sits in front of the
-  # Ingress (Tailscale, Traefik basicAuth middleware, future SSO).
-  authRequired: ''
+  # Header-trust auth gate. The workbench-api requires every non-probe
+  # request to carry an `X-Forwarded-User` header (set upstream by
+  # Traefik forward-auth or oauth2-proxy). The default is `true` —
+  # fail-closed; only the literal string `false` disables enforcement.
+  # Disabling logs a loud warning at workbench-api boot. See WS-A
+  # security baseline + packages/workbench-api/src/auth.ts for the
+  # trust model.
+  #
+  # `/healthz` and `/readyz` ALWAYS bypass auth so kubelet probes
+  # work regardless of upstream auth-shim health.
+  authRequired: 'true'
   # Per-container resource budget. Conservative MVP defaults — bump
   # when you start watching many AgentTasks (the in-memory cache scales
   # with the count of objects under watch).
@@ -205,6 +211,51 @@ podLabels: {}
 # Workbench logging verbosity (info | debug). Plumbed as LOG_LEVEL into
 # the workbench-api container.
 logLevel: 'info'
+
+# ---------------------------------------------------------------------
+# WS-A — default-deny NetworkPolicy. See `templates/networkpolicy.yaml`.
+# REQUIRES a CNI that enforces NetworkPolicies (Calico, Cilium,
+# Weave, ...). K3s with the default flannel backend ignores this
+# resource.
+# ---------------------------------------------------------------------
+networkPolicy:
+  # Default true — fail-closed.
+  enabled: true
+  # `from` clauses copied verbatim into the ingress allow rule. Defaults
+  # to a Traefik-friendly rule if left empty (see networkpolicy.yaml).
+  # Override on clusters whose ingress controller uses a different
+  # namespace/label.
+  # Example for nginx-ingress in the `ingress-nginx` namespace:
+  #   ingressFrom:
+  #     - namespaceSelector:
+  #         matchLabels:
+  #           kubernetes.io/metadata.name: ingress-nginx
+  #       podSelector:
+  #         matchLabels:
+  #           app.kubernetes.io/name: ingress-nginx
+  ingressFrom: []
+  # Extra egress rules merged into the rendered policy.
+  extraEgress: []
+
+# ---------------------------------------------------------------------
+# WS-A pod + container security context defaults. Applied to both the
+# api and ui sidecar containers in the workbench Deployment. Override
+# sub-fields by passing the full object via `--set-json` or values
+# overlay.
+# ---------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ['ALL']
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
 
 # Optional name + fullname overrides — standard Helm idiom.
 nameOverride: ''

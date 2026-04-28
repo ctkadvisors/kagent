@@ -233,6 +233,14 @@ export function resolveWriterEnv(
  * file (post-rename).
  *
  * Throws on FS errors so the caller can surface a clean tool error.
+ *
+ * INVARIANT: this function ALWAYS persists to disk before returning;
+ * the returned `pvc://...` URI is always followable to a real file at
+ * `path`. Callers MUST treat any `pvc://` URI as "bytes are durable on
+ * disk." The inline counterpart that intentionally skips the FS write
+ * is `inlineArtifactRef()`, which returns an `inline://sha256:...`
+ * URI under a different scheme — that contract is the only way to
+ * tell durable artifacts apart from inline-only ones at the URI level.
  */
 export function writeArtifactToDisk(
   name: string,
@@ -307,6 +315,50 @@ export function writeArtifactToDisk(
     producedAt: now.toISOString(),
   };
   return { ref, path: targetPath };
+}
+
+/* =====================================================================
+ * Inline-only ref builder — non-persisting counterpart to write_artifact.
+ * ===================================================================== */
+
+/**
+ * Build a synthetic `ArtifactRef` for content that the caller does NOT
+ * want to durably persist on disk. The returned URI uses the
+ * `inline://sha256:<hex>` scheme to make the non-durable contract
+ * explicit at the URI level — `pvc://` ⟹ persisted, `inline://` ⟹
+ * not persisted.
+ *
+ * Use ONLY when the caller does NOT want the bytes durably stored
+ * (e.g. a small text payload that is also embedded directly into
+ * `AgentTask.status.result.content`). Refs with the `inline://` scheme
+ * are intentionally dropped from `RunResult.artifacts` by the runner
+ * collator (see `collectArtifactsFromTraces`) so durable consumers
+ * never see a URI they can't follow.
+ *
+ * The synthetic URI is content-addressed via SHA-256 so two callers
+ * producing the same bytes get the same URI — useful for debug
+ * fingerprinting; not used for routing or storage in v0.1.
+ */
+export function inlineArtifactRef(
+  content: string,
+  mediaType: string,
+  now: Date = new Date(),
+): ArtifactRef {
+  if (typeof content !== 'string') {
+    throw new Error('inlineArtifactRef: "content" must be a UTF-8 string');
+  }
+  if (typeof mediaType !== 'string' || mediaType.length === 0) {
+    throw new Error('inlineArtifactRef: "mediaType" must be a non-empty string');
+  }
+  const bytes = Buffer.from(content, 'utf8');
+  const hex = createHash('sha256').update(bytes).digest('hex');
+  return {
+    uri: `inline://sha256:${hex}`,
+    mediaType,
+    sizeBytes: bytes.byteLength,
+    checksum: `sha256:${hex}`,
+    producedAt: now.toISOString(),
+  };
 }
 
 /* =====================================================================

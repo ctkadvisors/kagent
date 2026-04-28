@@ -1,31 +1,60 @@
 name: CI
 
+# Single-workflow CI gate. Verify (install / typecheck / lint / test /
+# format / build) runs on every PR and main push. The CRD-drift job
+# runs after verify and asserts that packages/operator/manifests/crds/
+# *.yaml has not drifted from packages/operator/src/crds/types.ts. The
+# image build job runs only on `v*` tags AND only after both verify +
+# crd-drift are green — image releases never ship if CI is red.
+#
+# All `uses:` actions are pinned by SHA per the supply-chain hardening
+# baseline. Update SHAs with `gh api repos/<owner>/<repo>/git/refs/
+# tags/<v>` and the workflow `# vN` comment is the human-readable hint
+# for what each SHA was at pin time.
+
 on:
   pull_request:
   push:
     branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+  # Required for cosign keyless signing + buildkit provenance attestations
+  # (`docker/build-push-action` reads OIDC tokens from this scope).
+  id-token: write
+  attestations: write
+
+# Cancel in-progress runs on the same ref. Tag runs and main pushes get
+# distinct refs so an image release won't cancel an in-flight CI run on
+# main.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
   verify:
-    name: Install + Typecheck + Lint + Test + Format
+    name: Install + Typecheck + Lint + Test + Build + Format
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 9.15.9
           run_install: false
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -42,5 +71,156 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+      - name: Build (compile TS to JS for every non-UI package)
+        # Verifies every package's `tsc -p .` emit succeeds — the same
+        # build path the production Dockerfiles run.
+        run: pnpm -r --filter '!@kagent/workbench-ui' build
+
       - name: Format check
         run: pnpm format:check
+
+  crd-drift:
+    name: CRD drift check
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies (operator only)
+        run: pnpm install --frozen-lockfile --filter @kagent/operator...
+
+      - name: Check CRD YAML vs TS types drift
+        run: pnpm --filter @kagent/operator crd:check
+
+  build-images:
+    name: Build + sign + SBOM (${{ matrix.name }})
+    needs: [verify, crd-drift]
+    # Only build / push images on tag pushes (releases) or manual
+    # dispatch. Plain main / PR runs skip this job — verify + crd-drift
+    # is the per-commit gate; images are an explicit release artifact.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Fail-fast so a broken Dockerfile in one image doesn't burn cosign
+      # signatures on the others. Each matrix leg is independent
+      # (separate context, file, image-ref pair).
+      fail-fast: true
+      matrix:
+        include:
+          - name: operator
+            image: ghcr.io/ctkadvisors/kagent-operator
+            file: packages/operator/Dockerfile
+          - name: agent-pod
+            image: ghcr.io/ctkadvisors/kagent-agent-pod
+            file: packages/agent-pod/Dockerfile
+          - name: workbench-api
+            image: ghcr.io/ctkadvisors/kagent-workbench-api
+            file: packages/workbench-api/Dockerfile
+          - name: workbench-ui
+            image: ghcr.io/ctkadvisors/kagent-workbench-ui
+            file: packages/workbench-ui/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build + push image (multi-arch)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Belt-and-suspenders: buildkit-native attestations for SBOM
+          # + provenance, plus a cosign-attached SBOM below. The two
+          # are not redundant — buildkit's are stored as referrers on
+          # the image manifest while cosign attaches separately and is
+          # what `cosign verify` consumes.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Generate SPDX SBOM (syft via anchore/sbom-action)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          # Upload as a workflow artifact so the SBOM is downloadable
+          # alongside the image.
+          artifact-name: sbom-${{ matrix.name }}.spdx.json
+          output-file: ${{ runner.temp }}/sbom-${{ matrix.name }}.spdx.json
+
+      - name: Cosign sign image (keyless OIDC)
+        # Sigstore keyless flow — no static signing key. The OIDC token
+        # GitHub mints from `id-token: write` is what cosign uses to
+        # bind the signature to this workflow + tag.
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          IMAGE_REF: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE_REF"
+
+      - name: Cosign attest SBOM (attach to image)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          IMAGE_REF: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          SBOM_PATH: ${{ runner.temp }}/sbom-${{ matrix.name }}.spdx.json
+        run: |
+          cosign attest --yes \
+            --predicate "$SBOM_PATH" \
+            --type spdxjson \
+            "$IMAGE_REF"
+
+      - name: Generate build provenance attestation
+        # GitHub-native build provenance (separate from buildkit's
+        # `provenance: mode=max` above). Belt-and-suspenders so consumers
+        # can verify either via `gh attestation verify` or `cosign verify`.
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

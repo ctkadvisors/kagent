@@ -105,7 +105,10 @@ export class InProcessToolProvider implements ToolProvider {
     }));
   }
 
-  describeTools(): ToolDescriptor[] {
+  describeTools(_ctx?: ToolInvocationContext): ToolDescriptor[] {
+    // ctx is part of the WS-G interface change so subprocess providers
+    // can cancel slow lookups; in-process enumeration is synchronous and
+    // I/O-free, so the signal is intentionally unused here.
     return this.descriptors;
   }
 

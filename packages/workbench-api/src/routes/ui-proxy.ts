@@ -97,9 +97,19 @@ export function uiProxyRoute(deps: UiProxyDeps): Hono {
 
     // Pass-through the body. Hono's `Response` constructor accepts a
     // ReadableStream so we don't have to buffer the whole asset.
-    const body = upstream.body;
-    const init: ResponseInit = { status: upstream.status, headers: upstream.headers };
-    return new Response(body, init);
+    //
+    // Strip hop-by-hop headers + framing/encoding headers that wouldn't
+    // survive re-emission. Node's `fetch` (undici) auto-decompresses, so
+    // a `content-encoding: gzip` header from the upstream describes bytes
+    // we no longer have; same logic for `content-length`. `transfer-
+    // encoding`, `connection`, `keep-alive` are hop-by-hop per RFC 9110.
+    const headers = new Headers(upstream.headers);
+    headers.delete('content-encoding');
+    headers.delete('content-length');
+    headers.delete('transfer-encoding');
+    headers.delete('connection');
+    headers.delete('keep-alive');
+    return new Response(upstream.body, { status: upstream.status, headers });
   });
 
   return app;

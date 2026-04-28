@@ -9,10 +9,15 @@ published to:
 - `ghcr.io/ctkadvisors/kagent-workbench-api`
 - `ghcr.io/ctkadvisors/kagent-workbench-ui`
 
-Triggers: every push to `main`, tags matching `v*-phase*` or `vX.Y.Z`, and
-manual `workflow_dispatch`. Per-image `cache-from/cache-to` scopes keep cold
-builds bounded. Build context is the repo root so the workbench packages
-can pull `@kagent/dto` (and any other workspace dep) via pnpm.
+Triggers: every push to `main`, every tag matching `v*` (any version-
+prefixed tag — pre-release, MVP, or final), and manual
+`workflow_dispatch`. The metadata-action emits image tags from
+`type=ref,event=tag` which preserves the leading `v`, so a git tag
+`v0.0.5-workbench-mvp` produces an image tag `v0.0.5-workbench-mvp`
+that lines up exactly with `Chart.appVersion`. Per-image
+`cache-from/cache-to` scopes keep cold builds bounded. Build context is
+the repo root so the workbench packages can pull `@kagent/dto` (and any
+other workspace dep) via pnpm.
 
 ## History — why there's no Gitea pipeline
 
@@ -35,3 +40,19 @@ risk. Only image pulls were moved.
 packages, Helm chart, and Dockerfiles have all landed. The GitHub
 Actions workflow reacts to that tag pattern automatically; check the
 Actions tab on github.com/ctkadvisors/kagent for build status.
+
+## Auth (WS-A — security baseline)
+
+The workbench-api is FAIL-CLOSED by default. The chart sets
+`api.authRequired: true` (see
+`packages/operator/charts/kagent-workbench/values.yaml`); that env-vars
+into the container as `WORKBENCH_AUTH_REQUIRED=true`, and the API
+rejects every non-probe request that doesn't carry the
+`X-Forwarded-User` header (set upstream by Traefik forward-auth or
+oauth2-proxy).
+
+`/healthz` and `/readyz` are exempt — kubelet probes still work without
+an auth shim in front of the pod.
+
+To disable enforcement (dev-only): `--set api.authRequired=false`. The
+container logs a loud warning at boot in that mode.

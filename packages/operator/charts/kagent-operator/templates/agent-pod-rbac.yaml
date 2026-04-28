@@ -6,8 +6,12 @@ ServiceAccount + Role + RoleBinding for the agent pods the operator
 spawns. Each agent pod patches its own AgentTask's status subresource
 on completion — that's the only K8s permission it needs.
 
-Scoped to the release namespace (kagent-system by default). Multi-
-namespace AgentTasks would need a ClusterRole; deferred to v0.2.
+Scoped to the release namespace (kagent-system by default). With
+watchAllNamespaces=true the operator reaches across namespaces, but
+this SA + Role still only exists here — operators must replicate the
+agent-pod ServiceAccount + RoleBinding in every workload namespace
+they expect to spawn pods in. Multi-namespace via a ClusterRole is
+deferred to v0.2.
 */}}
 {{- if .Values.agentPod.rbac.create -}}
 apiVersion: v1

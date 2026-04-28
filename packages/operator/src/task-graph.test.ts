@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { API_GROUP_VERSION, type AgentTask, type AgentTaskPhase } from './crds/index.js';
 import {
+  PARENT_TASK_NAME_ANNOTATION,
   PARENT_TASK_NAME_LABEL,
   PARENT_TASK_UID_LABEL,
   aggregateChildren,
@@ -103,11 +104,23 @@ describe('buildChildTaskManifest', () => {
     expect(child.metadata.name).toBe('child-1');
   });
 
-  it('attaches parent-task-uid + parent-task-name labels', () => {
+  it('attaches parent-task-uid label, short parent-name label, and full-name annotation', () => {
     const parent = makeParent();
     const child = buildChildTaskManifest(parent, makeChildTaskSpec());
     expect(child.metadata.labels?.[PARENT_TASK_UID_LABEL]).toBe('parent-uid-1');
     expect(child.metadata.labels?.[PARENT_TASK_NAME_LABEL]).toBe('parent-task');
+    expect(child.metadata.annotations?.[PARENT_TASK_NAME_ANNOTATION]).toBe('parent-task');
+  });
+
+  it('omits the parent-name label for long parent names but keeps the annotation', () => {
+    const longName = 'a'.repeat(70);
+    const parent = makeParent({
+      metadata: { name: longName, namespace: 'default', uid: 'parent-uid-1' },
+    });
+    const child = buildChildTaskManifest(parent, makeChildTaskSpec());
+    expect(child.metadata.labels?.[PARENT_TASK_UID_LABEL]).toBe('parent-uid-1');
+    expect(child.metadata.labels?.[PARENT_TASK_NAME_LABEL]).toBeUndefined();
+    expect(child.metadata.annotations?.[PARENT_TASK_NAME_ANNOTATION]).toBe(longName);
   });
 
   it('attaches a non-controller ownerReference back to the parent with blockOwnerDeletion=true', () => {
@@ -295,6 +308,27 @@ describe('parentTaskRefFromChild', () => {
       spec: { targetAgent: 'x', payload: {}, originalUserMessage: 'hi' },
     };
     expect(parentTaskRefFromChild(child)).toBeNull();
+  });
+
+  it('falls back to the parent-name annotation when the label is omitted', () => {
+    const longName = 'a'.repeat(70);
+    const child: AgentTask = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: {
+        name: 'c1',
+        namespace: 'default',
+        uid: 'c-uid',
+        labels: { [PARENT_TASK_UID_LABEL]: 'p-uid' },
+        annotations: { [PARENT_TASK_NAME_ANNOTATION]: longName },
+      },
+      spec: { targetAgent: 'x', payload: {}, originalUserMessage: 'hi' },
+    };
+    expect(parentTaskRefFromChild(child)).toEqual({
+      name: longName,
+      namespace: 'default',
+      uid: 'p-uid',
+    });
   });
 
   it('returns parent ref with uid when both labels present', () => {

@@ -52,3 +52,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}
+
+{{- define "kagent-operator.agentPod.image" -}}
+{{- $tag := .Values.agentPod.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.agentPod.image.repository $tag -}}
+{{- end -}}
