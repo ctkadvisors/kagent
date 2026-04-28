@@ -41,13 +41,22 @@ export type {
   ParsedArtifactUri,
 } from './crds/index.js';
 
-export { reconcileAgentTask, reconcileParentFromChildEvent } from './reconcile.js';
+export {
+  markAgentTaskFailedFromExternal,
+  patchStatusWithRetry,
+  reconcileAgentTask,
+  reconcileParentFromChildEvent,
+} from './reconcile.js';
 export type {
+  MarkFailureAction,
+  MarkFailureDeps,
+  PatchStatusResult,
   ReconcileDeps,
   ReconcileParentFromChildAction,
   ReconcileParentFromChildDeps,
   ReconcileResult,
 } from './reconcile.js';
+export { mergeCondition, nextPhase } from './status-transitions.js';
 export { buildJobSpec, jobNameForTask } from './job-spec.js';
 export type { BuildJobSpecOptions } from './job-spec.js';
 export { buildHandler } from './main.js';

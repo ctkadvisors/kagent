@@ -28,12 +28,20 @@
 
 import type { BatchV1Api, CustomObjectsApi, V1Job } from '@kubernetes/client-node';
 
-import { API_GROUP, API_VERSION, type Agent, type AgentTask, isAgent } from './crds/index.js';
+import {
+  API_GROUP,
+  API_VERSION,
+  type Agent,
+  type AgentTask,
+  type AgentTaskCondition,
+  isAgent,
+} from './crds/index.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
 import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
 import { mergePatchOptions } from './k8s.js';
+import { mergeCondition, nextPhase } from './status-transitions.js';
 import {
   PARENT_TASK_UID_LABEL,
   aggregateChildren,
@@ -119,12 +127,30 @@ export async function reconcileAgentTask(
     return { action: 'failed', reason };
   }
 
-  // Step 5 — update status.
+  // Step 5 — update status. Routed through the conflict-aware retry
+  // helper so a stale informer object can't dispatch over the top of
+  // a terminal phase that landed between the relist and this point.
   const now = deps.now ?? (() => new Date());
-  await patchStatus(task, deps.customApi, {
-    phase: 'Dispatched',
-    podName: jobNameForTask(task),
-    startedAt: now().toISOString(),
+  const ts = now().toISOString();
+  await patchStatusWithRetry(task, deps.customApi, (current) => {
+    const proposed = nextPhase(current.status?.phase, 'Dispatched');
+    if (proposed === null) return null;
+    return {
+      phase: proposed,
+      podName: jobNameForTask(task),
+      startedAt: ts,
+      observedGeneration: current.metadata.generation ?? 0,
+      conditions: mergeCondition(current.status?.conditions, {
+        type: 'Dispatched',
+        status: 'True',
+        reason: 'JobCreated',
+        message: `Job ${jobNameForTask(task)} created`,
+        lastTransitionTime: ts,
+        ...(current.metadata.generation !== undefined && {
+          observedGeneration: current.metadata.generation,
+        }),
+      }),
+    };
   });
 
   return { action: 'dispatched', jobName: jobNameForTask(task) };
@@ -209,11 +235,45 @@ function isAlreadyExists(err: unknown): boolean {
 
 async function markFailed(task: AgentTask, reason: string, deps: ReconcileDeps): Promise<void> {
   const now = deps.now ?? (() => new Date());
+  const ts = now().toISOString();
   try {
-    await patchStatus(task, deps.customApi, {
-      phase: 'Failed',
-      error: reason,
-      completedAt: now().toISOString(),
+    await patchStatusWithRetry(task, deps.customApi, (current) => {
+      const proposed = nextPhase(current.status?.phase, 'Failed');
+      // If the task is already Completed, never overwrite — the agent-pod
+      // wrote success between the dispatch error and this fallback. The
+      // outer reconcile error path is the cause; conditions[] still gets
+      // an entry for visibility.
+      if (proposed === null) {
+        return {
+          observedGeneration: current.metadata.generation ?? 0,
+          conditions: mergeCondition(current.status?.conditions, {
+            type: 'ReconcileError',
+            status: 'True',
+            reason: 'ReconcileFailedAfterTerminal',
+            message: reason,
+            lastTransitionTime: ts,
+            ...(current.metadata.generation !== undefined && {
+              observedGeneration: current.metadata.generation,
+            }),
+          }),
+        };
+      }
+      return {
+        phase: proposed,
+        error: reason,
+        completedAt: ts,
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, {
+          type: 'Failed',
+          status: 'True',
+          reason: 'ReconcileError',
+          message: reason,
+          lastTransitionTime: ts,
+          ...(current.metadata.generation !== undefined && {
+            observedGeneration: current.metadata.generation,
+          }),
+        }),
+      };
     });
   } catch (err) {
     // Status patch is best-effort; surface but don't propagate.
@@ -230,6 +290,10 @@ interface StatusPatch {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  /** WS-E — see status-transitions.ts. */
+  observedGeneration?: number;
+  /** WS-E — append-only conditions list. */
+  conditions?: readonly AgentTaskCondition[];
   /* ---- Workstream 5 / Phase 5 — child-aggregation projection.
    * Operator-owned (NOT agent-pod-owned). `reconcileParentFromChildEvent`
    * is the only writer. Carved out separately from `phase` so terminal
@@ -265,6 +329,120 @@ async function patchStatus(
   );
 }
 
+/* =====================================================================
+ * patchStatusWithRetry — WS-E.
+ *
+ * Read-build-write cycle that gives every status writer a fresh view of
+ * the cluster's current state before computing the patch. The `build`
+ * closure is invoked on each attempt with the freshly fetched object;
+ * if it returns `null` the patch is treated as a no-op regression and
+ * skipped (caller gets `{kind:'skipped', reason:'regression'}`).
+ *
+ * On a 409 conflict (concurrent writer) we retry up to `maxRetries`
+ * times, re-reading the object on each attempt. On 404 we surface
+ * `{kind:'skipped', reason:'not-found'}` (the AgentTask was deleted out
+ * from under us — owner-GC race or operator-issued DELETE).
+ *
+ * ## Why a read-build-write cycle and not server-side
+ * `replace-status` with metadata.resourceVersion?
+ *
+ * Kubernetes' merge-patch on the status subresource doesn't honor a
+ * caller-supplied `metadata.resourceVersion` the way `replace-status`
+ * (PUT) does. Switching every status writer to PUT would force us to
+ * resend the full status object every time — including fields owned by
+ * other writers (the agent-pod's `result`, the parent re-reconcile's
+ * `children/aggregatePhase`). That couples writers we explicitly want
+ * to keep loosely coupled. Read-build-write gives us the same effective
+ * regression guard (the build closure inspects `current.status.phase`
+ * and refuses backward transitions) while keeping each writer's patch
+ * narrowly scoped to the fields it owns.
+ *
+ * The cost is a small race window between GET and PATCH where another
+ * writer can land first. The 409 retry loop closes most of it; the
+ * `nextPhase()` regression check inside the build closure closes the
+ * rest (a write that races a terminal phase is rejected on the next
+ * attempt's GET).
+ * ===================================================================== */
+
+export type PatchStatusResult =
+  | { kind: 'patched' }
+  | { kind: 'skipped'; reason: 'regression' | 'not-found' }
+  | { kind: 'failed'; error: Error };
+
+export async function patchStatusWithRetry(
+  task: AgentTask,
+  customApi: CustomObjectsApi,
+  build: (current: AgentTask) => StatusPatch | null,
+  maxRetries = 3,
+): Promise<PatchStatusResult> {
+  const namespace = task.metadata.namespace ?? 'default';
+  const name = task.metadata.name;
+  if (typeof name !== 'string' || name.length === 0) {
+    return { kind: 'failed', error: new Error('AgentTask is missing metadata.name') };
+  }
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let current: AgentTask;
+    try {
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+      const res = await customApi.getNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace,
+        plural: 'agenttasks',
+        name,
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+      current = res as AgentTask;
+    } catch (err) {
+      if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
+      lastErr = err;
+      // GET failures are not retryable except for transient errors —
+      // surface immediately to keep behavior simple.
+      throw err;
+    }
+
+    const patch = build(current);
+    if (patch === null) {
+      return { kind: 'skipped', reason: 'regression' };
+    }
+
+    try {
+      await customApi.patchNamespacedCustomObjectStatus(
+        {
+          group: API_GROUP,
+          version: API_VERSION,
+          namespace,
+          plural: 'agenttasks',
+          name,
+          body: { status: patch },
+        },
+        mergePatchOptions,
+      );
+      return { kind: 'patched' };
+    } catch (err) {
+      lastErr = err;
+      if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
+      if (!isConflict(err)) {
+        throw err;
+      }
+      // 409 — loop and re-read.
+    }
+  }
+  // Exhausted retries — surface the last conflict as a thrown error so
+  // callers (markFailed's catch, etc.) can log + move on.
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`patchStatusWithRetry: exhausted ${maxRetries} retries`);
+}
+
+function isConflict(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: unknown; statusCode?: unknown };
+  return e.code === 409 || e.statusCode === 409;
+}
+
 /**
  * External entry point — used by the Job/Pod watcher to mark an
  * AgentTask Failed when its underlying K8s primitives died before the
@@ -282,42 +460,124 @@ export interface MarkFailureDeps {
 
 export type MarkFailureAction =
   | { kind: 'marked-failed'; previousPhase: string }
-  | { kind: 'skipped'; reason: 'already-completed' | 'already-failed' | 'not-found' };
+  | { kind: 'condition-appended'; previousPhase: 'Completed' | 'Failed' }
+  | { kind: 'skipped'; reason: 'not-found' };
 
+/**
+ * WS-E behavior:
+ *   - Pending / Dispatched / unset → write `phase=Failed` AND append a
+ *     condition with the failure context.
+ *   - Completed → DO NOT overwrite phase. Append a
+ *     `JobFailedAfterComplete` condition so the post-success failure
+ *     stays visible without erasing the success signal.
+ *   - Failed → append a fresh condition (multiple failure modes — image
+ *     pull → OOM → etc — all stay observable).
+ *
+ * Both branches go through `patchStatusWithRetry`; the build closure
+ * uses `nextPhase()` to enforce monotonicity and re-reads on 409.
+ */
 export async function markAgentTaskFailedFromExternal(
   ref: { readonly namespace: string; readonly name: string },
   failure: { readonly reason: string; readonly message: string; readonly source: 'job' | 'pod' },
   deps: MarkFailureDeps,
 ): Promise<MarkFailureAction> {
   const now = deps.now ?? (() => new Date());
-  let current: AgentTask | undefined;
-  try {
-    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-    const res = await deps.customApi.getNamespacedCustomObject({
-      group: API_GROUP,
-      version: API_VERSION,
-      namespace: ref.namespace,
-      plural: 'agenttasks',
-      name: ref.name,
-    });
-    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
-    current = res as AgentTask;
-  } catch (err) {
-    if (isNotFound(err)) return { kind: 'skipped', reason: 'not-found' };
-    throw err;
+  const ts = now().toISOString();
+  const errorPrefix = `[${failure.source}/${failure.reason}] `;
+
+  // Probe for the not-found case so the early-return contract still
+  // holds. `patchStatusWithRetry` re-fetches inside its loop, so a
+  // disappearing object between this probe and the loop is handled too.
+  // Carrying the synthetic AgentTask shape avoids a redundant GET when
+  // the object is present (the helper does its own fresh GET inside).
+  const probeTask: AgentTask = {
+    apiVersion: 'kagent.knuteson.io/v1alpha1',
+    kind: 'AgentTask',
+    metadata: { namespace: ref.namespace, name: ref.name },
+    spec: { payload: null },
+  };
+
+  // Tracked across the build closure invocation. Annotate the union
+  // explicitly so TS doesn't narrow on the seed value.
+  type ResolvedKind = 'marked-failed' | 'condition-appended';
+  const state: { previousPhase: string | undefined; kind: ResolvedKind } = {
+    previousPhase: undefined,
+    kind: 'marked-failed',
+  };
+
+  const result = await patchStatusWithRetry(probeTask, deps.customApi, (current) => {
+    const phase = current.status?.phase;
+    state.previousPhase = phase;
+
+    const conditionType =
+      phase === 'Completed'
+        ? 'JobFailedAfterComplete'
+        : phase === 'Failed'
+          ? failure.reason || 'AdditionalFailure'
+          : 'Failed';
+
+    const newCondition: AgentTaskCondition = {
+      type: conditionType,
+      status: 'True',
+      reason: failure.reason,
+      message: errorPrefix + failure.message,
+      lastTransitionTime: ts,
+      ...(current.metadata.generation !== undefined && {
+        observedGeneration: current.metadata.generation,
+      }),
+    };
+
+    if (phase === 'Completed' || phase === 'Failed') {
+      // Additive only — never overwrite a terminal phase.
+      state.kind = 'condition-appended';
+      return {
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, newCondition),
+      };
+    }
+
+    // Pending / Dispatched / unset → mark Failed AND record condition.
+    const proposed = nextPhase(phase, 'Failed');
+    if (proposed === null) {
+      // Defensive — shouldn't be reachable given the branch above.
+      state.kind = 'condition-appended';
+      return {
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, newCondition),
+      };
+    }
+    state.kind = 'marked-failed';
+    return {
+      phase: proposed,
+      error: errorPrefix + failure.message,
+      completedAt: ts,
+      observedGeneration: current.metadata.generation ?? 0,
+      conditions: mergeCondition(current.status?.conditions, newCondition),
+    };
+  });
+
+  if (result.kind === 'skipped' && result.reason === 'not-found') {
+    return { kind: 'skipped', reason: 'not-found' };
+  }
+  if (result.kind === 'skipped' && result.reason === 'regression') {
+    // Build closure refused — the append-only branches always return a
+    // patch so this is unreachable in practice. Surface a condition-
+    // appended verdict so callers never see an unhandled case.
+    const prior = state.previousPhase;
+    return {
+      kind: 'condition-appended',
+      previousPhase: prior === 'Completed' || prior === 'Failed' ? prior : 'Failed',
+    };
   }
 
-  const phase = current?.status?.phase;
-  if (phase === 'Completed') return { kind: 'skipped', reason: 'already-completed' };
-  if (phase === 'Failed') return { kind: 'skipped', reason: 'already-failed' };
-
-  const errorPrefix = `[${failure.source}/${failure.reason}] `;
-  await patchStatus(current, deps.customApi, {
-    phase: 'Failed',
-    error: errorPrefix + failure.message,
-    completedAt: now().toISOString(),
-  });
-  return { kind: 'marked-failed', previousPhase: phase ?? '(unset)' };
+  if (state.kind === 'condition-appended') {
+    const prior = state.previousPhase;
+    return {
+      kind: 'condition-appended',
+      previousPhase: prior === 'Completed' || prior === 'Failed' ? prior : 'Failed',
+    };
+  }
+  return { kind: 'marked-failed', previousPhase: state.previousPhase ?? '(unset)' };
 }
 
 function isNotFound(err: unknown): boolean {

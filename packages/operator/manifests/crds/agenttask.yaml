@@ -184,6 +184,53 @@ spec:
                   type: integer
                   minimum: 0
                   description: 'Children that have not reached a terminal phase yet (Pending/Dispatched/absent).'
+                # ---- Workstream E (WS-E) — status authority + monotonic transitions.
+                # `observedGeneration` lets consumers tell whether the
+                # operator has caught up to a new `spec` write (compare
+                # against `metadata.generation`). `conditions[]` is the
+                # standard Kubernetes append-only list — WS-E uses it to
+                # carry failure context that doesn't fit the single
+                # terminal `phase` field (e.g. an OOMKill detected after
+                # the pod already wrote `Completed`). See WS-E plan.
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                  description: '`metadata.generation` the operator most recently reconciled.'
+                conditions:
+                  type: array
+                  description: |
+                    Discrete conditions observed for this AgentTask.
+                    Append-only — WS-E adds entries (e.g.
+                    `JobFailedAfterComplete`) without overwriting a
+                    terminal `phase`. Same `type` is replaced in place;
+                    `lastTransitionTime` is preserved when `status`
+                    didn't change.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                        description: 'CamelCase identifier, e.g. Dispatched, Failed, ImagePullBackOff, OOMKilled, DeadlineExceeded.'
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
       additionalPrinterColumns:
         - name: Phase
           type: string
