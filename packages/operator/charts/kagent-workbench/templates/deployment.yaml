@@ -64,12 +64,23 @@ spec:
       #   - nginx-cache + nginx-run: nginx-alpine's default config
       #     writes /var/cache/nginx + /var/run/nginx.pid; both must
       #     be writable for the ui sidecar to start.
+      #   - nginx-conf-d: the nginx-alpine entrypoint expands
+      #     /etc/nginx/templates/*.template via envsubst INTO
+      #     /etc/nginx/conf.d/. Without a writable mount here the
+      #     `20-envsubst-on-templates.sh` step fails with
+      #     "/etc/nginx/conf.d is not writable", no server block is
+      #     materialized, nginx starts listening on nothing, and the
+      #     readiness probe to ui.port returns connection refused →
+      #     CrashLoop. Empty emptyDir works because the entrypoint
+      #     writes the rendered config there at boot.
       volumes:
         - name: tmp
           emptyDir: {}
         - name: nginx-cache
           emptyDir: {}
         - name: nginx-run
+          emptyDir: {}
+        - name: nginx-conf-d
           emptyDir: {}
       containers:
         - name: api
@@ -141,6 +152,8 @@ spec:
               mountPath: /var/cache/nginx
             - name: nginx-run
               mountPath: /var/run
+            - name: nginx-conf-d
+              mountPath: /etc/nginx/conf.d
           ports:
             - name: ui
               containerPort: {{ .Values.ui.port }}
