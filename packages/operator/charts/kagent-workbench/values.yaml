@@ -213,6 +213,31 @@ podLabels: {}
 logLevel: 'info'
 
 # ---------------------------------------------------------------------
+# WS-A — default-deny NetworkPolicy. See `templates/networkpolicy.yaml`.
+# REQUIRES a CNI that enforces NetworkPolicies (Calico, Cilium,
+# Weave, ...). K3s with the default flannel backend ignores this
+# resource.
+# ---------------------------------------------------------------------
+networkPolicy:
+  # Default true — fail-closed.
+  enabled: true
+  # `from` clauses copied verbatim into the ingress allow rule. Defaults
+  # to a Traefik-friendly rule if left empty (see networkpolicy.yaml).
+  # Override on clusters whose ingress controller uses a different
+  # namespace/label.
+  # Example for nginx-ingress in the `ingress-nginx` namespace:
+  #   ingressFrom:
+  #     - namespaceSelector:
+  #         matchLabels:
+  #           kubernetes.io/metadata.name: ingress-nginx
+  #       podSelector:
+  #         matchLabels:
+  #           app.kubernetes.io/name: ingress-nginx
+  ingressFrom: []
+  # Extra egress rules merged into the rendered policy.
+  extraEgress: []
+
+# ---------------------------------------------------------------------
 # WS-A pod + container security context defaults. Applied to both the
 # api and ui sidecar containers in the workbench Deployment. Override
 # sub-fields by passing the full object via `--set-json` or values

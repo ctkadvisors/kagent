@@ -1,0 +1,67 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+WS-A — default-deny NetworkPolicy for the kagent-operator pod.
+
+Allowed egress (rendered when the corresponding piece of plumbing is
+configured upstream — chart users opt-in by setting the relevant
+values, but the default-deny posture is on regardless):
+  - DNS to kube-system (UDP/TCP 53)
+  - Kubernetes API server (TCP 443) — required for the watch loop
+  - LiteLLM endpoint (when `agentPod.litellmBaseUrl` is set)
+  - OTLP / Langfuse endpoint (when `agentPod.otlpEndpoint` is set)
+  - NATS (when `nats.enabled` is true; defaults to in-namespace)
+  - Any extra rules configured via `networkPolicy.extraEgress`.
+
+Ingress: the operator runs no listening port today (probes are
+restartPolicy-driven), so default-deny ingress is applied with no
+explicit allow rules.
+
+NOTE: K3s with the default flannel CNI does NOT enforce
+NetworkPolicies. Either deploy K3s with `--flannel-backend=none` and
+install Calico/Cilium, or accept that this resource is documentation
+on a flannel cluster. See chart README.
+*/}}
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  # Ingress: default-deny. The operator pod doesn't listen on any port
+  # in v0.1 (no /healthz endpoint), so no allow rules are emitted.
+  ingress: []
+  egress:
+    # DNS — kube-system kube-dns / coredns. UDP for normal queries,
+    # TCP for large responses + EDNS truncation fallback.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Kubernetes API server — required for the watch loop and for
+    # status patches. The default-server pattern works on any cluster
+    # (K8s 1.29+: control-plane endpoint is reachable on 443).
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

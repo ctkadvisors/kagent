@@ -153,6 +153,44 @@ Cluster-scoped read-only. The exact verbs are documented inline in [`templates/c
 
 **No write verbs.** Write actions ship in a separate ClusterRole behind an `actions.enabled` flag in v0.2.
 
+## Auth (WS-A)
+
+Header-trust auth is ENABLED by default (`api.authRequired: true`). The
+workbench-api requires every non-probe request to carry an
+`X-Forwarded-User` header (set upstream by Traefik forward-auth or
+oauth2-proxy). `/healthz` and `/readyz` always bypass the gate so
+kubelet probes still work without an auth shim.
+
+Disable (dev / port-forward only): `--set api.authRequired=false`. The
+container logs a loud warning at boot in that mode.
+
+## NetworkPolicy (WS-A)
+
+A default-deny NetworkPolicy is rendered at
+`templates/networkpolicy.yaml` (gated by `networkPolicy.enabled`,
+default `true`). It allows ingress only from the configured ingress
+controller (defaults to a Traefik-friendly rule in
+`ingress-controller` namespace) and egress to DNS + the Kubernetes API
+server.
+
+Override the ingress source for non-Traefik clusters:
+
+```yaml
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+```
+
+**CNI requirement.** K3s with the default `flannel` backend does NOT
+enforce NetworkPolicies. Run K3s with `--flannel-backend=none` +
+Calico/Cilium for enforcement, or accept that this resource is
+documentation on a flannel cluster.
+
 ## Upgrade
 
 ```bash

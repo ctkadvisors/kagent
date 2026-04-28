@@ -69,6 +69,35 @@ The `value` (plaintext) field still renders the env directly and keeps
 back-compat working. Setting `value` triggers a deprecation warning in
 `helm install` / `helm upgrade` output (NOTES.txt).
 
+## NetworkPolicy (WS-A)
+
+The chart renders a default-deny NetworkPolicy at
+`templates/networkpolicy.yaml` for the operator pod. Allowed egress
+covers DNS + the Kubernetes API server; ingress is fully denied (the
+operator runs no listening port). Extend via:
+
+```yaml
+networkPolicy:
+  enabled: true
+  extraEgress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: nats
+      ports:
+        - port: 4222
+          protocol: TCP
+```
+
+**CNI requirement.** K3s with the default `flannel` backend does NOT
+enforce NetworkPolicies — the resource installs cleanly but is a
+no-op. To get enforcement, install K3s with `--flannel-backend=none`
+and add Calico/Cilium, or run on a cloud K8s cluster whose default
+CNI enforces.
+
+Disable with `--set networkPolicy.enabled=false` if you've accepted
+the risk on a non-enforcing CNI.
+
 ## Uninstall
 
 ```bash

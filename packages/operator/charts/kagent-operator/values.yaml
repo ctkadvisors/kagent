@@ -205,6 +205,32 @@ containerSecurityContext:
 # subprocesses (MCP servers via npx, etc.), so these are kept editable
 # so a workload can opt out of e.g. readOnlyRootFilesystem if its
 # tool subprocesses need writable HOME paths beyond /tmp.
+# ---------------------------------------------------------------------
+# WS-A — default-deny NetworkPolicy. See `templates/networkpolicy.yaml`.
+# REQUIRES a CNI that enforces NetworkPolicies (Calico, Cilium,
+# Weave, ...). K3s with the default flannel backend ignores this
+# resource — deploy K3s with `--flannel-backend=none` + install Calico
+# if you want enforcement.
+# ---------------------------------------------------------------------
+networkPolicy:
+  # Default true — fail-closed posture. Disable only when running on a
+  # cluster whose CNI does not enforce policies AND you've accepted
+  # that risk.
+  enabled: true
+  # Extra egress rules merged into the rendered policy. Use to allow
+  # outbound traffic to LiteLLM, Langfuse, NATS, or any other endpoint
+  # the operator + (transitively) the spawned agent pods need.
+  # Example:
+  #   extraEgress:
+  #     - to:
+  #         - namespaceSelector:
+  #             matchLabels:
+  #               kubernetes.io/metadata.name: nats
+  #       ports:
+  #         - port: 4222
+  #           protocol: TCP
+  extraEgress: []
+
 agentPodSecurityContext:
   pod:
     runAsNonRoot: true
