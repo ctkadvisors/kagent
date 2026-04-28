@@ -24,6 +24,10 @@ export default tseslint.config(
       'node_modules/**',
       'eslint.config.js',
       'vitest.config.ts',
+      // Standalone CI-only tsx scripts. They are not part of the
+      // operator's runtime build and shouldn't pull in the strict
+      // typed-lint rule set. Kept simple-Node-style on purpose.
+      'scripts/**',
     ],
   },
   js.configs.recommended,

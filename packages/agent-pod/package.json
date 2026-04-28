@@ -14,8 +14,14 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
-    "start": "node --import tsx/esm src/main.ts"
+    "start": "node --import tsx/esm src/main.ts",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
   },
+  "files": [
+    "dist",
+    "src"
+  ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
     "@kagent/in-process-tool-provider": "workspace:*",
