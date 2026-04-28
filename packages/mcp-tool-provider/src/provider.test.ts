@@ -105,6 +105,31 @@ describe('McpToolProvider — describeTools + cache (D-15, D-18)', () => {
   });
 });
 
+describe('McpToolProvider — describeTools cancellation (WS-G)', () => {
+  it('pre-aborted signal short-circuits before spawning the subprocess', async () => {
+    const p = spawnFixtureProvider();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(p.describeTools(ctx(controller.signal))).rejects.toBeInstanceOf(
+      McpToolProviderAbortError,
+    );
+  });
+
+  it('passing a non-aborted ctx still resolves to the tool list', async () => {
+    const p = spawnFixtureProvider();
+    const desc = await p.describeTools(ctx());
+    expect(desc.some((d) => d.name === 'mcp_echo')).toBe(true);
+  });
+
+  it('omitting ctx preserves the legacy signature behavior', async () => {
+    // Existing callers that called describeTools() with no args must
+    // still work — the parameter is optional.
+    const p = spawnFixtureProvider();
+    const desc = await p.describeTools();
+    expect(desc.length).toBeGreaterThan(0);
+  });
+});
+
 describe('McpToolProvider — executeTool happy path (D-16)', () => {
   it('Test 4 — tools/call mcp_echo returns flat-string content', async () => {
     const p = spawnFixtureProvider();
