@@ -66,6 +66,7 @@ import { mergeCondition, nextPhase } from './status-transitions.js';
 import {
   PARENT_TASK_UID_LABEL,
   aggregateChildren,
+  cycleCheck,
   type ChildRef,
   type ParentStatusProjection,
 } from './task-graph.js';
@@ -83,6 +84,26 @@ export interface ReconcileDeps {
   readonly jobSpecOptions?: BuildJobSpecOptions;
   /** Override `Date.now()` in tests for deterministic timestamps. */
   readonly now?: () => Date;
+  /* ---- WS-I parent re-aggregate plumbing.
+   * These three optional fields are forwarded by `buildHandler` ->
+   * `maybeReconcileParent` -> `reconcileParentFromChildEvent`. They
+   * are NOT consulted by the dispatch path itself; carving them onto
+   * `ReconcileDeps` keeps the operator boot wiring (`main()`) building
+   * a single dep object.
+   *
+   * Production wiring: `listChildrenForParent` reads the AgentTask
+   * informer cache (`Informer<AgentTask>.list(namespace)` filtered by
+   * the parent-uid label); `getTaskByUid` reads the same cache by uid
+   * for cycle detection; `emitCycleEvent` writes a v1 Event via
+   * CoreV1Api when a cycle trips. Tests typically leave them all
+   * unset — the parent re-aggregate path falls back to a fresh
+   * namespaced LIST and skips cycle detection (fail-open). */
+  readonly listChildrenForParent?: (parentUid: string, namespace: string) => readonly AgentTask[];
+  readonly getTaskByUid?: (uid: string) => AgentTask | undefined;
+  readonly emitCycleEvent?: (
+    parent: { readonly name: string; readonly namespace: string; readonly uid: string },
+    cycle: readonly string[],
+  ) => Promise<void>;
 }
 
 export interface ReconcileResult {
@@ -700,6 +721,36 @@ function isNotFound(err: unknown): boolean {
 
 export interface ReconcileParentFromChildDeps {
   readonly customApi: CustomObjectsApi;
+  /**
+   * Optional informer-cache reader. When supplied, used instead of a
+   * fresh `LIST agenttasks --label-selector=parent-task-uid=<uid>` API
+   * call — see WS-I spec point 3 ("watch-cache discipline"). Returns
+   * the parent's currently-known children from the operator's cached
+   * AgentTask informer. Falls back to the API list when undefined
+   * (the unit-test default; production wiring in main.ts always
+   * supplies the cache reader).
+   */
+  readonly listChildren?: (parentUid: string, namespace: string) => readonly AgentTask[];
+  /**
+   * Optional UID → AgentTask lookup, sourced from the same informer
+   * cache. Required for cycle detection — without it `cycleCheck` has
+   * nothing to walk and we fail-open (existing behavior, per WS-I
+   * spec point 7 "fail-open today"). When supplied, every projection
+   * pass runs `cycleCheck(parent.uid, child.uid, getTaskByUid)` for
+   * each child; any non-ok result aborts the patch and emits an Event.
+   */
+  readonly getTaskByUid?: (uid: string) => AgentTask | undefined;
+  /**
+   * Optional event emitter. Called when cycle detection trips. Receives
+   * the parent identity (for the involvedObject ref) and the cycle path
+   * (for the message body). Best-effort — failures are logged but not
+   * propagated; the patch is still skipped regardless. When undefined
+   * the operator only logs a warning.
+   */
+  readonly emitCycleEvent?: (
+    parent: { readonly name: string; readonly namespace: string; readonly uid: string },
+    cycle: readonly string[],
+  ) => Promise<void>;
 }
 
 export type ReconcileParentFromChildAction =
@@ -708,7 +759,18 @@ export type ReconcileParentFromChildAction =
       aggregatePhase: ParentStatusProjection['aggregatePhase'];
       childCount: number;
     }
-  | { kind: 'skipped'; reason: 'not-found' | 'missing-uid' };
+  | {
+      /**
+       * Idempotency guard — projection equals the parent's existing
+       * `status.children/aggregatePhase/successCount/failureCount/
+       * inFlightCount`, so no PATCH is issued. Spec point 4: "must
+       * produce zero K8s writes" when projection hasn't changed.
+       */
+      kind: 'unchanged';
+      aggregatePhase: ParentStatusProjection['aggregatePhase'];
+      childCount: number;
+    }
+  | { kind: 'skipped'; reason: 'not-found' | 'missing-uid' | 'cycle-detected' };
 
 /**
  * Re-aggregate a parent AgentTask's child projection. Steps:
@@ -756,21 +818,80 @@ export async function reconcileParentFromChildEvent(
     return { kind: 'skipped', reason: 'missing-uid' };
   }
 
-  // LIST children — namespaced because children always live in the same
-  // namespace as their parent (enforced by `buildChildTaskManifest`).
-  /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-  const listRes = await deps.customApi.listNamespacedCustomObject({
-    group: API_GROUP,
-    version: API_VERSION,
-    namespace: ref.namespace,
-    plural: 'agenttasks',
-    labelSelector: `${PARENT_TASK_UID_LABEL}=${parentUid}`,
-  });
-  /* eslint-enable @typescript-eslint/no-unsafe-assignment */
-  const itemsRaw = (listRes as { items?: unknown }).items;
-  const items: AgentTask[] = Array.isArray(itemsRaw) ? (itemsRaw as AgentTask[]) : [];
+  // List children — prefer the informer-cache reader (WS-I spec point 3
+  // "watch-cache discipline"). Falls back to a fresh namespaced LIST
+  // for unit tests and any caller that hasn't wired the cache yet.
+  let items: AgentTask[];
+  if (deps.listChildren !== undefined) {
+    items = [...deps.listChildren(parentUid, ref.namespace)];
+  } else {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const listRes = await deps.customApi.listNamespacedCustomObject({
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace: ref.namespace,
+      plural: 'agenttasks',
+      labelSelector: `${PARENT_TASK_UID_LABEL}=${parentUid}`,
+    });
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    const itemsRaw = (listRes as { items?: unknown }).items;
+    items = Array.isArray(itemsRaw) ? (itemsRaw as AgentTask[]) : [];
+  }
+
+  // WS-I spec point 7 — cycle detection. With the cache reader present
+  // (`getTaskByUid`), walk each child's parent chain back to the root.
+  // If any child appears as an ancestor of the parent we're projecting,
+  // the graph is corrupt; refuse the patch + emit a K8s Event so the
+  // bug surfaces in `kubectl describe`. Without the lookup we fail
+  // open (no-op cycle check), preserving prior behavior.
+  if (deps.getTaskByUid !== undefined) {
+    for (const child of items) {
+      const childUid = child.metadata.uid;
+      if (typeof childUid !== 'string' || childUid.length === 0) continue;
+      const result = cycleCheck(parentUid, childUid, deps.getTaskByUid);
+      if (!result.ok) {
+        const cyclePath = result.cycle;
+        console.warn(
+          `[kagent-operator] AgentTaskCycleDetected on ${ref.namespace}/${ref.name} ` +
+            `(parent uid=${parentUid}, offending child uid=${childUid}, ` +
+            `cycle=${cyclePath.join(' → ')}); skipping projection patch`,
+        );
+        if (deps.emitCycleEvent !== undefined) {
+          try {
+            await deps.emitCycleEvent(
+              { name: ref.name, namespace: ref.namespace, uid: parentUid },
+              cyclePath,
+            );
+          } catch (err) {
+            // Event emission is best-effort — never let a hiccup turn
+            // a refusal-to-patch into a thrown exception that the
+            // informer would log as a watch error.
+            console.error(
+              `[kagent-operator] failed to emit AgentTaskCycleDetected Event for ${ref.namespace}/${ref.name}:`,
+              err,
+            );
+          }
+        }
+        return { kind: 'skipped', reason: 'cycle-detected' };
+      }
+    }
+  }
 
   const projection = aggregateChildren(items);
+
+  // WS-I spec point 4 — idempotency. Re-firing on every relist must
+  // produce ZERO K8s writes when the projection hasn't changed. Diff
+  // every field we own; if all match, return `unchanged` without
+  // touching etcd. The diff is field-level (not just count-level) so
+  // a stale `children[]` entry (e.g. a deleted child still in
+  // parent.status) re-triggers the patch.
+  if (projectionMatchesStatus(projection, parent.status)) {
+    return {
+      kind: 'unchanged',
+      aggregatePhase: projection.aggregatePhase,
+      childCount: projection.children.length,
+    };
+  }
 
   // Narrow patch — children/aggregatePhase only. NEVER includes `phase`.
   await patchStatus(parent, deps.customApi, {
@@ -786,4 +907,47 @@ export async function reconcileParentFromChildEvent(
     aggregatePhase: projection.aggregatePhase,
     childCount: projection.children.length,
   };
+}
+
+/**
+ * True iff every projection field matches the corresponding field on
+ * `current` (the parent's existing `status`). Carved out so the
+ * idempotency check stays close to the field set the writer owns —
+ * if a future field is added to the projection, both this comparator
+ * and `patchStatus`'s body need to learn about it.
+ */
+function projectionMatchesStatus(
+  projection: ParentStatusProjection,
+  current: AgentTask['status'] | undefined,
+): boolean {
+  if (current === undefined) return false;
+  if (current.aggregatePhase !== projection.aggregatePhase) return false;
+  if (current.successCount !== projection.successCount) return false;
+  if (current.failureCount !== projection.failureCount) return false;
+  if (current.inFlightCount !== projection.inFlightCount) return false;
+  return childRefArraysEqual(current.children, projection.children);
+}
+
+function childRefArraysEqual(
+  a: AgentTask['status'] extends infer S
+    ? S extends { children?: infer C }
+      ? C | undefined
+      : never
+    : never,
+  b: readonly ChildRef[],
+): boolean {
+  if (a === undefined) return b.length === 0;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x === undefined || y === undefined) return false;
+    if (x.name !== y.name) return false;
+    if (x.namespace !== y.namespace) return false;
+    if (x.uid !== y.uid) return false;
+    if (x.phase !== y.phase) return false;
+    if (x.completedAt !== y.completedAt) return false;
+    if (x.error !== y.error) return false;
+  }
+  return true;
 }

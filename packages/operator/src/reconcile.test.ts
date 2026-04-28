@@ -1006,4 +1006,301 @@ describe('reconcileParentFromChildEvent — child aggregation projection', () =>
       labelSelector: 'kagent.knuteson.io/parent-task-uid=parent-uid-1',
     });
   });
+
+  /* -------------------------------------------------------------------
+   * WS-I — projection-shape coverage that the existing tests miss:
+   * the `PartiallyComplete` aggregatePhase fires when at least one
+   * child has reached `Completed` AND at least one is still in flight,
+   * with no failures. Truth-table tail per `aggregateChildren` in
+   * task-graph.ts.
+   * ------------------------------------------------------------------- */
+  it('projects 2 Completed + 1 Pending → PartiallyComplete (successCount=2, inFlightCount=1)', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({
+        items: [
+          makeChild('c1', 'Completed'),
+          makeChild('c2', 'Completed'),
+          makeChild('c3', 'Pending'),
+        ],
+      }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({
+      kind: 'updated',
+      aggregatePhase: 'PartiallyComplete',
+      childCount: 3,
+    });
+    const body = (
+      customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+        body: {
+          status: { successCount: number; failureCount: number; inFlightCount: number };
+        };
+      }
+    ).body.status;
+    expect(body.successCount).toBe(2);
+    expect(body.failureCount).toBe(0);
+    expect(body.inFlightCount).toBe(1);
+  });
+});
+
+/* =====================================================================
+ * reconcileParentFromChildEvent — WS-I idempotency + cycle detection.
+ *
+ * `reconcileParentFromChildEvent` is fired on EVERY child phase
+ * transition (and on every informer relist). For typical workloads
+ * that's high-frequency. The two behaviors covered here keep the
+ * etcd write rate bounded:
+ *
+ *   - Idempotency: when the freshly-computed projection equals the
+ *     parent's existing `status.children/successCount/...`, skip the
+ *     PATCH entirely. The action verdict shifts from `updated` to
+ *     `unchanged` so callers can still log a tick happened.
+ *
+ *   - Cycle detection: if any child's parent chain loops back to the
+ *     parent we're projecting, walk away — refuse to project a graph
+ *     we know is corrupt, log a warning, and emit a K8s Event so the
+ *     bug surfaces in `kubectl describe` / Workbench TaskDetail.
+ * ===================================================================== */
+describe('reconcileParentFromChildEvent — WS-I idempotency', () => {
+  it('skips the patch when the projection already matches parent.status (returns kind=unchanged)', async () => {
+    // Parent already carries a status whose children/aggregatePhase /
+    // counts EXACTLY match the projection we're about to compute.
+    const c1 = makeChild('c1', 'Completed');
+    const parentWithProjection = makeParent({
+      status: {
+        children: [
+          {
+            name: c1.metadata.name ?? '',
+            namespace: c1.metadata.namespace ?? '',
+            uid: c1.metadata.uid,
+            phase: 'Completed',
+          },
+        ],
+        aggregatePhase: 'AllComplete',
+        successCount: 1,
+        failureCount: 0,
+        inFlightCount: 0,
+      },
+    });
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithProjection),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action).toEqual({ kind: 'unchanged', aggregatePhase: 'AllComplete', childCount: 1 });
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('STILL patches when the parent has partial projection state (e.g. counts match but children differs)', async () => {
+    // Counts match on the surface (1 Completed) but `children[]` has a
+    // stale UID — the projection diff has to be field-by-field, not
+    // just count-by-count.
+    const c1 = makeChild('c1', 'Completed');
+    const parentWithStale = makeParent({
+      status: {
+        children: [
+          {
+            name: 'child-OLD',
+            namespace: 'default',
+            uid: 'old-uid',
+            phase: 'Completed',
+          },
+        ],
+        aggregatePhase: 'AllComplete',
+        successCount: 1,
+        failureCount: 0,
+        inFlightCount: 0,
+      },
+    });
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithStale),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action.kind).toBe('updated');
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('patches when projection differs only in aggregatePhase (e.g. PartiallyComplete → AllComplete)', async () => {
+    const c1 = makeChild('c1', 'Completed');
+    const c2 = makeChild('c2', 'Completed');
+    // Stale projection said PartiallyComplete; reality is AllComplete.
+    const parentWithStaleAggregate = makeParent({
+      status: {
+        children: [
+          {
+            name: c1.metadata.name ?? '',
+            namespace: c1.metadata.namespace ?? '',
+            uid: c1.metadata.uid,
+            phase: 'Completed',
+          },
+          {
+            name: c2.metadata.name ?? '',
+            namespace: c2.metadata.namespace ?? '',
+            uid: c2.metadata.uid,
+            phase: 'Completed',
+          },
+        ],
+        aggregatePhase: 'PartiallyComplete',
+        successCount: 2,
+        failureCount: 0,
+        inFlightCount: 0,
+      },
+    });
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithStaleAggregate),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1, c2] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action.kind).toBe('updated');
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reconcileParentFromChildEvent — WS-I cycle detection', () => {
+  let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('skips the patch + emits an AgentTaskCycleDetected Event when a child appears in the parent chain', async () => {
+    // Synthesize a cycle: parent P has spec.parentTask = C.uid (so
+    // walking up from P leads back through C). Child C is labeled
+    // parent-task-uid=P.uid (so from P's projection, C is a child).
+    // Re-projecting P → cycleCheck(P, C, getParent) walks up from P,
+    // hits C, returns { ok:false }.
+    const parentWithCycle = makeParent({
+      spec: {
+        targetAgent: 'researcher',
+        payload: {},
+        originalUserMessage: 'cycle',
+        parentTask: 'cycle-child-uid',
+      },
+    });
+    const cycleChild = makeChild('cycle-child-uid', 'Pending');
+    // For getTaskByUid lookups: parent.uid=parent-uid-1, child.uid=cycle-child-uid
+    const cache = new Map<string, AgentTask>([
+      ['parent-uid-1', parentWithCycle],
+      ['cycle-child-uid', cycleChild],
+    ]);
+
+    const emitCycleEvent = vi.fn().mockResolvedValue(undefined);
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithCycle),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [cycleChild] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      getTaskByUid: (uid: string) => cache.get(uid),
+      emitCycleEvent,
+    });
+
+    expect(action).toEqual({ kind: 'skipped', reason: 'cycle-detected' });
+    // CRITICAL: no patch when a cycle is detected — corrupt graph,
+    // refuse to write a projection on top of it.
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    // Event surfaces in `kubectl describe agenttask parent-task`.
+    expect(emitCycleEvent).toHaveBeenCalledTimes(1);
+    const eventArgs = emitCycleEvent.mock.calls[0] as [
+      { name: string; namespace: string; uid: string },
+      readonly string[],
+    ];
+    expect(eventArgs[0]).toEqual({
+      name: 'parent-task',
+      namespace: 'default',
+      uid: 'parent-uid-1',
+    });
+    expect(eventArgs[1]).toContain('parent-uid-1');
+    expect(eventArgs[1]).toContain('cycle-child-uid');
+    // Warning is logged so operator-side debugging surfaces it.
+    expect(consoleWarnSpy).toHaveBeenCalled();
+  });
+
+  it('does NOT crash when the event-emit callback throws — cycle is still skipped (event is best-effort)', async () => {
+    const parentWithCycle = makeParent({
+      spec: {
+        targetAgent: 'researcher',
+        payload: {},
+        originalUserMessage: 'cycle',
+        parentTask: 'cycle-child-uid',
+      },
+    });
+    const cycleChild = makeChild('cycle-child-uid', 'Pending');
+    const cache = new Map<string, AgentTask>([
+      ['parent-uid-1', parentWithCycle],
+      ['cycle-child-uid', cycleChild],
+    ]);
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithCycle),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [cycleChild] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      getTaskByUid: (uid: string) => cache.get(uid),
+      emitCycleEvent: vi.fn().mockRejectedValue(new Error('apiserver hiccup')),
+    });
+    expect(action).toEqual({ kind: 'skipped', reason: 'cycle-detected' });
+    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('with no getTaskByUid dep, cycle detection is fail-open (existing behavior unchanged)', async () => {
+    // Without a getTaskByUid the operator cannot walk the chain — per
+    // spec 7, "fail-open today" means we proceed with the patch rather
+    // than blocking on incomplete data.
+    const c1 = makeChild('c1', 'Completed');
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1] }),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(action.kind).toBe('updated');
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reconcileParentFromChildEvent — WS-I informer-cache list', () => {
+  it('uses listChildren callback when provided INSTEAD of customApi.listNamespacedCustomObject', async () => {
+    const c1 = makeChild('c1', 'Completed');
+    const listChildren = vi.fn().mockReturnValue([c1]);
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+    });
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      listChildren,
+    });
+    expect(action).toEqual({
+      kind: 'updated',
+      aggregatePhase: 'AllComplete',
+      childCount: 1,
+    });
+    // Cache callback fired with parentUid + namespace.
+    expect(listChildren).toHaveBeenCalledWith('parent-uid-1', 'default');
+    // CRITICAL: no API list when cache is provided — keeps watch-cache
+    // discipline (spec point 3).
+    expect(customApi.listNamespacedCustomObject).not.toHaveBeenCalled();
+  });
+
+  it('falls back to customApi.listNamespacedCustomObject when listChildren is not provided', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [] }),
+    });
+    await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+    });
+    expect(customApi.listNamespacedCustomObject).toHaveBeenCalled();
+  });
 });

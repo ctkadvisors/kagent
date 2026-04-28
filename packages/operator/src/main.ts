@@ -14,6 +14,7 @@
 
 import {
   CoreV1Api,
+  type CoreV1Event,
   type V1Job,
   type V1JobList,
   type V1Pod,
@@ -23,6 +24,7 @@ import {
 import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
+import type { AgentTask } from './crds/index.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import type { BuildJobSpecOptions } from './job-spec.js';
@@ -35,8 +37,8 @@ import {
   reconcileParentFromChildEvent,
   type ReconcileDeps,
 } from './reconcile.js';
-import { parentTaskRefFromChild } from './task-graph.js';
-import type { AgentTaskHandler } from './watch.js';
+import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
+import type { AgentTaskHandler, AgentTaskInformerWithCache } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
 
 /**
@@ -282,13 +284,32 @@ async function maybeReconcileParent(
   try {
     const action = await reconcileParentFromChildEvent(
       { namespace: parentRef.namespace, name: parentRef.name },
-      { customApi: deps.customApi },
+      {
+        customApi: deps.customApi,
+        // WS-I: forward informer-cache + cycle-event hooks when the
+        // operator boot wired them. Tests typically leave them unset
+        // (which intentionally makes the function fall back to a fresh
+        // API list and skip cycle detection — see ReconcileDeps docs).
+        ...(deps.listChildrenForParent !== undefined && {
+          listChildren: deps.listChildrenForParent,
+        }),
+        ...(deps.getTaskByUid !== undefined && { getTaskByUid: deps.getTaskByUid }),
+        ...(deps.emitCycleEvent !== undefined && { emitCycleEvent: deps.emitCycleEvent }),
+      },
     );
     const childId = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
     const parentId = `${parentRef.namespace}/${parentRef.name}`;
     if (action.kind === 'updated') {
       console.log(
         `[kagent-operator] ${verb} ${childId} → re-aggregated parent ${parentId} ` +
+          `(aggregatePhase=${action.aggregatePhase}, children=${action.childCount})`,
+      );
+    } else if (action.kind === 'unchanged') {
+      // Idempotency hit — no etcd write. Logged at debug level only;
+      // re-firing on every relist of every child would otherwise spam
+      // `kubectl logs` for no operational signal.
+      console.debug(
+        `[kagent-operator] ${verb} ${childId} → parent ${parentId} projection unchanged ` +
           `(aggregatePhase=${action.aggregatePhase}, children=${action.childCount})`,
       );
     } else {
@@ -366,11 +387,98 @@ async function main(): Promise<void> {
   }
 
   const jobSpecOptions = buildJobSpecOptionsFromEnv();
+
+  // Phase 4.x — Job/Pod failure watcher. The agent-pod owns success-
+  // path status writeback; this watcher closes the loop on failures
+  // the pod can't report (image pull, OOMKill, unschedulable, etc).
+  // Built early so it's also available to the WS-I cycle-event emitter
+  // wired into ReconcileDeps below.
+  const coreApi = kc.makeApiClient(CoreV1Api);
+
+  // WS-I — informer-cache plumbing for parent re-aggregate. The
+  // informer doesn't exist yet (we need the handler first, which needs
+  // deps, which closes over these callbacks). A mutable ref-object
+  // breaks the cycle: the closures read `informerRef.current`, which
+  // we populate just below the `createAgentTaskInformer` call. Until
+  // then the callbacks return empty/undefined, matching the desired
+  // "informer hasn't synced yet" semantics
+  // (`reconcileParentFromChildEvent` falls back gracefully).
+  const informerRef: { current: AgentTaskInformerWithCache | undefined } = {
+    current: undefined,
+  };
+
+  const listChildrenForParent = (parentUid: string, namespace: string): readonly AgentTask[] => {
+    const informer = informerRef.current;
+    if (informer === undefined) return [];
+    return informer
+      .list(namespace)
+      .filter((t) => t.metadata.labels?.[PARENT_TASK_UID_LABEL] === parentUid);
+  };
+  const getTaskByUid = (uid: string): AgentTask | undefined => {
+    const informer = informerRef.current;
+    if (informer === undefined) return undefined;
+    // Cache is per-namespace; pass undefined to walk the full cluster
+    // view (the operator's informer is either namespaced or
+    // cluster-wide based on `watchNamespace`, so list(undefined)
+    // returns whatever the informer is configured to see).
+    for (const t of informer.list()) {
+      if (t.metadata.uid === uid) return t;
+    }
+    return undefined;
+  };
+  const emitCycleEvent = async (
+    parent: { readonly name: string; readonly namespace: string; readonly uid: string },
+    cycle: readonly string[],
+  ): Promise<void> => {
+    // K8s v1 Event — surfaces via `kubectl describe agenttask <name>`
+    // and Workbench TaskDetail. Reason `AgentTaskCycleDetected` is
+    // matched by ops dashboards / alerting.
+    const ts = new Date();
+    const event: CoreV1Event = {
+      apiVersion: 'v1',
+      kind: 'Event',
+      metadata: {
+        // Generate a unique name per cycle detection — the apiserver
+        // dedupes events with the same involvedObject + reason +
+        // message via `count`, but a unique metadata.name keeps the
+        // create call safe to retry.
+        generateName: `${parent.name}-cycle-`,
+        namespace: parent.namespace,
+      },
+      involvedObject: {
+        apiVersion: 'kagent.knuteson.io/v1alpha1',
+        kind: 'AgentTask',
+        name: parent.name,
+        namespace: parent.namespace,
+        uid: parent.uid,
+      },
+      reason: 'AgentTaskCycleDetected',
+      message: `Refused to project parent.status.children: cycle detected in parent chain (${cycle.join(' → ')})`,
+      type: 'Warning',
+      source: { component: 'kagent-operator' },
+      // V1MicroTime extends Date and adds nothing structurally, so a
+      // plain Date is assignable to both the eventTime (V1MicroTime)
+      // and *Timestamp (Date) fields. The K8s API server serializes
+      // them to ISO-8601 either way.
+      eventTime: ts,
+      reportingComponent: 'kagent-operator',
+      reportingInstance: process.env.HOSTNAME ?? 'kagent-operator',
+      action: 'SkipProjection',
+      firstTimestamp: ts,
+      lastTimestamp: ts,
+      count: 1,
+    };
+    await coreApi.createNamespacedEvent({ namespace: parent.namespace, body: event });
+  };
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
     dispatcher,
     capabilityRegistry,
+    listChildrenForParent,
+    getTaskByUid,
+    emitCycleEvent,
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
   };
   const handler = buildHandler(deps);
@@ -379,12 +487,11 @@ async function main(): Promise<void> {
   // misconfiguration can't scope one watch but not the other.
   const informerOpts: { namespace?: string } =
     watchNamespace !== undefined ? { namespace: watchNamespace } : {};
+  // Forward-reference assignment: the closures above capture
+  // `informerRef` so the cache lookups work as soon as the informer
+  // is constructed.
   const informer = createAgentTaskInformer(kc, customApi, handler, informerOpts);
-
-  // Phase 4.x — Job/Pod failure watcher. The agent-pod owns success-
-  // path status writeback; this watcher closes the loop on failures
-  // the pod can't report (image pull, OOMKill, unschedulable, etc).
-  const coreApi = kc.makeApiClient(CoreV1Api);
+  informerRef.current = informer;
   const jobListFn = async (): Promise<V1JobList> => {
     return watchNamespace !== undefined
       ? await batchApi.listNamespacedJob({

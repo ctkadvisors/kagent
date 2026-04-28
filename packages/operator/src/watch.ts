@@ -15,10 +15,21 @@ import {
   type Informer,
   type KubeConfig,
   type KubernetesListObject,
+  type ObjectCache,
   makeInformer,
 } from '@kubernetes/client-node';
 
 import { API_GROUP, API_VERSION, type AgentTask, isAgentTask } from './crds/index.js';
+
+/**
+ * The intersection type returned by `@kubernetes/client-node`'s
+ * `makeInformer`. Re-exported here so the operator's main wiring can
+ * capture both the watch-lifecycle (`start`/`stop`) interface AND the
+ * cached `list()`/`get()` interface in a single typed handle —
+ * required for WS-I parent re-aggregate, which reads children from
+ * the cache instead of issuing a fresh API list per child event.
+ */
+export type AgentTaskInformerWithCache = Informer<AgentTask> & ObjectCache<AgentTask>;
 
 const PLURAL = 'agenttasks' as const;
 const CLUSTER_WATCH_PATH = `/apis/${API_GROUP}/${API_VERSION}/${PLURAL}` as const;
@@ -51,7 +62,7 @@ export function createAgentTaskInformer(
   api: CustomObjectsApi,
   handler: AgentTaskHandler,
   opts: AgentTaskInformerOptions = {},
-): Informer<AgentTask> {
+): AgentTaskInformerWithCache {
   // CustomObjectsApi.listClusterCustomObject returns Promise<any> by design —
   // CRDs aren't in the OpenAPI schema the client was generated against.
   // Casting at the call site is the documented v1.x pattern for typed CRs.
