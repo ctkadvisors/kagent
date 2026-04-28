@@ -143,8 +143,8 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
  *
  *   1. ALWAYS run `reconcileAgentTask(task)` — the existing dispatch
  *      path. Idempotent for terminal/Dispatched phases.
- *   2. WHEN the event resource carries the `parent-task-name` label
- *      (i.e. it's a child AgentTask), ALSO run
+ *   2. WHEN the event resource carries parent-task metadata written by
+ *      `buildChildTaskManifest` (label/annotation/ownerRef), ALSO run
  *      `reconcileParentFromChildEvent(parentRef)` so the parent's
  *      `status.children` / `status.aggregatePhase` projection stays
  *      live. This is the Workstream 5 / Phase 5 wire-up — see
@@ -236,6 +236,7 @@ async function main(): Promise<void> {
   const kc = loadKubeConfig();
   const customApi = makeCustomObjectsApi(kc);
   const batchApi = makeBatchApi(kc);
+  const watchNamespace = normalizeOptionalEnv(process.env.KAGENT_WATCH_NAMESPACE);
 
   // Phase 3: KAGENT_NATS_URL toggles real NATS dispatcher; otherwise
   // we fall back to StubDispatcher (in-memory, useful for local
@@ -281,16 +282,26 @@ async function main(): Promise<void> {
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
   };
   const handler = buildHandler(deps);
-  const informer = createAgentTaskInformer(kc, customApi, handler);
+  // Single informer-opts object reused for both the AgentTask and the
+  // Job/Pod informers — keeps the namespace toggle in lockstep so a
+  // misconfiguration can't scope one watch but not the other.
+  const informerOpts: { namespace?: string } =
+    watchNamespace !== undefined ? { namespace: watchNamespace } : {};
+  const informer = createAgentTaskInformer(kc, customApi, handler, informerOpts);
 
   // Phase 4.x — Job/Pod failure watcher. The agent-pod owns success-
   // path status writeback; this watcher closes the loop on failures
   // the pod can't report (image pull, OOMKill, unschedulable, etc).
   const coreApi = kc.makeApiClient(CoreV1Api);
   const jobListFn = async (): Promise<V1JobList> => {
-    return await batchApi.listJobForAllNamespaces({
-      labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
-    });
+    return watchNamespace !== undefined
+      ? await batchApi.listNamespacedJob({
+          namespace: watchNamespace,
+          labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
+        })
+      : await batchApi.listJobForAllNamespaces({
+          labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
+        });
   };
   const surfaceFailure = async (
     ref: { namespace: string; name: string },
@@ -308,23 +319,29 @@ async function main(): Promise<void> {
       console.error(`[kagent-operator] failed to mark ${ref.namespace}/${ref.name} Failed:`, err);
     }
   };
-  const jobPodInformer = createJobPodInformer(kc, coreApi, jobListFn, {
-    async onJob(job: V1Job): Promise<void> {
-      const ref = parentTaskRef(job);
-      if (ref === null) return;
-      const verdict = detectJobFailure(job);
-      if (verdict !== null) await surfaceFailure(ref, verdict);
+  const jobPodInformer = createJobPodInformer(
+    kc,
+    coreApi,
+    jobListFn,
+    {
+      async onJob(job: V1Job): Promise<void> {
+        const ref = parentTaskRef(job);
+        if (ref === null) return;
+        const verdict = detectJobFailure(job);
+        if (verdict !== null) await surfaceFailure(ref, verdict);
+      },
+      async onPod(pod: V1Pod): Promise<void> {
+        const ref = parentTaskRef(pod);
+        if (ref === null) return;
+        const verdict = detectPodFailure(pod);
+        if (verdict !== null) await surfaceFailure(ref, verdict);
+      },
+      onError(err) {
+        console.error('[kagent-operator] job/pod watch error:', err);
+      },
     },
-    async onPod(pod: V1Pod): Promise<void> {
-      const ref = parentTaskRef(pod);
-      if (ref === null) return;
-      const verdict = detectPodFailure(pod);
-      if (verdict !== null) await surfaceFailure(ref, verdict);
-    },
-    onError(err) {
-      console.error('[kagent-operator] job/pod watch error:', err);
-    },
-  });
+    informerOpts,
+  );
 
   // Graceful shutdown — stop the informer cleanly on SIGTERM/SIGINT
   // so K8s can drain the operator pod without orphaning the watch.
@@ -352,10 +369,17 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
-  console.log('[kagent-operator] starting informers on AgentTask + Job + Pod');
+  const scope = watchNamespace ?? 'all namespaces';
+  console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
   await informer.start();
   await jobPodInformer.start();
   console.log('[kagent-operator] informers started');
+}
+
+function normalizeOptionalEnv(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // Only run main() when this module is the entrypoint — unit tests

@@ -49,6 +49,7 @@ import {
 
 export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
 export const PARENT_TASK_NAME_LABEL = 'kagent.knuteson.io/parent-task-name';
+export const PARENT_TASK_NAME_ANNOTATION = 'kagent.knuteson.io/parent-task-name-full';
 
 /* =====================================================================
  * Types
@@ -148,9 +149,11 @@ export interface ParentStatusProjection {
  * - `metadata.namespace` inherits from the parent (children must live
  *   beside their parent for the operator's namespaced reconcile to
  *   find them).
- * - Two labels: `parent-task-uid` (machine-readable, used by the
- *   informer label-selector watch) and `parent-task-name` (human-
- *   readable for `kubectl get -l ...`).
+ * - One required label: `parent-task-uid` (machine-readable, used by
+ *   the informer label-selector watch). Short parent names also get
+ *   `parent-task-name` as a convenience label for `kubectl get -l ...`;
+ *   long parent names live only in an annotation because label values
+ *   are capped at 63 characters while resource names can be longer.
  * - One owner reference back to the parent AgentTask, with
  *   `controller: false` so it does not collide with the Job's
  *   `controller: true` ownerRef on the child (TASK-GRAPH.md §5
@@ -215,7 +218,10 @@ export function buildChildTaskManifest(parent: AgentTask, spec: ChildTaskSpec): 
     namespace: parentNamespace,
     labels: {
       [PARENT_TASK_UID_LABEL]: parentUid,
-      [PARENT_TASK_NAME_LABEL]: parentName,
+      ...(isValidLabelValue(parentName) && { [PARENT_TASK_NAME_LABEL]: parentName }),
+    },
+    annotations: {
+      [PARENT_TASK_NAME_ANNOTATION]: parentName,
     },
     ownerReferences: [ownerRef],
   };
@@ -337,10 +343,14 @@ export function aggregateChildren(children: readonly AgentTask[]): ParentStatusP
  * ===================================================================== */
 
 /**
- * Read the parent-name + parent-uid + namespace off a child AgentTask's
- * labels. Returns null when the labels are missing — defensive against
- * AgentTasks created out-of-band that happen to satisfy a list filter
- * but were not produced by `buildChildTaskManifest`.
+ * Read the parent-name + parent-uid + namespace off a child AgentTask.
+ * The UID is expected in the `parent-task-uid` label (the only label-
+ * keyed informer filter, which is why long parent names — whose names
+ * exceed K8s' 63-char label-value cap — still get matched). The name
+ * is read from the short-name label when present, then the full-name
+ * annotation, then the ownerRef. Returns null when no parent name can
+ * be recovered — defensive against AgentTasks that lack any parent-
+ * task metadata (i.e. real top-level tasks).
  *
  * Symmetric with `parentTaskRef()` in `job-watch.ts` (which reads the
  * `kagent.knuteson.io/task` label off Job/Pod resources to find the
@@ -351,8 +361,12 @@ export function parentTaskRefFromChild(
   child: AgentTask,
 ): { name: string; namespace: string; uid?: string } | null {
   const labels = child.metadata.labels ?? {};
-  const name = labels[PARENT_TASK_NAME_LABEL];
-  const uid = labels[PARENT_TASK_UID_LABEL];
+  const annotations = child.metadata.annotations ?? {};
+  const ownerRef = child.metadata.ownerReferences?.find((ref) => ref.kind === 'AgentTask');
+  const name =
+    firstNonEmpty(labels[PARENT_TASK_NAME_LABEL], annotations[PARENT_TASK_NAME_ANNOTATION]) ??
+    ownerRef?.name;
+  const uid = firstNonEmpty(labels[PARENT_TASK_UID_LABEL], ownerRef?.uid);
   // Namespace comes from the child itself — children inherit parent
   // namespace per `buildChildTaskManifest`, so the child's own
   // namespace IS the parent's namespace.
@@ -364,6 +378,18 @@ export function parentTaskRefFromChild(
     namespace,
     ...(typeof uid === 'string' && uid.length > 0 && { uid }),
   };
+}
+
+function firstNonEmpty(...values: readonly (string | undefined)[]): string | undefined {
+  return values.find((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+// Stricter than the K8s spec — the spec allows empty values, but we
+// never want to write an empty parent-task-name label. Valid label
+// values: ≤63 chars, alphanumeric start/end, alphanumeric + `-_.` in
+// between (or a single alphanumeric).
+function isValidLabelValue(value: string): boolean {
+  return value.length <= 63 && /^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/.test(value);
 }
 
 /* =====================================================================

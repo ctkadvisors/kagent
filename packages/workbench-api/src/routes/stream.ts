@@ -44,17 +44,21 @@ export function streamRoute(deps: StreamRouteDeps): Hono {
 
   app.get('/api/stream', (c) => {
     return streamSSE(c, async (stream) => {
+      // Fire-and-forget writeSSE that swallows post-disconnect rejections.
+      // Hono rejects pending writes when the request aborts; without this
+      // catch, those rejections become unhandled-promise warnings (and on
+      // newer Node may exit the worker via `--unhandled-rejections=strict`).
+      // The SseBroker still counts drops on synchronous sink errors.
+      const safeWrite = (wire: { event: string; data: string }): void => {
+        stream.writeSSE({ event: wire.event, data: wire.data }).catch(() => {});
+      };
+
       const sub = deps.broker.subscribe((wire) => {
-        // Hono's writeSSE returns a promise; we deliberately fire-
-        // and-forget so the SnapshotCache's listener loop doesn't
-        // serialize on slow clients. The SseBroker counts dropped
-        // events.
-        void stream.writeSSE({ event: wire.event, data: wire.data });
+        safeWrite(wire);
       });
 
       const heartbeatHandle = setInt(() => {
-        const wire = formatHeartbeat();
-        void stream.writeSSE({ event: wire.event, data: wire.data });
+        safeWrite(formatHeartbeat());
       }, HEARTBEAT_MS);
 
       // Send an initial heartbeat so the client knows the connection

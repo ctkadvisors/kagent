@@ -3,13 +3,17 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2026 Chris Knuteson
 
 ClusterRole — minimum permissions for the operator to:
-  - watch + read Agents / AgentTasks / AgentCapabilities cluster-wide
+  - watch + read Agents / AgentTasks / AgentCapabilities
   - patch AgentTask.status (status subresource)
   - create + list + watch + delete batch/v1 Jobs (per-task pods)
-  - read Pods (Phase 3 will read pod logs / status; benign for v0.1)
+  - read Pods (job-watch detects image-pull / OOMKill / unschedulable
+    states the agent-pod cannot self-report)
   - emit Events (kubectl describe surfacing)
 
-Cluster-scoped because the operator watches across all namespaces.
+Kept cluster-scoped so advanced installs can set watchAllNamespaces=true
+for a cluster-wide watch. The chart default still watches only the release
+namespace because spawned Jobs need namespace-local agent-pod ServiceAccount
++ artifact PVC prerequisites.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -30,7 +34,8 @@ rules:
   - apiGroups: ['batch']
     resources: ['jobs']
     verbs: ['get', 'list', 'watch', 'create', 'delete']
-  # Read Pods (Phase 3: pod status reflection; safe to grant now)
+  # Read Pods — job-watch surfaces external failures (image pull, OOM,
+  # scheduling) onto AgentTask.status when the agent-pod cannot.
   - apiGroups: ['']
     resources: ['pods']
     verbs: ['get', 'list', 'watch']

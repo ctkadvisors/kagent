@@ -330,10 +330,11 @@ function isNotFound(err: unknown): boolean {
  * reconcileParentFromChildEvent
  *
  * External entry point — called by the AgentTask informer in `main.ts`
- * whenever a child AgentTask event fires (any AgentTask carrying the
- * `kagent.knuteson.io/parent-task-name` label). Mirrors the shape of
- * `markAgentTaskFailedFromExternal`: read the parent, decide an action,
- * patch a NARROWLY-SCOPED slice of status, return an action verdict.
+ * whenever an AgentTask event resolves to a parent ref via
+ * `parentTaskRefFromChild` (label, annotation, or ownerRef). Mirrors
+ * the shape of `markAgentTaskFailedFromExternal`: read the parent,
+ * decide an action, patch a NARROWLY-SCOPED slice of status, return an
+ * action verdict.
  *
  * Responsibility split (parallel to failure-detector ↔ reconcile):
  *

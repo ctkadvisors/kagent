@@ -55,6 +55,14 @@ export function buildRouter(deps: RouterDeps): Hono {
   app.route('/', agentsRoute({ cache: deps.cache }));
   app.route('/', streamRoute({ broker: deps.broker }));
 
+  // Reserve the API namespace before the SPA proxy catches unmatched
+  // GETs. Without this, `/api/typo` can return the UI's index.html
+  // with 200 because nginx's SPA fallback handles every unknown path.
+  const apiNotFound = (c: import('hono').Context) =>
+    c.json({ error: 'not-found', path: c.req.path }, 404);
+  app.all('/api', apiNotFound);
+  app.all('/api/*', apiNotFound);
+
   // Sidecar UI proxy — catches every non-API path the routes above
   // didn't claim. Hono's first-match-wins routing means the API
   // routes always take precedence; this proxy fields `/`,

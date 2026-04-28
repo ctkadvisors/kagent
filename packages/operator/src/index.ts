@@ -65,6 +65,7 @@ export type { AgentLiveEntry, KvBucketFactory, KvBucketLike } from './nats-capab
 
 export {
   PARENT_TASK_NAME_LABEL,
+  PARENT_TASK_NAME_ANNOTATION,
   PARENT_TASK_UID_LABEL,
   aggregateChildren,
   buildChildTaskManifest,

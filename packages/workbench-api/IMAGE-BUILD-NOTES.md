@@ -9,10 +9,15 @@ published to:
 - `ghcr.io/ctkadvisors/kagent-workbench-api`
 - `ghcr.io/ctkadvisors/kagent-workbench-ui`
 
-Triggers: every push to `main`, tags matching `v*-phase*` or `vX.Y.Z`, and
-manual `workflow_dispatch`. Per-image `cache-from/cache-to` scopes keep cold
-builds bounded. Build context is the repo root so the workbench packages
-can pull `@kagent/dto` (and any other workspace dep) via pnpm.
+Triggers: every push to `main`, every tag matching `v*` (any version-
+prefixed tag — pre-release, MVP, or final), and manual
+`workflow_dispatch`. The metadata-action emits image tags from
+`type=ref,event=tag` which preserves the leading `v`, so a git tag
+`v0.0.5-workbench-mvp` produces an image tag `v0.0.5-workbench-mvp`
+that lines up exactly with `Chart.appVersion`. Per-image
+`cache-from/cache-to` scopes keep cold builds bounded. Build context is
+the repo root so the workbench packages can pull `@kagent/dto` (and any
+other workspace dep) via pnpm.
 
 ## History — why there's no Gitea pipeline
 

@@ -52,7 +52,8 @@ Done or effectively landed:
 Remaining P0 work:
 
 - Verify `helm template` in CI or a local dev toolchain.
-- Document the image build path for Gitea mirror limitations.
+- Keep the workbench/operator image-build path on ghcr.io documented
+  alongside chart defaults (see `packages/workbench-api/IMAGE-BUILD-NOTES.md`).
 - Keep Phase 4 smoke green after every operator/runtime change.
 
 ### P1 — Build visibility before complexity

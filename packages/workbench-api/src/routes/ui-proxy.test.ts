@@ -90,6 +90,40 @@ describe('uiProxyRoute', () => {
     }
   });
 
+  it('strips hop-by-hop and re-encoded framing headers from the upstream response', async () => {
+    // Node fetch (undici) auto-decompresses, so a `content-encoding: gzip`
+    // + `content-length` from upstream describes bytes the body no longer
+    // carries. Forwarding them verbatim corrupts the response. Plus
+    // `transfer-encoding`, `connection`, `keep-alive` are RFC 9110
+    // hop-by-hop and must not survive the proxy.
+    const stub: typeof fetch = () =>
+      Promise.resolve(
+        new Response('<html>ok</html>', {
+          status: 200,
+          headers: {
+            'content-type': 'text/html',
+            'content-encoding': 'gzip',
+            'content-length': '999',
+            'transfer-encoding': 'chunked',
+            connection: 'keep-alive',
+            'keep-alive': 'timeout=5',
+            etag: '"abc"',
+          },
+        }),
+      );
+    const app = uiProxyRoute({ upstream: 'http://127.0.0.1:8081', fetch: stub });
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-encoding')).toBeNull();
+    expect(res.headers.get('content-length')).toBeNull();
+    expect(res.headers.get('transfer-encoding')).toBeNull();
+    expect(res.headers.get('connection')).toBeNull();
+    expect(res.headers.get('keep-alive')).toBeNull();
+    // Non-stripped headers survive.
+    expect(res.headers.get('content-type')).toBe('text/html');
+    expect(res.headers.get('etag')).toBe('"abc"');
+  });
+
   it('returns 502 with reason when the upstream is unreachable', async () => {
     const stub: typeof fetch = () => Promise.reject(new Error('ECONNREFUSED 127.0.0.1:8081'));
     const app = uiProxyRoute({ upstream: 'http://127.0.0.1:8081', fetch: stub });
@@ -118,6 +152,30 @@ describe('buildRouter — UI proxy precedence', () => {
     // /api/tasks is a real route — must not proxy.
     const tasks = await app.request('/api/tasks');
     expect(tasks.status).toBe(200);
+  });
+
+  it('unknown /api paths return JSON 404 instead of proxying to the SPA', async () => {
+    const stub: typeof fetch = () =>
+      Promise.resolve(new Response('<!doctype html>SPA', { status: 200 }));
+    const app = buildRouter(deps({ uiUpstream: 'http://127.0.0.1:8081', proxyFetch: stub }));
+
+    const res = await app.request('/api/not-real');
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    const body = (await res.json()) as { error: string; path: string };
+    expect(body).toEqual({ error: 'not-found', path: '/api/not-real' });
+  });
+
+  it('bare /api returns JSON 404 instead of proxying to the SPA', async () => {
+    const stub: typeof fetch = () =>
+      Promise.resolve(new Response('<!doctype html>SPA', { status: 200 }));
+    const app = buildRouter(deps({ uiUpstream: 'http://127.0.0.1:8081', proxyFetch: stub }));
+
+    const res = await app.request('/api');
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    const body = (await res.json()) as { error: string; path: string };
+    expect(body).toEqual({ error: 'not-found', path: '/api' });
   });
 
   it('non-API paths proxy to the UI upstream when configured', async () => {

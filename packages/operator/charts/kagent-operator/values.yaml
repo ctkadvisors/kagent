@@ -4,8 +4,10 @@
 # kagent-operator default values.
 #
 # Override at install time with `--set` or `-f values.local.yaml`. The
-# operator runs cluster-wide in v0.1; namespaced isolation is a v0.2
-# affordance.
+# default chart installation watches the release namespace because the
+# chart-managed agent-pod ServiceAccount + artifact PVC are namespace-
+# local. Set watchAllNamespaces=true only if you provision equivalent
+# ServiceAccounts/PVCs in every workload namespace.
 
 replicaCount: 1
 
@@ -18,6 +20,14 @@ image:
 # Image pull secret(s) for private registries. Empty = no secret.
 # Example: imagePullSecrets: [{ name: ghcr-pull }]
 imagePullSecrets: []
+
+# Namespace to watch for Agent / AgentTask resources. Empty defaults to
+# the Helm release namespace in the deployment template.
+watchNamespace: ''
+# Set true only after provisioning agent-pod ServiceAccounts and artifact
+# PVCs in every workload namespace. When true, KAGENT_WATCH_NAMESPACE is
+# intentionally empty and the operator uses cluster-wide watch/list paths.
+watchAllNamespaces: false
 
 serviceAccount:
   create: true
@@ -39,7 +49,8 @@ resources:
 agentPod:
   image:
     repository: ghcr.io/ctkadvisors/kagent-agent-pod
-    tag: 'v0.0.4-phase4'
+    # Defaults to .Chart.appVersion; override here for dev pins.
+    tag: ''
     pullPolicy: IfNotPresent
   imagePullSecret: '' # name of secret in the AgentTask's namespace
   # ServiceAccount the agent pod runs as. The chart creates one named
