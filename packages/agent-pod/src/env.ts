@@ -18,11 +18,32 @@ export interface AgentSpecEnv {
   readonly sandboxProfile?: 'default' | 'strict';
 }
 
+/**
+ * Mirror of `AgentTaskRunConfig` from `@kagent/operator/crds`. Defined
+ * locally to avoid pulling the operator (and its `nats` /
+ * `@kubernetes/client-node` transitive surface) into the agent-pod
+ * dependency tree just for a 4-field interface — same pattern used
+ * for `ArtifactRef` in `runner.ts`. Keep in sync with the operator's
+ * canonical definition + the CRD YAML schema.
+ */
+export interface AgentTaskRunConfigEnv {
+  readonly tokenLimit?: number;
+  readonly costLimitUsd?: number;
+  readonly maxIterations?: number;
+  readonly timeoutSeconds?: number;
+}
+
 export interface TaskSpecEnv {
   readonly targetAgent?: string;
   readonly targetCapability?: string;
   readonly payload: unknown;
+  /**
+   * @deprecated Prefer `runConfig.timeoutSeconds`. Resolution: when both
+   * are set, `runConfig.timeoutSeconds` wins. This field is preserved
+   * for backward compatibility with pre-WS-G AgentTask resources.
+   */
   readonly timeoutSeconds?: number;
+  readonly runConfig?: AgentTaskRunConfigEnv;
   readonly parentTask?: string;
   readonly originalUserMessage?: string;
   readonly parentDistillation?: string;
