@@ -189,18 +189,27 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
     });
   });
 
-  it('patches AgentTask.status with phase=Dispatched + podName + startedAt', async () => {
+  it('patches AgentTask.status with phase=Dispatched + podName + startedAt + observedGeneration + condition', async () => {
     await reconcileAgentTask(task, deps);
     expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         plural: 'agenttasks',
         name: 't1',
         body: {
-          status: {
+          status: expect.objectContaining({
             phase: 'Dispatched',
             podName: 'kat-task-uid-1',
             startedAt: fixedNow.toISOString(),
-          },
+            observedGeneration: 0,
+            conditions: expect.arrayContaining([
+              expect.objectContaining({
+                type: 'Dispatched',
+                status: 'True',
+                reason: 'JobCreated',
+                lastTransitionTime: fixedNow.toISOString(),
+              }),
+            ]),
+          }),
         },
       }),
       expect.objectContaining({ middleware: expect.any(Array) }),
@@ -240,7 +249,16 @@ describe('reconcileAgentTask — failure paths', () => {
         payload: {},
       },
     });
-    const deps = makeDeps({}); // default: StubCapabilityRegistry → null
+    // markFailed → patchStatusWithRetry re-reads the AgentTask before
+    // building the patch. Configure the mock to return the same task
+    // shape on both Agent + AgentTask GETs (the build closure only
+    // touches `status.phase` + `metadata.generation`, and an absent
+    // status is fine).
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(task),
+      },
+    });
     const result = await reconcileAgentTask(task, deps);
     expect(result.action).toBe('failed');
     expect(result.reason).toMatch(/no live agent satisfies capability 'researcher'/);
@@ -387,7 +405,7 @@ describe('markAgentTaskFailedFromExternal', () => {
     );
   });
 
-  it('skips when AgentTask is already Completed (preserves agent-pod success)', async () => {
+  it('appends a JobFailedAfterComplete condition when AgentTask is already Completed (WS-E: never overwrite success)', async () => {
     const customApi: MockCustomApi = {
       getNamespacedCustomObject: vi
         .fn()
@@ -396,12 +414,27 @@ describe('markAgentTaskFailedFromExternal', () => {
     };
     const action = await markAgentTaskFailedFromExternal(ref, failure, {
       customApi: customApi as unknown as ReconcileDeps['customApi'],
+      now: () => fixedNow,
     });
-    expect(action).toEqual({ kind: 'skipped', reason: 'already-completed' });
-    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    expect(action).toEqual({ kind: 'condition-appended', previousPhase: 'Completed' });
+    // The patch landed but did NOT include `phase` — terminal-monotonic.
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+    const patchCall = customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+      body: { status: Record<string, unknown> };
+    };
+    expect(patchCall.body.status).not.toHaveProperty('phase');
+    expect(patchCall.body.status.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'JobFailedAfterComplete',
+          status: 'True',
+          reason: 'ImagePullBackOff',
+        }),
+      ]),
+    );
   });
 
-  it('skips when AgentTask is already Failed (idempotent)', async () => {
+  it('appends a fresh failure condition when AgentTask is already Failed (multi-mode failures stay observable)', async () => {
     const customApi: MockCustomApi = {
       getNamespacedCustomObject: vi
         .fn()
@@ -410,9 +443,22 @@ describe('markAgentTaskFailedFromExternal', () => {
     };
     const action = await markAgentTaskFailedFromExternal(ref, failure, {
       customApi: customApi as unknown as ReconcileDeps['customApi'],
+      now: () => fixedNow,
     });
-    expect(action).toEqual({ kind: 'skipped', reason: 'already-failed' });
-    expect(customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    expect(action).toEqual({ kind: 'condition-appended', previousPhase: 'Failed' });
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+    const patchCall = customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+      body: { status: Record<string, unknown> };
+    };
+    expect(patchCall.body.status).not.toHaveProperty('phase');
+    expect(patchCall.body.status.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'ImagePullBackOff',
+          status: 'True',
+        }),
+      ]),
+    );
   });
 
   it('skips silently when AgentTask is gone (404 — race vs. owner GC)', async () => {
