@@ -49,6 +49,15 @@ export interface RouterDeps {
    * via `resolveAuthRequired()` in `auth.ts`.
    */
   readonly authRequired?: boolean;
+  /**
+   * Optional Langfuse base URL (e.g. `https://langfuse.knuteson.io`).
+   * When set, the tasks route populates a `traceLink` field on the
+   * TaskDetail response so the UI can render a "View trace" deep-link.
+   * Trace IDs derive from `traceIdFromRunId` in `@kagent/trace-sinks`
+   * (sha256(runId)[0..32]) — the dto's `traceLink()` mapper handles the
+   * derivation; this field just supplies the base URL.
+   */
+  readonly langfuseBaseUrl?: string;
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
@@ -67,7 +76,13 @@ export function buildRouter(deps: RouterDeps): Hono {
   // API surface — read-only GETs only in v0.1. Each route owns its
   // own /api/* prefix internally; mounting at '/' here keeps the
   // surface flat for a future SemVer-aware mount move.
-  app.route('/', tasksRoute({ cache: deps.cache }));
+  app.route(
+    '/',
+    tasksRoute({
+      cache: deps.cache,
+      ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
+    }),
+  );
   app.route('/', agentsRoute({ cache: deps.cache }));
   app.route('/', streamRoute({ broker: deps.broker }));
 

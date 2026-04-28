@@ -28,7 +28,7 @@ those workflows multiply failure modes.
 Keep the UI outside the operator.
 
 ```text
-[React/Next.js Workbench]
+[React/Vite Workbench]
         ↓
 [thin kagent API facade]
         ↓

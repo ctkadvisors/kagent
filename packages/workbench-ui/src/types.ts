@@ -50,6 +50,73 @@ export interface TaskSummary {
   readonly aggregatePhase?: AggregatePhase;
 }
 
+/**
+ * Container-status subset we render on the detail page. Mirrors
+ * V1ContainerStatus from `@kubernetes/client-node` but copied here to
+ * keep the UI a leaf in the dep graph (no `@kagent` / `@kubernetes`
+ * imports). Fields the UI actually uses are typed; the rest is
+ * dropped — the API is the source of truth.
+ */
+export interface ContainerStatusSummary {
+  readonly name: string;
+  readonly ready?: boolean;
+  readonly restartCount?: number;
+  readonly image?: string;
+  readonly state?: {
+    readonly waiting?: { readonly reason?: string; readonly message?: string };
+    readonly running?: { readonly startedAt?: string };
+    readonly terminated?: {
+      readonly exitCode?: number;
+      readonly reason?: string;
+      readonly message?: string;
+      readonly finishedAt?: string;
+    };
+  };
+}
+
+export interface ChildRefSummary {
+  readonly name: string;
+  readonly namespace?: string;
+  readonly uid?: string;
+  readonly phase?: AgentTaskPhase;
+}
+
+export interface ArtifactSummaryRow {
+  readonly name?: string;
+  readonly uri: string;
+  readonly mediaType?: string;
+  readonly sizeBytes?: number;
+  readonly producedAt?: string;
+}
+
+export interface TraceLinkSummary {
+  readonly provider: 'langfuse' | 'jaeger' | 'otel-collector';
+  readonly runId: string;
+  readonly url?: string;
+}
+
+export interface TaskDetail extends TaskSummary {
+  readonly originalUserMessage?: string;
+  readonly payload?: unknown;
+  readonly result?: unknown;
+  readonly expectedTools?: readonly string[];
+  readonly parentDistillation?: string;
+  readonly parentTask?: string;
+  readonly containerStatuses: readonly ContainerStatusSummary[];
+  readonly children?: readonly ChildRefSummary[];
+  readonly artifacts?: readonly ArtifactSummaryRow[];
+  readonly successCount?: number;
+  readonly failureCount?: number;
+  readonly inFlightCount?: number;
+  /**
+   * Optional Langfuse trace deep-link. Populated by the workbench-api
+   * when `LANGFUSE_BASE_URL` is set. Trace ID is the sha256-derived
+   * OTel trace ID (matches what `OtelTraceSink` actually emits) — see
+   * `@kagent/dto`'s `traceLink()` mapper.
+   */
+  readonly traceLink?: TraceLinkSummary;
+}
+
 export interface CacheChangeEvent {
   readonly kind: 'task' | 'agent' | 'job' | 'pod';
   readonly op: 'upsert' | 'delete';

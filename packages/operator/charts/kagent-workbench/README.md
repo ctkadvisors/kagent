@@ -1,6 +1,6 @@
 # kagent-workbench Helm chart
 
-Read-only operator console over the [kagent](https://github.com/ctkadvisors/kagent) control plane. Surfaces `Agent`, `AgentTask`, `AgentCapability`, and the operator-owned `Job`s/`Pod`s through a thin API facade (`kagent-workbench-api`) plus a Next.js UI (`kagent-workbench-ui`) sidecar.
+Read-only operator console over the [kagent](https://github.com/ctkadvisors/kagent) control plane. Surfaces `Agent`, `AgentTask`, `AgentCapability`, and the operator-owned `Job`s/`Pod`s through a thin API facade (`kagent-workbench-api`) plus a React/Vite UI (`kagent-workbench-ui`) sidecar.
 
 This chart is the **deployment** surface. The `workbench-api` and `workbench-ui` packages live in the same kagent monorepo (`packages/workbench-api/`, `packages/workbench-ui/`). The chart references them by image name only — see [`values.yaml`](./values.yaml).
 
@@ -20,7 +20,7 @@ A single Pod with two containers, plus the supporting RBAC / Service / optional 
 | `Ingress` _or_        | `<release>-kagent-workbench`  | rendered when `ingress.enabled=true` and `ingress.authMiddleware=''` |
 | `IngressRoute`        | `<release>-kagent-workbench`  | rendered when `ingress.enabled=true` and `ingress.authMiddleware!='` |
 
-The `ui` container is a sidecar (nginx-alpine baking the Next.js `out/`/`dist/` build), not a separate Deployment. The `api` container proxies non-`/api` requests to the sidecar over loopback. Lifecycle is coupled (no UI without API), and the network hop is loopback-only — one Pod is the right unit.
+The `ui` container is a sidecar (nginx-alpine baking the Vite `dist/` build), not a separate Deployment. The `api` container proxies non-`/api` requests to the sidecar over loopback. Lifecycle is coupled (no UI without API), and the network hop is loopback-only — one Pod is the right unit.
 
 **RBAC is read-only.** Write actions (cancel/retry/create-task) are scoped for v0.2 behind a separate ClusterRole keyed off an `actions.enabled` values flag (not yet implemented). Splitting it keeps the read-only MVP install accidentally-write-proof.
 
@@ -40,7 +40,7 @@ Verify after install:
 kubectl --namespace kagent-system port-forward \
   svc/kagent-workbench-kagent-workbench 8080:80
 
-curl -fsS http://localhost:8080/api/healthz
+curl -fsS http://localhost:8080/healthz
 ```
 
 ## Values reference
@@ -52,9 +52,9 @@ curl -fsS http://localhost:8080/api/healthz
 | `api.image.tag`                | `''` (defaults to `Chart.appVersion`)                | Pin in dev with `--set api.image.tag=...`.                         |
 | `api.image.pullPolicy`         | `IfNotPresent`                                       | ghcr.io tags are immutable per release. Set `Always` for moving tags. |
 | `api.port`                     | `8080`                                               | Container port the api listens on.                                 |
-| `api.healthPath`               | `/api/healthz`                                       | Liveness + readiness probe path. Owned by the workbench-api package. |
-| `api.langfuseBaseUrl`          | `''`                                                 | Optional. Plumbed as `LANGFUSE_BASE_URL` for "open trace" links.   |
-| `api.authRequired`             | `''`                                                 | Optional. Set non-empty to make the api enforce auth itself.       |
+| `api.healthPath`               | `/healthz`                                           | Liveness + readiness probe path. Owned by the workbench-api package. |
+| `api.langfuseBaseUrl`          | `''`                                                 | Optional. Plumbed as `LANGFUSE_BASE_URL`; reserved for "open trace" links. |
+| `api.authRequired`             | `'true'`                                             | Fail-closed header-trust auth. Only literal `false` disables it.   |
 | `api.resources`                | `50m / 128Mi → 500m / 256Mi`                         | Bump when watching many AgentTasks.                                |
 | `ui.image.repository`          | `ghcr.io/ctkadvisors/kagent-workbench-ui`            | workbench-ui static-asset image. Public ghcr.io package.            |
 | `ui.image.tag`                 | `''` (defaults to `Chart.appVersion`)                |                                                                    |
@@ -68,8 +68,8 @@ curl -fsS http://localhost:8080/api/healthz
 | `serviceAccount.annotations`   | `{}`                                                 |                                                                    |
 | `rbac.create`                  | `true`                                               | Cluster-scoped read-only ClusterRole + binding.                    |
 | `service.type`                 | `ClusterIP`                                          |                                                                    |
-| `service.port`                 | `8080`                                               | (Informational; the Service exposes port 80 → api targetPort.)     |
-| `service.uiPort`               | `8081`                                               | (Informational; the Service exposes port 81 → ui targetPort.)      |
+| `service.port`                 | `80`                                                 | Service-side API port targeting the api container's named port.     |
+| `service.uiPort`               | `81`                                                 | Service-side UI port targeting the ui sidecar's named port; debug/port-forward only. |
 | `ingress.enabled`              | `false`                                              | See "Ingress + auth recipe" below.                                 |
 | `ingress.className`            | `traefik`                                            | Used on the vanilla Ingress path; informational on the IngressRoute path. |
 | `ingress.host`                 | `''`                                                 | REQUIRED when `enabled=true`. Hostname (e.g. `kagent.knuteson.io`).|

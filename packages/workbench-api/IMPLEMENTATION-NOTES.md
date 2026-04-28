@@ -33,31 +33,28 @@ imported as-is. CRD type aliases (`Agent`, `AgentTask`,
 `API_GROUP`/`API_VERSION`) are also re-exported by `@kagent/dto`, so the
 operator package isn't needed as a dep at all.
 
-## Auth (deferred — header-trust pattern documented here)
+## Auth (WS-A — header-trust gate)
 
-This slice ships **no authentication**. The Workbench is intended to
-deploy behind the homelab's existing Traefik + OAuth2 Proxy / Authelia
-chain, which terminates auth at the Ingress and passes identity headers
-to the upstream:
+The Workbench API is fail-closed by default. Every non-probe route
+requires `X-Forwarded-User`; `/healthz` and `/readyz` are exempt so
+kubelet probes keep working without an auth shim. The chart sets
+`WORKBENCH_AUTH_REQUIRED=true` by default; only the literal string
+`false` disables the gate for development.
+
+The intended deployment path is header-trust behind the homelab's
+existing Traefik + OAuth2 Proxy / Authelia chain. That upstream layer
+terminates auth and passes identity headers to the API:
 
 - `X-Forwarded-User` — username
 - `X-Forwarded-Email` — email
-- `X-Forwarded-Groups` — comma-separated group membership
+- `X-Forwarded-Groups` — comma-separated group membership, reserved for
+  future mutating endpoints
 
-When auth gets wired:
-
-1. Add a `requireUser` middleware in `src/auth.ts` that parses these
-   headers and rejects requests where `X-Forwarded-User` is missing.
-2. The middleware MUST trust headers only when the request reaches us
-   through the homelab Ingress — when developing against a port-forward,
-   set `KAGENT_WORKBENCH_TRUST_HEADERS=1` to bypass the strict-mode
-   check.
-3. Out-of-band: the Ingress strips inbound `X-Forwarded-*` headers
-   before adding its own. Without that, anyone can spoof identity by
-   sending the headers themselves. Verify in the Traefik
-   `IngressRoute` middleware chain.
-4. Mutating endpoints (cancel, retry — slated for v0.2) MUST be
-   group-gated. Admin-only by default.
+Out of band, the Ingress or Middleware chain must strip inbound
+`X-Forwarded-*` headers before adding its own. Without that, a direct
+client could spoof identity by sending the headers itself. Mutating
+endpoints (cancel, retry — slated for v0.2) MUST be group-gated.
+Admin-only remains the default posture.
 
 ## Cache invariants
 
@@ -113,6 +110,8 @@ These were intentionally cut from v0.1:
 
 - `WORKBENCH_PORT` (default 8080) — HTTP listen port
 - `WORKBENCH_HOSTNAME` (default 0.0.0.0)
+- `WORKBENCH_AUTH_REQUIRED` (default true) — require
+  `X-Forwarded-User` on every non-probe route; only `false` disables it
 - `KAGENT_NO_INFORMER` — skip informer boot. Used by CI to verify the
   entrypoint resolves without contacting a cluster
 
@@ -126,7 +125,7 @@ test knob, not a chart-managed runtime input.
 The brief asks for a brief no-cluster smoke test. The standard recipe:
 
 ```bash
-KAGENT_NO_INFORMER=1 WORKBENCH_PORT=18999 \
+KAGENT_NO_INFORMER=1 WORKBENCH_AUTH_REQUIRED=false WORKBENCH_PORT=18999 \
   pnpm --filter @kagent/workbench-api start &
 sleep 2
 curl -sS http://127.0.0.1:18999/healthz                # → {"status":"ok"}

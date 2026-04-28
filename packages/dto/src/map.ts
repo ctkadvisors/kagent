@@ -20,6 +20,8 @@
  * tractable for SemVer.
  */
 
+import { createHash } from 'node:crypto';
+
 import type { V1ContainerStatus, V1Job, V1Pod } from '@kubernetes/client-node';
 
 import type { Agent, AgentTask } from './crds.js';
@@ -323,16 +325,37 @@ export function traceLink(task: AgentTask, opts: TraceLinkOptions): TraceLink | 
   return link;
 }
 
+/**
+ * Derive the OTel trace ID the substrate's `OtelTraceSink` actually
+ * emits for a given runId. MUST stay byte-identical to
+ * `traceIdFromRunId` in `@kagent/trace-sinks/src/otel-sink.ts` —
+ * inlined here (rather than imported) to keep `@kagent/dto` a
+ * leaf data package with no OTel runtime dependency.
+ *
+ * Why the mirror exists: the AgentTask UID is the human-readable runId
+ * (good for log-grep + audit), but the actual trace ID stored in
+ * Langfuse / Jaeger is `sha256(runId)[0..32]`. A "View trace" deep-link
+ * built from the UID 404s in Langfuse — the trace doesn't exist at that
+ * key. WS-D shipped this derivation in trace-sinks; this is the
+ * consumer-side mirror so dto-built URLs resolve.
+ */
+function deriveTraceId(runId: string): string {
+  return createHash('sha256').update(runId).digest('hex').slice(0, 32);
+}
+
 function renderTraceUrl(provider: TraceLink['provider'], baseUrl: string, runId: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
   switch (provider) {
     case 'langfuse':
       // Langfuse trace URLs follow `<host>/trace/<traceId>` per the
-      // self-hosted UI route. v0.2 will revisit if Langfuse changes.
-      return `${trimmed}/trace/${runId}`;
+      // self-hosted UI route. The trace ID is the deterministic
+      // `sha256(runId)[0..32]` derivation the OtelTraceSink emits, NOT
+      // the raw AgentTask UID — see `deriveTraceId` above.
+      return `${trimmed}/trace/${deriveTraceId(runId)}`;
     case 'jaeger':
-      // Jaeger UI: `<host>/trace/<traceId>`.
-      return `${trimmed}/trace/${runId}`;
+      // Jaeger UI: `<host>/trace/<traceId>`. Same OTel 32-hex trace ID
+      // semantics as Langfuse.
+      return `${trimmed}/trace/${deriveTraceId(runId)}`;
     case 'otel-collector':
       // OTel collector has no UI; return the OTLP endpoint as-is so a
       // CLI consumer can curl it. Workbench callers usually pass

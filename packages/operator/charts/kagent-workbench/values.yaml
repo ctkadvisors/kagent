@@ -76,11 +76,11 @@ api:
       memory: '256Mi'
 
 # ---------------------------------------------------------------------
-# Workbench UI (Next.js / React; static assets served by nginx-alpine)
+# Workbench UI (React/Vite; static assets served by nginx-alpine)
 # ---------------------------------------------------------------------
 # Container 2 in the Deployment (sidecar). Pure browser bundle — owns
-# no Kubernetes credentials. The workbench-ui image is the Next.js
-# build's `out/` (or `dist/`) baked behind nginx-alpine on `ui.port`.
+# no Kubernetes credentials. The workbench-ui image is the Vite
+# build's `dist/` baked behind nginx-alpine on `ui.port`.
 # The workbench-api proxies `/` requests to this sidecar; everything
 # under `/api/*` stays in the API container.
 #

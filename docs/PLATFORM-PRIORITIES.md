@@ -31,7 +31,8 @@ Still intentionally incomplete:
 - Policy-managed browser/code/git tools.
 - Agent templates for controlled on-demand specialists.
 - Replay/eval harness.
-- Workbench/console visibility surface.
+- Full Workbench follow-up views (task detail/graph, agent catalog,
+  artifact browser) and write actions.
 
 ## 2. Priority order
 
@@ -48,12 +49,14 @@ Done or effectively landed:
   `activeDeadlineSeconds`.
 - Job/Pod failure states reflect back to `AgentTask.status`.
 - Smoke-test resources rerun predictably under Argo.
+- `helm template` renders locally for the Workbench chart's default,
+  vanilla Ingress, and Traefik IngressRoute paths (verified
+  2026-04-28).
+- Workbench image-build path on ghcr.io is documented alongside chart
+  defaults (see `packages/workbench-api/IMAGE-BUILD-NOTES.md`).
 
 Remaining P0 work:
 
-- Verify `helm template` in CI or a local dev toolchain.
-- Keep the workbench/operator image-build path on ghcr.io documented
-  alongside chart defaults (see `packages/workbench-api/IMAGE-BUILD-NOTES.md`).
 - Keep Phase 4 smoke green after every operator/runtime change.
 
 ### P1 — Build visibility before complexity

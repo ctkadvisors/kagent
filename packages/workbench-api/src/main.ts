@@ -20,6 +20,12 @@
  *     `X-Forwarded-User` on every non-probe request. Setting this to
  *     `"false"` disables enforcement and logs a loud warning at boot.
  *     See `auth.ts` for the trust model.
+ *   - `LANGFUSE_BASE_URL` — when set, the workbench-api populates a
+ *     `traceLink` field on the TaskDetail response so the UI can render
+ *     a "View trace" deep-link. Trace IDs are derived in lockstep with
+ *     `@kagent/trace-sinks`'s `traceIdFromRunId` (sha256(uid)[0..32]).
+ *     When unset, the detail response omits `traceLink` and the UI
+ *     hides the affordance. Surface set by the chart's `api.langfuseBaseUrl`.
  *   - `KAGENT_NO_INFORMER` — skip informer boot. Useful for smoke-
  *     testing the entrypoint in CI without a live cluster.
  *
@@ -77,6 +83,7 @@ async function main(): Promise<void> {
   }
 
   const uiUpstream = process.env.WORKBENCH_UI_UPSTREAM;
+  const langfuseBaseUrl = process.env.LANGFUSE_BASE_URL;
   const authRequired = resolveAuthRequired();
   if (!authRequired) {
     console.warn(
@@ -91,6 +98,7 @@ async function main(): Promise<void> {
     ready: () => ready,
     authRequired,
     ...(typeof uiUpstream === 'string' && uiUpstream.length > 0 && { uiUpstream }),
+    ...(typeof langfuseBaseUrl === 'string' && langfuseBaseUrl.length > 0 && { langfuseBaseUrl }),
   });
   const handle = startServer(app, { port, hostname });
 

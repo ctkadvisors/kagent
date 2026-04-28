@@ -151,3 +151,13 @@
   border-radius: 0.375rem;
   margin-bottom: 1rem;
 }
+
+.linkCell {
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.linkCell:hover {
+  text-decoration: underline;
+}

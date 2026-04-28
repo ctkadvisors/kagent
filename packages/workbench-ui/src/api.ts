@@ -9,7 +9,7 @@
  * so paths are relative.
  */
 
-import type { CacheChangeEvent, TaskSummary } from './types.js';
+import type { CacheChangeEvent, TaskDetail, TaskSummary } from './types.js';
 
 export async function fetchTasks(signal?: AbortSignal): Promise<TaskSummary[]> {
   const init: RequestInit = signal !== undefined ? { signal } : {};
@@ -19,6 +19,28 @@ export async function fetchTasks(signal?: AbortSignal): Promise<TaskSummary[]> {
   }
   const body = (await res.json()) as { items?: TaskSummary[] };
   return body.items ?? [];
+}
+
+/**
+ * Fetch one task's detail projection. The API returns a 404 when the
+ * task isn't in the cache; `fetchTaskDetail` translates that into a
+ * thrown `Error` with the status text so the caller can surface a
+ * user-visible "not found" state without leaking response shape.
+ */
+export async function fetchTaskDetail(
+  namespace: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<TaskDetail> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch(
+    `/api/tasks/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+    init,
+  );
+  if (!res.ok) {
+    throw new Error(`fetchTaskDetail: ${String(res.status)} ${res.statusText}`);
+  }
+  return (await res.json()) as TaskDetail;
 }
 
 /**

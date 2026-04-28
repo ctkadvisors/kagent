@@ -6,7 +6,7 @@ description: |
   Read-only operator console over the kagent control plane. Deploys the
   workbench-api facade (thin Kubernetes-watch + DTO layer over Agent /
   AgentTask / AgentCapability + operator-managed Jobs/Pods) and the
-  workbench-ui Next.js client as a sidecar. RBAC is read-only for the
+  workbench-ui React/Vite client as a sidecar. RBAC is read-only for the
   v0.0.5 MVP; write actions (cancel/retry/create-task) ship behind a
   separate ClusterRole + values flag in v0.2.
 
@@ -17,7 +17,8 @@ type: application
 # expected to churn faster than the workbench images during MVP.
 version: 0.0.1
 # Default workbench-api / workbench-ui image tag. Both images publish
-# from the GitHub Images workflow alongside the operator + agent-pod.
+# from the GitHub CI workflow's build-images matrix alongside the
+# operator + agent-pod.
 appVersion: 'v0.0.5-workbench-mvp'
 home: https://github.com/ctkadvisors/kagent
 sources:

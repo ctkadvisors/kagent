@@ -3,21 +3,22 @@
 # Workbench image build path
 
 The `kagent-workbench-api` and `kagent-workbench-ui` images are produced by
-[`.github/workflows/images.yml`](../../.github/workflows/images.yml) and
-published to:
+the `build-images` matrix in
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) and published
+to:
 
 - `ghcr.io/ctkadvisors/kagent-workbench-api`
 - `ghcr.io/ctkadvisors/kagent-workbench-ui`
 
-Triggers: every push to `main`, every tag matching `v*` (any version-
-prefixed tag — pre-release, MVP, or final), and manual
-`workflow_dispatch`. The metadata-action emits image tags from
-`type=ref,event=tag` which preserves the leading `v`, so a git tag
-`v0.0.5-workbench-mvp` produces an image tag `v0.0.5-workbench-mvp`
-that lines up exactly with `Chart.appVersion`. Per-image
-`cache-from/cache-to` scopes keep cold builds bounded. Build context is
-the repo root so the workbench packages can pull `@kagent/dto` (and any
-other workspace dep) via pnpm.
+Triggers: every tag matching `v*` (any version-prefixed tag —
+pre-release, MVP, or final) and manual `workflow_dispatch`. PR and
+main-branch pushes run the verify gate only; they do not push images.
+The metadata-action emits image tags from `type=ref,event=tag`, which
+preserves the leading `v`, so a git tag `v0.0.5-workbench-mvp` produces
+an image tag `v0.0.5-workbench-mvp` that lines up exactly with
+`Chart.appVersion`. Per-image `cache-from/cache-to` scopes keep cold
+builds bounded. Build context is the repo root so the workbench packages
+can pull `@kagent/dto` (and any other workspace dep) via pnpm.
 
 ## History — why there's no Gitea pipeline
 
@@ -45,7 +46,7 @@ Actions tab on github.com/ctkadvisors/kagent for build status.
 
 The workbench-api is FAIL-CLOSED by default. The chart sets
 `api.authRequired: true` (see
-`packages/operator/charts/kagent-workbench/values.yaml`); that env-vars
+`packages/operator/charts/kagent-workbench/values.yaml`); that renders
 into the container as `WORKBENCH_AUTH_REQUIRED=true`, and the API
 rejects every non-probe request that doesn't carry the
 `X-Forwarded-User` header (set upstream by Traefik forward-auth or

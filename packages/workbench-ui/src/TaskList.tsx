@@ -111,7 +111,14 @@ export function TaskList(): React.JSX.Element {
           <tbody>
             {tasks.map((t) => (
               <tr key={t.uid !== '' ? t.uid : `${t.namespace}/${t.name}`}>
-                <td>{t.name}</td>
+                <td>
+                  <a
+                    href={`#/tasks/${encodeURIComponent(t.namespace)}/${encodeURIComponent(t.name)}`}
+                    className={styles.linkCell}
+                  >
+                    {t.name}
+                  </a>
+                </td>
                 <td>{t.namespace}</td>
                 <td>
                   {t.phase !== undefined ? (

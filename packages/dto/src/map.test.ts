@@ -3,6 +3,8 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 import type { V1Job, V1Pod } from '@kubernetes/client-node';
 
@@ -470,21 +472,35 @@ describe('traceLink', () => {
     });
   });
 
-  it('renders Langfuse trace URL', () => {
+  it('renders Langfuse trace URL using sha256-derived trace ID (not raw UID)', () => {
+    // The substrate's OtelTraceSink emits spans under
+    // `sha256(runId).slice(0, 32)`, not the raw runId. A deep-link
+    // built from the raw UID would 404 in Langfuse. This test pins
+    // the derivation in lockstep with @kagent/trace-sinks's
+    // `traceIdFromRunId`. Same fixture UID `9b1a8c4e-fixture` →
+    // sha256 → first 32 hex chars.
     const t = makeTask({});
+    const expectedTraceId = createHash('sha256')
+      .update('9b1a8c4e-fixture')
+      .digest('hex')
+      .slice(0, 32);
     expect(
       traceLink(t, { provider: 'langfuse', baseUrl: 'https://langfuse.knuteson.io/' }),
     ).toEqual({
       provider: 'langfuse',
       runId: '9b1a8c4e-fixture',
-      url: 'https://langfuse.knuteson.io/trace/9b1a8c4e-fixture',
+      url: `https://langfuse.knuteson.io/trace/${expectedTraceId}`,
     });
   });
 
-  it('renders Jaeger trace URL', () => {
+  it('renders Jaeger trace URL using sha256-derived trace ID', () => {
     const t = makeTask({});
+    const expectedTraceId = createHash('sha256')
+      .update('9b1a8c4e-fixture')
+      .digest('hex')
+      .slice(0, 32);
     expect(traceLink(t, { provider: 'jaeger', baseUrl: 'https://jaeger.local' })).toMatchObject({
-      url: 'https://jaeger.local/trace/9b1a8c4e-fixture',
+      url: `https://jaeger.local/trace/${expectedTraceId}`,
     });
   });
 

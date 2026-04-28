@@ -26,12 +26,20 @@
 
 import { Hono } from 'hono';
 
-import { taskDetail, taskSummary, type TaskSummary } from '@kagent/dto';
+import { taskDetail, taskSummary, traceLink, type TaskSummary } from '@kagent/dto';
 
 import type { SnapshotCache } from '../cache.js';
 
 export interface TasksRouteDeps {
   readonly cache: SnapshotCache;
+  /**
+   * Optional Langfuse base URL. When set, the detail response carries
+   * a `traceLink` field with a deep-link the UI can render. The DTO
+   * mapper derives the OTel trace ID from the AgentTask UID (mirror of
+   * `traceIdFromRunId` in `@kagent/trace-sinks`); the base URL is just
+   * the `<scheme>://<host>` prefix.
+   */
+  readonly langfuseBaseUrl?: string;
 }
 
 export function tasksRoute(deps: TasksRouteDeps): Hono {
@@ -90,6 +98,16 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
       ...(job !== undefined && { job }),
       ...(pod !== undefined && { pod }),
     });
+    // Attach a Langfuse trace deep-link when configured. The dto mapper
+    // returns null when the task has no UID; surface that as omitted
+    // rather than null so the UI can use a simple "key present" check.
+    const link =
+      deps.langfuseBaseUrl !== undefined
+        ? traceLink(task, { provider: 'langfuse', baseUrl: deps.langfuseBaseUrl })
+        : null;
+    if (link !== null) {
+      return c.json({ ...detail, traceLink: link });
+    }
     return c.json(detail);
   });
 

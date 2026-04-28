@@ -9,8 +9,8 @@ Workbench Deployment — single Pod, two containers:
     facade (Agent/AgentTask/AgentCapability + Job/Pod/Event watches)
     and serves SSE/JSON under /api/. Listens on api.port (8080).
 
-  - `ui`: workbench-ui sidecar (nginx-alpine baking the Next.js
-    static `out/`/`dist/` build). No K8s creds. Listens on ui.port
+  - `ui`: workbench-ui sidecar (nginx-alpine baking the React/Vite
+    static `dist/` build). No K8s creds. Listens on ui.port
     (8081). The api container proxies non-/api requests to this
     sidecar over loopback (127.0.0.1:{ui.port}).
 

@@ -165,6 +165,13 @@ export interface TaskDetail extends TaskSummary {
   readonly eventsSummary: readonly EventSummary[];
 
   /**
+   * Optional trace deep-link. The pure `taskDetail()` mapper leaves
+   * this unset; API facades can attach it after calling `traceLink()`
+   * when they know the configured trace provider base URL.
+   */
+  readonly traceLink?: TraceLink;
+
+  /**
    * Full artifact projection for the detail view. Mirrors
    * `status.artifacts` 1:1 (uri/mediaType/sizeBytes/name/producedAt
    * — checksum dropped, the UI doesn't render it). Empty array when

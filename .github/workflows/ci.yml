@@ -106,9 +106,61 @@ jobs:
       - name: Check CRD YAML vs TS types drift
         run: pnpm --filter @kagent/operator crd:check
 
+  helm-smoke:
+    name: Helm chart smoke (lint + template)
+    needs: verify
+    # PRs + main runs validate every chart still lints and renders
+    # cleanly. The Phase 4 / 5 deploy paths feed off these chart
+    # outputs, so a templating regression silently broke the smoke
+    # test for hours in v0.0.4. Catch it on PR.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: kagent-operator
+            path: packages/operator/charts/kagent-operator
+          - name: kagent-workbench
+            path: packages/operator/charts/kagent-workbench
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4
+        with:
+          version: v3.16.3
+
+      - name: helm lint
+        # Static workflow-matrix values; not user input.
+        env:
+          CHART_PATH: ${{ matrix.path }}
+        run: helm lint "$CHART_PATH"
+
+      - name: helm template (default values)
+        # Render with no overrides — exercises the chart's default-values
+        # path, which is what `helm install` consumes when the operator
+        # writes minimal Argo `values:` blobs.
+        env:
+          CHART_NAME: ${{ matrix.name }}
+          CHART_PATH: ${{ matrix.path }}
+        run: helm template "$CHART_NAME" "$CHART_PATH" > /dev/null
+
+      - name: helm template (smoke-test values, operator chart only)
+        if: matrix.name == 'kagent-operator'
+        # The operator chart bundles a Phase-4 smoke test (`smokeTest.enabled`)
+        # that ships an Agent + AgentTask + verifier Job. Render it here
+        # so a templating regression in the smoke bundle surfaces on PR
+        # rather than at next ArgoCD sync.
+        env:
+          CHART_NAME: ${{ matrix.name }}
+          CHART_PATH: ${{ matrix.path }}
+        run: helm template "$CHART_NAME" "$CHART_PATH" --set smokeTest.enabled=true > /dev/null
+
   build-images:
     name: Build + sign + SBOM (${{ matrix.name }})
-    needs: [verify, crd-drift]
+    needs: [verify, crd-drift, helm-smoke]
     # Only build / push images on tag pushes (releases) or manual
     # dispatch. Plain main / PR runs skip this job — verify + crd-drift
     # is the per-commit gate; images are an explicit release artifact.

@@ -1,7 +1,7 @@
 # Roadmap
 
-**Date:** 2026-04-26
-**Status:** Phase 4 smoke test passed; Phase 4.x hardening and Phase 5 prioritization underway
+**Date:** 2026-04-28
+**Status:** Phase 4 smoke green; Phase 4.x hardening complete; Phase 5 Workbench surface materialized (TaskList + TaskDetail + chart); remaining v0.1 work is researcher port + comparison rig.
 **Convention:** one phase = one git commit cluster + one tag (`vX.Y.Z-phaseN`).
 
 > Read [`DESIGN-V0.1.md`](./DESIGN-V0.1.md) for the v0.1 architecture detail. This document is the multi-version phasing plan.
@@ -64,7 +64,7 @@
 
 **Scope deviation from original ROADMAP**: Phase 4 was "LiteLLM + Langfuse Helm deploys + smoke." The actual shape pivoted to "shortest path to a deployed + proven kagent": skip the LiteLLM/Langfuse Helm deploys (their values are documented in [`packages/operator/charts/values-references/`](../packages/operator/charts/values-references/)), point the smoke test directly at LM Studio for inference, and prove the GitOps loop end-to-end. LiteLLM + Langfuse install when the homelab actually needs them; the substrate doesn't gate on either.
 
-- [x] CI image build pipeline ([`.github/workflows/images.yml`](../.github/workflows/images.yml)): builds + pushes `ghcr.io/ctkadvisors/kagent-operator` and `ghcr.io/ctkadvisors/kagent-agent-pod` on tag-push (`v*-phase*` or `vX.Y.Z`), main-branch pushes, and manual dispatch.
+- [x] CI image build pipeline ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)): verifies on PR/main, then builds + pushes `ghcr.io/ctkadvisors/kagent-operator` and `ghcr.io/ctkadvisors/kagent-agent-pod` on tag-push (`v*`) and manual dispatch.
 - [x] Operator Dockerfile mirroring agent-pod's multi-stage shape (Node 22 + pnpm install → Node 22 + tsx runtime; Bun runtime reverted because `@kubernetes/client-node` Watch + status-PATCH paths fail with `SELF_SIGNED_CERT_IN_CHAIN` against K3s under Bun, see Phase 4.x follow-ups below).
 - [x] ArgoCD Application + repo secret placeholder in sibling `new_localai/k8s/argocd-apps/kagent-app.yaml`. Targets the kagent repo's Helm chart, sync wave 6.
 - [x] Helm chart wires the agent-pod's runtime config (LiteLLM base URL + API key, OTel endpoint + headers) through operator env into the spawned pods. agent-pod ServiceAccount + Role for AgentTask.status patching created by the chart.
@@ -104,13 +104,15 @@ Phase 5 has two tracks: prove the first real workflow and make the engine visibl
 - [x] `ArtifactRef` type + `AgentTask.status.artifacts` schema (P3). Status-reference-only — writer slice is the next P3 step.
 - [x] Task-graph helpers (`buildChildTaskManifest`, `aggregateChildren`, `cycleCheck`, parent/child labels) + status-projection schema (P4). Operator wire-up (re-reconcile parent on child status change) is the next P4 step.
 - [x] Workbench API + UI blueprint (`docs/WORKBENCH.md` §5; full file-by-file scaffold ready in the WS2 design output for next-session materialization).
-- [x] Workbench deployment plan in `new_localai` — `feat/kagent-workbench-deploy` branch with RBAC + auth integration recipe; manifest staged with DO-NOT-APPLY banner pending chart shipping.
+- [x] Workbench deployment plan in `new_localai` — `feat/kagent-workbench-deploy` branch with RBAC + auth integration recipe; manifest staged with DO-NOT-APPLY banner pending the first workbench image tag.
 
 **Phase 5 implementation slate (in PLATFORM-PRIORITIES.md priority order):**
 
-- [ ] Materialize the Workbench API + UI from the WS2 blueprint (`packages/workbench-api`, `packages/workbench-ui`); first view is `TaskList` over `/api/tasks`.
-- [ ] Ship the Workbench Helm chart at `packages/operator/charts/kagent-workbench/` referenced by `new_localai/k8s/argocd-apps/kagent-workbench-app.yaml`.
-- [x] Build + push `kagent-workbench-{api,ui}` images via `.github/workflows/images.yml` to `ghcr.io/ctkadvisors/kagent-workbench-{api,ui}`. (Originally planned to also mirror through Gitea Actions; the Gitea pipeline was retired when the repo went public — see Phase 4.x bullet above.)
+- [x] Materialize the Workbench API + UI from the WS2 blueprint (`packages/workbench-api`, `packages/workbench-ui`); views are `TaskList` over `/api/tasks` and `TaskDetail` over `/api/tasks/:ns/:name`, hash-routed (`#/`, `#/tasks/<ns>/<name>`), refreshed by `/api/stream` SSE.
+- [x] Ship the Workbench Helm chart at `packages/operator/charts/kagent-workbench/` referenced by `new_localai/k8s/argocd-apps/kagent-workbench-app.yaml`.
+- [x] Build + push `kagent-workbench-{api,ui}` images via `.github/workflows/ci.yml` to `ghcr.io/ctkadvisors/kagent-workbench-{api,ui}`. (Originally planned to also mirror through Gitea Actions; the Gitea pipeline was retired when the repo went public — see Phase 4.x bullet above.)
+- [x] Helm chart smoke job in CI (`helm-smoke` matrix in `.github/workflows/ci.yml`) — lints + templates the operator and workbench charts on every PR; gates image-build on green smoke. Mitigates the "templating regression silently breaks the deploy" risk surfaced after v0.0.4.
+- [x] Trace-link derivation fix in `@kagent/dto` — `traceLink()` now mirrors `OtelTraceSink.traceIdFromRunId` (`sha256(uid).slice(0, 32)`) so Langfuse deep-links resolve. Was previously emitting `<base>/trace/<uid>`, which 404'd in Langfuse because spans are stored under the derived OTel trace ID. Workbench `TaskDetail` surfaces the link when `LANGFUSE_BASE_URL` is set on the API container.
 - [ ] Wire the operator's reconcile to USE the task-graph helpers (P4 wire-up): on child status change, look up parent and patch parent.status.children + aggregatePhase.
 - [ ] Implement the artifact writer (P3 wire-up): mount the `kagent-artifacts` PVC into agent-pods, expose a `write_artifact` built-in tool, populate `status.artifacts`.
 - [ ] Port researcher agent from `homelab-orchestrator` → produces same daily digest on new substrate.
@@ -127,7 +129,7 @@ Phase 5 has two tracks: prove the first real workflow and make the engine visibl
 - **Inline media-type allowlist:** `inlineSafe` accepts `text/{plain,markdown,x-diff,x-patch}` + `application/json`. Add `text/html` / `application/yaml` / `text/csv`, or wait for the writer? (WS4 Q2)
 - **Task-graph cancellation:** `cycleCheck` is fail-open on missing parents. Move to fail-closed for stale chains? Add `Cancelled` to the phase enum? (WS5 Q2/Q3)
 - **DTO consolidation:** `@kagent/dto` copied the failure-detector + CRD shapes from `@kagent/operator` (which has no public API). Promote to a shared `@kagent/crds` package now or after Workbench lands? (WS1)
-- **Workbench auth:** Tailscale-only on `kagent.homelab` vs Traefik basicAuth + SealedSecret on `kagent.knuteson.io`? Pick before the chart ships. (WS6)
+- **Workbench auth:** Resolved for the MVP as fail-closed header-trust auth (`X-Forwarded-User`) in `workbench-api`, with optional Traefik Middleware wiring in the chart. The exact public/Tailscale hostname remains a deployment-values choice. (WS6)
 
 **Tag:** `v0.1.0-phase5` — **v0.1 ships when this tag lands and the comparison-rig numbers do not regress against `homelab-orchestrator`'s baseline.**
 
