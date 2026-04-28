@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpToolProvider, _classifyMcpErrorForTests } from './provider.js';
 import {
   InvalidConfigError,
@@ -41,12 +41,16 @@ afterEach(async () => {
   providers = [];
 });
 
-function spawnFixtureProvider(envOverride?: Record<string, string>): McpToolProvider {
+function spawnFixtureProvider(
+  envOverride?: Record<string, string>,
+  envAllowlist?: readonly string[],
+): McpToolProvider {
   const opts: ConstructorParameters<typeof McpToolProvider>[0] = {
     command: process.execPath,
     args: ['--import', 'tsx', FIXTURE_PATH],
   };
   if (envOverride !== undefined) opts.env = envOverride;
+  if (envAllowlist !== undefined) opts.envAllowlist = envAllowlist;
   const p = new McpToolProvider(opts);
   providers.push(p);
   return p;
@@ -126,15 +130,74 @@ describe('McpToolProvider — executeTool error paths (D-16, D-17, D-23)', () =>
   });
 });
 
-describe('McpToolProvider — env merge (D-14, RESEARCH §Pitfall 3)', () => {
-  it('Test 8 — env merged over process.env: child sees both MY_VAR and inherited PATH', async () => {
-    const p = spawnFixtureProvider({ MY_VAR: 'phase-5-test' });
+describe('McpToolProvider — env merge (D-14, RESEARCH §Pitfall 3, WS-A)', () => {
+  it("Test 8 — envAllowlist:['*'] forwards everything; child sees MY_VAR + inherited PATH", async () => {
+    const p = spawnFixtureProvider({ MY_VAR: 'phase-5-test' }, ['*']);
     const result = await p.executeTool(call('env_dump'), ctx());
     const envJson = result.content as string;
     const env: Record<string, string> = JSON.parse(envJson) as Record<string, string>;
     expect(env['MY_VAR']).toBe('phase-5-test');
     // Inherited from process.env (PATH always set on POSIX; on Windows use Path)
     expect(env['PATH'] !== undefined || env['Path'] !== undefined).toBe(true);
+  });
+
+  it("WS-A default — empty allowlist masks process.env (HOME / PATH absent or '')", async () => {
+    // Sanity: parent has HOME (POSIX) or USERPROFILE (Windows) set —
+    // we want to prove they don't propagate.
+    expect(process.env.HOME !== undefined || process.env.USERPROFILE !== undefined).toBe(true);
+
+    const p = spawnFixtureProvider({ MY_VAR: 'kept' });
+    const result = await p.executeTool(call('env_dump'), ctx());
+    const env: Record<string, string> = JSON.parse(result.content as string) as Record<
+      string,
+      string
+    >;
+    expect(env['MY_VAR']).toBe('kept');
+    // The SDK's StdioClientTransport always merges its
+    // getDefaultEnvironment() set (HOME, PATH, USER, ...) when an
+    // `env` map is passed. We mask those keys to '' so the child
+    // sees an empty value instead of the parent's (e.g. a leaked
+    // home directory path).
+    expect(env['HOME'] ?? '').toBe('');
+    expect(env['PATH'] ?? '').toBe('');
+    expect(env['USERPROFILE'] ?? '').toBe('');
+    // None of these should equal the parent's value.
+    if (process.env.HOME !== undefined) expect(env['HOME']).not.toBe(process.env.HOME);
+    if (process.env.PATH !== undefined) expect(env['PATH']).not.toBe(process.env.PATH);
+  });
+
+  it('explicit allowlist forwards only listed keys', async () => {
+    process.env.MCP_TEST_ALLOWED = 'yes';
+    process.env.MCP_TEST_BLOCKED = 'no';
+    try {
+      const p = spawnFixtureProvider(undefined, ['MCP_TEST_ALLOWED']);
+      const result = await p.executeTool(call('env_dump'), ctx());
+      const env: Record<string, string> = JSON.parse(result.content as string) as Record<
+        string,
+        string
+      >;
+      expect(env['MCP_TEST_ALLOWED']).toBe('yes');
+      expect(env['MCP_TEST_BLOCKED']).toBeUndefined();
+    } finally {
+      delete process.env.MCP_TEST_ALLOWED;
+      delete process.env.MCP_TEST_BLOCKED;
+    }
+  });
+
+  it("envAllowlist:['*'] logs a deprecation warning at construction", () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const p = new McpToolProvider({
+        command: 'true',
+        envAllowlist: ['*'],
+      });
+      providers.push(p);
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(msg).toMatch(/envAllowlist:\['\*'\]/);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
