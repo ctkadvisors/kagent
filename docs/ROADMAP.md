@@ -132,10 +132,12 @@ Phase 5 has two tracks: prove the first real workflow and make the engine visibl
 
 ---
 
-## Phase 6 (v0.2) — Kata Containers + warm pool (~1 week)
+## Phase 6 (v0.2) — Kata Containers node install + warm pool (~1 week)
 
-- [ ] Kata Containers `RuntimeClass` deployed onto K3s nodes via Kata K8s deployer
-- [ ] Agent CRD `sandboxProfile: strict` plumbs to `runtimeClassName: kata` on Agent Pod spec
+Operator-side wiring is already shipped (WS-C): `Agent.spec.sandboxProfile` is resolved per-Agent against `agentPod.runtimeClasses.{default,strict}` at Job-spawn time, never globally. What remains is the cluster-side install + measurement work.
+
+- [ ] Kata Containers `RuntimeClass` deployed onto K3s nodes via the Kata K8s deployer (this is the remaining gating item — pods that opt into `sandboxProfile: 'strict'` will fail to schedule with a missing-RuntimeClass error until this lands)
+- [x] Agent CRD `sandboxProfile: strict` plumbs to `runtimeClassName: kata` on Agent Pod spec — _operator side wired in v0.1 via `agentPod.runtimeClasses.strict`; toggling that value to `'kata'` lights it up once the node install completes._
 - [ ] Measure overhead: spawn time, RSS, throughput delta vs runc
 - [ ] Warm pool option: `Agent` CRD `warmReplicas: N` materializes a StatefulSet alongside the Job-per-task path
 - [ ] Decide on default sandbox profile based on measured overhead

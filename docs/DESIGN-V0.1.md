@@ -84,7 +84,8 @@ v0.1 ships when:
 ### 4.4 Sandbox layer
 
 - **v0.1: default `runc`.** Ship without Kata to reduce v0.1 risk. Pods are still namespace-isolated; this just isn't microVM-grade.
-- **v0.2: Kata Containers as a `RuntimeClass`** (`kata` runtime added to K3s nodes via the Kata K8s deployer). Set `runtimeClassName: kata` on Agent Pod spec when `sandboxProfile: strict`. ~30MB overhead per pod, ~1s additional spawn.
+- **Operator-side `sandboxProfile` → `runtimeClassName` plumbing is wired in v0.1.** `Agent.spec.sandboxProfile` (`default`/`strict`) is resolved per-Agent against the operator's `agentPod.runtimeClasses.{default,strict}` Helm map at Job-spawn time; the operator NEVER sets a global `runtimeClassName` (that would over-apply Kata to every Agent). Default chart values leave both entries empty — strict-profile Agents fall back to the cluster default until the v0.2 node-side install lands.
+- **v0.2: Kata Containers `RuntimeClass` install.** Add the `kata` runtime to K3s nodes via the Kata K8s deployer, then flip `agentPod.runtimeClasses.strict: 'kata'`. Strict-profile Agents then land on Kata pods; ~30MB overhead per pod, ~1s additional spawn.
 - **For untrusted-code-exec inside an agent (CF Sandbox analog):** out of scope v0.1. Eventual answer is nested isolation — Agent runs in Kata pod, plus a sub-process sandboxed via Bubblewrap for code-exec tools, OR a separately-managed Firecracker pool the agent dispatches to.
 
 ### 4.5 Model gateway
@@ -118,7 +119,7 @@ v0.1 ships when:
 
 ### Out of scope (deferred — see [`ROADMAP.md`](./ROADMAP.md))
 
-- **Kata Containers runtime** — v0.2
+- **Kata Containers node-side install** — v0.2 (operator-side `sandboxProfile` → `runtimeClassName` map is wired in v0.1; only the cluster install of the Kata RuntimeClass is deferred)
 - **Warm pool / StatefulSet** — only Job-per-task in v0.1; v0.2 if cold-start measures bad
 - **Operator UI** — `kubectl` + Langfuse UI sufficient for v0.1
 - **Authority graph / OPA policy enforcement** — may never ship if no concrete need
