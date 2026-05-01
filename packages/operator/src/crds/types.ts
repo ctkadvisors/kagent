@@ -291,6 +291,63 @@ export interface AgentCapability {
 }
 
 /* =====================================================================
+ * AgentTemplate (WS-M) — declarative recipe for dynamic specialists.
+ *
+ * The materializer (`template-instantiator.ts`) consumes one of these
+ * + a parameter map, computes a deterministic agentName, and posts an
+ * `Agent` CR with the rendered spec. The orchestrator agent never
+ * holds Agent-create RBAC — it only asks the operator to materialize
+ * a template instance. See docs/AGENT-TEMPLATES.md.
+ * ===================================================================== */
+
+export type AgentTemplateParameterType = 'string' | 'integer' | 'toolSelection';
+
+export interface AgentTemplateParameter {
+  readonly name: string;
+  readonly type: AgentTemplateParameterType;
+  readonly pattern?: string;
+  readonly allowedValues?: readonly string[];
+  readonly required?: boolean;
+  readonly default?: string;
+}
+
+export interface AgentTemplateBudget {
+  readonly maxIterations?: number;
+  readonly maxCostUsdPerRun?: number;
+  readonly maxParallelInstances?: number;
+}
+
+export interface AgentTemplateSpec {
+  readonly templateVersion?: number;
+  readonly revisionHistoryLimit?: number;
+  readonly idleTtlSeconds?: number;
+  readonly parameters?: readonly AgentTemplateParameter[];
+  readonly budget?: AgentTemplateBudget;
+  readonly toolAllowlist?: readonly string[];
+  readonly toolDefaults?: readonly string[];
+  /**
+   * Template body. Substituted with `${param.X}` placeholders before
+   * being written to the materialized Agent's spec. Mustache-without-
+   * helpers semantics — see `template-instantiator.ts:renderAgentSpec`.
+   */
+  readonly agentSpec: Readonly<Record<string, unknown>>;
+}
+
+export interface AgentTemplateStatus {
+  readonly liveInstanceCount?: number;
+  readonly lastInstantiatedAt?: string;
+  readonly conditions?: readonly AgentTaskCondition[];
+}
+
+export interface AgentTemplate {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'AgentTemplate';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: AgentTemplateSpec;
+  readonly status?: AgentTemplateStatus;
+}
+
+/* =====================================================================
  * Type guards — runtime-checkable shapes used by the watch handler when
  * the API server hands back `unknown`-typed CR objects.
  * ===================================================================== */

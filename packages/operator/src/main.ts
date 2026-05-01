@@ -38,6 +38,7 @@ import {
   type ReconcileDeps,
 } from './reconcile.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
+import { startTemplateServer } from './template-server.js';
 import type { AgentTaskHandler, AgentTaskInformerWithCache } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
 
@@ -130,6 +131,26 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       name: 'KAGENT_SPAWN_CHILD_ENABLED',
       value: 'true',
     });
+  }
+  // WS-M — substrate kill switch + URL plumbing for the in-pod
+  // ensure_agent_from_template tool. Forwarded only when the
+  // template-server is enabled on the operator side; the chart binds
+  // both flags to the same `agentPod.templates.enabled` values key so
+  // they can't drift.
+  if (env.KAGENT_TEMPLATES_ENABLED === 'true') {
+    extraEnv.push({
+      name: 'KAGENT_TEMPLATES_ENABLED',
+      value: 'true',
+    });
+    if (
+      typeof env.KAGENT_AGENT_POD_TEMPLATE_SERVER_URL === 'string' &&
+      env.KAGENT_AGENT_POD_TEMPLATE_SERVER_URL.length > 0
+    ) {
+      extraEnv.push({
+        name: 'KAGENT_TEMPLATE_SERVER_URL',
+        value: env.KAGENT_AGENT_POD_TEMPLATE_SERVER_URL,
+      });
+    }
   }
   const pullPolicy = env.KAGENT_AGENT_POD_IMAGE_PULL_POLICY;
   // Artifact PVC plumbing — Helm sets KAGENT_ARTIFACT_PVC_NAME +
@@ -585,6 +606,33 @@ async function main(): Promise<void> {
   await informer.start();
   await jobPodInformer.start();
   console.log('[kagent-operator] informers started');
+
+  // WS-M — boot the template-server when enabled. Default-OFF; the
+  // chart's `agentPod.templates.enabled=true` flips
+  // KAGENT_TEMPLATES_ENABLED on this deployment AND
+  // KAGENT_TEMPLATE_SERVER_URL on every spawned agent-pod Job. The
+  // namespace-resolver short-circuits to the operator's release
+  // namespace; v0.1 is single-namespace per AGENT-TEMPLATES.md §8.4.
+  if (process.env.KAGENT_TEMPLATES_ENABLED === 'true') {
+    const port = Number.parseInt(process.env.KAGENT_TEMPLATE_SERVER_PORT ?? '8081', 10);
+    const releaseNamespace = watchNamespace ?? process.env.KAGENT_RELEASE_NAMESPACE ?? 'default';
+    const tplServer = startTemplateServer(port, {
+      customApi,
+      resolveNamespace: () => releaseNamespace,
+    });
+    console.log(
+      `[kagent-operator] template-server listening on :${String(port)} (namespace=${releaseNamespace})`,
+    );
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        await tplServer.close();
+      } catch (err) {
+        console.error('[kagent-operator] template-server close failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  }
 }
 
 function normalizeOptionalEnv(value: string | undefined): string | undefined {

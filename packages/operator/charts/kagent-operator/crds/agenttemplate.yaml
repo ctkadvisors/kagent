@@ -1,0 +1,183 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# AgentTemplate (WS-M) — declarative recipe an orchestrator agent
+# instantiates via the in-pod `ensure_agent_from_template` tool.
+#
+# The orchestrator may supply ONLY the parameter values declared in
+# `spec.parameters`; everything load-bearing (model, system prompt,
+# tools, sandbox, budget) is fixed at template-author time, in git.
+# This is the substrate primitive that makes constrained dynamic
+# specialist creation safe — see docs/AGENT-TEMPLATES.md.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agenttemplates.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: AgentTemplate
+    listKind: AgentTemplateList
+    plural: agenttemplates
+    singular: agenttemplate
+    shortNames:
+      - kagtmpl
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - agentSpec
+              properties:
+                templateVersion:
+                  type: integer
+                  minimum: 1
+                  default: 1
+                  description: |
+                    Bumped by the human author when the template's intent
+                    changes. New `templateVersion` means new effective
+                    `agentName`s for fresh instantiations; already-materialized
+                    Agents keep their pinned spec until idle GC reaps them.
+                revisionHistoryLimit:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  default: 20
+                  description: |
+                    Cap on materialized Agents per template at any time.
+                    Exceeding returns `cap_exhausted` to the caller and
+                    forces the GC sweeper to reclaim before new ones spawn.
+                idleTtlSeconds:
+                  type: integer
+                  minimum: 60
+                  maximum: 86400
+                  default: 3600
+                  description: |
+                    GC sweeper reaps materialized Agents whose
+                    `lastUsedAt` annotation is older than this AND have no
+                    in-flight referencing AgentTask. See
+                    docs/AGENT-TEMPLATES.md §5.
+                parameters:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - type
+                    properties:
+                      name:
+                        type: string
+                        pattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+                      type:
+                        type: string
+                        enum:
+                          - string
+                          - integer
+                          - toolSelection
+                      pattern:
+                        type: string
+                        description: |
+                          Regex (RE2 / JS-compatible) the value must match
+                          when type=string. Ignored otherwise.
+                      allowedValues:
+                        type: array
+                        items: { type: string }
+                        description: |
+                          Closed set of permitted values. For type=integer,
+                          values are stringified at the wire surface and
+                          parsed back at validation time.
+                      required:
+                        type: boolean
+                        default: true
+                      default:
+                        type: string
+                        description: |
+                          Default value (string-encoded for integer + toolSelection).
+                          When set, omitting the parameter at instantiate time
+                          is fine; the default joins the parameterHash so a
+                          later change to the default yields a fresh agentName.
+                budget:
+                  type: object
+                  properties:
+                    maxIterations:
+                      type: integer
+                      minimum: 1
+                      maximum: 1000
+                    maxCostUsdPerRun:
+                      type: number
+                      minimum: 0
+                    maxParallelInstances:
+                      type: integer
+                      minimum: 1
+                      maximum: 10000
+                      default: 50
+                  description: |
+                    Template-author constants, NOT caller-controllable. The
+                    materialized Agent gets these baked into a budget-hash
+                    annotation that the agent-pod's RunBudget reads at boot.
+                toolAllowlist:
+                  type: array
+                  items: { type: string }
+                  description: |
+                    Authoritative ceiling on the materialized Agent's
+                    spec.tools. The caller's `parameterValues` cannot
+                    expand it; a parameter of type `toolSelection` is
+                    intersected with this list.
+                toolDefaults:
+                  type: array
+                  items: { type: string }
+                  description: |
+                    Default tools written to the materialized Agent's
+                    spec.tools when the parameter set doesn't request a
+                    different subset. Must be ⊆ toolAllowlist.
+                agentSpec:
+                  type: object
+                  description: |
+                    Template body — fed verbatim into the materialized
+                    Agent's spec, after `${param.X}` substitution. Mustache-
+                    without-helpers semantics: only declared parameters
+                    substitute, no JS eval, no control flow.
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                liveInstanceCount:
+                  type: integer
+                  minimum: 0
+                lastInstantiatedAt:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: { type: string }
+                      status: { type: string, enum: ['True', 'False', 'Unknown'] }
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+      additionalPrinterColumns:
+        - name: Version
+          type: integer
+          jsonPath: .spec.templateVersion
+        - name: Live
+          type: integer
+          jsonPath: .status.liveInstanceCount
+        - name: Cap
+          type: integer
+          jsonPath: .spec.revisionHistoryLimit
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

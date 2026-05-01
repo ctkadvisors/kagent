@@ -37,6 +37,7 @@ import type { ToolProvider } from '@kagent/agent-loop';
 import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 
 import { defineSpawnChildTask } from './builtin-tools-spawn.js';
+import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
 import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
 import { createInClusterK8sTaskCreator } from './k8s-task-creator.js';
 import { runAgentTask } from './runner.js';
@@ -211,9 +212,27 @@ async function main(): Promise<void> {
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
     });
+    const subTools = [spawnDefs, waitChildDef, waitAllDef];
+    // WS-M — append the template tool when the operator's
+    // template-server URL was injected. Trust boundary: cluster-internal
+    // network only (the operator Service is ClusterIP). Tool errors
+    // surface as `policy_denied:` to the LLM, identical shape to
+    // spawn_child's allowlist refusals.
+    const templateServerUrl = process.env.KAGENT_TEMPLATE_SERVER_URL;
+    if (typeof templateServerUrl === 'string' && templateServerUrl.length > 0) {
+      subTools.push(
+        defineEnsureAgentFromTemplate({
+          serverUrl: templateServerUrl,
+          createdByTaskUid: config.taskId,
+        }),
+      );
+      console.log(
+        `[kagent-agent-pod] template tool ENABLED → ${templateServerUrl} (ensure_agent_from_template)`,
+      );
+    }
     substrateTools = new InProcessToolProvider({
       id: 'kagent-substrate',
-      tools: [spawnDefs, waitChildDef, waitAllDef],
+      tools: subTools,
     });
     console.log('[kagent-agent-pod] substrate tools ENABLED (spawn_child_task + wait_*)');
   }

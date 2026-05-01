@@ -1,0 +1,37 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+WS-M — Service exposing the operator's template-server port to other
+pods in the cluster (chiefly the agent-pods that POST to
+`/v1alpha1/templates/{name}:instantiate`).
+
+ClusterIP-only — there is no Ingress for this surface; the trust
+boundary is the in-cluster network. A future NetworkPolicy on the
+operator pod can restrict ingress to label `kagent.knuteson.io/role=
+agent-pod`, but v0.1 leans on RBAC + the operator's own validation as
+the gate (homelab posture per AGENT-TEMPLATES.md §8.1).
+
+Gated on `agentPod.templates.enabled` so a chart install with
+templates disabled doesn't materialize a Service the operator isn't
+listening on.
+*/}}
+{{- if .Values.agentPod.templates.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-templates
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: template-server
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: templates
+      port: {{ .Values.agentPod.templates.serverPort }}
+      targetPort: templates
+      protocol: TCP
+{{- end }}

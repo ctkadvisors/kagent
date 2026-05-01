@@ -22,14 +22,24 @@ metadata:
   labels:
     {{- include "kagent-operator.labels" . | nindent 4 }}
 rules:
-  # Read CRDs the operator owns
+  # Read CRDs the operator owns + WS-M agenttemplates (read-only;
+  # template authorship is GitOps).
   - apiGroups: ['kagent.knuteson.io']
-    resources: ['agents', 'agenttasks', 'agentcapabilities']
+    resources: ['agents', 'agenttasks', 'agentcapabilities', 'agenttemplates']
     verbs: ['get', 'list', 'watch']
-  # Patch AgentTask.status (status subresource)
+  # Patch AgentTask.status + AgentTemplate.status (operator-owned
+  # subresources).
   - apiGroups: ['kagent.knuteson.io']
-    resources: ['agenttasks/status']
+    resources: ['agenttasks/status', 'agenttemplates/status']
     verbs: ['get', 'patch', 'update']
+  # WS-M — operator mints Agent CRs from templates via the
+  # template-server. Needed for `agents:create` (POST), `update/patch`
+  # (lastUsedAt annotation bumps), and `delete` (idle-GC sweeper).
+  # Only the operator holds these verbs; the agent-pod's RBAC stays
+  # read-only on `agents`.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agents']
+    verbs: ['create', 'update', 'patch', 'delete']
   # Manage Jobs we create per AgentTask
   - apiGroups: ['batch']
     resources: ['jobs']

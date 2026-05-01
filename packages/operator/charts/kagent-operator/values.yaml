@@ -175,6 +175,19 @@ agentPod:
   spawnChild:
     enabled: false
 
+  # WS-M — AgentTemplate substrate. When enabled:
+  #   - the operator boots the template-server on `serverPort`
+  #   - the operator-fullname-templates Service exposes it ClusterIP
+  #   - every spawned agent-pod Job gets `KAGENT_TEMPLATE_SERVER_URL`
+  #     pointing at that Service, plus the in-pod
+  #     `ensure_agent_from_template` tool registered when the
+  #     `KAGENT_TEMPLATES_ENABLED=true` env knob is on.
+  # Same default-OFF posture as `spawnChild` — an install that hasn't
+  # deliberately enabled this exposes neither the tool nor the server.
+  templates:
+    enabled: false
+    serverPort: 8081
+
   # RuntimeClass mapping (WS-C / Phase 6 prep) — `Agent.spec.sandboxProfile`
   # is resolved against this map per-Agent. The operator's reconcile loop
   # NEVER sets a global runtimeClassName: each spawned Job's pod spec gets

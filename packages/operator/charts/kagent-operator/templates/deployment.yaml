@@ -87,6 +87,16 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+          {{- if .Values.agentPod.templates.enabled }}
+          ports:
+            # WS-M template-server. Exposes
+            # POST /v1alpha1/templates/{name}:instantiate to in-cluster
+            # callers (chiefly agent-pods). ClusterIP-only Service in
+            # template-service.yaml fronts this.
+            - name: templates
+              containerPort: {{ .Values.agentPod.templates.serverPort }}
+              protocol: TCP
+          {{- end }}
           env:
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
@@ -200,6 +210,21 @@ spec:
             # application-layer trust boundary.
             - name: KAGENT_AGENT_POD_SPAWN_CHILD_ENABLED
               value: {{ .Values.agentPod.spawnChild.enabled | ternary "true" "false" | quote }}
+            # WS-M — substrate kill switch + URL plumbing for the in-pod
+            # ensure_agent_from_template tool. The operator boots the
+            # template-server when this is `true`; the agent-pod gets
+            # the in-cluster Service URL via KAGENT_TEMPLATE_SERVER_URL.
+            # Default OFF for the same provably-write-proof posture as
+            # spawnChild (an install where this is not deliberately set
+            # exposes neither tool nor server).
+            - name: KAGENT_TEMPLATES_ENABLED
+              value: {{ .Values.agentPod.templates.enabled | ternary "true" "false" | quote }}
+            - name: KAGENT_TEMPLATE_SERVER_PORT
+              value: {{ .Values.agentPod.templates.serverPort | quote }}
+            {{- if .Values.agentPod.templates.enabled }}
+            - name: KAGENT_AGENT_POD_TEMPLATE_SERVER_URL
+              value: 'http://{{ include "kagent-operator.fullname" . }}-templates.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.agentPod.templates.serverPort }}'
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Operator's livenessProbe wired in Phase 3 once a /healthz

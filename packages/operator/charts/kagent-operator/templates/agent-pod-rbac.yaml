@@ -48,6 +48,14 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agents']
     verbs: ['get', 'list']
+  # WS-M — read AgentTemplate so the agent-pod can sanity-check the
+  # template's existence before posting to the template-server. The
+  # actual instantiate call goes to the operator (which holds
+  # `agents:create`), so the agent-pod itself can NEVER mint an Agent
+  # CR — only ask the operator to.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttemplates']
+    verbs: ['get', 'list']
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
