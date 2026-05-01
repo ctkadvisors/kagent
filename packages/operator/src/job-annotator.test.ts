@@ -108,17 +108,23 @@ describe('markJobPublished', () => {
   it('issues a merge-patch with the published annotation set to "true"', async () => {
     const api = makeBatchApi();
     await markJobPublished(api as unknown as BatchV1Api, 'default', 'kat-x');
-    expect(api.patchNamespacedJob).toHaveBeenCalledWith({
-      namespace: 'default',
-      name: 'kat-x',
-      body: {
-        metadata: {
-          annotations: {
-            [DISPATCH_PUBLISHED_ANNOTATION]: DISPATCH_PUBLISHED_TRUE,
+    expect(api.patchNamespacedJob).toHaveBeenCalledWith(
+      {
+        namespace: 'default',
+        name: 'kat-x',
+        body: {
+          metadata: {
+            annotations: {
+              [DISPATCH_PUBLISHED_ANNOTATION]: DISPATCH_PUBLISHED_TRUE,
+            },
           },
         },
       },
-    });
+      // Per-call header override forcing application/merge-patch+json —
+      // the K8s SDK 1.x default (json-patch+json) wants a JSON Patch
+      // array; we send an object body, so we must override.
+      expect.objectContaining({}) as unknown,
+    );
   });
 
   it('propagates patch errors so the reconcile loop can log them', async () => {
@@ -135,11 +141,14 @@ describe('unsuspendJob', () => {
   it('issues a merge-patch with spec.suspend=false', async () => {
     const api = makeBatchApi();
     await unsuspendJob(api as unknown as BatchV1Api, 'default', 'kat-x');
-    expect(api.patchNamespacedJob).toHaveBeenCalledWith({
-      namespace: 'default',
-      name: 'kat-x',
-      body: { spec: { suspend: false } },
-    });
+    expect(api.patchNamespacedJob).toHaveBeenCalledWith(
+      {
+        namespace: 'default',
+        name: 'kat-x',
+        body: { spec: { suspend: false } },
+      },
+      expect.objectContaining({}) as unknown,
+    );
   });
 
   it('propagates patch errors (operator caller logs + relies on relist)', async () => {

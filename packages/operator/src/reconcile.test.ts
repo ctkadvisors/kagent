@@ -209,6 +209,9 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
           }),
         }),
       }),
+      // job-annotator now passes a Content-Type override as the 2nd arg
+      // (application/merge-patch+json) — see job-annotator.ts:MERGE_PATCH_OPTIONS.
+      expect.anything() as unknown,
     );
   });
 

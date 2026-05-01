@@ -27,18 +27,30 @@
  *
  * All three use `application/merge-patch+json` (RFC 7396), matching
  * the Content-Type override in `k8s.ts:mergePatchOptions` (which is
- * for CustomObjectsApi). For BatchV1Api the generated client lets us
- * pass a pre-formatted body and infers the right Content-Type via
- * its options; we pass the body verbatim and let the client decide.
+ * for CustomObjectsApi). For BatchV1Api the generated client expects
+ * a JSON Patch array body by default — we MUST set the Content-Type
+ * to `application/merge-patch+json` so K8s parses our object body as
+ * a strategic-style merge patch. Without this header K8s 400s with
+ * `error decoding patch: json: cannot unmarshal object into Go value
+ * of type []handlers.jsonPatchOp`.
  */
 
-import type { BatchV1Api, V1Job } from '@kubernetes/client-node';
+import { setHeaderOptions, type BatchV1Api, type V1Job } from '@kubernetes/client-node';
 
 /** Annotation key set on the spawned Job after a successful bus publish. */
 export const DISPATCH_PUBLISHED_ANNOTATION = 'kagent.knuteson.io/dispatch-published';
 
 /** Value written under {@link DISPATCH_PUBLISHED_ANNOTATION}. */
 export const DISPATCH_PUBLISHED_TRUE = 'true';
+
+/**
+ * Per-call header override forcing `Content-Type: application/merge-patch+json`.
+ * Required because `@kubernetes/client-node` 1.x's generated
+ * `patchNamespacedJob` defaults to `application/json-patch+json` (a
+ * JSON Patch array of ops), and we want object-merge semantics. Same
+ * trick `agent-pod/src/status.ts` uses for status patches.
+ */
+const MERGE_PATCH_OPTIONS = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 /**
  * Read a Job by name. Returns `undefined` on 404 (job not yet created
@@ -93,7 +105,7 @@ export async function markJobPublished(
       },
     },
   };
-  await batchApi.patchNamespacedJob({ namespace, name, body });
+  await batchApi.patchNamespacedJob({ namespace, name, body }, MERGE_PATCH_OPTIONS);
 }
 
 /**
@@ -107,7 +119,7 @@ export async function unsuspendJob(
   name: string,
 ): Promise<void> {
   const body = { spec: { suspend: false } };
-  await batchApi.patchNamespacedJob({ namespace, name, body });
+  await batchApi.patchNamespacedJob({ namespace, name, body }, MERGE_PATCH_OPTIONS);
 }
 
 function isNotFound(err: unknown): boolean {
