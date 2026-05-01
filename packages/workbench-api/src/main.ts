@@ -67,10 +67,13 @@ async function main(): Promise<void> {
 
   let ready = skipInformer; // in skip mode, we're "ready" immediately
   let informers: InformerSet | undefined;
+  let writeCustomApi: CustomObjectsApi | undefined;
+  let kubeConfig: KubeConfig | undefined;
 
   if (!skipInformer) {
     const kc = new KubeConfig();
     kc.loadFromDefault();
+    kubeConfig = kc;
     const customApi = kc.makeApiClient(CustomObjectsApi);
     const coreApi = kc.makeApiClient(CoreV1Api);
     const batchApi = kc.makeApiClient(BatchV1Api);
@@ -80,6 +83,21 @@ async function main(): Promise<void> {
     };
 
     informers = createInformerSet({ kc, customApi, coreApi, listJobs }, cache);
+
+    // WS-J write surface — opt-in via env. The chart's
+    // `actions.create=true` flips `WORKBENCH_ACTIONS_ENABLED=true`,
+    // which both wires the K8s client into the POST handler AND signals
+    // the client that the write surface is live. Default-OFF so a
+    // chart install with `actions.create=false` is provably write-proof.
+    const actionsEnabled = process.env.WORKBENCH_ACTIONS_ENABLED === 'true';
+    if (actionsEnabled) {
+      writeCustomApi = customApi;
+      console.log('[workbench-api] write surface ENABLED (POST /api/tasks)');
+    } else {
+      console.log(
+        '[workbench-api] write surface disabled (set WORKBENCH_ACTIONS_ENABLED=true to enable)',
+      );
+    }
   }
 
   const uiUpstream = process.env.WORKBENCH_UI_UPSTREAM;
@@ -92,6 +110,15 @@ async function main(): Promise<void> {
         'Re-enable by unsetting WORKBENCH_AUTH_REQUIRED or setting it to anything other than "false".',
     );
   }
+
+  // Resolve the default namespace for POST /api/tasks. The chart sets
+  // WORKBENCH_DEFAULT_NAMESPACE to .Release.Namespace; out-of-cluster
+  // we fall back to the kubeconfig's current context namespace, then
+  // 'default' (handled inside the POST handler when undefined).
+  const defaultNamespace =
+    process.env.WORKBENCH_DEFAULT_NAMESPACE ??
+    kubeConfig?.getContextObject(kubeConfig.getCurrentContext())?.namespace;
+
   const app = buildRouter({
     cache,
     broker,
@@ -99,6 +126,9 @@ async function main(): Promise<void> {
     authRequired,
     ...(typeof uiUpstream === 'string' && uiUpstream.length > 0 && { uiUpstream }),
     ...(typeof langfuseBaseUrl === 'string' && langfuseBaseUrl.length > 0 && { langfuseBaseUrl }),
+    ...(writeCustomApi !== undefined && { customApi: writeCustomApi }),
+    ...(typeof defaultNamespace === 'string' &&
+      defaultNamespace.length > 0 && { defaultNamespace }),
   });
   const handle = startServer(app, { port, hostname });
 

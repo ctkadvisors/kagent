@@ -118,6 +118,16 @@ spec:
             # packages/workbench-api/src/auth.ts.
             - name: WORKBENCH_AUTH_REQUIRED
               value: {{ .Values.api.authRequired | quote }}
+            # WS-J write surface gate. The workbench-api default-OFFs the
+            # POST /api/tasks handler unless this is the literal string
+            # `true`. Tied to `.Values.rbac.actions.create` so the chart
+            # cannot ship "API enabled but RBAC missing" — they flip in
+            # lockstep. When ON, the workbench-api also reads
+            # WORKBENCH_DEFAULT_NAMESPACE for POSTs that omit `namespace`.
+            - name: WORKBENCH_ACTIONS_ENABLED
+              value: {{ and .Values.rbac.create .Values.rbac.actions.create | ternary "true" "false" | quote }}
+            - name: WORKBENCH_DEFAULT_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
           livenessProbe:
             httpGet:
               path: {{ .Values.api.healthPath }}

@@ -16,6 +16,7 @@
  */
 
 import { Hono } from 'hono';
+import type { CustomObjectsApi } from '@kubernetes/client-node';
 
 import { buildAuthMiddleware } from './auth.js';
 import type { SnapshotCache } from './cache.js';
@@ -58,6 +59,17 @@ export interface RouterDeps {
    * derivation; this field just supplies the base URL.
    */
   readonly langfuseBaseUrl?: string;
+  /**
+   * K8s CustomObjects client for the WS-J write surface (POST /api/tasks).
+   * When omitted, POST returns 503 — kept opt-in so a chart install with
+   * `actions.create=false` is provably write-proof.
+   */
+  readonly customApi?: CustomObjectsApi;
+  /**
+   * Default namespace for POST when the request body omits one. Set to
+   * the workbench-api's release namespace (typically `kagent-system`).
+   */
+  readonly defaultNamespace?: string;
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
@@ -81,6 +93,8 @@ export function buildRouter(deps: RouterDeps): Hono {
     tasksRoute({
       cache: deps.cache,
       ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
+      ...(deps.customApi !== undefined && { customApi: deps.customApi }),
+      ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));

@@ -1,0 +1,35 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+ClusterRole — WRITE surface for the workbench-api (WS-J).
+
+Kept distinct from `clusterrole.yaml` so an install with
+`actions.create=false` is provably write-proof: the read role grants
+no `create`/`update`/`delete` verbs anywhere; the write role does not
+exist when actions are disabled. Drop-in: bind/unbind by toggling
+`.Values.rbac.actions.create`.
+
+Today this grants `agenttasks: [create]` only — the smallest verb set
+that satisfies POST /api/tasks. WS-K (spawn_child_task) does NOT use
+this role; it ships its own RBAC on the agent-pod's namespace-scoped
+Role. WS-M (AgentTemplate) will extend this role with
+`agenttemplates: [get,list,watch]` when it lands.
+
+`/cancel` and `/retry` (WORKBENCH.md §5) are not implemented in v0.1;
+when they land they extend this role with `agenttasks: [delete]` plus
+the corresponding write verb on `agenttasks/status`.
+*/}}
+{{- if and .Values.rbac.create .Values.rbac.actions.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-actions
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workbench-actions
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['create']
+{{- end }}

@@ -129,13 +129,24 @@ serviceAccount:
 
 # ---------------------------------------------------------------------
 # RBAC. Cluster-scoped read-only ClusterRole + binding for the
-# workbench-api ServiceAccount. NO write verbs in this slice — write
-# actions (cancel/retry/create-task) ship in v0.2 behind a separate
-# ClusterRole keyed off `actions.enabled` (not yet implemented). See
-# new_localai/docs/kagent-workbench-rbac.md §2.2.
+# workbench-api ServiceAccount.
+#
+# `actions.create` (default true since v0.0.7-write-surface) gates a
+# SEPARATE ClusterRole + binding for write verbs (POST /api/tasks).
+# Set to false on installs where the workbench is read-only — the
+# split keeps the read RBAC provably write-proof. The workbench-api
+# also requires the `WORKBENCH_ACTIONS_ENABLED=true` env knob (set
+# automatically when `actions.create=true`) before the POST handler
+# wires the K8s client; without it, POST /api/tasks returns 503.
+#
+# Today actions covers `agenttasks: [create]` only. /cancel + /retry
+# (WORKBENCH.md §5) extend the same role when they land.
+# See new_localai/docs/kagent-workbench-rbac.md §2.2.
 # ---------------------------------------------------------------------
 rbac:
   create: true
+  actions:
+    create: true
 
 # ---------------------------------------------------------------------
 # Service. Exposes port `service.port` → api container's `api.port`

@@ -1,0 +1,24 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+ClusterRoleBinding — WRITE surface for the workbench-api (WS-J).
+Pairs with `clusterrole-actions.yaml`.
+*/}}
+{{- if and .Values.rbac.create .Values.rbac.actions.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-actions
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workbench-actions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kagent-workbench.fullname" . }}-actions
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-workbench.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

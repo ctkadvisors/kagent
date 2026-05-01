@@ -126,13 +126,13 @@ Phase 5 has two tracks: prove the first real workflow and make the engine visibl
 
 The substrate ships but every channel for invoking work is YAML-into-GitOps. [`PLATFORM-PRIORITIES.md`](./PLATFORM-PRIORITIES.md) §4 commits to "the same unit of work can be created by YAML, CLI, GUI, webhook, scheduler, or agent." This slate fills the missing channels in dependency order. **Full plan:** [`AGENT-SELF-SERVICE.md`](./AGENT-SELF-SERVICE.md) — file-level contracts, RBAC deltas, gray-area decisions (D1-D9), and the cross-workstream acceptance test.
 
-| WS  | Goal                                                                | Tag                          | Effort   | Depends on |
+| WS  | Goal                                                                | Tag                          | Status   | Depends on |
 |-----|---------------------------------------------------------------------|------------------------------|----------|------------|
-| J   | `POST /api/tasks` + workbench "New Task" button + `kagent` CLI       | `v0.0.7-write-surface`       | ~1 day   | none       |
-| K   | `spawn_child_task` built-in tool + `Agent.spec.allowedChildAgents`  | `v0.0.8-spawn-child`         | ~1 day   | none       |
-| L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | ~0.5 day | WS-K       |
-| M   | `AgentTemplate` CRD + `ensure_agent_from_template` (per `AGENT-TEMPLATES.md`) | `v0.1.0-templates` | ~3 days  | WS-K       |
-| N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.4-entry-points` (deferred) | ~1 day | WS-J + driver |
+| J   | `POST /api/tasks` + workbench "New Task" button + `kagent` CLI       | `v0.0.7-write-surface`       | ✅ shipped | none       |
+| K   | `spawn_child_task` built-in tool + `Agent.spec.allowedChildAgents`  | `v0.0.8-spawn-child`         | pending  | none       |
+| L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | pending  | WS-K       |
+| M   | `AgentTemplate` CRD + `ensure_agent_from_template` (per `AGENT-TEMPLATES.md`) | `v0.1.0-templates` | pending  | WS-K       |
+| N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.4-entry-points` (deferred) | pending | WS-J + driver |
 
 **v0.1.0 anchor flips** under this slate: from "comparison rig" to "agent self-service shipped (WS-J/K/L/M)." Comparison rig + researcher port move to `v0.1.5-rig`. Reasoning: substrate-completeness (you can use it without YAML) is a stronger v0.1 milestone than a single benchmark, and the rig depends on having self-service to configure it.
 

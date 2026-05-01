@@ -122,3 +122,52 @@ export interface CacheChangeEvent {
   readonly op: 'upsert' | 'delete';
   readonly key: string;
 }
+
+/* =====================================================================
+ * Write surface (POST /api/tasks) — WS-J. Mirrors workbench-api's
+ * `CreateTaskRequest` / `CreateTaskResponse` / `CreateTaskErrorBody`.
+ * ===================================================================== */
+
+export interface AgentSummaryRow {
+  readonly name: string;
+  readonly namespace: string;
+  readonly model?: string;
+  readonly tools?: readonly string[];
+  readonly capabilities?: readonly string[];
+}
+
+export interface CreateTaskRequest {
+  readonly targetAgent: string;
+  readonly originalUserMessage: string;
+  readonly namespace?: string;
+  readonly name?: string;
+  readonly runConfig?: {
+    readonly timeoutSeconds?: number;
+    readonly maxIterations?: number;
+  };
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly payload?: unknown;
+}
+
+export interface CreateTaskResponse {
+  readonly namespace: string;
+  readonly name: string;
+  readonly uid: string;
+  readonly createdAt: string;
+  readonly phase: 'Pending';
+  readonly _links: { readonly detail: string; readonly ui: string };
+}
+
+/**
+ * 4xx error body shape — the workbench-api returns `error` (always)
+ * + `fields[]` (on 400/422 validation failures).
+ */
+export interface CreateTaskError {
+  readonly status: number;
+  readonly error: string;
+  readonly fields?: ReadonlyArray<{
+    readonly field: string;
+    readonly code: string;
+    readonly detail?: string;
+  }>;
+}

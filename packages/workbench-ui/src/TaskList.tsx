@@ -25,6 +25,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { fetchTasks, subscribeCacheEvents } from './api.js';
+import { NewTaskModal } from './NewTaskModal.js';
 import type { TaskSummary } from './types.js';
 import styles from './TaskList.module.css';
 
@@ -35,6 +36,7 @@ export function TaskList(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [lastEventAt, setLastEventAt] = useState<number>(Date.now());
   const [now, setNow] = useState<number>(Date.now());
+  const [showNewTask, setShowNewTask] = useState<boolean>(false);
   const refetchAbortRef = useRef<AbortController | null>(null);
 
   const refetch = (): void => {
@@ -83,12 +85,38 @@ export function TaskList(): React.JSX.Element {
     <div className={styles.wrapper}>
       <div className={styles.header}>
         <h1 className={styles.title}>Tasks</h1>
-        <span
-          className={`${styles.connection} ${isStale ? styles.connectionStale : styles.connectionLive}`}
-        >
-          {isStale ? `stream stale (${formatAgo(now - lastEventAt)})` : 'stream live'}
-        </span>
+        <div className={styles.headerActions}>
+          <button
+            type="button"
+            className={styles.newTaskButton}
+            onClick={() => setShowNewTask(true)}
+          >
+            + New Task
+          </button>
+          <span
+            className={`${styles.connection} ${isStale ? styles.connectionStale : styles.connectionLive}`}
+          >
+            {isStale ? `stream stale (${formatAgo(now - lastEventAt)})` : 'stream live'}
+          </span>
+        </div>
       </div>
+
+      {showNewTask ? (
+        <NewTaskModal
+          onClose={() => setShowNewTask(false)}
+          onSuccess={(created) => {
+            setShowNewTask(false);
+            // Navigate to the new task's detail page so the user lands
+            // on the live progress view immediately. The SSE stream
+            // will surface the task in the list when they navigate back.
+            window.location.hash = `#/tasks/${encodeURIComponent(created.namespace)}/${encodeURIComponent(created.name)}`;
+            // Optimistic refresh — the SSE event usually arrives first
+            // anyway, but this guarantees the row is present even if
+            // the cache is briefly behind.
+            refetch();
+          }}
+        />
+      ) : null}
 
       {error !== null ? <div className={styles.error}>error: {error}</div> : null}
 

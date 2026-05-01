@@ -1,0 +1,38 @@
+{
+  "name": "@kagent/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "kagent — CLI for the kagent agent farm. Wraps the same K8s API surface the workbench uses (POST AgentTask). Out-of-cluster usage via kubeconfig; --via-workbench flag forces the workbench-api path for users without direct cluster RBAC.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "bin": {
+    "kagent": "./bin/kagent.js"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "start": "tsx src/cli.ts",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src",
+    "bin"
+  ],
+  "dependencies": {
+    "@kubernetes/client-node": "1.4.0"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

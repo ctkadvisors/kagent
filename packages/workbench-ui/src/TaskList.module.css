@@ -28,6 +28,28 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.newTaskButton {
+  background: #2563eb;
+  color: white;
+  border: none;
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.newTaskButton:hover {
+  background: #1d4ed8;
+}
+
 .connectionLive {
   color: #047857;
 }
