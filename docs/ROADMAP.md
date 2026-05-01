@@ -1,7 +1,7 @@
 # Roadmap
 
-**Date:** 2026-04-28
-**Status:** Phase 4 smoke green; Phase 4.x hardening complete; Phase 5 Workbench surface materialized (TaskList + TaskDetail + chart); remaining v0.1 work is researcher port + comparison rig.
+**Date:** 2026-05-01
+**Status:** Phase 4 smoke green; Phase 4.x hardening complete; Phase 5 Workbench read-side materialized; WS-I parent-child reconcile shipped (`v0.0.6-ws-i`). **Next: Phase 5.x agent-self-service slate** — bridges substrate to user via write API, in-pod delegation tools, and AgentTemplate. After that: researcher port + comparison rig.
 **Convention:** one phase = one git commit cluster + one tag (`vX.Y.Z-phaseN`).
 
 > Read [`DESIGN-V0.1.md`](./DESIGN-V0.1.md) for the v0.1 architecture detail. This document is the multi-version phasing plan.
@@ -119,6 +119,39 @@ Phase 5 has two tracks: prove the first real workflow and make the engine visibl
 - [ ] A2A demo: researcher delegates to summarizer specialist via task-graph (parent + child AgentTasks), both as separate Pods, both traced, parent waits via re-reconcile.
 - [ ] Comparison rig: run existing 5-topic workload through both substrates for one week; compare cost + completion + median latency.
 - [ ] Publish comparison numbers in `docs/V0.1-COMPARISON.md`.
+
+---
+
+## Phase 5.x — Agent self-service (~5-6 days, in flight)
+
+The substrate ships but every channel for invoking work is YAML-into-GitOps. [`PLATFORM-PRIORITIES.md`](./PLATFORM-PRIORITIES.md) §4 commits to "the same unit of work can be created by YAML, CLI, GUI, webhook, scheduler, or agent." This slate fills the missing channels in dependency order. **Full plan:** [`AGENT-SELF-SERVICE.md`](./AGENT-SELF-SERVICE.md) — file-level contracts, RBAC deltas, gray-area decisions (D1-D9), and the cross-workstream acceptance test.
+
+| WS  | Goal                                                                | Tag                          | Effort   | Depends on |
+|-----|---------------------------------------------------------------------|------------------------------|----------|------------|
+| J   | `POST /api/tasks` + workbench "New Task" button + `kagent` CLI       | `v0.0.7-write-surface`       | ~1 day   | none       |
+| K   | `spawn_child_task` built-in tool + `Agent.spec.allowedChildAgents`  | `v0.0.8-spawn-child`         | ~1 day   | none       |
+| L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | ~0.5 day | WS-K       |
+| M   | `AgentTemplate` CRD + `ensure_agent_from_template` (per `AGENT-TEMPLATES.md`) | `v0.1.0-templates` | ~3 days  | WS-K       |
+| N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.4-entry-points` (deferred) | ~1 day | WS-J + driver |
+
+**v0.1.0 anchor flips** under this slate: from "comparison rig" to "agent self-service shipped (WS-J/K/L/M)." Comparison rig + researcher port move to `v0.1.5-rig`. Reasoning: substrate-completeness (you can use it without YAML) is a stronger v0.1 milestone than a single benchmark, and the rig depends on having self-service to configure it.
+
+**Acceptance for the slate** (per [`AGENT-SELF-SERVICE.md`](./AGENT-SELF-SERVICE.md) §9): browser → "New Task" modal → orchestrator agent runs → uses `ensure_agent_from_template` × 3 → `spawn_child_task` × 3 → `wait_for_children_all` → synthesizes → completes. Workbench shows the task graph live, Langfuse shows nested traces. No YAML, no kubectl.
+
+---
+
+## Phase 5 — Remaining (researcher + comparison)
+
+After Phase 5.x lands, the original Phase 5 workload work resumes:
+
+- [ ] Port researcher agent from `homelab-orchestrator` → produces same daily digest on new substrate
+- [ ] A2A demo: researcher → summarizer using WS-K/L/M (replaces the original "parent + child AgentTasks" wording — same outcome, now via real tools instead of hand-applied YAML)
+- [ ] Comparison rig: 5-topic workload through both substrates for one week
+- [ ] Publish comparison numbers in `docs/V0.1-COMPARISON.md`
+
+**Tag:** `v0.1.5-rig`
+
+---
 
 **Open questions surfaced by the substrate slice (carry forward to next session):**
 
