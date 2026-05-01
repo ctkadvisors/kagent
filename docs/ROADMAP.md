@@ -130,7 +130,7 @@ The substrate ships but every channel for invoking work is YAML-into-GitOps. [`P
 |-----|---------------------------------------------------------------------|------------------------------|----------|------------|
 | J   | `POST /api/tasks` + workbench "New Task" button + `kagent` CLI       | `v0.0.7-write-surface`       | ✅ shipped | none       |
 | K   | `spawn_child_task` built-in tool + `Agent.spec.allowedChildAgents`  | `v0.0.8-spawn-child`         | ✅ shipped | none       |
-| L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | pending  | WS-K       |
+| L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | ✅ shipped | WS-K       |
 | M   | `AgentTemplate` CRD + `ensure_agent_from_template` (per `AGENT-TEMPLATES.md`) | `v0.1.0-templates` | pending  | WS-K       |
 | N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.4-entry-points` (deferred) | pending | WS-J + driver |
 

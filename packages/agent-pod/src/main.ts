@@ -33,7 +33,11 @@ import type { TraceSink } from '@kagent/agent-loop';
 import type { PodConfig } from './env.js';
 import { parseEnv } from './env.js';
 import type { RunResult } from './runner.js';
-import { buildSpawnToolProvider } from './builtin-tools-spawn.js';
+import type { ToolProvider } from '@kagent/agent-loop';
+import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
+
+import { defineSpawnChildTask } from './builtin-tools-spawn.js';
+import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
 import { createInClusterK8sTaskCreator } from './k8s-task-creator.js';
 import { runAgentTask } from './runner.js';
 import { buildStatusPatch, makeCustomObjectsApi, writeStatus } from './status.js';
@@ -160,34 +164,58 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
 
-  // WS-K — wire spawn tools when the substrate flag is on. Default-OFF
-  // per AGENT-SELF-SERVICE.md §11 Q5 — opt-in via Helm value
-  // `agentPod.spawnChild.enabled` flipping `KAGENT_SPAWN_CHILD_ENABLED=true`.
-  // The tool's guardrails (allowedChildAgents, concurrent cap, etc.)
-  // are the application-layer trust boundary; the env knob is the
-  // operator-layer kill switch.
+  // WS-K + WS-L — wire substrate task-graph tools when the flag is on.
+  // Default-OFF per AGENT-SELF-SERVICE.md §11 Q5 — opt-in via Helm
+  // value `agentPod.spawnChild.enabled` flipping
+  // `KAGENT_SPAWN_CHILD_ENABLED=true`. spawn AND wait tools share the
+  // same kill switch — they're useless apart (spawn without wait =
+  // fire-and-forget; wait without spawn = nothing to wait on). The
+  // per-tool guardrails (allowedChildAgents, concurrent cap, timeout
+  // clamp) are the application-layer trust boundary; the env knob is
+  // the operator-layer kill switch.
   const spawnEnabled = process.env.KAGENT_SPAWN_CHILD_ENABLED === 'true';
-  const spawnTools = spawnEnabled
-    ? buildSpawnToolProvider({
-        parent: { uid: config.taskId, name: config.taskName, namespace: config.taskNamespace },
-        parentAgentName: config.agentName,
-        parentAgentSpec: config.agentSpec,
-        k8s: createInClusterK8sTaskCreator(),
-        // Compute remaining wall-clock budget against the runConfig
-        // timeout so child timeouts get clamped to "what the parent
-        // could possibly outlive". The parent's own Job has the same
-        // activeDeadlineSeconds; this just keeps the child from
-        // requesting more than its parent has left.
-        ...(config.taskSpec.runConfig?.timeoutSeconds !== undefined && {
-          remainingBudgetSeconds: ((startMs: number, totalSec: number) => () => {
+  let substrateTools: ToolProvider | undefined;
+  if (spawnEnabled) {
+    const k8s = createInClusterK8sTaskCreator();
+    const parent = {
+      uid: config.taskId,
+      name: config.taskName,
+      namespace: config.taskNamespace,
+    };
+    // Compute remaining wall-clock budget against the runConfig
+    // timeout so child timeouts get clamped to "what the parent could
+    // possibly outlive". The parent's own Job has the same
+    // activeDeadlineSeconds; this just keeps spawned children + wait
+    // calls from requesting more than the parent has left.
+    const remainingBudgetSeconds: (() => number | undefined) | undefined =
+      config.taskSpec.runConfig?.timeoutSeconds !== undefined
+        ? ((startMs: number, totalSec: number) => () => {
             const elapsedSec = (Date.now() - startMs) / 1000;
             return Math.max(0, totalSec - elapsedSec);
-          })(Date.now(), config.taskSpec.runConfig.timeoutSeconds),
-        }),
-      })
-    : undefined;
-  if (spawnEnabled) {
-    console.log('[kagent-agent-pod] spawn_child_task ENABLED');
+          })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
+        : undefined;
+    const spawnDefs = defineSpawnChildTask({
+      parent,
+      parentAgentName: config.agentName,
+      parentAgentSpec: config.agentSpec,
+      k8s,
+      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+    });
+    const waitChildDef = defineWaitForChildTask({
+      parent,
+      k8s,
+      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+    });
+    const waitAllDef = defineWaitForChildrenAll({
+      parent,
+      k8s,
+      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+    });
+    substrateTools = new InProcessToolProvider({
+      id: 'kagent-substrate',
+      tools: [spawnDefs, waitChildDef, waitAllDef],
+    });
+    console.log('[kagent-agent-pod] substrate tools ENABLED (spawn_child_task + wait_*)');
   }
 
   let result: RunResult;
@@ -195,7 +223,7 @@ async function main(): Promise<void> {
     result = await runAgentTask(config, {
       sinks,
       signal: shutdownController.signal,
-      ...(spawnTools !== undefined && { spawnTools }),
+      ...(substrateTools !== undefined && { spawnTools: substrateTools }),
     });
   } catch (err) {
     // If the runner threw because we already aborted, treat it as a
