@@ -43,6 +43,13 @@ export interface AgentSpec {
   readonly tools?: readonly string[];
   readonly capabilities?: readonly string[];
   readonly sandboxProfile?: 'default' | 'strict';
+  /**
+   * WS-K — agents this Agent may spawn as children via the in-pod
+   * `spawn_child_task` tool. Empty / unset = no children may be spawned.
+   */
+  readonly allowedChildAgents?: readonly string[];
+  /** WS-K — direct-child concurrency cap. Default 10. */
+  readonly maxConcurrentChildren?: number;
 }
 
 export interface Agent {

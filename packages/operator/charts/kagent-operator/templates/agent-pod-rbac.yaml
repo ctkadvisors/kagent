@@ -32,16 +32,22 @@ metadata:
     {{- include "kagent-operator.labels" . | nindent 4 }}
     app.kubernetes.io/component: agent-pod
 rules:
-  # Patch AgentTask.status — the only thing the agent pod writes.
+  # Patch AgentTask.status — the agent pod writes its own task's status.
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks/status']
     verbs: ['get', 'patch', 'update']
-  # Read AgentTask spec — useful for sanity-checks (the operator already
-  # injects KAGENT_TASK_SPEC via env, but a re-read is helpful in
-  # debugging cycles where the env got stale).
+  # WS-K — read AgentTask spec (own task + sibling/child tasks via list)
+  # plus list verb for `wait_for_children_all`'s parent-UID label
+  # selector polling.
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks']
-    verbs: ['get']
+    verbs: ['get', 'list', 'create']
+  # WS-K — read the parent Agent's spec (allowedChildAgents +
+  # maxConcurrentChildren). Parent target Agent is in the same
+  # namespace as the AgentTask.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agents']
+    verbs: ['get', 'list']
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

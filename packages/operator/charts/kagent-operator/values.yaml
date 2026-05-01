@@ -159,6 +159,22 @@ agentPod:
     #     - 'lobste.rs'
     httpAllowDomains: []
 
+  # WS-K — substrate kill switch for the in-pod `spawn_child_task` tool.
+  # Default off so an install where the value isn't deliberately set
+  # stays free of the substrate write tool. When enabled, the agent-pod
+  # registers spawn_child_task alongside the built-in network tools;
+  # which agents may be spawned is gated per-Agent by
+  # `Agent.spec.allowedChildAgents` (fail-closed when empty/unset), and
+  # the `Agent.spec.maxConcurrentChildren` cap (default 10) bounds the
+  # blast radius of a runaway loop.
+  #
+  # Operator-level RBAC for `agenttasks: [create]` is granted on the
+  # agent-pod ServiceAccount unconditionally (templates/agent-pod-rbac.yaml)
+  # so a per-Agent enable doesn't require a cluster-admin re-bind; the
+  # in-pod tool is the gate, the RBAC is just the floor.
+  spawnChild:
+    enabled: false
+
   # RuntimeClass mapping (WS-C / Phase 6 prep) — `Agent.spec.sandboxProfile`
   # is resolved against this map per-Agent. The operator's reconcile loop
   # NEVER sets a global runtimeClassName: each spawned Job's pod spec gets

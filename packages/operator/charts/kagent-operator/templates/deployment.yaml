@@ -190,6 +190,16 @@ spec:
             - name: KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS
               value: {{ join "," . | quote }}
             {{- end }}
+            # WS-K — substrate kill switch for the in-pod
+            # spawn_child_task tool. The operator forwards this verbatim
+            # into spawned Jobs (env-rename to KAGENT_SPAWN_CHILD_ENABLED
+            # via buildJobSpecOptionsFromEnv). Default OFF in chart values
+            # so an install where the value isn't deliberately set stays
+            # free of the substrate write tool. Per-Agent guardrails
+            # (allowedChildAgents, maxConcurrentChildren) are the
+            # application-layer trust boundary.
+            - name: KAGENT_AGENT_POD_SPAWN_CHILD_ENABLED
+              value: {{ .Values.agentPod.spawnChild.enabled | ternary "true" "false" | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Operator's livenessProbe wired in Phase 3 once a /healthz

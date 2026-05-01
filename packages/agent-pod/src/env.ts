@@ -16,6 +16,15 @@ export interface AgentSpecEnv {
   readonly tools?: readonly string[];
   readonly capabilities?: readonly string[];
   readonly sandboxProfile?: 'default' | 'strict';
+  /**
+   * WS-K — agent-self-allowlist for `spawn_child_task`. The operator
+   * threads this verbatim into KAGENT_AGENT_SPEC. The spawn tool reads
+   * it to gate child agent names BEFORE issuing the K8s create. Empty
+   * / unset = no children may be spawned (fail-closed).
+   */
+  readonly allowedChildAgents?: readonly string[];
+  /** WS-K — direct-child concurrency cap. Default 10 in the spawn tool. */
+  readonly maxConcurrentChildren?: number;
 }
 
 /**

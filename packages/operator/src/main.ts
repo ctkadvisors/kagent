@@ -119,6 +119,18 @@ function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_AGENT_POD_HTTP_ALLOW_DOMAINS,
     });
   }
+  // WS-K — substrate kill switch for the spawn_child_task tool. Helm's
+  // `agentPod.spawnChild.enabled` flips KAGENT_AGENT_POD_SPAWN_CHILD_ENABLED
+  // on the operator deployment; the operator forwards it into spawned
+  // Jobs as KAGENT_SPAWN_CHILD_ENABLED. The agent-pod treats only the
+  // exact literal "true" as on (default off so an install where the
+  // value isn't deliberately set stays free of the substrate write tool).
+  if (env.KAGENT_AGENT_POD_SPAWN_CHILD_ENABLED === 'true') {
+    extraEnv.push({
+      name: 'KAGENT_SPAWN_CHILD_ENABLED',
+      value: 'true',
+    });
+  }
   const pullPolicy = env.KAGENT_AGENT_POD_IMAGE_PULL_POLICY;
   // Artifact PVC plumbing — Helm sets KAGENT_ARTIFACT_PVC_NAME +
   // (optionally) KAGENT_ARTIFACT_MOUNT_PATH on the operator deployment;

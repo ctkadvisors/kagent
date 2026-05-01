@@ -105,6 +105,16 @@ export interface RunDeps {
   readonly sinks?: readonly TraceSink[];
   readonly toolProviders?: readonly ToolProvider[];
   readonly signal?: AbortSignal;
+  /**
+   * WS-K — substrate tools (spawn_child_task, plus future siblings)
+   * appended to the resolved built-in providers when present. The
+   * runner builds this in `main.ts` from the in-cluster K8s client
+   * when `KAGENT_SPAWN_CHILD_ENABLED=true` is on the env. Tests pass
+   * a fake provider directly. When undefined, the spawn tool is not
+   * registered at all — an LLM that tries to call it gets the
+   * executor's standard "unknown tool" error.
+   */
+  readonly spawnTools?: ToolProvider;
 }
 
 /**
@@ -269,15 +279,28 @@ export function pickUserMessage(config: PodConfig): string {
 /**
  * Resolve the providers list the executor will see — `deps.toolProviders`
  * wins (test injection), otherwise we look up `Agent.spec.tools` against
- * the built-in registry. Exported for the runner test suite; production
- * callers go through `runAgentTask`.
+ * the built-in registry, then conditionally append the WS-K substrate
+ * tools (spawn_child_task) when:
+ *
+ *   - `KAGENT_SPAWN_CHILD_ENABLED=true` is set on the pod env, AND
+ *   - `deps.spawnTools` is non-undefined (the runner builds it from
+ *     the in-cluster K8s client at boot).
+ *
+ * Per AGENT-SELF-SERVICE.md §11 Q5: default-OFF in WS-K, opt-in via
+ * Helm value once the demo flow needs it.
+ *
+ * Exported for the runner test suite; production callers go through
+ * `runAgentTask`.
  *
  * Throws on unknown tool names with a clear, operator-actionable message.
  */
 export function resolveToolProviders(config: PodConfig, deps: RunDeps): readonly ToolProvider[] {
   if (deps.toolProviders !== undefined) return deps.toolProviders;
+  const out: ToolProvider[] = [];
   const builtin = resolveBuiltinTools(config.agentSpec.tools);
-  return builtin === null ? [] : [builtin];
+  if (builtin !== null) out.push(builtin);
+  if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
+  return out;
 }
 
 /**

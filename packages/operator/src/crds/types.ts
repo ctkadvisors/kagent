@@ -50,6 +50,26 @@ export interface AgentSpec {
    * Kata is deployed onto the K3s nodes).
    */
   readonly sandboxProfile?: 'default' | 'strict';
+
+  /**
+   * WS-K — declarative allowlist of Agent names this agent may spawn
+   * as children via the in-pod `spawn_child_task` tool. Empty / unset
+   * means NO children may be spawned (fail-closed). The list is the
+   * GitOps-controlled trust boundary so an LLM-driven prompt injection
+   * cannot pick its own child target.
+   *
+   * When the Tool Broker (P6) lands, this becomes the fallback for
+   * `spawn_child_task`'s `argumentPolicy` when no `ToolBinding` exists
+   * for the spawn tool — see docs/AGENT-SELF-SERVICE.md §8 D9.
+   */
+  readonly allowedChildAgents?: readonly string[];
+
+  /**
+   * WS-K — upper bound on direct children of THIS agent's tasks that
+   * may be in non-terminal phases simultaneously. Stops an LLM-loop
+   * bug from creating 10⁶ children. Default 10.
+   */
+  readonly maxConcurrentChildren?: number;
 }
 
 export interface Agent {
