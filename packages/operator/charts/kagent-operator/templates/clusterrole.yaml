@@ -40,10 +40,16 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agents']
     verbs: ['create', 'update', 'patch', 'delete']
-  # Manage Jobs we create per AgentTask
+  # Manage Jobs we create per AgentTask. `patch` is required for the
+  # WS-F suspend-publish-unsuspend pattern: operator creates the Job
+  # with `spec.suspend=true`, publishes the dispatch envelope to NATS
+  # with the Job's UID as the dedupe key, then PATCHes `spec.suspend=
+  # false` to release the Job for scheduling. Without `patch` here
+  # the unsuspend step 403s and the AgentTask never advances past
+  # Pending.
   - apiGroups: ['batch']
     resources: ['jobs']
-    verbs: ['get', 'list', 'watch', 'create', 'delete']
+    verbs: ['get', 'list', 'watch', 'create', 'patch', 'delete']
   # Read Pods — job-watch surfaces external failures (image pull, OOM,
   # scheduling) onto AgentTask.status when the agent-pod cannot.
   - apiGroups: ['']
