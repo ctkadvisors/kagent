@@ -4,11 +4,13 @@
 # kagent LLM Gateway — Helm sub-chart values.
 # See docs/superpowers/specs/2026-05-03-llm-gateway-bundle-design.md §3.7.
 
-# Enable/disable the entire gateway. Default off — operator works without it
-# (agents talk to backends directly via litellmBaseUrl). Set to true to deploy
-# the gateway. Operator-side wiring (LLM_GATEWAY_BASE_URL injection) is
-# controlled by the OPERATOR chart's values, not this one.
-enabled: true
+# Enable/disable the entire gateway. Default off so `helm template` with
+# no overrides renders zero resources (the spec §3.7 contract). Operator
+# works without the gateway — agents talk to backends directly via
+# litellmBaseUrl. Set to true to deploy the gateway. Operator-side
+# wiring (LLM_GATEWAY_BASE_URL injection) is controlled by the OPERATOR
+# chart's values, not this one.
+enabled: false
 
 image:
   repository: ghcr.io/ctkadvisors/kagent/llm-gateway
