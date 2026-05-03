@@ -133,9 +133,11 @@ The substrate ships but every channel for invoking work is YAML-into-GitOps. [`P
 | L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | ✅ shipped | WS-K       |
 | M   | `AgentTemplate` CRD + `ensure_agent_from_template` (per `AGENT-TEMPLATES.md`) | `v0.1.0-templates` | ✅ shipped | WS-K       |
 | —   | `Agent.spec.allowedChildTemplates` (admit children by from-template label — unblocks WS-M live demo) | `v0.1.3-prefix-allow` | ✅ shipped | WS-K + WS-M |
-| N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.4-entry-points` (deferred) | pending | WS-J + driver |
+| —   | `Agent.spec.llmParams` — declarative temperature / maxTokens / stopSequences threaded to LLM body | `v0.1.4-llm-params` | ✅ shipped | none |
+| —   | LLM gateway bundle — `@kagent/llm-gateway` package + Helm sub-chart + `ModelEndpoint` CRD + operator admission reconciler ([spec](./superpowers/specs/2026-05-03-llm-gateway-bundle-design.md)) | `v0.1.5-llm-gateway` | ✅ shipped | WS-K |
+| N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.6-entry-points` (deferred) | pending | WS-J + driver |
 
-**v0.1.0 anchor flips** under this slate: from "comparison rig" to "agent self-service shipped (WS-J/K/L/M)." Comparison rig + researcher port move to `v0.1.5-rig`. Reasoning: substrate-completeness (you can use it without YAML) is a stronger v0.1 milestone than a single benchmark, and the rig depends on having self-service to configure it.
+**v0.1.0 anchor flips** under this slate: from "comparison rig" to "agent self-service shipped (WS-J/K/L/M)." Comparison rig + researcher port move to `v0.1.7-rig` (was v0.1.5; v0.1.5 was taken by the LLM gateway slice). Reasoning: substrate-completeness (you can use it without YAML) is a stronger v0.1 milestone than a single benchmark, and the rig depends on having self-service to configure it.
 
 **Acceptance for the slate** (per [`AGENT-SELF-SERVICE.md`](./AGENT-SELF-SERVICE.md) §9): browser → "New Task" modal → orchestrator agent runs → uses `ensure_agent_from_template` × 3 → `spawn_child_task` × 3 → `wait_for_children_all` → synthesizes → completes. Workbench shows the task graph live, Langfuse shows nested traces. No YAML, no kubectl.
 
@@ -150,7 +152,7 @@ After Phase 5.x lands, the original Phase 5 workload work resumes:
 - [ ] Comparison rig: 5-topic workload through both substrates for one week
 - [ ] Publish comparison numbers in `docs/V0.1-COMPARISON.md`
 
-**Tag:** `v0.1.5-rig`
+**Tag:** `v0.1.7-rig`
 
 ---
 
