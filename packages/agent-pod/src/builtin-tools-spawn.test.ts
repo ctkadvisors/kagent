@@ -26,17 +26,29 @@ const PARENT: ParentIdentity = {
   namespace: 'kagent-system',
 };
 
+/**
+ * One Agent CR fixture for getAgentByName. Keys are the Agent's
+ * `metadata.name`; values are the labels we want the fake to return.
+ * `null` value = simulate "Agent not found" (404 / undefined).
+ */
+type AgentLabelsMap = Readonly<Record<string, Readonly<Record<string, string>> | null>>;
+
 function makeFakeK8s(opts?: {
   readonly liveChildren?: readonly LiveChildSummary[];
   readonly throwOnCreate?: Error;
+  readonly throwOnGetAgent?: Error;
+  readonly agents?: AgentLabelsMap;
 }): K8sTaskCreator & {
   readonly creates: readonly ChildTaskInput[];
   readonly listLiveCalls: number;
+  readonly getAgentCalls: ReadonlyArray<{ namespace: string; name: string }>;
 } {
   const creates: ChildTaskInput[] = [];
+  const getAgentCalls: { namespace: string; name: string }[] = [];
   let listLiveCalls = 0;
   return {
     creates,
+    getAgentCalls,
     get listLiveCalls() {
       return listLiveCalls;
     },
@@ -58,6 +70,16 @@ function makeFakeK8s(opts?: {
     },
     getTaskByUid(): Promise<ChildSnapshot | undefined> {
       return Promise.resolve(undefined);
+    },
+    getAgentByName(
+      namespace: string,
+      name: string,
+    ): Promise<{ readonly labels: Readonly<Record<string, string>> } | undefined> {
+      getAgentCalls.push({ namespace, name });
+      if (opts?.throwOnGetAgent !== undefined) return Promise.reject(opts.throwOnGetAgent);
+      const entry = opts?.agents?.[name];
+      if (entry === undefined || entry === null) return Promise.resolve(undefined);
+      return Promise.resolve({ labels: entry });
     },
   };
 }
@@ -288,6 +310,204 @@ describe('spawn_child_task', () => {
     });
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain('connection refused');
+  });
+});
+
+describe('spawn_child_task — allowedChildTemplates (v0.1.3)', () => {
+  it('admits a child whose Agent CR carries a from-template label in allowedChildTemplates', async () => {
+    const k8s = makeFakeK8s({
+      agents: {
+        'summarizer-rust-7f3a2b9c': {
+          'kagent.knuteson.io/from-template': 'summarizer',
+          'kagent.knuteson.io/managed-by': 'kagent-operator',
+        },
+      },
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: ['summarizer'],
+      }),
+      k8s,
+      generateChildName: () => 'parent-task-001-c-tmpl1',
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer-rust-7f3a2b9c',
+      originalUserMessage: 'summarize topic X',
+    });
+    expect(result.isError).not.toBe(true);
+    expect(k8s.creates.length).toBe(1);
+    expect(k8s.creates[0]?.targetAgent).toBe('summarizer-rust-7f3a2b9c');
+    expect(k8s.getAgentCalls).toEqual([
+      { namespace: PARENT.namespace, name: 'summarizer-rust-7f3a2b9c' },
+    ]);
+  });
+
+  it('refuses when the target Agent has no from-template label', async () => {
+    const k8s = makeFakeK8s({
+      agents: {
+        'summarizer-static': {
+          'kagent.knuteson.io/managed-by': 'kagent-operator',
+          // no from-template label — hand-authored Agent
+        },
+      },
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: ['summarizer'],
+      }),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer-static',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied');
+    expect(k8s.getAgentCalls.length).toBe(1);
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('refuses when from-template label value is not in allowedChildTemplates', async () => {
+    const k8s = makeFakeK8s({
+      agents: {
+        'attacker-7f3a2b9c': {
+          'kagent.knuteson.io/from-template': 'attacker',
+        },
+      },
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: ['summarizer', 'researcher'],
+      }),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'attacker-7f3a2b9c',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied');
+    expect(k8s.getAgentCalls.length).toBe(1);
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('refuses when the target Agent CR does not exist', async () => {
+    const k8s = makeFakeK8s({ agents: { 'missing-agent': null } });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: ['summarizer'],
+      }),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'missing-agent',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied');
+    expect(k8s.getAgentCalls.length).toBe(1);
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('does NOT fetch the Agent CR when allowedChildAgents already matches (cheap path)', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: ['summarizer'],
+        allowedChildTemplates: ['summarizer-template'],
+      }),
+      k8s,
+      generateChildName: () => 'parent-task-001-c-cheap',
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).not.toBe(true);
+    expect(k8s.getAgentCalls.length).toBe(0);
+    expect(k8s.creates.length).toBe(1);
+  });
+
+  it('refuses when both allowedChildAgents and allowedChildTemplates are empty/unset', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: [],
+      }),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied');
+    expect(resultText(result)).toContain('no allowedChildAgents');
+    expect(k8s.getAgentCalls.length).toBe(0);
+  });
+
+  it('still rejects self-spawn even when the materialized target matches a template', async () => {
+    const k8s = makeFakeK8s({
+      agents: {
+        orchestrator: {
+          'kagent.knuteson.io/from-template': 'orchestrator-tpl',
+        },
+      },
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: ['orchestrator-tpl'],
+      }),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'orchestrator',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('immediate cycle');
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('forwards K8s API errors during getAgentByName as tool errors', async () => {
+    const k8s = makeFakeK8s({
+      throwOnGetAgent: new Error('K8s get failed: timeout'),
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({
+        allowedChildAgents: [],
+        allowedChildTemplates: ['summarizer'],
+      }),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer-x',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('timeout');
   });
 });
 

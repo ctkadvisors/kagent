@@ -21,12 +21,17 @@
  * structured error, identical to the SSRF-guard pattern in
  * `builtin-tools.ts:assertUrlIsSafe`):
  *
- *   1. agentName ∈ parent's Agent.spec.allowedChildAgents
- *      (empty/unset = no children may be spawned)
- *   2. agentName !== parent.agentName (single-hop self-cycle reject)
- *   3. concurrent direct children < parent's maxConcurrentChildren
- *   4. originalUserMessage ≤ 32KB
- *   5. runConfig.timeoutSeconds clamped to remaining parent budget
+ *   1. agentName !== parent.agentName (single-hop self-cycle reject)
+ *   2. fail-closed when both allowedChildAgents and
+ *      allowedChildTemplates are empty/unset
+ *   3. agentName ∈ parent's Agent.spec.allowedChildAgents OR the
+ *      target Agent's `kagent.knuteson.io/from-template` label is
+ *      in Agent.spec.allowedChildTemplates (v0.1.3 — admits content-
+ *      addressed Agents materialized by ensure_agent_from_template
+ *      without enumerating their names)
+ *   4. concurrent direct children < parent's maxConcurrentChildren
+ *   5. originalUserMessage ≤ 32KB
+ *   6. runConfig.timeoutSeconds clamped to remaining parent budget
  *      (prevents child-outlives-parent pathology)
  */
 
@@ -35,6 +40,7 @@ import { defineInProcessTool, InProcessToolProvider } from '@kagent/in-process-t
 import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 
 import type { AgentSpecEnv } from './env.js';
+import { FROM_TEMPLATE_LABEL } from './k8s-task-creator.js';
 import type { K8sTaskCreator, ParentIdentity } from './k8s-task-creator.js';
 
 /** 32 KB cap on `originalUserMessage` per AGENT-SELF-SERVICE.md §4.4 #5. */
@@ -92,6 +98,7 @@ interface SpawnArgs {
 export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefinition {
   const generate = deps.generateChildName ?? defaultGenerateChildName;
   const allow = new Set<string>(deps.parentAgentSpec.allowedChildAgents ?? []);
+  const allowTemplates = new Set<string>(deps.parentAgentSpec.allowedChildTemplates ?? []);
   const cap = deps.parentAgentSpec.maxConcurrentChildren ?? DEFAULT_MAX_CONCURRENT_CHILDREN;
 
   return defineInProcessTool({
@@ -100,8 +107,11 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
       'Create a child AgentTask under the current task. Returns immediately ' +
       'with {name, namespace, uid}. Use wait_for_child_task or ' +
       'wait_for_children_all to block until the child reaches a terminal ' +
-      "phase. Refuses agent names not in this Agent's allowedChildAgents, " +
-      'self-spawn, exceeded concurrent-children cap, or oversize prompts.',
+      "phase. The agentName must be in this Agent's allowedChildAgents, " +
+      'OR the target Agent must carry a `kagent.knuteson.io/from-template` ' +
+      "label whose value is in this Agent's allowedChildTemplates (lets you " +
+      'spawn dynamically materialized agents from ensure_agent_from_template). ' +
+      'Also refuses self-spawn, exceeded concurrent-children cap, or oversize prompts.',
     inputSchema: {
       type: 'object',
       required: ['agentName', 'originalUserMessage'],
@@ -130,28 +140,58 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
     handler: async (rawArgs) => {
       const args = parseSpawnArgs(rawArgs);
 
-      // Guardrail 1 — allowedChildAgents.
-      if (allow.size === 0) {
-        throw new Error(
-          `policy_denied: agent "${deps.parentAgentName}" has no allowedChildAgents (set Agent.spec.allowedChildAgents in GitOps to permit children)`,
-        );
-      }
-      if (!allow.has(args.agentName)) {
-        const known = Array.from(allow).sort().join(', ');
-        throw new Error(
-          `policy_denied: agent "${args.agentName}" is not in allowedChildAgents (allowed: ${known})`,
-        );
-      }
-
-      // Guardrail 2 — single-hop self-cycle (operator's WS-I does
-      // multi-hop; we catch the cheapest case for clean error UX).
+      // Guardrail 1 — single-hop self-cycle. Hoisted ABOVE the allow-
+      // list check so the error stays specific even when the spec
+      // happens to whitelist the parent's own name (or a template
+      // that materializes to it). Operator's WS-I covers multi-hop.
       if (args.agentName === deps.parentAgentName) {
         throw new Error(
           `policy_denied: cannot spawn a child against the same agent as the parent ("${args.agentName}") — would create an immediate cycle`,
         );
       }
 
-      // Guardrail 3 — concurrent-children cap.
+      // Guardrail 2 — both allowlists empty/unset = fail-closed.
+      if (allow.size === 0 && allowTemplates.size === 0) {
+        throw new Error(
+          `policy_denied: agent "${deps.parentAgentName}" has no allowedChildAgents (set Agent.spec.allowedChildAgents or Agent.spec.allowedChildTemplates in GitOps to permit children)`,
+        );
+      }
+
+      // Guardrail 3 — name must match either list. Try the cheap
+      // exact-match path first (no K8s API call); fall back to the
+      // template-label lookup only when the name isn't directly listed
+      // and templates are configured.
+      if (!allow.has(args.agentName)) {
+        let admittedByTemplate = false;
+        if (allowTemplates.size > 0) {
+          const target = await deps.k8s.getAgentByName(deps.parent.namespace, args.agentName);
+          if (target === undefined) {
+            const known = describeAllow(allow, allowTemplates);
+            throw new Error(
+              `policy_denied: agent "${args.agentName}" not found in namespace "${deps.parent.namespace}" (allowed: ${known})`,
+            );
+          }
+          const fromTemplate = target.labels[FROM_TEMPLATE_LABEL];
+          if (typeof fromTemplate === 'string' && allowTemplates.has(fromTemplate)) {
+            admittedByTemplate = true;
+          } else {
+            const known = describeAllow(allow, allowTemplates);
+            const reason =
+              typeof fromTemplate === 'string'
+                ? `from-template label "${fromTemplate}" is not in allowedChildTemplates`
+                : `target Agent has no "${FROM_TEMPLATE_LABEL}" label and is not in allowedChildAgents`;
+            throw new Error(`policy_denied: ${reason} (allowed: ${known})`);
+          }
+        }
+        if (!admittedByTemplate) {
+          const known = describeAllow(allow, allowTemplates);
+          throw new Error(
+            `policy_denied: agent "${args.agentName}" is not in allowedChildAgents (allowed: ${known})`,
+          );
+        }
+      }
+
+      // Guardrail 4 — concurrent-children cap.
       const live = await deps.k8s.listLiveChildren(deps.parent);
       if (live.length >= cap) {
         throw new Error(
@@ -159,7 +199,7 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
         );
       }
 
-      // Guardrail 4 — message size cap (the JSON schema enforces it
+      // Guardrail 5 — message size cap (the JSON schema enforces it
       // structurally too, but defensive depth-check).
       if (Buffer.byteLength(args.originalUserMessage, 'utf8') > SPAWN_CHILD_MAX_MESSAGE_BYTES) {
         throw new Error(
@@ -167,7 +207,7 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
         );
       }
 
-      // Guardrail 5 — clamp child timeout to remaining parent budget.
+      // Guardrail 6 — clamp child timeout to remaining parent budget.
       let runConfig = args.runConfig;
       const remaining = deps.remainingBudgetSeconds?.();
       if (
@@ -265,6 +305,13 @@ function parseSpawnArgs(raw: Record<string, unknown>): SpawnArgs {
 
 function jsonContent(value: unknown): ContentBlock[] {
   return [{ type: 'text', text: JSON.stringify(value) }];
+}
+
+function describeAllow(agents: ReadonlySet<string>, templates: ReadonlySet<string>): string {
+  const parts: string[] = [];
+  if (agents.size > 0) parts.push(`agents=[${Array.from(agents).sort().join(', ')}]`);
+  if (templates.size > 0) parts.push(`templates=[${Array.from(templates).sort().join(', ')}]`);
+  return parts.length > 0 ? parts.join('; ') : '(none)';
 }
 
 /** Kept for symmetry with `builtin-tools.ts` — re-export the provider class. */

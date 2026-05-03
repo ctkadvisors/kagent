@@ -132,6 +132,7 @@ The substrate ships but every channel for invoking work is YAML-into-GitOps. [`P
 | K   | `spawn_child_task` built-in tool + `Agent.spec.allowedChildAgents`  | `v0.0.8-spawn-child`         | ✅ shipped | none       |
 | L   | `wait_for_child_task` / `wait_for_children_all` (polling)           | `v0.0.9-wait-for-child`      | ✅ shipped | WS-K       |
 | M   | `AgentTemplate` CRD + `ensure_agent_from_template` (per `AGENT-TEMPLATES.md`) | `v0.1.0-templates` | ✅ shipped | WS-K       |
+| —   | `Agent.spec.allowedChildTemplates` (admit children by from-template label — unblocks WS-M live demo) | `v0.1.3-prefix-allow` | ✅ shipped | WS-K + WS-M |
 | N   | Webhook + `KagentSchedule` CRD                                       | `v0.1.4-entry-points` (deferred) | pending | WS-J + driver |
 
 **v0.1.0 anchor flips** under this slate: from "comparison rig" to "agent self-service shipped (WS-J/K/L/M)." Comparison rig + researcher port move to `v0.1.5-rig`. Reasoning: substrate-completeness (you can use it without YAML) is a stronger v0.1 milestone than a single benchmark, and the rig depends on having self-service to configure it.

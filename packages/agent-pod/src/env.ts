@@ -20,9 +20,24 @@ export interface AgentSpecEnv {
    * WS-K — agent-self-allowlist for `spawn_child_task`. The operator
    * threads this verbatim into KAGENT_AGENT_SPEC. The spawn tool reads
    * it to gate child agent names BEFORE issuing the K8s create. Empty
-   * / unset = no children may be spawned (fail-closed).
+   * / unset = no children may be spawned (fail-closed) UNLESS
+   * `allowedChildTemplates` matches.
    */
   readonly allowedChildAgents?: readonly string[];
+  /**
+   * v0.1.3 — companion to `allowedChildAgents` that admits children by
+   * the `kagent.knuteson.io/from-template` label on the target Agent
+   * CR (set by the WS-M template-instantiator). Lets parents permit a
+   * whole class of materialized agents (e.g. every `summarizer-*`
+   * Agent the operator mints from the `summarizer` template) without
+   * enumerating their content-addressed names.
+   *
+   * Fail-closed: an Agent missing the from-template label is NEVER
+   * admitted via this list — only Agents the operator's
+   * template-server stamped with a known template name. Both lists
+   * union (matching either admits).
+   */
+  readonly allowedChildTemplates?: readonly string[];
   /** WS-K — direct-child concurrency cap. Default 10 in the spawn tool. */
   readonly maxConcurrentChildren?: number;
 }

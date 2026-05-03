@@ -65,6 +65,18 @@ export interface AgentSpec {
   readonly allowedChildAgents?: readonly string[];
 
   /**
+   * v0.1.3 — companion to `allowedChildAgents` that admits a child by
+   * its target Agent's `kagent.knuteson.io/from-template` label
+   * (stamped by the WS-M template-instantiator). Lets a parent permit
+   * a whole class of materialized agents (e.g. every Agent the
+   * operator mints from the `summarizer` template) without
+   * enumerating their content-addressed names. Both lists union; an
+   * Agent missing the from-template label is NEVER admitted via this
+   * field (fail-closed).
+   */
+  readonly allowedChildTemplates?: readonly string[];
+
+  /**
    * WS-K — upper bound on direct children of THIS agent's tasks that
    * may be in non-terminal phases simultaneously. Stops an LLM-loop
    * bug from creating 10⁶ children. Default 10.

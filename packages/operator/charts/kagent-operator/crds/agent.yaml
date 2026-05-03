@@ -60,12 +60,27 @@ spec:
                     WS-K — declarative allowlist of Agent names this agent
                     may spawn as children via the in-pod `spawn_child_task`
                     tool. Empty / unset means NO children may be spawned
-                    (fail-closed). Per-Agent grant lives at GitOps
-                    authoring time so an LLM-driven prompt injection
-                    cannot pick its own child target. When the Tool Broker
-                    (P6) lands, this becomes the fallback for
-                    `spawn_child_task`'s `argumentPolicy` when no
-                    `ToolBinding` exists.
+                    (fail-closed) UNLESS `allowedChildTemplates` admits the
+                    target. Per-Agent grant lives at GitOps authoring time
+                    so an LLM-driven prompt injection cannot pick its own
+                    child target. When the Tool Broker (P6) lands, this
+                    becomes the fallback for `spawn_child_task`'s
+                    `argumentPolicy` when no `ToolBinding` exists.
+                allowedChildTemplates:
+                  type: array
+                  items:
+                    type: string
+                  description: |
+                    v0.1.3 — companion to `allowedChildAgents` that admits
+                    a child by its target Agent's
+                    `kagent.knuteson.io/from-template` label (stamped by
+                    the WS-M template-instantiator). Lets a parent permit
+                    every Agent the operator materializes from a given
+                    template (e.g. every `summarizer-*` Agent the
+                    `summarizer` template mints) without enumerating their
+                    content-addressed names. Both lists union; an Agent
+                    missing the from-template label is NEVER admitted via
+                    this field (fail-closed).
                 maxConcurrentChildren:
                   type: integer
                   minimum: 1

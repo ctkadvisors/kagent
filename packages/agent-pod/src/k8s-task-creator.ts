@@ -38,9 +38,19 @@ export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 const KAGENT_GROUP = 'kagent.knuteson.io';
 const KAGENT_VERSION = 'v1alpha1';
 const AGENTTASK_PLURAL = 'agenttasks';
+const AGENT_PLURAL = 'agents';
 
 /** Label key the operator's WS-I reconcile uses to find children. */
 export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
+
+/**
+ * Label the operator's WS-M template-instantiator stamps on every
+ * Agent it materializes (`template-instantiator.ts:216`). The spawn
+ * tool's v0.1.3 `allowedChildTemplates` check matches against this
+ * label to admit content-addressed Agent names without enumerating
+ * them in `allowedChildAgents`.
+ */
+export const FROM_TEMPLATE_LABEL = 'kagent.knuteson.io/from-template';
 
 /** Parent identity threaded into child manifests. */
 export interface ParentIdentity {
@@ -84,6 +94,11 @@ export interface ChildSnapshot {
   readonly error?: string;
 }
 
+/** Minimal Agent CR projection — labels only, all v0.1.3 needs. */
+export interface AgentSummary {
+  readonly labels: Readonly<Record<string, string>>;
+}
+
 export interface K8sTaskCreator {
   createChildTask(parent: ParentIdentity, input: ChildTaskInput): Promise<ChildTaskCreated>;
   listLiveChildren(parent: ParentIdentity): Promise<readonly LiveChildSummary[]>;
@@ -91,6 +106,13 @@ export interface K8sTaskCreator {
   listAllChildren(parent: ParentIdentity): Promise<readonly ChildSnapshot[]>;
   /** Used by WS-L wait_for_child_task to fetch one specific child by uid. */
   getTaskByUid(namespace: string, uid: string): Promise<ChildSnapshot | undefined>;
+  /**
+   * v0.1.3 — fetch an Agent CR by namespace/name, returning just the
+   * label projection used by `spawn_child_task`'s
+   * `allowedChildTemplates` check. Returns `undefined` when the Agent
+   * is absent (404). Other errors (RBAC, network) propagate.
+   */
+  getAgentByName(namespace: string, name: string): Promise<AgentSummary | undefined>;
 }
 
 /**
@@ -203,7 +225,44 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
       }
       return undefined;
     },
+
+    async getAgentByName(namespace: string, name: string): Promise<AgentSummary | undefined> {
+      let obj: unknown;
+      try {
+        obj = await customApi.getNamespacedCustomObject({
+          group: KAGENT_GROUP,
+          version: KAGENT_VERSION,
+          namespace,
+          plural: AGENT_PLURAL,
+          name,
+        });
+      } catch (err: unknown) {
+        if (isNotFound(err)) return undefined;
+        throw err;
+      }
+      if (obj === null || typeof obj !== 'object') return undefined;
+      return { labels: readLabels(obj) };
+    },
   };
+}
+
+function isNotFound(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: unknown; statusCode?: unknown };
+  return e.code === 404 || e.statusCode === 404;
+}
+
+function readLabels(obj: unknown): Readonly<Record<string, string>> {
+  if (obj === null || typeof obj !== 'object') return {};
+  const meta = (obj as Record<string, unknown>).metadata;
+  if (meta === null || typeof meta !== 'object') return {};
+  const labels = (meta as Record<string, unknown>).labels;
+  if (labels === null || typeof labels !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(labels as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
 }
 
 async function listChildrenRaw(

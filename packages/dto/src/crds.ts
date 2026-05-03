@@ -45,9 +45,17 @@ export interface AgentSpec {
   readonly sandboxProfile?: 'default' | 'strict';
   /**
    * WS-K — agents this Agent may spawn as children via the in-pod
-   * `spawn_child_task` tool. Empty / unset = no children may be spawned.
+   * `spawn_child_task` tool. Empty / unset = no children may be
+   * spawned UNLESS `allowedChildTemplates` admits the target.
    */
   readonly allowedChildAgents?: readonly string[];
+  /**
+   * v0.1.3 — companion to `allowedChildAgents` that admits children
+   * by the `kagent.knuteson.io/from-template` label on the target
+   * Agent CR (set by the WS-M template-instantiator). Both lists
+   * union; an Agent without the label is never admitted by this field.
+   */
+  readonly allowedChildTemplates?: readonly string[];
   /** WS-K — direct-child concurrency cap. Default 10. */
   readonly maxConcurrentChildren?: number;
 }
