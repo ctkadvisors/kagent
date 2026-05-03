@@ -64,25 +64,31 @@ import { createAgentTaskInformer } from './watch.js';
  * for every Pod it materializes. Reads operator env vars; everything
  * is optional. Helm values plumb through here.
  */
-function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
+export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   const env = process.env;
   const extraEnv: { name: string; value: string }[] = [];
-  if (
-    typeof env.KAGENT_AGENT_POD_LITELLM_BASE_URL === 'string' &&
-    env.KAGENT_AGENT_POD_LITELLM_BASE_URL.length > 0
-  ) {
+  // LLM endpoint resolution. When the operator was started with
+  // KAGENT_LLM_GATEWAY_BASE_URL (chart's llmGateway.enabled=true), we
+  // route spawned agent-pods through the gateway by overriding their
+  // KAGENT_LITELLM_BASE_URL with the gateway service URL. The gateway
+  // then enforces its AIMD-tuned per-(model, backend) cap as last-
+  // resort safety; the operator's admission reconciler (admission.ts)
+  // is the primary queue.
+  const gatewayUrl = env.KAGENT_LLM_GATEWAY_BASE_URL;
+  const gatewayApiKey = env.KAGENT_LLM_GATEWAY_API_KEY;
+  const gatewayActive = typeof gatewayUrl === 'string' && gatewayUrl.length > 0;
+  const effectiveLlmUrl = gatewayActive ? gatewayUrl : env.KAGENT_AGENT_POD_LITELLM_BASE_URL;
+  const effectiveLlmKey = gatewayActive ? gatewayApiKey : env.KAGENT_AGENT_POD_LITELLM_API_KEY;
+  if (typeof effectiveLlmUrl === 'string' && effectiveLlmUrl.length > 0) {
     extraEnv.push({
       name: 'KAGENT_LITELLM_BASE_URL',
-      value: env.KAGENT_AGENT_POD_LITELLM_BASE_URL,
+      value: effectiveLlmUrl,
     });
   }
-  if (
-    typeof env.KAGENT_AGENT_POD_LITELLM_API_KEY === 'string' &&
-    env.KAGENT_AGENT_POD_LITELLM_API_KEY.length > 0
-  ) {
+  if (typeof effectiveLlmKey === 'string' && effectiveLlmKey.length > 0) {
     extraEnv.push({
       name: 'KAGENT_LITELLM_API_KEY',
-      value: env.KAGENT_AGENT_POD_LITELLM_API_KEY,
+      value: effectiveLlmKey,
     });
   }
   if (
