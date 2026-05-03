@@ -40,6 +40,14 @@ export const API_GROUP_VERSION = `${API_GROUP}/${API_VERSION}` as const;
 export interface AgentSpec {
   readonly model: string;
   readonly systemPrompt?: string;
+  /**
+   * v0.1.6 — Langfuse-managed system prompt reference. Mirror of
+   * AgentSpec.systemPromptRef in operator/crds/types.ts.
+   */
+  readonly systemPromptRef?: {
+    readonly name: string;
+    readonly version?: number;
+  };
   readonly tools?: readonly string[];
   readonly capabilities?: readonly string[];
   readonly sandboxProfile?: 'default' | 'strict';

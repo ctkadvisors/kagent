@@ -253,6 +253,23 @@ agentPod:
 # The gateway itself is a separate sub-chart at
 # packages/llm-gateway/charts/llm-gateway/ — install it independently
 # before flipping this on, OR depend on it via umbrella chart in v0.2.
+# v0.1.6 — Langfuse-managed system prompts. When enabled, the operator
+# threads KAGENT_LANGFUSE_HOST + creds into spawned agent-pods so they
+# fetch their `Agent.spec.systemPromptRef` body from Langfuse at boot.
+# Off by default — agents without a systemPromptRef are unaffected.
+langfuse:
+  enabled: false
+  # In-cluster service URL for the Langfuse web pod.
+  host: 'http://langfuse-web.langfuse-system.svc.cluster.local:3000'
+  # Public + secret API key for the project the agent prompts live in.
+  # Created via the Langfuse UI after first install (Project Settings →
+  # API Keys → Create new API key). Drop both into a Secret in this
+  # release namespace and reference it here.
+  apiKey:
+    secretName: ''
+    publicKeyKey: 'public'
+    secretKeyKey: 'secret'
+
 llmGateway:
   enabled: false
   # In-cluster Service URL of the gateway's /v1 endpoint. Default points

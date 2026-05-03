@@ -155,6 +155,38 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: 'true',
     });
   }
+  // v0.1.6 — Langfuse-managed prompt fetcher plumbing. Forwarded into
+  // spawned agent-pods only when the operator chart's
+  // `langfuse.enabled=true` set the corresponding KAGENT_AGENT_POD_*
+  // env on the operator deployment. Renamed on the way through (same
+  // pattern as KAGENT_AGENT_POD_LITELLM_BASE_URL → KAGENT_LITELLM_BASE_URL).
+  if (
+    typeof env.KAGENT_AGENT_POD_LANGFUSE_HOST === 'string' &&
+    env.KAGENT_AGENT_POD_LANGFUSE_HOST.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_LANGFUSE_HOST',
+      value: env.KAGENT_AGENT_POD_LANGFUSE_HOST,
+    });
+    if (
+      typeof env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY === 'string' &&
+      env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY.length > 0
+    ) {
+      extraEnv.push({
+        name: 'KAGENT_LANGFUSE_PUBLIC_KEY',
+        value: env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY,
+      });
+    }
+    if (
+      typeof env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY === 'string' &&
+      env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY.length > 0
+    ) {
+      extraEnv.push({
+        name: 'KAGENT_LANGFUSE_SECRET_KEY',
+        value: env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY,
+      });
+    }
+  }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
   // template-server is enabled on the operator side; the chart binds

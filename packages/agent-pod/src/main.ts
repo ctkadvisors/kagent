@@ -237,12 +237,25 @@ async function main(): Promise<void> {
     console.log('[kagent-agent-pod] substrate tools ENABLED (spawn_child_task + wait_*)');
   }
 
+  // v0.1.6 — Langfuse-managed prompt fetcher. Wired only when the
+  // operator threaded KAGENT_LANGFUSE_HOST + creds (chart values
+  // langfuse.{enabled,host,publicKeySecret,secretKeySecret}). Agents
+  // with `systemPromptRef` boot-fail without this; agents with
+  // literal `systemPrompt` are unaffected.
+  const langfuseFetcher = buildLangfusePromptFetcher(process.env);
+  if (langfuseFetcher !== undefined) {
+    console.log(
+      `[kagent-agent-pod] Langfuse prompt fetcher ENABLED → ${process.env.KAGENT_LANGFUSE_HOST ?? '<unset>'}`,
+    );
+  }
+
   let result: RunResult;
   try {
     result = await runAgentTask(config, {
       sinks,
       signal: shutdownController.signal,
       ...(substrateTools !== undefined && { spawnTools: substrateTools }),
+      ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
     });
   } catch (err) {
     // If the runner threw because we already aborted, treat it as a
@@ -317,4 +330,70 @@ if (isDirectInvocation) {
     console.error('[kagent-agent-pod] fatal:', err);
     process.exit(1);
   });
+}
+
+/**
+ * v0.1.6 — Build a Langfuse prompt fetcher from process.env.
+ *
+ * Returns `undefined` when KAGENT_LANGFUSE_HOST is unset (so
+ * `runner.resolveSystemPrompt` falls through cleanly for agents that
+ * don't use Langfuse). Returns a function when host + creds are all
+ * present.
+ *
+ * Calls Langfuse's v2 prompt API:
+ *   GET {host}/api/public/v2/prompts/{name}[?version=N]
+ *   Authorization: Basic base64(public:secret)
+ *
+ * Response body:
+ *   { id, name, version, type: 'text'|'chat', prompt: string|object, ... }
+ *
+ * v1 only handles `type: 'text'` prompts (single-string body).
+ * Chat-typed prompts throw — agent system prompts are text by convention.
+ */
+export function buildLangfusePromptFetcher(
+  env: Readonly<Record<string, string | undefined>>,
+): ((name: string, version?: number) => Promise<string>) | undefined {
+  const host = env.KAGENT_LANGFUSE_HOST;
+  const publicKey = env.KAGENT_LANGFUSE_PUBLIC_KEY;
+  const secretKey = env.KAGENT_LANGFUSE_SECRET_KEY;
+  if (
+    typeof host !== 'string' ||
+    host.length === 0 ||
+    typeof publicKey !== 'string' ||
+    publicKey.length === 0 ||
+    typeof secretKey !== 'string' ||
+    secretKey.length === 0
+  ) {
+    return undefined;
+  }
+
+  const basicAuth = Buffer.from(`${publicKey}:${secretKey}`, 'utf8').toString('base64');
+  const baseUrl = host.replace(/\/+$/, '');
+
+  return async (name: string, version?: number): Promise<string> => {
+    const qs = version !== undefined ? `?version=${String(version)}` : '';
+    const url = `${baseUrl}/api/public/v2/prompts/${encodeURIComponent(name)}${qs}`;
+    const res = await fetch(url, {
+      headers: {
+        authorization: `Basic ${basicAuth}`,
+        accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Langfuse GET ${url} returned ${String(res.status)}: ${await res.text().catch(() => '<no body>')}`,
+      );
+    }
+    const body = (await res.json()) as { type?: string; prompt?: unknown };
+    if (body.type !== 'text') {
+      throw new Error(
+        `Langfuse prompt "${name}" has type="${body.type ?? 'unknown'}"; only text prompts are supported in v0.1.6`,
+      );
+    }
+    if (typeof body.prompt !== 'string') {
+      throw new Error(`Langfuse prompt "${name}" body is not a string (got ${typeof body.prompt})`);
+    }
+    return body.prompt;
+  };
 }

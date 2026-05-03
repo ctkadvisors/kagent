@@ -13,6 +13,20 @@
 export interface AgentSpecEnv {
   readonly model: string;
   readonly systemPrompt?: string;
+  /**
+   * v0.1.6 — declarative reference to a Langfuse-managed prompt. When
+   * set AND the agent-pod was started with KAGENT_LANGFUSE_HOST etc.,
+   * the runner fetches this prompt at boot and uses it as the system
+   * prompt. Falls back to `systemPrompt` literal on fetch failure;
+   * boot-fails when neither is available.
+   *
+   * `version` is optional — when omitted, Langfuse returns the
+   * production-promoted version (or latest if none promoted).
+   */
+  readonly systemPromptRef?: {
+    readonly name: string;
+    readonly version?: number;
+  };
   readonly tools?: readonly string[];
   readonly capabilities?: readonly string[];
   readonly sandboxProfile?: 'default' | 'strict';

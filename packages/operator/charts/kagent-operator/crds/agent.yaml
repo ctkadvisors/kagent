@@ -38,6 +38,25 @@ spec:
                   description: 'LiteLLM model id WITH provider prefix (e.g. workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct).'
                 systemPrompt:
                   type: string
+                systemPromptRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      maxLength: 256
+                    version:
+                      type: integer
+                      minimum: 1
+                  description: |
+                    v0.1.6 — Langfuse-managed system prompt. Agent-pod
+                    fetches the body via Langfuse's v2 prompts API at
+                    boot. Falls back to systemPrompt literal on fetch
+                    failure; boot-fails when neither resolves. version
+                    optional — Langfuse returns the production-promoted
+                    label when omitted.
                 tools:
                   type: array
                   items:

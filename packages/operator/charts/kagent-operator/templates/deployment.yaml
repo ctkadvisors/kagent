@@ -225,6 +225,26 @@ spec:
             - name: KAGENT_AGENT_POD_TEMPLATE_SERVER_URL
               value: 'http://{{ include "kagent-operator.fullname" . }}-templates.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.agentPod.templates.serverPort }}'
             {{- end }}
+            # v0.1.6 — Langfuse-managed prompt fetcher. When enabled,
+            # spawned agent-pods inherit KAGENT_LANGFUSE_HOST + creds
+            # (forwarded by job-spec.ts via this same set of env vars)
+            # and fetch Agent.spec.systemPromptRef bodies at boot.
+            {{- if .Values.langfuse.enabled }}
+            - name: KAGENT_AGENT_POD_LANGFUSE_HOST
+              value: {{ .Values.langfuse.host | quote }}
+            {{- if .Values.langfuse.apiKey.secretName }}
+            - name: KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.langfuse.apiKey.secretName | quote }}
+                  key: {{ .Values.langfuse.apiKey.publicKeyKey | quote }}
+            - name: KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.langfuse.apiKey.secretName | quote }}
+                  key: {{ .Values.langfuse.apiKey.secretKeyKey | quote }}
+            {{- end }}
+            {{- end }}
             # LLM gateway integration (spec §3.2). When enabled, the
             # operator (a) suspends new Jobs on creation and runs the
             # admission reconciler against ModelEndpoint capacity, AND

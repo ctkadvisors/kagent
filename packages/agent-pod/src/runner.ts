@@ -115,6 +115,14 @@ export interface RunDeps {
    * executor's standard "unknown tool" error.
    */
   readonly spawnTools?: ToolProvider;
+  /**
+   * v0.1.6 — Langfuse-managed prompt fetcher. Production wires this
+   * in main.ts from KAGENT_LANGFUSE_HOST + creds (see
+   * `buildLangfusePromptFetcher`). Tests inject directly. When the
+   * Agent has a systemPromptRef but this is undefined, we treat that
+   * as a config-time error and boot-fail.
+   */
+  readonly fetchPrompt?: (name: string, version?: number) => Promise<string>;
 }
 
 /**
@@ -135,6 +143,13 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
       ...(config.litellmApiKey !== undefined && { apiKey: config.litellmApiKey }),
     });
 
+  // v0.1.6 — resolve the system prompt. Order:
+  //   1. If systemPromptRef set AND a fetcher is wired → try Langfuse.
+  //      Success → use that.
+  //   2. Else (or fetch failed): fall back to systemPrompt literal.
+  //   3. Both unresolved + ref was set → boot-fail (config-time error).
+  const resolvedSystemPrompt = await resolveSystemPrompt(config, deps);
+
   const registry = new AgentRegistry();
   registry.register({
     type: config.agentName,
@@ -144,8 +159,8 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     secondaryPhases: [],
     skills: [],
     baseConfidence: 1.0,
-    ...(config.agentSpec.systemPrompt !== undefined && {
-      systemPrompt: config.agentSpec.systemPrompt,
+    ...(resolvedSystemPrompt !== undefined && {
+      systemPrompt: resolvedSystemPrompt,
     }),
     ...(config.agentSpec.llmParams !== undefined && {
       llmParams: config.agentSpec.llmParams,
@@ -323,4 +338,55 @@ export function composeSignals(
   if (caller === undefined) return timeout;
   if (timeout === undefined) return caller;
   return AbortSignal.any([caller, timeout]);
+}
+
+/**
+ * v0.1.6 — resolve the system prompt from Langfuse-managed reference
+ * with literal fallback. Three branches per `Agent.spec`:
+ *
+ *   - `systemPromptRef` set + fetcher wired: try Langfuse. On success,
+ *     use that; on failure, fall back to literal `systemPrompt` if
+ *     present, else throw (config-time boot failure).
+ *   - `systemPromptRef` set + NO fetcher wired: throw (operator
+ *     misconfigured — set langfuseHost or remove the ref).
+ *   - `systemPromptRef` unset: use the literal as-is (back-compat).
+ */
+export async function resolveSystemPrompt(
+  config: PodConfig,
+  deps: RunDeps,
+): Promise<string | undefined> {
+  const ref = config.agentSpec.systemPromptRef;
+  if (ref === undefined) return config.agentSpec.systemPrompt;
+
+  if (deps.fetchPrompt === undefined) {
+    if (config.agentSpec.systemPrompt !== undefined) {
+      // Misconfig but recoverable — log + use literal.
+
+      console.warn(
+        `[runner] Agent.spec.systemPromptRef set but no Langfuse fetcher wired; ` +
+          `falling back to literal systemPrompt`,
+      );
+      return config.agentSpec.systemPrompt;
+    }
+    throw new Error(
+      `Agent.spec.systemPromptRef.name="${ref.name}" requires KAGENT_LANGFUSE_HOST + creds (none found in env). ` +
+        `Either wire Langfuse on the operator chart (langfuse.enabled=true) or remove the ref.`,
+    );
+  }
+
+  try {
+    return await deps.fetchPrompt(ref.name, ref.version);
+  } catch (err) {
+    if (config.agentSpec.systemPrompt !== undefined) {
+      console.warn(
+        `[runner] Langfuse fetch for prompt "${ref.name}" failed (${err instanceof Error ? err.message : String(err)}); ` +
+          `falling back to literal systemPrompt`,
+      );
+      return config.agentSpec.systemPrompt;
+    }
+    throw new Error(
+      `Langfuse fetch for systemPromptRef "${ref.name}" failed and no literal systemPrompt fallback set: ` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
 }

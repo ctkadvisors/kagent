@@ -120,6 +120,77 @@ describe('runAgentTask — Agent.spec.llmParams passthrough (v0.1.4)', () => {
   });
 });
 
+function findSystemMessage(req: ChatRequest | undefined): string | undefined {
+  if (!req) return undefined;
+  // Executor may surface the system prompt either via ChatRequest.systemPrompt
+  // OR by prepending a role:system message — assert against either.
+  if (req.systemPrompt !== undefined && req.systemPrompt.length > 0) return req.systemPrompt;
+  const sys = req.messages.find((m) => m.role === 'system');
+  return sys?.content;
+}
+
+describe('runAgentTask — Agent.spec.systemPromptRef (Langfuse-managed prompts)', () => {
+  it('fetches system prompt from Langfuse when systemPromptRef is set', async () => {
+    const captured: ChatRequest[] = [];
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        // Drop the literal so we KNOW the fetched value is what flows.
+        systemPrompt: undefined,
+        systemPromptRef: { name: 'researcher-system' },
+      },
+    };
+    const fetchPrompt = (name: string): Promise<string> =>
+      Promise.resolve(`<<from-langfuse:${name}>>`);
+    await runAgentTask(cfg, { llm: recordingLlm(captured), fetchPrompt });
+    expect(findSystemMessage(captured[0])).toBe('<<from-langfuse:researcher-system>>');
+  });
+
+  it('falls back to literal systemPrompt when Langfuse fetch fails', async () => {
+    const captured: ChatRequest[] = [];
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        systemPrompt: 'fallback prompt',
+        systemPromptRef: { name: 'researcher-system' },
+      },
+    };
+    const fetchPrompt = (): Promise<string> => Promise.reject(new Error('langfuse 503'));
+    await runAgentTask(cfg, { llm: recordingLlm(captured), fetchPrompt });
+    expect(findSystemMessage(captured[0])).toBe('fallback prompt');
+  });
+
+  it('throws when Langfuse fetch fails and no literal fallback is set', async () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        systemPrompt: undefined,
+        systemPromptRef: { name: 'researcher-system' },
+      },
+    };
+    const fetchPrompt = (): Promise<string> => Promise.reject(new Error('langfuse 503'));
+    await expect(runAgentTask(cfg, { llm: recordingLlm([]), fetchPrompt })).rejects.toThrow(
+      /langfuse|systemPromptRef/i,
+    );
+  });
+
+  it('uses literal systemPrompt when systemPromptRef is unset (back-compat)', async () => {
+    const captured: ChatRequest[] = [];
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        systemPrompt: 'plain literal prompt',
+      },
+    };
+    await runAgentTask(cfg, { llm: recordingLlm(captured) });
+    expect(findSystemMessage(captured[0])).toBe('plain literal prompt');
+  });
+});
+
 describe('pickUserMessage', () => {
   it('returns originalUserMessage when set', () => {
     expect(pickUserMessage(baseConfig)).toBe('what is k3s default runtime?');

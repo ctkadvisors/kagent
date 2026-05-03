@@ -38,6 +38,23 @@ export interface AgentSpec {
   /** Optional system prompt baked into every run of this agent. */
   readonly systemPrompt?: string;
 
+  /**
+   * v0.1.6 — Langfuse-managed system prompt reference. Operator
+   * threads this verbatim into KAGENT_AGENT_SPEC; agent-pod fetches
+   * the prompt body from Langfuse at boot via the v2 prompts API.
+   *
+   * When both `systemPrompt` and `systemPromptRef` are set, the ref
+   * wins on fetch success; the literal is the fallback on fetch
+   * failure. When only the ref is set, fetch failure boot-fails.
+   *
+   * `version` is optional — Langfuse returns the production-promoted
+   * version when omitted (latest if no production label set).
+   */
+  readonly systemPromptRef?: {
+    readonly name: string;
+    readonly version?: number;
+  };
+
   /** Optional tool names this agent is allowed to invoke. Empty/undefined = none. */
   readonly tools?: readonly string[];
 
