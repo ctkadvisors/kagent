@@ -68,6 +68,14 @@ export interface AgentSpec {
     readonly maxTokens?: number;
     readonly stopSequences?: readonly string[];
   };
+  /**
+   * Opt-in per-Agent fairness cap (LLM-gateway bundle, spec §3.4).
+   * Upper bound on the number of in-flight Jobs the operator's
+   * admission reconciler will leave un-suspended for this Agent.
+   * Absent = unlimited at this layer; the per-(model, backend) cap on
+   * the matching `ModelEndpoint` is the only gate when this is unset.
+   */
+  readonly maxInFlightTasks?: number;
 }
 
 export interface Agent {

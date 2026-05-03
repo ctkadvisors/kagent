@@ -53,6 +53,17 @@ export interface AgentSpecEnv {
     readonly maxTokens?: number;
     readonly stopSequences?: readonly string[];
   };
+  /**
+   * Opt-in per-Agent fairness cap (LLM-gateway bundle, spec §3.4).
+   * Mirror of `AgentSpec.maxInFlightTasks` from the operator's CRD
+   * surface. The agent-pod itself does not enforce this — it lives in
+   * the operator's admission reconciler — but the value is threaded
+   * through `KAGENT_AGENT_SPEC` for completeness so any in-pod
+   * observability surface (e.g. workbench-side fixtures) can read the
+   * cap without a separate CRD round-trip. Absent = unlimited at the
+   * admission layer.
+   */
+  readonly maxInFlightTasks?: number;
 }
 
 /**

@@ -95,6 +95,23 @@ export interface AgentSpec {
     readonly maxTokens?: number;
     readonly stopSequences?: readonly string[];
   };
+
+  /**
+   * Opt-in per-Agent fairness cap (LLM-gateway bundle, spec §3.4).
+   * Upper bound on the number of Jobs the operator's admission
+   * reconciler will leave un-suspended at any given moment whose
+   * `kagent.knuteson.io/agent=<name>` label matches this Agent.
+   *
+   * Absent / undefined = unlimited at this layer; the per-(model,
+   * backend) cap declared on the matching `ModelEndpoint` is the only
+   * gate when this field is unset. Set this when one Agent is hot
+   * enough to monopolize a backend's capacity and you want to leave
+   * headroom for others.
+   *
+   * Range 1..1024. Counted by direct in-flight Jobs only; queued /
+   * suspended Jobs do not count against the cap.
+   */
+  readonly maxInFlightTasks?: number;
 }
 
 export interface Agent {

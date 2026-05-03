@@ -117,6 +117,21 @@ spec:
                         type: string
                         maxLength: 256
                       description: 'Stop sequences passed as the OpenAI `stop` field.'
+                maxInFlightTasks:
+                  type: integer
+                  minimum: 1
+                  maximum: 1024
+                  description: |
+                    Opt-in per-Agent fairness cap (LLM-gateway bundle,
+                    spec §3.4). Upper bound on the number of in-flight
+                    Jobs the operator's admission reconciler will leave
+                    un-suspended for this Agent at any given moment
+                    (Jobs whose `kagent.knuteson.io/agent=<name>` label
+                    matches). Absent / unset = unlimited at this layer;
+                    the per-(model, backend) cap on the matching
+                    ModelEndpoint is the only gate when this is unset.
+                    Counted by direct in-flight Jobs only; queued /
+                    suspended Jobs do not count against the cap.
       additionalPrinterColumns:
         - name: Model
           type: string

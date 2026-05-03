@@ -101,6 +101,24 @@ describe('isAgent', () => {
   });
 });
 
+describe('Agent.spec.maxInFlightTasks (LLM-gateway opt-in fairness cap)', () => {
+  it('round-trips a numeric maxInFlightTasks on AgentSpec', () => {
+    // Type-only assertion: an Agent spec with maxInFlightTasks must type-check.
+    const spec: import('./types.js').AgentSpec = {
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      maxInFlightTasks: 3,
+    };
+    expect(spec.maxInFlightTasks).toBe(3);
+  });
+
+  it('accepts an AgentSpec with maxInFlightTasks unset (default = unlimited at this layer)', () => {
+    const spec: import('./types.js').AgentSpec = {
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    };
+    expect(spec.maxInFlightTasks).toBeUndefined();
+  });
+});
+
 describe('isModelEndpoint', () => {
   const valid = {
     apiVersion: API_GROUP_VERSION,
