@@ -181,3 +181,74 @@ export interface AgentTask {
   readonly spec: AgentTaskSpec;
   readonly status?: AgentTaskStatus;
 }
+
+/* =====================================================================
+ * ModelEndpoint
+ *
+ * Mirror of `packages/operator/src/crds/types.ts`'s `ModelEndpoint`
+ * (per the duplication contract documented at the top of this file).
+ * Source-of-truth = the YAML schema under
+ * `packages/operator/charts/kagent-operator/crds/modelendpoint.yaml`.
+ * See docs/superpowers/specs/2026-05-03-llm-gateway-bundle-design.md
+ * §3.3 for the full design + YAML example.
+ * ===================================================================== */
+
+export type ModelEndpointBackendKind =
+  | 'ollama'
+  | 'cloudflare'
+  | 'openrouter'
+  | 'bedrock'
+  | 'openai'
+  | 'anthropic'
+  | 'localai'
+  | 'groq'
+  | 'exo';
+
+export interface ModelEndpointInFlight {
+  readonly seed: number;
+  readonly max: number;
+}
+
+export interface ModelEndpointSpec {
+  readonly model: string;
+  readonly backendKind: ModelEndpointBackendKind;
+  readonly backendUrl: string;
+  readonly inFlight: ModelEndpointInFlight;
+  readonly minSafe?: number;
+}
+
+export interface ModelEndpointStatus {
+  readonly observedInFlight?: number;
+  readonly lastSampledAt?: string;
+  readonly recentErrorRate?: number;
+}
+
+export interface ModelEndpoint {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'ModelEndpoint';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: ModelEndpointSpec;
+  readonly status?: ModelEndpointStatus;
+}
+
+export function isModelEndpoint(obj: unknown): obj is ModelEndpoint {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
+  if (o.apiVersion !== API_GROUP_VERSION) return false;
+  if (o.kind !== 'ModelEndpoint') return false;
+  const spec = o.spec as {
+    model?: unknown;
+    backendKind?: unknown;
+    backendUrl?: unknown;
+    inFlight?: unknown;
+  } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  if (typeof spec.model !== 'string' || spec.model.length === 0) return false;
+  if (typeof spec.backendKind !== 'string' || spec.backendKind.length === 0) return false;
+  if (typeof spec.backendUrl !== 'string' || spec.backendUrl.length === 0) return false;
+  const inFlight = spec.inFlight as { seed?: unknown; max?: unknown } | null;
+  if (typeof inFlight !== 'object' || inFlight === null) return false;
+  if (typeof inFlight.seed !== 'number') return false;
+  if (typeof inFlight.max !== 'number') return false;
+  return true;
+}

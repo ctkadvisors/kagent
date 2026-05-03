@@ -1,0 +1,154 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# ModelEndpoint — declares the per-(model, backend) concurrency cap
+# that both the operator's admission reconciler and the LLM gateway
+# read. The operator reads `spec` to know what to queue against; the
+# gateway reads `spec` for AIMD bounds and writes `status` as the
+# self-tuner converges. Same CR — no duplicated config.
+#
+# See packages/operator/src/crds/types.ts for the TS surface and
+# docs/superpowers/specs/2026-05-03-llm-gateway-bundle-design.md §3.3
+# for the full design + YAML example.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelendpoints.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: ModelEndpoint
+    listKind: ModelEndpointList
+    plural: modelendpoints
+    singular: modelendpoint
+    shortNames:
+      - kme
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      # Status subresource lets the LLM gateway PATCH .status without
+      # racing GitOps writes against .spec — gateway writes
+      # observedInFlight as the AIMD self-tuner converges; the
+      # operator's admission reconciler reads it to queue against the
+      # actual capacity, not the static seed.
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - model
+                - backendKind
+                - backendUrl
+                - inFlight
+              properties:
+                model:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Model identifier as it appears in `Agent.spec.model`
+                    — full LiteLLM-style id WITH provider prefix per
+                    CLAUDE.md (e.g.
+                    `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`,
+                    `nemotron-3-nano:4b`).
+                backendKind:
+                  type: string
+                  enum:
+                    - ollama
+                    - cloudflare
+                    - openrouter
+                    - bedrock
+                    - openai
+                    - anthropic
+                    - localai
+                    - groq
+                    - exo
+                  description: |
+                    Backend kind drives which signal-reader the gateway
+                    uses (e.g. Ollama `/api/ps` vs. Cloudflare
+                    `x-ratelimit-*` headers vs. backend-specific 429
+                    shapes). String-union by design — adding a backend
+                    is a CRD bump rather than a code change in the
+                    operator.
+                backendUrl:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Backend address. Provider-agnostic at the kagent
+                    layer; the gateway resolves it according to
+                    `backendKind`.
+                inFlight:
+                  type: object
+                  required:
+                    - seed
+                    - max
+                  description: |
+                    AIMD bounds. `seed` is the starting concurrency the
+                    gateway uses on cold start; `max` is the ceiling
+                    the AIMD self-tuner will not cross even after a
+                    long clean window of successful responses.
+                  properties:
+                    seed:
+                      type: integer
+                      minimum: 1
+                      maximum: 1024
+                      description: 'Starting concurrency on cold start.'
+                    max:
+                      type: integer
+                      minimum: 1
+                      maximum: 1024
+                      description: 'Hard ceiling the AIMD tuner will not cross.'
+                minSafe:
+                  type: integer
+                  minimum: 1
+                  maximum: 1024
+                  description: |
+                    Optional hard floor — the AIMD tuner never reduces
+                    the live cap below this. Useful for cloud APIs with
+                    known concurrency budgets (e.g. Bedrock per-key)
+                    where halving on a transient 429 would over-correct.
+            status:
+              type: object
+              description: |
+                Status subresource. The LLM gateway writes these
+                fields as the AIMD self-tuner converges. The
+                operator's admission reconciler reads them to queue
+                against the actual capacity, not the static seed.
+              properties:
+                observedInFlight:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Gateway-reported live cap (post-AIMD). The
+                    operator's admission reconciler queues against
+                    this, falling back to `spec.inFlight.seed` when
+                    absent.
+                lastSampledAt:
+                  type: string
+                  format: date-time
+                  description: 'RFC 3339 timestamp of the most recent gateway sample.'
+                recentErrorRate:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: 'Rolling error rate over the gateway recent window (0..1).'
+      additionalPrinterColumns:
+        - name: Model
+          type: string
+          jsonPath: .spec.model
+        - name: BackendKind
+          type: string
+          jsonPath: .spec.backendKind
+        - name: ObservedInFlight
+          type: integer
+          jsonPath: .status.observedInFlight
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

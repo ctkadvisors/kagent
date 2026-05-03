@@ -68,5 +68,10 @@ export type {
   AggregatePhase,
   ArtifactRef,
   ChildRef,
+  ModelEndpoint,
+  ModelEndpointBackendKind,
+  ModelEndpointInFlight,
+  ModelEndpointSpec,
+  ModelEndpointStatus,
 } from './crds.js';
-export { API_GROUP, API_GROUP_VERSION, API_VERSION } from './crds.js';
+export { API_GROUP, API_GROUP_VERSION, API_VERSION, isModelEndpoint } from './crds.js';
