@@ -121,27 +121,45 @@ export function computeCapacity(endpoint: ModelEndpoint): number {
 }
 
 /**
- * Count currently un-suspended Jobs whose decoded model matches `model`.
- * Suspended Jobs (waiting for capacity) do NOT count — only live
- * Jobs hold a capacity slot.
+ * A Job has reached a terminal state when its status reports
+ * succeeded>0 OR failed>0. Terminal Jobs do NOT hold capacity slots
+ * even though they're still un-suspended — Kubernetes leaves Jobs
+ * around for inspection / TTL cleanup but they're not running.
+ *
+ * Without this check the reconciler would count completed Jobs as
+ * live forever, refusing to admit anything new until the Job's
+ * owner deletes it (or TTL fires).
+ */
+function isTerminalJob(job: V1Job): boolean {
+  const succeeded = job.status?.succeeded ?? 0;
+  const failed = job.status?.failed ?? 0;
+  return succeeded > 0 || failed > 0;
+}
+
+/**
+ * Count currently live Jobs whose decoded model matches `model`.
+ * "Live" means: NOT suspended AND NOT terminal (succeeded/failed).
+ * Only live Jobs hold a capacity slot.
  */
 export function countInFlightByModel(jobs: readonly V1Job[], model: string): number {
   let n = 0;
   for (const job of jobs) {
     if (job.spec?.suspend === true) continue;
+    if (isTerminalJob(job)) continue;
     if (extractModelFromJob(job) === model) n++;
   }
   return n;
 }
 
 /**
- * Count currently un-suspended Jobs labeled with the Agent name. Used
- * for the per-Agent cap. Suspended Jobs don't count.
+ * Count currently live Jobs labeled with the Agent name. Used
+ * for the per-Agent cap. Suspended + terminal Jobs don't count.
  */
 export function countInFlightByAgent(jobs: readonly V1Job[], agentName: string): number {
   let n = 0;
   for (const job of jobs) {
     if (job.spec?.suspend === true) continue;
+    if (isTerminalJob(job)) continue;
     if (job.metadata?.labels?.[AGENT_LABEL] === agentName) n++;
   }
   return n;
@@ -201,10 +219,13 @@ export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[
   const { suspendedJobs, runningJobs, modelEndpoints, agentMaxInFlight } = input;
 
   // Initialize live counters from currently-running Jobs.
+  // Skip terminal Jobs — Kubernetes leaves succeeded/failed Jobs
+  // around for inspection but they don't hold capacity.
   const liveByModel = new Map<string, number>();
   const liveByAgent = new Map<string, number>();
   for (const job of runningJobs) {
     if (job.spec?.suspend === true) continue;
+    if (isTerminalJob(job)) continue;
     const model = extractModelFromJob(job);
     if (model !== undefined) {
       liveByModel.set(model, (liveByModel.get(model) ?? 0) + 1);
