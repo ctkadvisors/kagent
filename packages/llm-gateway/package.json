@@ -1,0 +1,37 @@
+{
+  "name": "@kagent/llm-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OpenAI-compatible HTTP gateway fronting multiple LLM backends with per-(model,backend) AIMD-tuned in-flight admission control. Adapted from archived/ai-gateway; AWS Lambda/CDK/DynamoDB surface dropped, runs as a long-running Node 22 http server in a Pod. BYO Postgres via DATABASE_URL.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "start": "node --import tsx/esm src/main.ts",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src",
+    "migrations"
+  ],
+  "dependencies": {
+    "@kubernetes/client-node": "1.4.0",
+    "pg": "8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.11.10",
+    "tsx": "4.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
