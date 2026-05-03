@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+
+# CI values overlay — exercises the BYO Postgres deployment path. The
+# deployer points `dsnSecretRef` at a Secret they provisioned out-of-band
+# (e.g. via kubectl create secret holding the RDS / Cloud SQL DSN).
+# Asserts: NO Bitnami postgresql resources rendered; gateway env
+# DATABASE_URL sourced from the external Secret.
+
+enabled: true
+
+database:
+  bundled: false
+  dsnSecretRef:
+    name: external-pg
+    key: dsn
+
+adminApiToken:
+  secretName: llm-gateway-token
+  secretKey: token

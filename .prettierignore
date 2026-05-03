@@ -22,3 +22,10 @@ LICENSE
 # remain prettier-managed; only templates/ is exempt.
 packages/operator/charts/*/templates/
 packages/operator/charts/*/templates/**
+packages/llm-gateway/charts/*/templates/
+packages/llm-gateway/charts/*/templates/**
+
+# Vendored Helm sub-chart tarballs + Chart.lock — managed by `helm
+# dependency update`, not by hand. Don't reformat the locked digests.
+packages/llm-gateway/charts/*/charts/
+packages/llm-gateway/charts/*/Chart.lock

@@ -1,0 +1,44 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+*/}}
+{{- if not .Values.enabled }}
+llm-gateway sub-chart is DISABLED (`enabled: false`). No resources rendered.
+{{- else }}
+llm-gateway {{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }}) installed.
+
+In-cluster gateway URL:
+  http://{{ include "llm-gateway.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+Database mode: {{ if .Values.database.bundled }}BUNDLED (Bitnami postgresql sub-chart){{ else }}BYO (external DSN){{ end }}
+DSN Secret:    {{ include "llm-gateway.dsnSecretName" . }} (key: {{ include "llm-gateway.dsnSecretKey" . }})
+
+{{- if .Values.database.bundled }}
+
+Bundled Postgres Service:
+  {{ include "llm-gateway.bundledPostgres.host" . }}:5432
+
+The Bitnami postgresql sub-chart auto-generated the user password into
+its own Secret on first install; this chart wires it into the
+{{ include "llm-gateway.dsnSecretName" . }} Secret as a libpq DSN
+that the gateway and migration Job both read.
+{{- end }}
+
+{{- if .Values.migrations.enabled }}
+
+Migrations run as a post-install/post-upgrade Helm hook against the DSN
+above. Inspect the most recent run:
+
+  kubectl --namespace {{ .Release.Namespace }} \
+    get jobs -l app.kubernetes.io/component=migrations \
+    -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- end }}
+
+Operator-side wiring lives in the kagent-operator chart. To point
+spawned agent-pods at this gateway, set on the operator chart:
+
+  agentPod:
+    litellmBaseUrl: 'http://{{ include "llm-gateway.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/v1'
+
+(Or, once Wave 2 ships, the dedicated `llmGateway.enabled=true` toggle.)
+{{- end }}

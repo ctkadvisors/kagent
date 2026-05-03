@@ -1,0 +1,134 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+LLM Gateway Deployment. Single replica in v1 — the in-flight counter
+is in-memory per Pod, so multi-replica needs Redis or a leader-election
+pattern (deferred per spec §6).
+
+Mounts the DSN Secret as env (`DATABASE_URL`) and the admin API token
+Secret as env (`ADMIN_API_TOKEN`). Both Secrets must exist in the
+release namespace before install — see README.
+
+WS-A pod + container security baseline mirrors the operator chart:
+non-root, drop ALL caps, readOnlyRootFilesystem, seccomp RuntimeDefault.
+A `/tmp` emptyDir is provided for transient files (npm cache, libpq
+SSL handshake scratch).
+*/}}
+{{- if .Values.enabled -}}
+{{- include "llm-gateway.validateValues" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Recreate (not RollingUpdate) — same rationale as the operator chart:
+  # the in-flight counter is in-memory, so even a brief overlap of two
+  # Pods would split the cap and let through over-budget concurrency.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "llm-gateway.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: gateway
+          image: {{ include "llm-gateway.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: 'production'
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            # Database connection — single libpq DSN. Sourced from
+            # whichever Secret database.dsnSecretRef points at (BYO mode)
+            # or the chart-auto-generated Secret pointing at the bundled
+            # Postgres (bundled mode). Either way the env var name is
+            # the same; the gateway code treats this as opaque.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.dsnSecretName" . | quote }}
+                  key: {{ include "llm-gateway.dsnSecretKey" . | quote }}
+            # Admin API bearer token — required when enabled=true. The
+            # chart fails install without a Secret reference (no
+            # plaintext fallback; security baseline).
+            {{- if .Values.adminApiToken.secretName }}
+            - name: ADMIN_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.adminApiToken.secretName | quote }}
+                  key: {{ .Values.adminApiToken.secretKey | quote }}
+            {{- end }}
+            # Kagent integration — the gateway uses these to namespace
+            # CR watches and to label its OTEL spans.
+            - name: KAGENT_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+apiVersion: v2
+name: llm-gateway
+description: |
+  Optional kagent LLM Gateway sub-chart. Deploys a generic
+  OpenAI-compatible HTTP service in `kagent-system` that fronts the
+  in-cluster LLM backends (Ollama, Cloudflare AI Gateway, OpenRouter,
+  Bedrock, OpenAI, Anthropic, LocalAI, Groq, Exo). Reads
+  `ModelEndpoint` CRs (kagent.knuteson.io/v1alpha1) for per-model
+  in-flight caps and writes back the AIMD-tuned `observedInFlight`.
+
+  See docs/superpowers/specs/2026-05-03-llm-gateway-bundle-design.md.
+type: application
+version: 0.1.0
+appVersion: '0.1.0'
+home: https://github.com/ctkadvisors/kagent
+sources:
+  - https://github.com/ctkadvisors/kagent
+maintainers:
+  - name: Chris Knuteson
+    email: chris@ctkadvisors.net
+keywords:
+  - kagent
+  - llm
+  - gateway
+  - openai-compat
+  - rate-limit
+dependencies:
+  # Optional bundled Postgres for the gateway's API-key + usage tables.
+  # Pulled in only when `database.bundled=true`. Pinned to a Bitnami
+  # 16.x chart line because it tracks Postgres 17.x via appVersion and
+  # exposes the auth.* / primary.persistence.* surface this chart maps
+  # `database.bundledConfig.*` onto. See spec §3.7 — bundled is opt-in
+  # convenience for homelab; cloud deployers point `dsnSecretRef` at
+  # managed Postgres (RDS / Cloud SQL / Aurora / Neon / Supabase) and
+  # this dependency stays inert.
+  - name: postgresql
+    version: '16.7.27'
+    repository: oci://registry-1.docker.io/bitnamicharts
+    condition: database.bundled
+    alias: bundled-postgres

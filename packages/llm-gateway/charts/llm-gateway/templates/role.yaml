@@ -1,0 +1,53 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Role for the gateway's K8s API access. Per spec §3.3 the gateway reads
+ModelEndpoint CRs (cap definitions, backend kind, AIMD bounds) and
+writes back the AIMD-tuned `observedInFlight` to the /status
+subresource. Scope is the release namespace (kagent-system) — the
+ModelEndpoint CRs are expected to live alongside the gateway.
+
+The CRD itself is owned by Wave 1B
+(packages/operator/charts/kagent-operator/crds/modelendpoint.yaml) —
+this Role assumes that CRD is registered. If it isn't yet, the gateway
+will get permission errors at startup; the gateway code must tolerate
+the CRD being absent (treat as "no caps" → degrade to passthrough)
+until the operator chart ships the CRD.
+*/}}
+{{- if and .Values.enabled .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "llm-gateway.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+rules:
+  # Read ModelEndpoint specs (cap definitions, backend URL, AIMD bounds).
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['modelendpoints']
+    verbs: ['get', 'list', 'watch']
+  # Write back AIMD-tuned `observedInFlight` to /status. The operator's
+  # admission reconciler reads this so it queues against the *actual*
+  # converged cap, not the static seed.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['modelendpoints/status']
+    verbs: ['get', 'patch', 'update']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "llm-gateway.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "llm-gateway.serviceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llm-gateway.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
