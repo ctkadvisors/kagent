@@ -3,7 +3,14 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-export { API_GROUP, API_VERSION, API_GROUP_VERSION, isAgent, isAgentTask } from './types.js';
+export {
+  API_GROUP,
+  API_VERSION,
+  API_GROUP_VERSION,
+  isAgent,
+  isAgentTask,
+  isModelEndpoint,
+} from './types.js';
 export type {
   Agent,
   AgentSpec,
@@ -15,6 +22,11 @@ export type {
   AgentTaskRunConfig,
   AgentCapability,
   AgentCapabilitySpec,
+  ModelEndpoint,
+  ModelEndpointSpec,
+  ModelEndpointStatus,
+  ModelEndpointInFlight,
+  ModelEndpointBackendKind,
 } from './types.js';
 
 export {

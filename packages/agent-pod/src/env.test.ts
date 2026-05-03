@@ -95,6 +95,24 @@ describe('parseEnv', () => {
     );
   });
 
+  describe('AgentSpec.maxInFlightTasks (LLM-gateway opt-in fairness cap)', () => {
+    it('round-trips a numeric maxInFlightTasks through KAGENT_AGENT_SPEC', () => {
+      const cfg = parseEnv({
+        ...baseEnv,
+        KAGENT_AGENT_SPEC: JSON.stringify({
+          model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          maxInFlightTasks: 5,
+        }),
+      });
+      expect(cfg.agentSpec.maxInFlightTasks).toBe(5);
+    });
+
+    it('leaves maxInFlightTasks undefined when unset (= unlimited at admission layer)', () => {
+      const cfg = parseEnv(baseEnv);
+      expect(cfg.agentSpec.maxInFlightTasks).toBeUndefined();
+    });
+  });
+
   describe('KAGENT_TRACE_CONTENT_MODE', () => {
     it('defaults to preview when unset', () => {
       expect(parseEnv(baseEnv).traceContentMode).toBe('preview');

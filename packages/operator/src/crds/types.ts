@@ -95,6 +95,23 @@ export interface AgentSpec {
     readonly maxTokens?: number;
     readonly stopSequences?: readonly string[];
   };
+
+  /**
+   * Opt-in per-Agent fairness cap (LLM-gateway bundle, spec §3.4).
+   * Upper bound on the number of Jobs the operator's admission
+   * reconciler will leave un-suspended at any given moment whose
+   * `kagent.knuteson.io/agent=<name>` label matches this Agent.
+   *
+   * Absent / undefined = unlimited at this layer; the per-(model,
+   * backend) cap declared on the matching `ModelEndpoint` is the only
+   * gate when this field is unset. Set this when one Agent is hot
+   * enough to monopolize a backend's capacity and you want to leave
+   * headroom for others.
+   *
+   * Range 1..1024. Counted by direct in-flight Jobs only; queued /
+   * suspended Jobs do not count against the cap.
+   */
+  readonly maxInFlightTasks?: number;
 }
 
 export interface Agent {
@@ -373,6 +390,92 @@ export interface AgentTemplate {
 }
 
 /* =====================================================================
+ * ModelEndpoint — declares the per-(model, backend) concurrency cap.
+ *
+ * Source of truth for both the operator's admission reconciler (spec —
+ * what to queue against) and the LLM gateway's AIMD self-tuner (status —
+ * live observed in-flight). Same CR; the gateway uses the `status`
+ * subresource so spec writes from GitOps and status writes from the
+ * gateway never race. See docs/superpowers/specs/2026-05-03-llm-gateway-
+ * bundle-design.md §3.3 for the full design + YAML example.
+ * ===================================================================== */
+
+/**
+ * Backend kind drives which signal-reader the gateway uses (e.g.
+ * Ollama `/api/ps` vs. Cloudflare `x-ratelimit-*` headers vs. backend-
+ * specific 429 shapes). Kept as a string-union so adding a backend is
+ * a CRD bump rather than a code change in the operator.
+ */
+export type ModelEndpointBackendKind =
+  | 'ollama'
+  | 'cloudflare'
+  | 'openrouter'
+  | 'bedrock'
+  | 'openai'
+  | 'anthropic'
+  | 'localai'
+  | 'groq'
+  | 'exo';
+
+/**
+ * AIMD bounds. `seed` is the starting concurrency the gateway uses on
+ * cold start; `max` is the ceiling the AIMD self-tuner will not cross
+ * even after a long clean-window of successful responses.
+ */
+export interface ModelEndpointInFlight {
+  readonly seed: number;
+  readonly max: number;
+}
+
+export interface ModelEndpointSpec {
+  /**
+   * Model identifier as it appears in `Agent.spec.model` (full
+   * LiteLLM-style id WITH provider prefix, per CLAUDE.md).
+   */
+  readonly model: string;
+  /** Backend kind — drives the gateway's signal-reader. */
+  readonly backendKind: ModelEndpointBackendKind;
+  /**
+   * Backend address. Provider-agnostic at the kagent layer; the
+   * gateway resolves it according to `backendKind`.
+   */
+  readonly backendUrl: string;
+  /** AIMD bounds: starting + ceiling concurrency. */
+  readonly inFlight: ModelEndpointInFlight;
+  /**
+   * Optional hard floor — the AIMD tuner never reduces the live cap
+   * below this. Useful for cloud APIs with known concurrency budgets
+   * (e.g. Bedrock per-key) where halving on a transient 429 would
+   * over-correct.
+   */
+  readonly minSafe?: number;
+}
+
+/**
+ * Status subresource. Written by the LLM gateway as it converges its
+ * AIMD self-tuner on the actual in-flight ceiling the backend
+ * sustains. The operator's admission reconciler reads this so it
+ * always queues against the *actual* capacity, not the static
+ * `spec.inFlight.seed`.
+ */
+export interface ModelEndpointStatus {
+  /** Gateway-reported live cap (post-AIMD). */
+  readonly observedInFlight?: number;
+  /** RFC 3339 timestamp of the most recent gateway sample. */
+  readonly lastSampledAt?: string;
+  /** Rolling error rate over the gateway's recent window (0..1). */
+  readonly recentErrorRate?: number;
+}
+
+export interface ModelEndpoint {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'ModelEndpoint';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: ModelEndpointSpec;
+  readonly status?: ModelEndpointStatus;
+}
+
+/* =====================================================================
  * Type guards — runtime-checkable shapes used by the watch handler when
  * the API server hands back `unknown`-typed CR objects.
  * ===================================================================== */
@@ -394,5 +497,27 @@ export function isAgent(obj: unknown): obj is Agent {
   const spec = o.spec as { model?: unknown } | null;
   if (typeof spec !== 'object' || spec === null) return false;
   if (typeof spec.model !== 'string' || spec.model.length === 0) return false;
+  return true;
+}
+
+export function isModelEndpoint(obj: unknown): obj is ModelEndpoint {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
+  if (o.apiVersion !== API_GROUP_VERSION) return false;
+  if (o.kind !== 'ModelEndpoint') return false;
+  const spec = o.spec as {
+    model?: unknown;
+    backendKind?: unknown;
+    backendUrl?: unknown;
+    inFlight?: unknown;
+  } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  if (typeof spec.model !== 'string' || spec.model.length === 0) return false;
+  if (typeof spec.backendKind !== 'string' || spec.backendKind.length === 0) return false;
+  if (typeof spec.backendUrl !== 'string' || spec.backendUrl.length === 0) return false;
+  const inFlight = spec.inFlight as { seed?: unknown; max?: unknown } | null;
+  if (typeof inFlight !== 'object' || inFlight === null) return false;
+  if (typeof inFlight.seed !== 'number') return false;
+  if (typeof inFlight.max !== 'number') return false;
   return true;
 }
