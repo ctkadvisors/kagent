@@ -62,6 +62,14 @@ interface PerKeyState {
   latencies: number[];
   /** Timestamp the current "clean" window opened (ms epoch). */
   windowStartedAt: number;
+  /**
+   * False until the first explicit `updateBounds` call. Lets us
+   * distinguish a freshly-ensured entry (cap === controller default
+   * seed) from a long-running one whose cap reflects observed
+   * traffic. The first updateBounds reseeds cap to the per-endpoint
+   * spec.seed; subsequent calls only re-clamp to the new max/minSafe.
+   */
+  seededFromEndpoint: boolean;
 }
 
 const DEFAULT_CLEAN_WINDOW_MS = 60_000;
@@ -84,10 +92,21 @@ export class AimdController {
     this.clock = opts.clock ?? ((): number => Date.now());
   }
 
-  /** Replace the per-key bounds (e.g. after a ModelEndpoint update event). */
+  /**
+   * Replace the per-key bounds (called by the router on every request
+   * with the latest CR observation). On the first call for a key, the
+   * cap is reseeded to `bounds.seed` so a fresh model starts at its
+   * spec-configured seed rather than the controller's default. On
+   * subsequent calls, only re-clamp to the new max/minSafe — preserves
+   * the AIMD-tuned cap across CR re-writes that don't change bounds.
+   */
   updateBounds(model: string, endpoint: string, bounds: AimdBounds): void {
     const state = this.ensure(model, endpoint);
     state.bounds = bounds;
+    if (!state.seededFromEndpoint) {
+      state.cap = bounds.seed;
+      state.seededFromEndpoint = true;
+    }
     if (state.cap > bounds.max) state.cap = bounds.max;
     if (state.cap < bounds.minSafe) state.cap = bounds.minSafe;
   }
@@ -170,6 +189,7 @@ export class AimdController {
         bounds: { ...this.defaults },
         latencies: [],
         windowStartedAt: this.clock(),
+        seededFromEndpoint: false,
       };
       this.map.set(key, state);
     }
