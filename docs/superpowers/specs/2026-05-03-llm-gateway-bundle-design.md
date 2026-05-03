@@ -81,7 +81,8 @@ The `archived/ai-gateway` project already implements ~80% of what we need — Op
 | `ModelEndpoint` CRD | NEW | `packages/operator/charts/kagent-operator/crds/modelendpoint.yaml` |
 | Operator admission reconciler | NEW | `packages/operator/src/admission.ts` |
 | `Agent.spec.maxInFlightTasks` field | NEW (additive) | CRD + dto + operator types |
-| Postgres dependency | NEW (in-cluster, sub-chart) | bundled when gateway enabled |
+| Postgres connection (BYO) | NEW — DSN from Secret reference | `gateway.database.dsnSecretRef: { name, key }` Helm value (required when gateway enabled) |
+| Postgres deployment (optional, opinionated default for homelab) | NEW (sub-chart, off by default for cloud-deployers) | `gateway.database.bundled: true \| false` — see §3.7 |
 | Existing `litellmBaseUrl` operator value | Renamed to `llmEndpointBaseUrl` | backward-compat alias kept for one minor |
 
 ### 3.2 Data flow
@@ -162,7 +163,45 @@ The gateway publishes `current_cap` back to `ModelEndpoint.status.observedInFlig
 | GET | `/healthz` | Liveness | Yes |
 | GET | `/readyz` | Readiness (Postgres reachable) | NEW (~20 LoC) |
 
-Authorizer + tenant logic from the existing project drops in unchanged (Postgres-backed in our deploy).
+Authorizer + tenant logic from the existing project drops in unchanged. The data layer reads from a Postgres DSN — provided externally (see §3.7); the gateway never instantiates its own DB.
+
+### 3.7 Database — BYO via DSN, optional bundled deploy
+
+The gateway needs a Postgres for two things: (1) API keys + tenant config, (2) usage rows. It does **NOT** care where that Postgres lives. The Helm chart exposes:
+
+```yaml
+gateway:
+  database:
+    # REQUIRED: where to find the DSN. The Secret must contain a libpq-style
+    # connection string (postgres://user:pass@host:port/db?sslmode=require).
+    dsnSecretRef:
+      name: kagent-llm-gateway-db
+      key: dsn
+    # OPTIONAL: when true, deploy an in-cluster Postgres StatefulSet + PVC
+    # AND auto-create the kagent-llm-gateway-db Secret pointing at it.
+    # Default: false (cloud-deployers should point at RDS / Cloud SQL /
+    # Aurora / Neon / Supabase / whatever managed Postgres they prefer).
+    bundled: false
+    # When bundled=true, these knobs configure the in-cluster Postgres.
+    # When bundled=false, they are ignored.
+    bundledConfig:
+      storageClass: longhorn   # PVC storage class
+      storageSize: 10Gi
+      version: '16'            # postgres image tag
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits:   { cpu: 500m, memory: 512Mi }
+```
+
+**Why this shape:**
+
+- **Cloud-portable.** AWS deployer points `dsnSecretRef` at a Secret holding their RDS DSN. GCP at Cloud SQL. Vercel-style at Neon/Supabase. Homelab at the bundled in-cluster Pod. Same code, same chart, three operational stories.
+- **Bundled is opt-in convenience for homelab.** When `bundled: true`, the chart adds a small Postgres StatefulSet + PVC + auto-generated DSN Secret. The bundled Postgres uses the [Bitnami chart pattern](https://github.com/bitnami/charts/tree/main/bitnami/postgresql) as a sub-dependency to avoid hand-rolling StatefulSet + init scripts; we set sensible defaults but expose `bundledConfig` for tuning.
+- **Migrations** (`migrations/` from the archived project) run as a Helm post-install/post-upgrade Job that reads the same DSN Secret. Works against bundled OR external Postgres identically.
+- **Connection pooling.** Single gateway replica → ≤10 connections; we don't ship PgBouncer in v1. When the gateway scales horizontally (deferred per §6), a PgBouncer sub-chart joins the same `bundled` switch.
+- **Schema migration safety.** The migration Job idempotency is on the `archived/ai-gateway` migration runner (it tracks applied versions in a `schema_migrations` table); upgrades are safe against either Postgres flavor.
+
+The kagent operator never touches Postgres — it talks only to the gateway's HTTP surface. Postgres is the gateway's private state.
 
 ---
 
@@ -188,7 +227,7 @@ Authorizer + tenant logic from the existing project drops in unchanged (Postgres
 ## 6. Decisions deferred (revisit only when evidence demands)
 
 - **Weighted fair-share scheduling across Agents.** v1 ships per-Agent hard cap (opt-in). When you have evidence one tenant is starving others, design the scheduler then.
-- **Postgres HA / multi-region.** Single Pod + PVC for v1. Backed up via existing K3s backup pattern.
+- **Bundled Postgres HA / multi-region.** When `gateway.database.bundled: true`, the in-cluster Postgres ships as a single StatefulSet replica + PVC. HA is the deployer's problem when they choose `bundled: false` and point at managed Postgres. We do not ship a clustered bundled option in v1.
 - **Gateway horizontal scaling.** Single replica for v1. The in-flight counter is in-memory, so HPA would need either Redis or a leader-election pattern. Defer until throughput proves we need it.
 - **Per-API-key tenant isolation in the kagent context.** Kagent gets one API key minted at deploy time. Multi-tenant kagent (different teams sharing a cluster) is a v0.2 design.
 - **Bedrock Guardrails / PII filtering.** Already on the `archived/ai-gateway` deferred list. Defer.
@@ -202,7 +241,7 @@ Authorizer + tenant logic from the existing project drops in unchanged (Postgres
 | `archived/ai-gateway` code is stale (not maintained since archive) | Treat as one-time import; vendored copy lives under `packages/llm-gateway/`, no upstream tracking after fork. The MIT license permits this. |
 | Existing homelab gateway has consumers we don't know about | **Audited 2026-05-03 — zero references.** It's dead-letter from a prior epoch where Jetson1 was in-cluster Ollama; Chris went bare-metal and never cleaned up. Removal is just deleting the Argo Application. |
 | In-memory in-flight counter loses state on Pod restart | AIMD reconverges in ~10 min. For v1, acceptable. Document the behavior. |
-| Postgres adds an in-cluster dependency that wasn't there before | Bundled as sub-chart, optional via `llmGateway.enabled=false`. Existing direct-backend path remains the default. |
+| Postgres adds an in-cluster dependency that wasn't there before | **Two-axis opt-out.** (1) Whole gateway optional via `llmGateway.enabled=false` — direct-backend path remains default. (2) When the gateway IS enabled, Postgres deployment shape is BYO: `gateway.database.bundled: false` (the cloud default) means deployers point at RDS / Cloud SQL / Aurora / Neon / Supabase via Secret-ref; `bundled: true` is opt-in convenience for homelab. Gateway never assumes which. |
 | Gateway becomes single point of failure | Single replica is intentional v1 trade-off; HA path documented in §6. |
 | Operator admission reconciler races (un-suspends 2 Jobs targeting last capacity slot) | Use K8s optimistic concurrency on Job patch; second un-suspend gets 409, reconciler re-queues. Same pattern WS-I uses. |
 
@@ -218,13 +257,18 @@ Authorizer + tenant logic from the existing project drops in unchanged (Postgres
 ## 9. Acceptance
 
 - [ ] `pnpm install && pnpm test` green for the new package.
-- [ ] `helm template kagent-operator --set llmGateway.enabled=true` renders cleanly with the sub-chart's CRDs + Postgres + gateway Deployment.
+- [ ] `helm template kagent-operator --set llmGateway.enabled=true --set llmGateway.database.bundled=true` renders cleanly with sub-chart CRDs + bundled Postgres StatefulSet + gateway Deployment + auto-generated DSN Secret.
+- [ ] `helm template kagent-operator --set llmGateway.enabled=true --set llmGateway.database.bundled=false --set llmGateway.database.dsnSecretRef.name=external-pg --set llmGateway.database.dsnSecretRef.key=dsn` renders cleanly WITHOUT bundled Postgres — gateway Deployment references the external Secret. Proves the BYO path.
 - [ ] Operator with `llmGateway.enabled=false` (default) preserves today's direct-backend behavior — no regression for the `homelab-orchestrator` migration plan.
-- [ ] Demo on the live cluster: 4 concurrent AgentTasks against `nemotron-jetson` (cap=2) → 2 Jobs un-suspended, 2 stay suspended, jobs roll through as capacity frees, all complete.
+- [ ] Demo on the live cluster (homelab, bundled Postgres): 4 concurrent AgentTasks against `nemotron-jetson` (cap=2) → 2 Jobs un-suspended, 2 stay suspended, jobs roll through as capacity frees, all complete.
 - [ ] Workbench TaskDetail shows `Pending — queued for capacity` state when an AgentTask is admission-blocked (≤ a one-line UI tweak).
 
 ## 10. Open questions
 
-- **Q1.** Do we want the gateway's admin UI bundled, or skip it for v1? It's a working Next.js app from the archived project but adds Node + Postgres consumers. **Lean: skip for v1, add as `llmGatewayAdmin.enabled=true` in v0.2.**
-- **Q2.** Where does the `kagent-gateway-api-key` secret live? Operator-namespace `Secret`, mounted by every spawned Job? **Lean: yes, same pattern as `KAGENT_LITELLM_API_KEY` today.**
-- **Q3.** Naming. The package is `@kagent/llm-gateway`; the deployable Service is `kagent-llm-gateway`. The existing homelab Service is `ai-gateway-router` in `ai-services` ns. **Plan:** deploy the new one in `kagent-system` (clean namespacing, no collision); after the new gateway is green and the kagent demo agents are pointed at it, delete the dead-letter `ai-services/ai-gateway*` resources via GitOps cleanup (one PR removing the Argo Application + kustomization entry). The two never coexist as live consumers — dead-letter just has stale pods burning ~150MB RAM until the cleanup PR lands.
+- **Q1.** Naming. The package is `@kagent/llm-gateway`; the deployable Service is `kagent-llm-gateway`. The existing homelab Service is `ai-gateway-router` in `ai-services` ns. **Plan:** deploy the new one in `kagent-system` (clean namespacing, no collision); after the new gateway is green and the kagent demo agents are pointed at it, delete the dead-letter `ai-services/ai-gateway*` resources via GitOps cleanup (one PR removing the Argo Application + kustomization entry). The two never coexist as live consumers — dead-letter just has stale pods burning ~150MB RAM until the cleanup PR lands.
+
+## 11. Decisions made (resolved during brainstorming)
+
+- **Admin UI:** skip for v1, add as `llmGatewayAdmin.enabled=true` in v0.2.
+- **API key Secret:** lives in `kagent-system` ns, mounted by every spawned Job — same pattern as today's `KAGENT_LITELLM_API_KEY`.
+- **Postgres deployment:** BYO via `gateway.database.dsnSecretRef`; bundled in-cluster Postgres is opt-in via `gateway.database.bundled: true` (default `false`). Cloud deployers point at RDS / Cloud SQL / Aurora / Neon / Supabase. See §3.7.
