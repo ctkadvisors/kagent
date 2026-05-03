@@ -15,16 +15,33 @@
 import {
   CoreV1Api,
   type CoreV1Event,
+  type Informer,
+  type KubernetesListObject,
+  type ObjectCache,
   type V1Job,
   type V1JobList,
   type V1Pod,
   type V1PodSecurityContext,
   type V1SecurityContext,
+  makeInformer,
 } from '@kubernetes/client-node';
 import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
+import {
+  buildAdmissionReconciler,
+  unsuspendJobApi,
+  type AdmissionReconciler,
+} from './admission.js';
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
-import type { AgentTask } from './crds/index.js';
+import {
+  API_GROUP,
+  API_VERSION,
+  isAgent,
+  isModelEndpoint,
+  type Agent,
+  type AgentTask,
+  type ModelEndpoint,
+} from './crds/index.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import type { BuildJobSpecOptions } from './job-spec.js';
@@ -248,6 +265,227 @@ function parseSecurityContextEnv<T>(varName: string, raw: string | undefined): T
     );
     return undefined;
   }
+}
+
+/**
+ * Wiring container for the LLM-gateway admission reconciler. Built
+ * lazily by `main()` only when KAGENT_ADMISSION_CONTROL_ENABLED=true
+ * — when disabled, none of these informers are started and the only
+ * surface area we add is one new ReconcileDeps field
+ * (`admissionControlEnabled: false`).
+ *
+ * Keeps three informers (Job + ModelEndpoint + Agent) plus the
+ * reconciler stitched together so `main()` can `start()` / `stop()`
+ * them as a unit.
+ */
+interface AdmissionWiring {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  /** Exposed for tests + diagnostic logging — not invoked by main(). */
+  reconciler: AdmissionReconciler;
+}
+
+interface BuildAdmissionWiringInput {
+  readonly kc: import('@kubernetes/client-node').KubeConfig;
+  readonly batchApi: import('@kubernetes/client-node').BatchV1Api;
+  readonly customApi: import('@kubernetes/client-node').CustomObjectsApi;
+  readonly watchNamespace: string | undefined;
+}
+
+/**
+ * Build the admission reconciler + its supporting informers. Caller
+ * (`main()`) gates on KAGENT_ADMISSION_CONTROL_ENABLED so this
+ * function never runs in the disabled path. All three informers
+ * share the same namespace scoping as the existing AgentTask /
+ * Job-Pod informers — when the operator runs cluster-wide
+ * (`KAGENT_WATCH_NAMESPACE` unset) so does admission control.
+ *
+ * Why split into a helper rather than inline in main():
+ *   - Keeps main() readable; the wiring touches three informers +
+ *     three event subscriptions + the reconciler factory call.
+ *   - Lets tests construct the same wiring against a fake KubeConfig
+ *     without booting the entire operator (future smoke test).
+ */
+function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring {
+  const { kc, batchApi, customApi, watchNamespace } = input;
+  const managedBySelector = 'kagent.knuteson.io/managed-by=kagent-operator';
+
+  // ---- Job informer (admission-cache flavor) -------------------------
+  // Watches only Jobs we manage (label-selected). The cache exposes
+  // .list(namespace?) which the reconciler reads on every tick.
+  const jobListFn = async (): Promise<KubernetesListObject<V1Job>> => {
+    const res =
+      watchNamespace !== undefined
+        ? await batchApi.listNamespacedJob({
+            namespace: watchNamespace,
+            labelSelector: managedBySelector,
+          })
+        : await batchApi.listJobForAllNamespaces({ labelSelector: managedBySelector });
+    return res;
+  };
+  const jobLabelQuery = `labelSelector=${encodeURIComponent(managedBySelector)}`;
+  const jobWatchPath =
+    watchNamespace !== undefined
+      ? `/apis/batch/v1/namespaces/${encodeURIComponent(watchNamespace)}/jobs?${jobLabelQuery}`
+      : `/apis/batch/v1/jobs?${jobLabelQuery}`;
+  const jobInformer: Informer<V1Job> & ObjectCache<V1Job> = makeInformer<V1Job>(
+    kc,
+    jobWatchPath,
+    jobListFn,
+  );
+
+  // ---- ModelEndpoint informer ---------------------------------------
+  const meListFn = async (): Promise<KubernetesListObject<ModelEndpoint>> => {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const res =
+      watchNamespace !== undefined
+        ? await customApi.listNamespacedCustomObject({
+            group: API_GROUP,
+            version: API_VERSION,
+            namespace: watchNamespace,
+            plural: 'modelendpoints',
+          })
+        : await customApi.listClusterCustomObject({
+            group: API_GROUP,
+            version: API_VERSION,
+            plural: 'modelendpoints',
+          });
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    return res as KubernetesListObject<ModelEndpoint>;
+  };
+  const meWatchPath =
+    watchNamespace !== undefined
+      ? `/apis/${API_GROUP}/${API_VERSION}/namespaces/${encodeURIComponent(watchNamespace)}/modelendpoints`
+      : `/apis/${API_GROUP}/${API_VERSION}/modelendpoints`;
+  const meInformer: Informer<ModelEndpoint> & ObjectCache<ModelEndpoint> =
+    makeInformer<ModelEndpoint>(kc, meWatchPath, meListFn);
+
+  // ---- Agent informer (per-Agent maxInFlightTasks lookup) -----------
+  const agentListFn = async (): Promise<KubernetesListObject<Agent>> => {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const res =
+      watchNamespace !== undefined
+        ? await customApi.listNamespacedCustomObject({
+            group: API_GROUP,
+            version: API_VERSION,
+            namespace: watchNamespace,
+            plural: 'agents',
+          })
+        : await customApi.listClusterCustomObject({
+            group: API_GROUP,
+            version: API_VERSION,
+            plural: 'agents',
+          });
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    return res as KubernetesListObject<Agent>;
+  };
+  const agentWatchPath =
+    watchNamespace !== undefined
+      ? `/apis/${API_GROUP}/${API_VERSION}/namespaces/${encodeURIComponent(watchNamespace)}/agents`
+      : `/apis/${API_GROUP}/${API_VERSION}/agents`;
+  const agentInformer: Informer<Agent> & ObjectCache<Agent> = makeInformer<Agent>(
+    kc,
+    agentWatchPath,
+    agentListFn,
+  );
+
+  // ---- Build the reconciler against the informer caches -------------
+  const reconciler = buildAdmissionReconciler({
+    enabled: true,
+    listJobs: (namespace) => {
+      // Informer cache is namespace-keyed; passing undefined returns
+      // the full cluster view. Reconciler does its own namespace
+      // partitioning by reading job.metadata.namespace.
+      return jobInformer.list(namespace);
+    },
+    listModelEndpoints: (namespace) => {
+      const items = meInformer.list(namespace);
+      // Defensive type-narrow — the apiserver validates schema, but
+      // the cache returns whatever it received.
+      return items.filter(isModelEndpoint);
+    },
+    lookupAgent: (namespace, name) => {
+      const agent = agentInformer.get(name, namespace);
+      return agent !== undefined && isAgent(agent) ? agent : undefined;
+    },
+    unsuspendJob: (namespace, name) => unsuspendJobApi(batchApi, namespace, name),
+  });
+
+  // ---- Subscribe events → re-evaluate ------------------------------
+  // Per spec §3.2 + the WS-I "watch-cache discipline" pattern: the
+  // reconciler is event-driven, NOT polled. Any add/update/delete on
+  // a managed Job (suspend flip, completion, deletion) AND any
+  // ModelEndpoint event (status.observedInFlight bump from the
+  // gateway, spec change from GitOps) re-runs the admission pass.
+  // Re-firing on every event is cheap when nothing has changed; the
+  // reconciler issues zero patches when no Job is admittable.
+  const fireOnJobEvent = (): void => {
+    void reconciler.onJobEvent().catch((err: unknown) => {
+      console.error('[kagent-operator] admission onJobEvent failed:', err);
+    });
+  };
+  const fireOnMeEvent = (): void => {
+    void reconciler.onModelEndpointEvent().catch((err: unknown) => {
+      console.error('[kagent-operator] admission onModelEndpointEvent failed:', err);
+    });
+  };
+
+  jobInformer.on('add', fireOnJobEvent);
+  jobInformer.on('update', fireOnJobEvent);
+  jobInformer.on('delete', fireOnJobEvent);
+  jobInformer.on('error', (err) => {
+    console.error('[kagent-operator] admission Job watch error:', err);
+    setTimeout(() => {
+      void jobInformer.start();
+    }, 5000);
+  });
+
+  meInformer.on('add', fireOnMeEvent);
+  meInformer.on('update', fireOnMeEvent);
+  meInformer.on('delete', fireOnMeEvent);
+  meInformer.on('error', (err) => {
+    console.error('[kagent-operator] admission ModelEndpoint watch error:', err);
+    setTimeout(() => {
+      void meInformer.start();
+    }, 5000);
+  });
+
+  // Agent informer is read-on-demand (lookupAgent); we don't need to
+  // re-evaluate on Agent events — the next Job or ModelEndpoint event
+  // will pick up the new cap. We DO still need the watch open so the
+  // cache stays warm.
+  agentInformer.on('error', (err) => {
+    console.error('[kagent-operator] admission Agent watch error:', err);
+    setTimeout(() => {
+      void agentInformer.start();
+    }, 5000);
+  });
+
+  return {
+    async start(): Promise<void> {
+      await jobInformer.start();
+      await meInformer.start();
+      await agentInformer.start();
+    },
+    async stop(): Promise<void> {
+      try {
+        await jobInformer.stop();
+      } catch (err) {
+        console.error('[kagent-operator] admission Job informer stop failed:', err);
+      }
+      try {
+        await meInformer.stop();
+      } catch (err) {
+        console.error('[kagent-operator] admission ModelEndpoint informer stop failed:', err);
+      }
+      try {
+        await agentInformer.stop();
+      } catch (err) {
+        console.error('[kagent-operator] admission Agent informer stop failed:', err);
+      }
+    },
+    reconciler,
+  };
 }
 
 /**
@@ -504,6 +742,15 @@ async function main(): Promise<void> {
     await coreApi.createNamespacedEvent({ namespace: parent.namespace, body: event });
   };
 
+  // LLM-gateway bundle (spec §3.2). When admission control is on, the
+  // dispatch path stops short of un-suspending the Job — the admission
+  // reconciler (built below) takes over the un-suspend decision based
+  // on per-(model, namespace) + per-Agent capacity. Default OFF for
+  // backwards compatibility with installs that don't deploy the LLM
+  // gateway sub-chart. The chart's `llmGateway.enabled=true` flips
+  // KAGENT_ADMISSION_CONTROL_ENABLED on this deployment.
+  const admissionControlEnabled = process.env.KAGENT_ADMISSION_CONTROL_ENABLED === 'true';
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
@@ -512,6 +759,7 @@ async function main(): Promise<void> {
     listChildrenForParent,
     getTaskByUid,
     emitCycleEvent,
+    admissionControlEnabled,
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
   };
   const handler = buildHandler(deps);
@@ -575,6 +823,31 @@ async function main(): Promise<void> {
     informerOpts,
   );
 
+  // LLM-gateway bundle (spec §3.2). When admission control is enabled
+  // we boot three additional informers (Job + ModelEndpoint + Agent),
+  // construct the admission reconciler, and wire event subscriptions.
+  // When disabled, none of the below runs — preserving today's
+  // dispatch path with zero new K8s watches.
+  //
+  // Why a separate Job informer (vs. reusing `jobPodInformer`):
+  //   - The existing one is private inside `createJobPodInformer`; it
+  //     doesn't expose the cache.list() we need for capacity counting.
+  //   - The two have different responsibilities — failure detection
+  //     vs. admission scheduling — and decoupling lets either be
+  //     restarted independently.
+  //   - Both use the same `managed-by` label selector so the watch
+  //     stream is identical. K8s watch is push, not pull, so an
+  //     "extra" informer is one extra HTTP/2 stream + memory-cached
+  //     copy of the same Jobs list — cheap.
+  const admissionWiring = admissionControlEnabled
+    ? buildAdmissionWiring({
+        kc,
+        batchApi,
+        customApi,
+        watchNamespace,
+      })
+    : undefined;
+
   // Graceful shutdown — stop the informer cleanly on SIGTERM/SIGINT
   // so K8s can drain the operator pod without orphaning the watch.
   const shutdown = async (signal: string): Promise<void> => {
@@ -588,6 +861,13 @@ async function main(): Promise<void> {
       await jobPodInformer.stop();
     } catch (err) {
       console.error('[kagent-operator] job/pod informer stop failed:', err);
+    }
+    if (admissionWiring !== undefined) {
+      try {
+        await admissionWiring.stop();
+      } catch (err) {
+        console.error('[kagent-operator] admission informer stop failed:', err);
+      }
     }
     if (onShutdownExtra !== undefined) {
       try {
@@ -605,6 +885,16 @@ async function main(): Promise<void> {
   console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
   await informer.start();
   await jobPodInformer.start();
+  if (admissionWiring !== undefined) {
+    await admissionWiring.start();
+    console.log(
+      `[kagent-operator] admission control ENABLED — Job + ModelEndpoint + Agent informers started`,
+    );
+  } else {
+    console.log(
+      '[kagent-operator] admission control disabled (set KAGENT_ADMISSION_CONTROL_ENABLED=true to enable)',
+    );
+  }
   console.log('[kagent-operator] informers started');
 
   // WS-M — boot the template-server when enabled. Default-OFF; the
