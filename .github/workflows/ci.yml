@@ -123,6 +123,8 @@ jobs:
             path: packages/operator/charts/kagent-operator
           - name: kagent-workbench
             path: packages/operator/charts/kagent-workbench
+          - name: kagent-llm-gateway
+            path: packages/llm-gateway/charts/llm-gateway
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -186,6 +188,9 @@ jobs:
           - name: workbench-ui
             image: ghcr.io/ctkadvisors/kagent-workbench-ui
             file: packages/workbench-ui/Dockerfile
+          - name: llm-gateway
+            image: ghcr.io/ctkadvisors/kagent-llm-gateway
+            file: packages/llm-gateway/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
