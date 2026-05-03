@@ -107,9 +107,16 @@ Validate values at template time. Two required gates, mirrored on
 all rendered manifests via {{ include "llm-gateway.validateValues" . }}.
 Helm's `fail` halts rendering with a clear message — much better UX
 than a downstream "secret not found" surfaced only at runtime.
+
+Gated on `.Values.enabled` so the disabled path stays a no-op (the
+operator chart can vendor this sub-chart with `enabled: false` and
+not be forced to satisfy the dsnSecretRef contract until a deployer
+opts in to the gateway).
 */}}
 {{- define "llm-gateway.validateValues" -}}
+{{- if .Values.enabled -}}
 {{- if and (not .Values.database.bundled) (not .Values.database.dsnSecretRef.name) -}}
 {{- fail "llm-gateway: database.dsnSecretRef.name is required when database.bundled is false (set dsnSecretRef to point at an existing Secret holding the libpq DSN, OR set database.bundled=true to use the in-cluster Postgres sub-chart)" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
