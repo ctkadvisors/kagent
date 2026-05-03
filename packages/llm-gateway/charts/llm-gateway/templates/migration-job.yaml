@@ -1,0 +1,84 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Migration Job — runs as a Helm post-install + post-upgrade hook so the
+gateway never starts against an unmigrated schema. Idempotent: the
+runner (archived/ai-gateway/migrations/) tracks applied versions in a
+`schema_migrations` table per spec §3.7.
+
+Hook delete policies:
+  - `before-hook-creation` — drop any leftover Job from a previous
+    upgrade (Helm doesn't garbage-collect hook resources by default).
+  - `hook-succeeded` — clean up the Job once it completes successfully.
+    Failed Jobs stay so you can `kubectl logs` them.
+
+The Job uses the same DSN Secret as the gateway Deployment (BYO or
+auto-generated) and runs as the gateway ServiceAccount (so it inherits
+the same WS-A baseline + the same network egress posture as the
+running Pod).
+*/}}
+{{- if and .Values.enabled .Values.migrations.enabled -}}
+{{- include "llm-gateway.validateValues" . -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "llm-gateway.fullname" . }}-migrations
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  # Bound the Job at 30 minutes — schema migrations should complete in
+  # seconds, not minutes; if it hangs there's a connectivity / lock
+  # issue and we want a clear failure rather than indefinite
+  # retry-loop.
+  activeDeadlineSeconds: 1800
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "llm-gateway.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "llm-gateway.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: migrate
+          image: {{ include "llm-gateway.migrations.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command:
+            {{- toYaml .Values.migrations.command | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          env:
+            - name: NODE_ENV
+              value: 'production'
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.dsnSecretName" . | quote }}
+                  key: {{ include "llm-gateway.dsnSecretKey" . | quote }}
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+{{- end }}

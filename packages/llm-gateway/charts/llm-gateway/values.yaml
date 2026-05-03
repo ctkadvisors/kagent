@@ -119,21 +119,35 @@ containerSecurityContext:
 # Log verbosity for the gateway. info|debug.
 logLevel: 'info'
 
-# Bitnami postgresql sub-chart values are scoped under
-# `bundled-postgres` (matches the Chart.yaml dependency alias). The
-# helper template `llm-gateway.bundled-postgres.host` reads
-# `bundled-postgres.fullnameOverride` (or builds one) when emitting
-# the auto-generated DSN Secret. Override here when you need to tune
-# the bundled Postgres beyond what `database.bundledConfig.*` exposes.
+# Bitnami postgresql sub-chart values — scoped under `bundled-postgres`
+# (matches the Chart.yaml dependency alias). Used only when
+# `database.bundled=true`.
+#
+# Password handling — IMPORTANT: this chart's `secret-bundled.yaml`
+# template auto-creates `<release>-llm-gateway-db`, which holds BOTH
+# the libpq DSN consumed by the gateway AND the raw `password` /
+# `postgres-password` keys Bitnami expects. To make Bitnami read from
+# that Secret (rather than generate its own and drift), pass the
+# release-templated name on install:
+#
+#   helm install <release> ./packages/llm-gateway/charts/llm-gateway/ \
+#     --set database.bundled=true \
+#     --set bundled-postgres.auth.existingSecret=<release>-llm-gateway-db
+#
+# The chart's NOTES.txt prints the exact name post-install. When
+# `existingSecret` is empty (the default below), Bitnami generates its
+# own password and the DSN Secret's password becomes stale on the
+# second upgrade — workable for first-install dev, but the override
+# above is the homelab-supported path.
 bundled-postgres:
-  # Match what the auto-generated DSN Secret expects. Helm wires the
-  # values from `database.bundledConfig.*` into these via templates,
-  # but the keys also live here so they're discoverable and
-  # overrideable from a single values overlay.
   auth:
     enablePostgresUser: false
     database: kagent_llm_gateway
     username: gateway
+    existingSecret: ''
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
   primary:
     persistence:
       enabled: true

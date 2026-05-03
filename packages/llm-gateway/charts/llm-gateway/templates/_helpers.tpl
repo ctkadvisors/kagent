@@ -67,13 +67,15 @@ in a separate image.
 {{- end -}}
 
 {{/*
-Bundled-postgres Service hostname. The Bitnami postgresql chart exposes its
-primary Service as `<release>-bundled-postgres-postgresql.<namespace>.svc...`
-when installed as a sub-chart with alias `bundled-postgres`. We mirror that
-naming so the auto-generated DSN Secret resolves cleanly.
+Bundled-postgres primary Service hostname. The Bitnami postgresql chart
+names its primary Service `<release>-<chart-or-alias>` when installed as
+a sub-chart — with alias `bundled-postgres` that resolves to
+`<release>-bundled-postgres.<namespace>.svc.cluster.local`. We mirror
+that naming so the auto-generated DSN Secret resolves cleanly without
+requiring the deployer to override `bundled-postgres.fullnameOverride`.
 */}}
 {{- define "llm-gateway.bundledPostgres.host" -}}
-{{- printf "%s-bundled-postgres-postgresql.%s.svc.cluster.local" .Release.Name .Release.Namespace -}}
+{{- printf "%s-bundled-postgres.%s.svc.cluster.local" .Release.Name .Release.Namespace -}}
 {{- end -}}
 
 {{/*

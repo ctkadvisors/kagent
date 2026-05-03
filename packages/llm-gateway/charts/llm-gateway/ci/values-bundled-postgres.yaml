@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+
+# CI values overlay — exercises the bundled Postgres deployment path.
+# The chart pulls in the Bitnami postgresql sub-chart AND auto-creates
+# the DSN Secret pointing at it. Asserts: bundled-postgres-postgresql
+# Service + StatefulSet rendered, migration Job rendered.
+
+enabled: true
+
+database:
+  bundled: true
+  bundledConfig:
+    storageClass: ''
+    storageSize: 10Gi
+    auth:
+      database: kagent_llm_gateway
+      username: gateway
+
+adminApiToken:
+  secretName: llm-gateway-token
+  secretKey: token
