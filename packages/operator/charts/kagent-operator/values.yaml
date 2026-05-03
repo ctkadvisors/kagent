@@ -239,6 +239,32 @@ agentPod:
     # execution.
     accessMode: 'ReadWriteMany'
 
+# LLM gateway integration (spec §3, §3.2 admission flow). Off by default
+# — kagent works without the gateway (agents talk to backends via
+# litellmBaseUrl as today). Set enabled=true to:
+#   1. Inject KAGENT_ADMISSION_CONTROL_ENABLED=true so the operator's
+#      admission reconciler suspends new Jobs on creation and un-suspends
+#      them based on per-(model, backend) capacity declared via
+#      ModelEndpoint CRs.
+#   2. Inject KAGENT_LLM_GATEWAY_BASE_URL into spawned agent-pods so they
+#      route LLM calls through the gateway instead of directly to the
+#      backend (the gateway then enforces its own AIMD-tuned cap as
+#      last-resort safety; see spec §3.5).
+# The gateway itself is a separate sub-chart at
+# packages/llm-gateway/charts/llm-gateway/ — install it independently
+# before flipping this on, OR depend on it via umbrella chart in v0.2.
+llmGateway:
+  enabled: false
+  # In-cluster Service URL of the gateway's /v1 endpoint. Default points
+  # at the gateway sub-chart's default Service in kagent-system.
+  baseUrl: 'http://kagent-llm-gateway.kagent-system.svc.cluster.local:4000/v1'
+  # Bearer token Secret the operator threads into spawned agent-pods so
+  # they can authenticate to the gateway. Mirrors the existing
+  # agentPod.litellmApiKey shape.
+  apiKey:
+    secretName: ''
+    secretKey: 'token'
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate
