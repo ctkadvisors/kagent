@@ -58,6 +58,16 @@ export interface AgentSpec {
   readonly allowedChildTemplates?: readonly string[];
   /** WS-K — direct-child concurrency cap. Default 10. */
   readonly maxConcurrentChildren?: number;
+  /**
+   * v0.1.4 — declarative LLM request-tuning knobs (temperature,
+   * maxTokens, stopSequences) threaded through to every chat() call.
+   * Unset fields = provider defaults.
+   */
+  readonly llmParams?: {
+    readonly temperature?: number;
+    readonly maxTokens?: number;
+    readonly stopSequences?: readonly string[];
+  };
 }
 
 export interface Agent {

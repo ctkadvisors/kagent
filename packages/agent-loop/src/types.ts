@@ -77,6 +77,19 @@ export interface AgentDefinition<TType extends string = string, TPhase extends s
   defaultToolset?: readonly string[];
   /** Optional system prompt (consumed by Phase 3+ executor; the loop ships none). */
   systemPrompt?: string;
+  /**
+   * Optional LLM request-tuning knobs threaded into every `chat()` call
+   * the executor makes for this agent. Maps 1:1 to the matching fields
+   * on `ChatRequest` — the executor spreads them in at request-build time.
+   * Defined as a forward-compat slot so consumers (kagent operator, etc.)
+   * can declare per-agent temperature / max output tokens / stop sequences
+   * declaratively. Unset fields fall through to the LLM provider's defaults.
+   */
+  llmParams?: {
+    readonly temperature?: number;
+    readonly maxTokens?: number;
+    readonly stopSequences?: readonly string[];
+  };
 }
 
 /** Result row from `listSuitable(phase, toolScope?)`. */

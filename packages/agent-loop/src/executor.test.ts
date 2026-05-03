@@ -562,6 +562,70 @@ describe('AgentExecutor — provider-trace-unaware (D-09 / SC2.6)', () => {
   });
 });
 
+describe('AgentExecutor — llmParams passthrough (v0.1.4)', () => {
+  it('threads agentDef.llmParams (temperature, maxTokens, stopSequences) into the LLM ChatRequest', async () => {
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [{ content: 'final' }],
+    });
+    const reg = new AgentRegistry<MyType, MyPhase>();
+    reg.register({
+      ...chatAgent,
+      llmParams: {
+        temperature: 0.3,
+        maxTokens: 1024,
+        stopSequences: ['<<END>>'],
+      },
+    });
+    const exec = new AgentExecutor({ registry: reg, llm });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(recordedRequests).toHaveLength(1);
+    expect(recordedRequests[0]?.temperature).toBe(0.3);
+    expect(recordedRequests[0]?.maxTokens).toBe(1024);
+    expect(recordedRequests[0]?.stopSequences).toEqual(['<<END>>']);
+  });
+
+  it('omits unset params (back-compat — chatRequest unchanged when llmParams absent)', async () => {
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [{ content: 'final' }],
+    });
+    const reg = new AgentRegistry<MyType, MyPhase>();
+    reg.register(chatAgent); // no llmParams set
+    const exec = new AgentExecutor({ registry: reg, llm });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(recordedRequests[0]?.temperature).toBeUndefined();
+    expect(recordedRequests[0]?.maxTokens).toBeUndefined();
+    expect(recordedRequests[0]?.stopSequences).toBeUndefined();
+  });
+
+  it('passes a partial llmParams (just temperature) through cleanly', async () => {
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [{ content: 'final' }],
+    });
+    const reg = new AgentRegistry<MyType, MyPhase>();
+    reg.register({ ...chatAgent, llmParams: { temperature: 0.7 } });
+    const exec = new AgentExecutor({ registry: reg, llm });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(recordedRequests[0]?.temperature).toBe(0.7);
+    expect(recordedRequests[0]?.maxTokens).toBeUndefined();
+    expect(recordedRequests[0]?.stopSequences).toBeUndefined();
+  });
+});
+
 describe('AgentExecutor — tool-call ID synthesis (WS-D fix #3)', () => {
   let registry: AgentRegistry<MyType, MyPhase>;
   beforeEach(() => {

@@ -66,6 +66,60 @@ function scriptedLlm(content: string): LLMClient {
   };
 }
 
+/**
+ * LLM stub that records the ChatRequest passed to chat() so tests can
+ * assert on whatever the runner threaded through (model, llmParams,
+ * etc.). Returns a single canned reply with no tool calls.
+ */
+function recordingLlm(captured: ChatRequest[]): LLMClient {
+  return {
+    chat(req: ChatRequest): Promise<ChatResult> {
+      captured.push(req);
+      return Promise.resolve({
+        content: 'ok',
+        toolCalls: [],
+        stopReason: 'end_turn',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+    },
+    async *chatStream(req: ChatRequest): AsyncIterable<ChatDelta> {
+      captured.push(req);
+      yield { content: 'ok', stopReason: 'end_turn' };
+      await Promise.resolve();
+    },
+  };
+}
+
+describe('runAgentTask — Agent.spec.llmParams passthrough (v0.1.4)', () => {
+  it('threads agentSpec.llmParams into the LLM ChatRequest', async () => {
+    const captured: ChatRequest[] = [];
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        llmParams: {
+          temperature: 0.2,
+          maxTokens: 512,
+          stopSequences: ['STOP'],
+        },
+      },
+    };
+    await runAgentTask(cfg, { llm: recordingLlm(captured) });
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[0]?.temperature).toBe(0.2);
+    expect(captured[0]?.maxTokens).toBe(512);
+    expect(captured[0]?.stopSequences).toEqual(['STOP']);
+  });
+
+  it('omits llmParams when agentSpec.llmParams is undefined (back-compat)', async () => {
+    const captured: ChatRequest[] = [];
+    await runAgentTask(baseConfig, { llm: recordingLlm(captured) });
+    expect(captured[0]?.temperature).toBeUndefined();
+    expect(captured[0]?.maxTokens).toBeUndefined();
+    expect(captured[0]?.stopSequences).toBeUndefined();
+  });
+});
+
 describe('pickUserMessage', () => {
   it('returns originalUserMessage when set', () => {
     expect(pickUserMessage(baseConfig)).toBe('what is k3s default runtime?');

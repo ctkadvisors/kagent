@@ -276,6 +276,15 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         messages: currentMessages,
         ...(agentDef.defaultModel !== undefined && { model: agentDef.defaultModel }),
         ...(toolDescriptors.length > 0 && { tools: toolDescriptors }),
+        ...(agentDef.llmParams?.temperature !== undefined && {
+          temperature: agentDef.llmParams.temperature,
+        }),
+        ...(agentDef.llmParams?.maxTokens !== undefined && {
+          maxTokens: agentDef.llmParams.maxTokens,
+        }),
+        ...(agentDef.llmParams?.stopSequences !== undefined && {
+          stopSequences: agentDef.llmParams.stopSequences,
+        }),
       };
       const llmStart = Date.now();
       let llmResult: ChatResult;

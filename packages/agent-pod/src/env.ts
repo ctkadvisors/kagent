@@ -40,6 +40,19 @@ export interface AgentSpecEnv {
   readonly allowedChildTemplates?: readonly string[];
   /** WS-K — direct-child concurrency cap. Default 10 in the spawn tool. */
   readonly maxConcurrentChildren?: number;
+  /**
+   * v0.1.4 — declarative LLM request-tuning knobs threaded into every
+   * `chat()` call this Agent's loop makes. Maps 1:1 to `ChatRequest`'s
+   * `temperature` / `maxTokens` / `stopSequences` fields, then to the
+   * OpenAI body fields `temperature` / `max_tokens` / `stop`. Unset
+   * fields fall through to the LLM provider's defaults — the substrate
+   * never invents values.
+   */
+  readonly llmParams?: {
+    readonly temperature?: number;
+    readonly maxTokens?: number;
+    readonly stopSequences?: readonly string[];
+  };
 }
 
 /**

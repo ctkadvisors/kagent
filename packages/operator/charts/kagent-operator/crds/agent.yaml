@@ -91,6 +91,32 @@ spec:
                     that may be in non-terminal phases simultaneously.
                     Stops an LLM-loop bug from creating 10⁶ children.
                     Counted by direct children only (not transitive).
+                llmParams:
+                  type: object
+                  description: |
+                    v0.1.4 — declarative LLM request-tuning knobs threaded
+                    through to every chat() call this Agent's loop makes.
+                    Maps 1:1 to OpenAI body fields temperature / max_tokens
+                    / stop. Unset fields fall through to the LLM provider's
+                    defaults; the substrate never invents values.
+                  properties:
+                    temperature:
+                      type: number
+                      minimum: 0
+                      maximum: 2
+                      description: 'Sampling temperature; provider-clamped.'
+                    maxTokens:
+                      type: integer
+                      minimum: 1
+                      maximum: 1048576
+                      description: 'Hard cap on output tokens for the request.'
+                    stopSequences:
+                      type: array
+                      maxItems: 16
+                      items:
+                        type: string
+                        maxLength: 256
+                      description: 'Stop sequences passed as the OpenAI `stop` field.'
       additionalPrinterColumns:
         - name: Model
           type: string

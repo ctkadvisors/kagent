@@ -147,6 +147,9 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(config.agentSpec.systemPrompt !== undefined && {
       systemPrompt: config.agentSpec.systemPrompt,
     }),
+    ...(config.agentSpec.llmParams !== undefined && {
+      llmParams: config.agentSpec.llmParams,
+    }),
   });
 
   const sinks = deps.sinks ?? [new StdoutSink()];
