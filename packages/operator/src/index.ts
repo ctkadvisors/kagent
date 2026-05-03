@@ -83,6 +83,27 @@ export {
   cycleCheck,
   parentTaskRefFromChild,
 } from './task-graph.js';
+
+export {
+  AGENT_LABEL,
+  buildAdmissionReconciler,
+  computeCapacity,
+  countInFlightByAgent,
+  countInFlightByModel,
+  extractModelFromJob,
+  selectAdmittable,
+} from './admission.js';
+export type {
+  AdmissionDeps,
+  AdmissionReconciler,
+  AdmissionSummary,
+  AgentLookupFn,
+  JobLister,
+  JobRef,
+  ModelEndpointLister,
+  SelectAdmittableInput,
+  UnsuspendJobFn,
+} from './admission.js';
 export type {
   AggregatePhase,
   ChildRef,

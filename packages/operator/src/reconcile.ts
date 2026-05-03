@@ -104,10 +104,32 @@ export interface ReconcileDeps {
     parent: { readonly name: string; readonly namespace: string; readonly uid: string },
     cycle: readonly string[],
   ) => Promise<void>;
+  /**
+   * LLM-gateway bundle (spec §3.2) — when true, the dispatch path
+   * STOPS short of un-suspending the Job. The Job stays in
+   * `spec.suspend: true` after the dispatch envelope is published +
+   * annotated; the admission reconciler (`admission.ts`) is the one
+   * that flips `spec.suspend: false` once per-(model, namespace) +
+   * per-Agent capacity allows it.
+   *
+   * Default `false` / undefined → today's WS-F behavior preserved
+   * (reconcile un-suspends immediately after publish + annotate).
+   * The chart's `llmGateway.enabled=true` flips
+   * `KAGENT_ADMISSION_CONTROL_ENABLED=true` on the operator
+   * deployment, which `main.ts` reads + threads here.
+   */
+  readonly admissionControlEnabled?: boolean;
 }
 
 export interface ReconcileResult {
-  readonly action: 'skipped' | 'dispatched' | 'failed';
+  /**
+   * `admission-pending` is the LLM-gateway path: dispatch envelope
+   * published + Job created suspended, but un-suspend is deferred to
+   * the admission reconciler (`admission.ts`). Status stays Pending
+   * — the AgentTask transitions to Dispatched only when admission
+   * un-suspends the Job.
+   */
+  readonly action: 'skipped' | 'dispatched' | 'admission-pending' | 'failed';
   readonly reason?: string;
   readonly jobName?: string;
 }
@@ -224,6 +246,19 @@ export async function reconcileAgentTask(
   // status alone; the informer relist will re-fire reconcile and step 4
   // will see the published annotation, skip publish, and retry the
   // unsuspend.
+  //
+  // LLM-gateway bundle (spec §3.2): when admission control is enabled,
+  // SKIP this step entirely — the admission reconciler
+  // (`admission.ts`) is the only writer that may un-suspend, doing so
+  // only when per-(model, namespace) + per-Agent capacity allows. The
+  // dispatch envelope is already on the bus + the
+  // `dispatch-published` annotation is set, so the agent-pod has
+  // everything it needs the moment admission un-suspends. Status
+  // stays Pending until then so the workbench surfaces "queued for
+  // capacity" correctly.
+  if (deps.admissionControlEnabled === true) {
+    return { action: 'admission-pending', jobName };
+  }
   try {
     await unsuspendJob(deps.batchApi, namespace, jobName);
   } catch (err) {

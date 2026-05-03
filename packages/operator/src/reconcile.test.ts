@@ -41,6 +41,7 @@ function makeDeps(overrides: {
   dispatcher?: StubDispatcher;
   capabilityRegistry?: ReconcileDeps['capabilityRegistry'];
   now?: () => Date;
+  admissionControlEnabled?: boolean;
 }): ReconcileDeps & {
   mocks: { customApi: MockCustomApi; batchApi: MockBatchApi; dispatcher: StubDispatcher };
 } {
@@ -71,6 +72,9 @@ function makeDeps(overrides: {
       capabilityRegistry: overrides.capabilityRegistry,
     }),
     ...(overrides.now !== undefined && { now: overrides.now }),
+    ...(overrides.admissionControlEnabled !== undefined && {
+      admissionControlEnabled: overrides.admissionControlEnabled,
+    }),
     mocks: { customApi, batchApi, dispatcher },
   };
 }
@@ -298,6 +302,132 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
       }),
       expect.objectContaining({ middleware: expect.any(Array) }),
     );
+  });
+});
+
+describe('reconcileAgentTask — admission control (LLM-gateway bundle)', () => {
+  // When `admissionControlEnabled: true`, reconcile publishes the
+  // dispatch envelope + creates the suspended Job + annotates it,
+  // but DOES NOT un-suspend the Job and DOES NOT patch status to
+  // Dispatched. The admission reconciler (`admission.ts`) owns those
+  // transitions, gated by ModelEndpoint capacity + Agent
+  // maxInFlightTasks. This preserves the WS-F suspended-publish
+  // ordering while letting capacity gating land independently.
+  let task: AgentTask;
+  const fixedNow = new Date('2026-04-26T10:00:00.000Z');
+
+  beforeEach(() => {
+    task = makeTask();
+  });
+
+  it('does NOT un-suspend the Job when admissionControlEnabled=true', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      now: () => fixedNow,
+      admissionControlEnabled: true,
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('admission-pending');
+    expect(result.jobName).toBe('kat-task-uid-1');
+    // Annotation patch happens (publish-then-annotate); un-suspend
+    // patch (spec.suspend=false) does NOT.
+    const patchCalls = deps.mocks.batchApi.patchNamespacedJob.mock.calls;
+    const unsuspendCall = patchCalls.find((c: unknown[]) => {
+      const arg = c[0] as { body?: { spec?: { suspend?: boolean } } };
+      return arg?.body?.spec?.suspend === false;
+    });
+    expect(unsuspendCall).toBeUndefined();
+  });
+
+  it('does NOT patch status to Dispatched when admissionControlEnabled=true', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      now: () => fixedNow,
+      admissionControlEnabled: true,
+    });
+    await reconcileAgentTask(task, deps);
+    // Status patch is the LAST step of the dispatch path; it gates on
+    // the un-suspend success. Skipping un-suspend means status stays
+    // Pending — the admission reconciler will mark Dispatched when it
+    // un-suspends.
+    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+  });
+
+  it('still publishes the dispatch envelope to the bus', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      admissionControlEnabled: true,
+    });
+    await reconcileAgentTask(task, deps);
+    // The bus message is what tells the agent-pod its task assignment;
+    // we still publish so the moment admission un-suspends the Job, the
+    // pod has everything it needs.
+    expect(deps.mocks.dispatcher.published).toHaveLength(1);
+    expect(deps.mocks.dispatcher.published[0]).toMatchObject({
+      taskId: 'task-uid-1',
+      agentId: 'researcher',
+    });
+  });
+
+  it('still annotates the Job with dispatch-published="true"', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      admissionControlEnabled: true,
+    });
+    await reconcileAgentTask(task, deps);
+    expect(deps.mocks.batchApi.patchNamespacedJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          metadata: expect.objectContaining({
+            annotations: expect.objectContaining({
+              'kagent.knuteson.io/dispatch-published': 'true',
+            }),
+          }),
+        }),
+      }),
+      expect.anything() as unknown,
+    );
+  });
+
+  it('un-suspends + dispatches as today when admissionControlEnabled is false (default)', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      now: () => fixedNow,
+    });
+    // admissionControlEnabled left undefined → falsy → today's path.
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    // Un-suspend patch happens.
+    const patchCalls = deps.mocks.batchApi.patchNamespacedJob.mock.calls;
+    const unsuspendCall = patchCalls.find((c: unknown[]) => {
+      const arg = c[0] as { body?: { spec?: { suspend?: boolean } } };
+      return arg?.body?.spec?.suspend === false;
+    });
+    expect(unsuspendCall).toBeDefined();
+    // Status patch to Dispatched happens.
+    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
+  });
+
+  it('admissionControlEnabled=false explicit value behaves identically to undefined', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      now: () => fixedNow,
+      admissionControlEnabled: false,
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
   });
 });
 
