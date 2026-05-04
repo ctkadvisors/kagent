@@ -14,8 +14,22 @@ import { buildJobSpecOptionsFromEnv } from './main.js';
 const TOUCHED_VARS = [
   'KAGENT_AGENT_POD_LITELLM_BASE_URL',
   'KAGENT_AGENT_POD_LITELLM_API_KEY',
+  'KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_NAME',
+  'KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_KEY',
   'KAGENT_LLM_GATEWAY_BASE_URL',
   'KAGENT_LLM_GATEWAY_API_KEY',
+  'KAGENT_LLM_GATEWAY_API_KEY_SECRET_NAME',
+  'KAGENT_LLM_GATEWAY_API_KEY_SECRET_KEY',
+  'KAGENT_AGENT_POD_LANGFUSE_HOST',
+  'KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY',
+  'KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_NAME',
+  'KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_KEY',
+  'KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY',
+  'KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_NAME',
+  'KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_KEY',
+  'KAGENT_AGENT_POD_OTLP_HEADERS',
+  'KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_NAME',
+  'KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_KEY',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -35,8 +49,27 @@ afterEach(() => {
   }
 });
 
-function findEnv(extraEnv: { name: string; value: string }[], name: string): string | undefined {
+/**
+ * Each entry rendered into `BuildJobSpecOptions.extraEnv` is one of:
+ *   - inline plaintext: { name, value }
+ *   - secret-ref:       { name, valueFrom: { secretKeyRef: { name, key } } }
+ * Tests use this loose shape so they can grep for either surface
+ * without re-importing the EnvVarSpec union.
+ */
+type ExtraEnvEntry = {
+  name: string;
+  value?: string;
+  valueFrom?: {
+    secretKeyRef?: { name: string; key: string };
+  };
+};
+
+function findEnv(extraEnv: readonly ExtraEnvEntry[], name: string): string | undefined {
   return extraEnv.find((e) => e.name === name)?.value;
+}
+
+function findEnvEntry(extraEnv: readonly ExtraEnvEntry[], name: string): ExtraEnvEntry | undefined {
+  return extraEnv.find((e) => e.name === name);
 }
 
 describe('buildJobSpecOptionsFromEnv — LLM endpoint resolution', () => {
@@ -95,5 +128,150 @@ describe('buildJobSpecOptionsFromEnv — LLM endpoint resolution', () => {
     const env = opts.extraEnv ?? [];
     expect(findEnv(env, 'KAGENT_LITELLM_BASE_URL')).toBeUndefined();
     expect(findEnv(env, 'KAGENT_LITELLM_API_KEY')).toBeUndefined();
+  });
+});
+
+/* =====================================================================
+ * v0.1.8 — secret-hygiene. Brief §1: when the operator's own env was
+ * sourced from a secretRef (chart sets `<NAME>_SECRET_NAME` +
+ * `<NAME>_SECRET_KEY` alongside the env), the operator forwards the
+ * spawned-Job env as a secretKeyRef rather than copying the resolved
+ * plaintext value.
+ *
+ * Convention: for every sensitive operator env var `<NAME>`, the chart
+ * exposes two side env vars holding the original Secret coordinates:
+ *   `<NAME>_SECRET_NAME`  → Secret name in the operator's release ns
+ *   `<NAME>_SECRET_KEY`   → key within that Secret
+ * When both are non-empty, the operator constructs a secretKeyRef
+ * entry and OMITS the inline plaintext value entry — even if the
+ * resolved env is also present (it would be, since K8s injects via
+ * envFrom). This keeps the rendered Job spec free of any plaintext for
+ * names matching /KEY|SECRET/i, the contract the unit test in
+ * job-spec.test.ts pins.
+ * ===================================================================== */
+
+describe('buildJobSpecOptionsFromEnv — secret-hygiene (v0.1.8)', () => {
+  it('forwards LiteLLM API key as a secretKeyRef when the chart provides _SECRET_NAME + _SECRET_KEY', () => {
+    process.env.KAGENT_AGENT_POD_LITELLM_BASE_URL = 'http://lm-studio.local:1234/v1';
+    // The plaintext is also injected via envFrom (K8s does it); the
+    // operator MUST ignore it in favor of the secret-ref hint.
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY = 'lm-key-resolved';
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_NAME = 'cloudflare-ai-gateway';
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_KEY = 'api-key';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+    const apiKeyEntry = findEnvEntry(env, 'KAGENT_LITELLM_API_KEY');
+    expect(apiKeyEntry).toBeDefined();
+    expect(apiKeyEntry?.value).toBeUndefined();
+    expect(apiKeyEntry?.valueFrom?.secretKeyRef?.name).toBe('cloudflare-ai-gateway');
+    expect(apiKeyEntry?.valueFrom?.secretKeyRef?.key).toBe('api-key');
+  });
+
+  it('forwards LLM-gateway API key as a secretKeyRef when chart provides the hints', () => {
+    process.env.KAGENT_LLM_GATEWAY_BASE_URL = 'http://gw/v1';
+    process.env.KAGENT_LLM_GATEWAY_API_KEY = 'gw-resolved-token';
+    process.env.KAGENT_LLM_GATEWAY_API_KEY_SECRET_NAME = 'kagent-llm-gateway-token';
+    process.env.KAGENT_LLM_GATEWAY_API_KEY_SECRET_KEY = 'token';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+    const apiKeyEntry = findEnvEntry(env, 'KAGENT_LITELLM_API_KEY');
+    expect(apiKeyEntry?.value).toBeUndefined();
+    expect(apiKeyEntry?.valueFrom?.secretKeyRef?.name).toBe('kagent-llm-gateway-token');
+    expect(apiKeyEntry?.valueFrom?.secretKeyRef?.key).toBe('token');
+  });
+
+  it('forwards Langfuse public + secret keys as secretKeyRefs when chart provides the hints', () => {
+    process.env.KAGENT_AGENT_POD_LANGFUSE_HOST = 'http://lf';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY = 'pk-resolved';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_NAME = 'langfuse-creds';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_KEY = 'public';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY = 'sk-resolved';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_NAME = 'langfuse-creds';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_KEY = 'secret';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+
+    const pkEntry = findEnvEntry(env, 'KAGENT_LANGFUSE_PUBLIC_KEY');
+    expect(pkEntry?.value).toBeUndefined();
+    expect(pkEntry?.valueFrom?.secretKeyRef?.name).toBe('langfuse-creds');
+    expect(pkEntry?.valueFrom?.secretKeyRef?.key).toBe('public');
+
+    const skEntry = findEnvEntry(env, 'KAGENT_LANGFUSE_SECRET_KEY');
+    expect(skEntry?.value).toBeUndefined();
+    expect(skEntry?.valueFrom?.secretKeyRef?.name).toBe('langfuse-creds');
+    expect(skEntry?.valueFrom?.secretKeyRef?.key).toBe('secret');
+  });
+
+  it('forwards OTLP headers as a secretKeyRef when chart provides the hints (bearer token typically lives there)', () => {
+    process.env.KAGENT_AGENT_POD_OTLP_HEADERS =
+      'authorization=Bearer%20resolved,x-langfuse-ingestion-version=4';
+    process.env.KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_NAME = 'otel-headers';
+    process.env.KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_KEY = 'headers';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+    const hdrEntry = findEnvEntry(env, 'OTEL_EXPORTER_OTLP_HEADERS');
+    expect(hdrEntry?.value).toBeUndefined();
+    expect(hdrEntry?.valueFrom?.secretKeyRef?.name).toBe('otel-headers');
+    expect(hdrEntry?.valueFrom?.secretKeyRef?.key).toBe('headers');
+  });
+
+  it('falls back to plaintext value: when only the resolved env is present (deprecated path; NOTES.txt warns)', () => {
+    // Deprecated path: NOTES.txt prints a loud warning so single-tenant
+    // dev installs that haven't migrated to secretRefs still work end-
+    // to-end. Ops grep `kubectl get pod ... | grep value:` will surface
+    // these immediately.
+    process.env.KAGENT_AGENT_POD_LITELLM_BASE_URL = 'http://lm';
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY = 'plain-old-key';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+    const apiKeyEntry = findEnvEntry(env, 'KAGENT_LITELLM_API_KEY');
+    expect(apiKeyEntry?.value).toBe('plain-old-key');
+    expect(apiKeyEntry?.valueFrom).toBeUndefined();
+  });
+
+  it('omits the env entirely when no plaintext AND no secret-ref hints are set', () => {
+    process.env.KAGENT_AGENT_POD_LITELLM_BASE_URL = 'http://lm';
+    // Nothing else.
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+    expect(findEnvEntry(env, 'KAGENT_LITELLM_API_KEY')).toBeUndefined();
+  });
+
+  it('rendered extraEnv has ZERO inline value: entries for any name matching /KEY|SECRET/i when secret-ref hints set everywhere', () => {
+    // The validation criterion from the brief: rendered Job spec must
+    // contain zero `value:` entries for any name matching the
+    // sensitive-name regex once the chart provides secret hints for
+    // every secret. This test pins the operator's main.ts contribution
+    // to that contract.
+    process.env.KAGENT_AGENT_POD_LITELLM_BASE_URL = 'http://lm';
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY = 'p1';
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_NAME = 's1';
+    process.env.KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_KEY = 'k1';
+
+    process.env.KAGENT_AGENT_POD_LANGFUSE_HOST = 'http://lf';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY = 'p2';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_NAME = 's2';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_KEY = 'k2';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY = 'p3';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_NAME = 's3';
+    process.env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_KEY = 'k3';
+
+    process.env.KAGENT_AGENT_POD_OTLP_HEADERS = 'authorization=Bearer%20x';
+    process.env.KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_NAME = 's4';
+    process.env.KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_KEY = 'k4';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = (opts.extraEnv ?? []) as ExtraEnvEntry[];
+    const sensitive = /(?:KEY|SECRET)/i;
+    const offenders = env.filter(
+      (e) => sensitive.test(e.name) && typeof e.value === 'string' && e.value.length > 0,
+    );
+    expect(offenders).toEqual([]);
   });
 });

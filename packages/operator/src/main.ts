@@ -44,7 +44,7 @@ import {
 } from './crds/index.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
-import type { BuildJobSpecOptions } from './job-spec.js';
+import type { BuildJobSpecOptions, EnvVarSpec } from './job-spec.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
 import { NatsDispatcher } from './nats-dispatcher.js';
@@ -60,13 +60,70 @@ import type { AgentTaskHandler, AgentTaskInformerWithCache } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
 
 /**
+ * Push a "sensitive env" entry into the spawned-Job's `extraEnv`
+ * array, preferring a `valueFrom.secretKeyRef` when the chart provided
+ * the secret coordinates as side env vars
+ * (`<sourceVar>_SECRET_NAME` + `<sourceVar>_SECRET_KEY`), and
+ * falling back to the resolved plaintext only when those hints are
+ * absent.
+ *
+ * v0.1.8 secret-hygiene contract (see WAVES.md §2.1, brief §1):
+ *   - When both hints are present + non-empty, emit secretKeyRef and
+ *     IGNORE the resolved plaintext (the chart's deployment template
+ *     also injects the resolved env via valueFrom.secretKeyRef on the
+ *     operator pod, but the operator never copies the plaintext into
+ *     a spawned Job's etcd object).
+ *   - When only the resolved plaintext is set (no hints), emit a
+ *     deprecated plaintext entry; NOTES.txt prints a loud warning
+ *     listing the affected sensitive name on `helm install / upgrade`.
+ *   - When nothing is set, emit nothing.
+ *
+ * Why side env vars rather than a single JSON-encoded hint blob: it
+ * keeps the chart's deployment template trivially auditable
+ * (one secretKeyRef + two literal envs per sensitive name) and lets
+ * `kubectl get deploy <operator> -o yaml` show the secret coordinates
+ * verbatim.
+ *
+ * @param extraEnv  destination array (mutated)
+ * @param targetName  name of the env var on the SPAWNED Job
+ * @param resolvedValue  the value of `process.env[sourceVar]` (the
+ *   plaintext K8s injected when the chart used the deprecated
+ *   `value:` path; ignored when secret hints are present)
+ * @param secretName  the value of `process.env[sourceVar + "_SECRET_NAME"]`
+ * @param secretKey   the value of `process.env[sourceVar + "_SECRET_KEY"]`
+ */
+function pushSensitiveEnv(
+  extraEnv: EnvVarSpec[],
+  targetName: string,
+  resolvedValue: string | undefined,
+  secretName: string | undefined,
+  secretKey: string | undefined,
+): void {
+  if (
+    typeof secretName === 'string' &&
+    secretName.length > 0 &&
+    typeof secretKey === 'string' &&
+    secretKey.length > 0
+  ) {
+    extraEnv.push({
+      name: targetName,
+      valueFrom: { secretKeyRef: { name: secretName, key: secretKey } },
+    });
+    return;
+  }
+  if (typeof resolvedValue === 'string' && resolvedValue.length > 0) {
+    extraEnv.push({ name: targetName, value: resolvedValue });
+  }
+}
+
+/**
  * Build the BuildJobSpecOptions the reconcile loop hands to job-spec
  * for every Pod it materializes. Reads operator env vars; everything
  * is optional. Helm values plumb through here.
  */
 export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   const env = process.env;
-  const extraEnv: { name: string; value: string }[] = [];
+  const extraEnv: EnvVarSpec[] = [];
   // LLM endpoint resolution. When the operator was started with
   // KAGENT_LLM_GATEWAY_BASE_URL (chart's llmGateway.enabled=true), we
   // route spawned agent-pods through the gateway by overriding their
@@ -78,19 +135,32 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   const gatewayApiKey = env.KAGENT_LLM_GATEWAY_API_KEY;
   const gatewayActive = typeof gatewayUrl === 'string' && gatewayUrl.length > 0;
   const effectiveLlmUrl = gatewayActive ? gatewayUrl : env.KAGENT_AGENT_POD_LITELLM_BASE_URL;
+  // For the API key we resolve BOTH the resolved plaintext AND the
+  // secret-ref hints from whichever source is active (gateway vs.
+  // direct LiteLLM). pushSensitiveEnv() prefers the secret-ref shape
+  // — the chart-side deployment template renders both
+  // `<NAME>_SECRET_NAME` and `<NAME>_SECRET_KEY` alongside the
+  // resolved env so we never have to crack open the Secret here.
   const effectiveLlmKey = gatewayActive ? gatewayApiKey : env.KAGENT_AGENT_POD_LITELLM_API_KEY;
+  const effectiveLlmKeySecretName = gatewayActive
+    ? env.KAGENT_LLM_GATEWAY_API_KEY_SECRET_NAME
+    : env.KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_NAME;
+  const effectiveLlmKeySecretKey = gatewayActive
+    ? env.KAGENT_LLM_GATEWAY_API_KEY_SECRET_KEY
+    : env.KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_KEY;
   if (typeof effectiveLlmUrl === 'string' && effectiveLlmUrl.length > 0) {
     extraEnv.push({
       name: 'KAGENT_LITELLM_BASE_URL',
       value: effectiveLlmUrl,
     });
   }
-  if (typeof effectiveLlmKey === 'string' && effectiveLlmKey.length > 0) {
-    extraEnv.push({
-      name: 'KAGENT_LITELLM_API_KEY',
-      value: effectiveLlmKey,
-    });
-  }
+  pushSensitiveEnv(
+    extraEnv,
+    'KAGENT_LITELLM_API_KEY',
+    effectiveLlmKey,
+    effectiveLlmKeySecretName,
+    effectiveLlmKeySecretKey,
+  );
   if (
     typeof env.KAGENT_AGENT_POD_OTLP_ENDPOINT === 'string' &&
     env.KAGENT_AGENT_POD_OTLP_ENDPOINT.length > 0
@@ -100,15 +170,19 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_AGENT_POD_OTLP_ENDPOINT,
     });
   }
-  if (
-    typeof env.KAGENT_AGENT_POD_OTLP_HEADERS === 'string' &&
-    env.KAGENT_AGENT_POD_OTLP_HEADERS.length > 0
-  ) {
-    extraEnv.push({
-      name: 'OTEL_EXPORTER_OTLP_HEADERS',
-      value: env.KAGENT_AGENT_POD_OTLP_HEADERS,
-    });
-  }
+  // OTEL OTLP headers — typically carry a Bearer token. Same secret-
+  // ref preference as the LiteLLM API key: chart-side deployment
+  // exposes `_SECRET_NAME` + `_SECRET_KEY` hints when the values came
+  // from a Secret, and the operator forwards the secretKeyRef
+  // verbatim. Falls back to the resolved plaintext for installs that
+  // haven't migrated.
+  pushSensitiveEnv(
+    extraEnv,
+    'OTEL_EXPORTER_OTLP_HEADERS',
+    env.KAGENT_AGENT_POD_OTLP_HEADERS,
+    env.KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_NAME,
+    env.KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_KEY,
+  );
   // Trace content-capture mode — controls whether OtelTraceSink ships
   // input messages / output content / tool args+results as Langfuse
   // observation bodies. `none|preview|full`; default `preview`. Operator
@@ -168,24 +242,25 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       name: 'KAGENT_LANGFUSE_HOST',
       value: env.KAGENT_AGENT_POD_LANGFUSE_HOST,
     });
-    if (
-      typeof env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY === 'string' &&
-      env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY.length > 0
-    ) {
-      extraEnv.push({
-        name: 'KAGENT_LANGFUSE_PUBLIC_KEY',
-        value: env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY,
-      });
-    }
-    if (
-      typeof env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY === 'string' &&
-      env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY.length > 0
-    ) {
-      extraEnv.push({
-        name: 'KAGENT_LANGFUSE_SECRET_KEY',
-        value: env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY,
-      });
-    }
+    // Public + secret Langfuse keys — both are sensitive (the public
+    // key alone authorizes ingestion writes, so it's "less secret" but
+    // still a credential). Both go through pushSensitiveEnv so the
+    // rendered Job spec carries the secretKeyRef shape under the
+    // chart's preferred path.
+    pushSensitiveEnv(
+      extraEnv,
+      'KAGENT_LANGFUSE_PUBLIC_KEY',
+      env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY,
+      env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_NAME,
+      env.KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_KEY,
+    );
+    pushSensitiveEnv(
+      extraEnv,
+      'KAGENT_LANGFUSE_SECRET_KEY',
+      env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY,
+      env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_NAME,
+      env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_KEY,
+    );
   }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
