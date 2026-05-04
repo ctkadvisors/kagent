@@ -45,12 +45,28 @@ interface JobOpts {
   /** RFC 3339 creation timestamp — used for FIFO ordering. */
   readonly creationTimestamp?: string;
   readonly resourceVersion?: string;
+  /**
+   * Parent AgentTask UID — exposed via ownerReferences[0].uid so the
+   * Wave 0 Audit emission can record `task.admitted.taskUid`. Defaults
+   * to a deterministic `task-<name>-uid` so existing tests don't need
+   * updates.
+   */
+  readonly taskUid?: string;
+  /**
+   * Parent AgentTask name — stamped on the Job via the
+   * `kagent.knuteson.io/task` label by buildJobSpec. Defaults to the
+   * Job's own name (matches buildJobSpec's `agentTaskNameToJobName`
+   * convention closely enough for these tests).
+   */
+  readonly taskName?: string;
 }
 
 function makeJob(opts: JobOpts): V1Job {
   const namespace = opts.namespace ?? 'default';
   // Mirror buildJobSpec's KAGENT_AGENT_SPEC encoding + label scheme.
   const agentSpec: { model: string } = { model: opts.model };
+  const taskUid = opts.taskUid ?? `task-${opts.name}-uid`;
+  const taskName = opts.taskName ?? opts.name;
   return {
     apiVersion: 'batch/v1',
     kind: 'Job',
@@ -59,8 +75,22 @@ function makeJob(opts: JobOpts): V1Job {
       namespace,
       labels: {
         [AGENT_LABEL]: opts.agent,
+        // Wave 0 Audit reads this label to emit `task.admitted.taskName`.
+        'kagent.knuteson.io/task': taskName,
         'kagent.knuteson.io/managed-by': 'kagent-operator',
       },
+      // Wave 0 Audit reads ownerReferences[0].uid to emit
+      // `task.admitted.taskUid`. buildJobSpec always sets this.
+      ownerReferences: [
+        {
+          apiVersion: 'kagent.knuteson.io/v1alpha1',
+          kind: 'AgentTask',
+          name: taskName,
+          uid: taskUid,
+          controller: true,
+          blockOwnerDeletion: true,
+        },
+      ],
       ...(opts.creationTimestamp !== undefined && {
         creationTimestamp: new Date(opts.creationTimestamp),
       }),
@@ -862,5 +892,262 @@ describe('buildAdmissionReconciler — event triggers', () => {
     await reconciler.onJobEvent();
     await reconciler.onModelEndpointEvent();
     expect(realEvaluate).not.toHaveBeenCalled();
+  });
+});
+
+/* =====================================================================
+ * Wave 0 Audit — `task.admitted` audit-event emission
+ *
+ * The reconciler MUST emit one audit event per successful admission,
+ * carrying the parent AgentTask's identifying fields. Failure paths
+ * (missing label, hook throws) MUST be observable + logged but never
+ * break the dispatch path. See packages/audit-events/ for the
+ * CloudEvents v1.0 envelope + best-effort publisher contract.
+ * ===================================================================== */
+
+describe('buildAdmissionReconciler — Wave 0 Audit emission', () => {
+  it('emits exactly one task.admitted audit event per successful admission', async () => {
+    const suspended = [
+      makeJob({
+        name: 'j1',
+        agent: 'researcher',
+        model: 'workers-ai/llama-4-scout',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:00Z',
+        taskUid: 'task-uid-fixed',
+        taskName: 'researcher-1',
+      }),
+    ];
+    const allJobs = suspended;
+    const auditSpy = vi.fn().mockResolvedValue(undefined);
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => allJobs,
+      listModelEndpoints: () => [
+        makeModelEndpoint({
+          name: 'me1',
+          model: 'workers-ai/llama-4-scout',
+          seed: 1,
+          max: 4,
+        }),
+      ],
+      lookupAgent: () => undefined,
+      unsuspendJob: vi.fn().mockResolvedValue(undefined),
+      emitAudit: auditSpy,
+    });
+    const summary = await reconciler.evaluate();
+    expect(summary.admitted).toBe(1);
+    expect(auditSpy).toHaveBeenCalledTimes(1);
+    expect(auditSpy).toHaveBeenCalledWith({
+      taskUid: 'task-uid-fixed',
+      taskNamespace: 'default',
+      taskName: 'researcher-1',
+      agentName: 'researcher',
+      model: 'workers-ai/llama-4-scout',
+    });
+  });
+
+  it('emits audit per admission across multiple admitted jobs', async () => {
+    const suspended: V1Job[] = [];
+    for (let i = 1; i <= 3; i++) {
+      suspended.push(
+        makeJob({
+          name: `j${String(i)}`,
+          agent: 'researcher',
+          model: 'm1',
+          suspended: true,
+          creationTimestamp: `2026-05-03T10:00:0${String(i)}Z`,
+          taskUid: `task-uid-${String(i)}`,
+          taskName: `t-${String(i)}`,
+        }),
+      );
+    }
+    const auditSpy = vi.fn().mockResolvedValue(undefined);
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => suspended,
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 5, max: 5 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: vi.fn().mockResolvedValue(undefined),
+      emitAudit: auditSpy,
+    });
+    const summary = await reconciler.evaluate();
+    expect(summary.admitted).toBe(3);
+    expect(auditSpy).toHaveBeenCalledTimes(3);
+    const uids = auditSpy.mock.calls.map((c: unknown[]) => (c[0] as { taskUid: string }).taskUid);
+    expect(uids.sort()).toEqual(['task-uid-1', 'task-uid-2', 'task-uid-3']);
+  });
+
+  it('does NOT emit audit when admission is disabled (master switch off)', async () => {
+    const suspended = [
+      makeJob({
+        name: 'j1',
+        agent: 'a',
+        model: 'm1',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:00Z',
+      }),
+    ];
+    const auditSpy = vi.fn().mockResolvedValue(undefined);
+    const reconciler = buildAdmissionReconciler({
+      enabled: false,
+      listJobs: () => suspended,
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 1, max: 4 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: vi.fn().mockResolvedValue(undefined),
+      emitAudit: auditSpy,
+    });
+    await reconciler.evaluate();
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit audit when un-suspend fails (no false positives)', async () => {
+    const suspended = [
+      makeJob({
+        name: 'j1',
+        agent: 'a',
+        model: 'm1',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:00Z',
+      }),
+    ];
+    const auditSpy = vi.fn().mockResolvedValue(undefined);
+    const unsuspend = vi.fn().mockRejectedValue(new Error('apiserver down'));
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => suspended,
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 1, max: 4 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: unsuspend,
+      emitAudit: auditSpy,
+    });
+    await reconciler.evaluate();
+    // The patch failed → no audit emission for that Job.
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit audit on 409 conflict (the racer wins)', async () => {
+    const suspended = [
+      makeJob({
+        name: 'j1',
+        agent: 'a',
+        model: 'm1',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:00Z',
+      }),
+    ];
+    const auditSpy = vi.fn().mockResolvedValue(undefined);
+    const conflict = Object.assign(new Error('conflict'), { code: 409 });
+    const unsuspend = vi.fn().mockRejectedValue(conflict);
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => suspended,
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 1, max: 4 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: unsuspend,
+      emitAudit: auditSpy,
+    });
+    await reconciler.evaluate();
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('emitAudit hook that rejects does NOT break the dispatch path (best-effort)', async () => {
+    const suspended = [
+      makeJob({
+        name: 'j1',
+        agent: 'a',
+        model: 'm1',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:00Z',
+      }),
+      makeJob({
+        name: 'j2',
+        agent: 'a',
+        model: 'm1',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:01Z',
+      }),
+    ];
+    const auditSpy = vi.fn().mockRejectedValue(new Error('audit-publisher exploded'));
+    const unsuspend = vi.fn().mockResolvedValue(undefined);
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => suspended,
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 5, max: 5 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: unsuspend,
+      emitAudit: auditSpy,
+    });
+    const summary = await reconciler.evaluate();
+    // Both Jobs admitted despite emitAudit failing.
+    expect(summary.admitted).toBe(2);
+    expect(unsuspend).toHaveBeenCalledTimes(2);
+    expect(auditSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips emission (logs warning) when ownerReferences[0].uid is missing', async () => {
+    const malformed: V1Job = {
+      apiVersion: 'batch/v1',
+      kind: 'Job',
+      metadata: {
+        name: 'j-malformed',
+        namespace: 'default',
+        labels: {
+          [AGENT_LABEL]: 'a',
+          'kagent.knuteson.io/task': 't-malformed',
+          'kagent.knuteson.io/managed-by': 'kagent-operator',
+        },
+        creationTimestamp: new Date('2026-05-03T10:00:00Z'),
+        // ownerReferences omitted
+      },
+      spec: {
+        suspend: true,
+        template: {
+          spec: {
+            containers: [
+              {
+                name: 'agent',
+                image: 'x',
+                env: [{ name: 'KAGENT_AGENT_SPEC', value: JSON.stringify({ model: 'm1' }) }],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const auditSpy = vi.fn().mockResolvedValue(undefined);
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => [malformed],
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 1, max: 4 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: vi.fn().mockResolvedValue(undefined),
+      emitAudit: auditSpy,
+    });
+    const summary = await reconciler.evaluate();
+    expect(summary.admitted).toBe(1);
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('absent emitAudit hook is a no-op (back-compat with non-audit installs)', async () => {
+    const suspended = [
+      makeJob({
+        name: 'j1',
+        agent: 'a',
+        model: 'm1',
+        suspended: true,
+        creationTimestamp: '2026-05-03T10:00:00Z',
+      }),
+    ];
+    const reconciler = buildAdmissionReconciler({
+      enabled: true,
+      listJobs: () => suspended,
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 1, max: 4 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: vi.fn().mockResolvedValue(undefined),
+      // no emitAudit provided
+    });
+    const summary = await reconciler.evaluate();
+    expect(summary.admitted).toBe(1);
   });
 });

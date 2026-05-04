@@ -302,6 +302,17 @@ spec:
               value: {{ .Values.llmGateway.apiKey.secretKey | quote }}
             {{- end }}
             {{- end }}
+            # Wave 0 sub-team Audit (v0.1.15-audit-stream). When enabled
+            # (default true), the operator builds an AuditPublisher and
+            # connects to NATS lazily. The connect path is best-effort:
+            # an unreachable NATS does NOT break the operator (publish()
+            # logs warning + no-ops per the @kagent/audit-events
+            # graceful-degrade contract). Stream provisioning lives in
+            # `templates/audit-stream.yaml` (a Helm post-install hook).
+            {{- if .Values.audit.enabled }}
+            - name: KAGENT_AUDIT_NATS_URL
+              value: {{ .Values.audit.natsUrl | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Operator's livenessProbe wired in Phase 3 once a /healthz

@@ -27,6 +27,7 @@
   ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
+    "@kagent/audit-events": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
     "nats": "2.29.3"
   },

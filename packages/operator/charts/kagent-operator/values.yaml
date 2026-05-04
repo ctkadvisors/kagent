@@ -291,6 +291,52 @@ llmGateway:
     secretName: ''
     secretKey: 'token'
 
+# Wave 0 sub-team Audit (v0.1.15-audit-stream). When enabled (default),
+# every substrate decision (admission, capability mint, secret access,
+# spawn, completion, contract violation, quota breach) emits a
+# CloudEvents-shaped record on the NATS JetStream `audit` stream per
+# docs/SUBSTRATE-V1.md §4.3.
+#
+# The stream is provisioned by a Helm post-install/post-upgrade Job
+# (`templates/audit-stream.yaml`) that runs `nats stream add/update`
+# against the configured NATS URL. The operator + agent-pod read
+# `KAGENT_AUDIT_NATS_URL` and connect via `@kagent/audit-events`'s
+# `AuditPublisher`; failure to connect is best-effort and does NOT
+# break the substrate (per `AuditPublisher`'s graceful no-op contract).
+#
+# To disable audit emission entirely (e.g. tests, local-dev installs
+# without a NATS server) set `audit.enabled: false`. The operator
+# still runs; emission sites become no-ops.
+audit:
+  enabled: true
+  # In-cluster NATS URL. Default points at the namespace-local
+  # `nats` Service installed by the upstream nats-io/nats Helm chart.
+  # Override when NATS lives in a different namespace.
+  natsUrl: 'nats://nats.kagent-system.svc.cluster.local:4222'
+  # JetStream stream sizing — defaults match the SOC2-shaped retention
+  # described in SUBSTRATE-V1.md §4.3. MaxBytes caps disk footprint so
+  # a noisy emission storm can't fill the JetStream PVC; MaxAge bounds
+  # how long events sit in the stream before NATS reclaims (the audit
+  # warehouse is expected to scrape from this stream and persist
+  # long-term independently).
+  maxBytes: '10GB'
+  maxAge: '720h' # 30 days
+  # Stream replica count — single-node JetStream by default (matches
+  # the v0.1 single-node setup in
+  # `packages/operator/charts/values-references/nats-jetstream.yaml`).
+  # Bump to 3 once NATS clustering is in place (v0.2).
+  replicas: 1
+  # Subject prefix the stream binds to (`<prefix>.>`). Every audit
+  # event publishes to `<prefix>.<eventType>` — eg
+  # `audit.task.admitted`, `audit.capability.minted`. Override only
+  # when running side-by-side with another consumer that already owns
+  # the `audit` namespace.
+  subjectPrefix: 'audit'
+  # Provisioning Job image. nats-box bundles the `nats` CLI we need
+  # for `nats stream add/update`; the operator's runtime image
+  # deliberately does NOT.
+  image: 'natsio/nats-box:0.14.5'
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate
