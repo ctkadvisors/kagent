@@ -423,6 +423,169 @@ export { hashTaskInputs };
 import type { EventTopicSubsetViolation } from '@kagent/events';
 import { topicSubsetViolations } from '@kagent/events';
 
+/* =====================================================================
+ * v0.5.0-tenancy — Wave 4 / Tenancy admission validator + resolver.
+ *
+ * Per docs/WAVES.md §6.1 deliverable 2 + docs/GATEWAY-CONTRACT.md §3:
+ *
+ *   - Each Agent / AgentTask carries a
+ *     `metadata.labels[kagent.knuteson.io/tenant]` label resolved at
+ *     admission time. The label is the tenancy scope downstream
+ *     consumers (cap-issuer, gateway, audit) read.
+ *
+ *   - Resolution order (`resolveTenantForTask`):
+ *       1. AgentTask's own `metadata.labels.tenant` (explicit on the
+ *          task)
+ *       2. Agent's `metadata.labels.tenant` (Agent-pinned tenant)
+ *       3. Cluster-wide default tenant (when set; from
+ *          `KAGENT_TENANCY_DEFAULT_TENANT` env)
+ *       4. Unresolved → returns undefined; admission tolerates this
+ *          for legacy installs (per Wave 4 deliverable 4 fail-open
+ *          posture: no JWT tenant claim threaded; no header sent)
+ *
+ *   - Admission gate (`validateTenantNamespace`):
+ *       - Resolves the tenant via `resolveTenantForTask`.
+ *       - Checks `Tenant.spec.namespaceAllowlist` admits the task's
+ *         namespace.
+ *       - Refusal: `policy_denied:tenant_namespace_mismatch`.
+ *
+ * Pure helpers — no K8s I/O. The reconciler wires these against the
+ * Tenant informer's `lookupTenant` callback.
+ * ===================================================================== */
+
+import type { Tenant } from './crds/index.js';
+import { TENANT_LABEL, tenantAdmitsNamespace } from './crds/index.js';
+
+/**
+ * Lookup callback type — informed by the Tenant informer cache the
+ * operator wires in `main.ts` under the `// === Wave 4 — Tenancy ===`
+ * section. Returns undefined when no Tenant CR with that name exists.
+ *
+ * Cluster-scoped lookup — Tenants are NOT namespaced (see
+ * `crds/tenant.ts` rationale). Tests pass an in-memory Map-backed
+ * implementation.
+ */
+export type TenantLookupFn = (name: string) => Tenant | undefined;
+
+/**
+ * Resolve the effective tenant for an AgentTask using the precedence
+ * documented above. Pure: takes the AgentTask, the resolved Agent CR
+ * (already loaded by admission), the cluster-default tenant name (when
+ * set), and a Tenant lookup callback.
+ *
+ * Returns the resolved Tenant CR, or undefined when nothing maps.
+ *
+ * Note on the namespace-default-tenant fallback: docs/WAVES.md §6.1
+ * deliverable 2 mentions "the namespace's default-tenant fallback" —
+ * v0.5.0 implements this as the cluster-wide default
+ * (`KAGENT_TENANCY_DEFAULT_TENANT`), since per-namespace defaults
+ * compose the same way once the cluster admin labels namespaces with
+ * `kagent.knuteson.io/default-tenant=<name>`. The cluster-wide default
+ * is the simpler v0.5.0 substrate primitive; per-namespace defaults
+ * are a forward-compat refinement (a namespace label that overrides
+ * the cluster default; lookup logic stays in this file).
+ */
+export function resolveTenantForTask(
+  task: AgentTask,
+  agent: Agent,
+  defaultTenantName: string | undefined,
+  lookupTenant: TenantLookupFn,
+): Tenant | undefined {
+  // (1) Task-pinned tenant.
+  const taskLabel = task.metadata.labels?.[TENANT_LABEL];
+  if (typeof taskLabel === 'string' && taskLabel.length > 0) {
+    const t = lookupTenant(taskLabel);
+    if (t !== undefined) return t;
+  }
+  // (2) Agent-pinned tenant.
+  const agentLabel = agent.metadata.labels?.[TENANT_LABEL];
+  if (typeof agentLabel === 'string' && agentLabel.length > 0) {
+    const t = lookupTenant(agentLabel);
+    if (t !== undefined) return t;
+  }
+  // (3) Cluster default.
+  if (typeof defaultTenantName === 'string' && defaultTenantName.length > 0) {
+    const t = lookupTenant(defaultTenantName);
+    if (t !== undefined) return t;
+  }
+  return undefined;
+}
+
+/**
+ * Result of `validateTenantNamespace`. `ok: false` carries the
+ * structured rejection reason — admission surfaces this on the
+ * AgentTask's status (`reason`, `message`) and emits a
+ * `tenant.admission_violation` audit event.
+ */
+export type TenantNamespaceValidation =
+  | { readonly ok: true; readonly tenant: Tenant | undefined }
+  | {
+      readonly ok: false;
+      readonly reason: 'TenantNamespaceMismatch';
+      readonly message: string;
+      readonly tenantName: string;
+      readonly namespace: string;
+    };
+
+/**
+ * Refusal taxonomy string — mirrors the in-pod / depth-cap pattern.
+ * Per docs/WAVES.md §6.1: `policy_denied:tenant_namespace_mismatch`.
+ */
+export const TENANT_NAMESPACE_REFUSAL_REASON = 'policy_denied:tenant_namespace_mismatch' as const;
+
+/**
+ * Validate the resolved tenant admits the AgentTask's namespace.
+ * Pure: no K8s I/O. Defensive — when no tenant resolved AND the
+ * cluster has no `defaultTenantName`, returns ok (legacy / pre-Wave-4
+ * install). When a tenant DID resolve but its allowlist refuses the
+ * namespace, returns the structured refusal.
+ *
+ * The `tenancyEnforced` flag (default false) gates the strict
+ * "no-tenant-resolved → fail" path. v0.5.0 ships fail-open by default
+ * so existing installs keep working; cluster operators flip
+ * `KAGENT_TENANCY_ENABLED=true` + provision Tenant CRs, then the
+ * controller can flip strict on.
+ */
+export function validateTenantNamespace(
+  task: AgentTask,
+  resolvedTenant: Tenant | undefined,
+  tenancyEnforced = false,
+): TenantNamespaceValidation {
+  const namespace = task.metadata.namespace ?? 'default';
+  if (resolvedTenant === undefined) {
+    if (tenancyEnforced) {
+      return {
+        ok: false,
+        reason: 'TenantNamespaceMismatch',
+        message: `${TENANT_NAMESPACE_REFUSAL_REASON} — no tenant resolved for AgentTask in namespace ${namespace} and KAGENT_TENANCY_ENFORCED=true`,
+        tenantName: '',
+        namespace,
+      };
+    }
+    return { ok: true, tenant: undefined };
+  }
+  if (!tenantAdmitsNamespace(resolvedTenant, namespace)) {
+    const allowlistStr = resolvedTenant.spec.namespaceAllowlist.join(', ');
+    return {
+      ok: false,
+      reason: 'TenantNamespaceMismatch',
+      message: `${TENANT_NAMESPACE_REFUSAL_REASON} — AgentTask in namespace ${namespace} is not in tenant ${resolvedTenant.spec.name} allowlist (${allowlistStr})`,
+      tenantName: resolvedTenant.spec.name,
+      namespace,
+    };
+  }
+  return { ok: true, tenant: resolvedTenant };
+}
+
+/**
+ * Compose the tenant label patch the operator stamps on Agents +
+ * AgentTasks at admission time. Pure helper used by the reconciler;
+ * tests assert the patch shape.
+ */
+export function tenantLabelPatch(tenantName: string): { labels: Record<string, string> } {
+  return { labels: { [TENANT_LABEL]: tenantName } };
+}
+
 export type EventTopicsValidation =
   | { readonly ok: true }
   | {
