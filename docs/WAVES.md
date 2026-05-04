@@ -102,9 +102,9 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 **Deliverables:**
 1. **prompts-migrated:** orchestrator + summarizer-{k8s,postgres} Agent CRs use `systemPromptRef: { name: <agent>-system }` (mirrors summarizer-rust); inline `systemPrompt` removed
-2. **ci-kind-gate:** new CI job `helm-smoke-kind` brings up ephemeral kind, installs operator + workbench charts via `helm install --wait`, runs the smoke AgentTask, tears down. Gates image-build on green.
+2. **ci-kind-gate (SHIPPED v0.1.14):** new CI job `helm-smoke-kind` brings up ephemeral kind, builds operator + workbench images locally (linux/amd64, no push), `kind load`s them, runs `helm install --wait` against both charts using the `ci/kind-smoke-values.yaml` overlay (smoke AgentTask + NetworkPolicy + artifact PVC disabled), asserts CRDs Established + Deployments Available. Gates `build-images` on green. AgentTask flow skipped — kind has no LLM endpoint and the gate's job is template + startup regression coverage.
 
-**Validation:** every Agent CR with `systemPromptRef` boots cleanly; CI fails on a deliberately-broken Helm template change.
+**Validation:** every Agent CR with `systemPromptRef` boots cleanly; CI fails on a deliberately-broken Helm template change. (`v0.1.14-ci-kind-gate`: gate active on PR + push-to-main; kind cluster + image build + `helm install --wait` round-trip in <15min.)
 
 ### 2.5 Sub-team: Audit
 

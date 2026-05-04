@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Values overlay for the `helm-smoke-kind` CI gate. See the matching
+# overlay in `packages/operator/charts/kagent-operator/ci/` for the
+# rationale; this file pins workbench images + disables NetworkPolicy
+# for the same reasons.
+
+api:
+  image:
+    repository: ghcr.io/ctkadvisors/kagent-workbench-api
+    tag: ci-smoke
+    pullPolicy: IfNotPresent
+
+ui:
+  image:
+    repository: ghcr.io/ctkadvisors/kagent-workbench-ui
+    tag: ci-smoke
+    pullPolicy: IfNotPresent
+
+networkPolicy:
+  enabled: false
+
+ingress:
+  enabled: false
