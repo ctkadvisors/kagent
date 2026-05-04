@@ -24,6 +24,9 @@
 
 export type {
   AdmissionPodPressureDeferredData,
+  AgentDeprecatedUsedData,
+  AgentMutationRefusedData,
+  AgentPublishedData,
   AuditEvent,
   AuditEventData,
   AuditEventType,
@@ -59,6 +62,9 @@ export type {
 
 export {
   ADMISSION_POD_PRESSURE_DEFERRED,
+  AGENT_DEPRECATED_USED,
+  AGENT_MUTATION_REFUSED,
+  AGENT_PUBLISHED,
   ALL_EVENT_TYPES,
   CACHE_HIT,
   CACHE_MISS,

@@ -98,19 +98,28 @@ export const TENANT_DELETED = 'tenant.deleted' as const;
 export const TENANT_ADMISSION_VIOLATION = 'tenant.admission_violation' as const;
 export const TENANT_MIGRATION = 'tenant.migration' as const;
 
+/* v0.5.3-versioning — Wave 4 / Versioning sub-team. Agent immutability +
+ * version-pinning + deprecation lifecycle audit events. Catalog grows
+ * from 30 → 33. `agent.published` fires when a NEW (name, version)
+ * Agent CR is admitted by the operator's Agent informer; the
+ * immutability webhook emits `agent.mutation_refused` whenever a
+ * post-publication mutation is rejected; AgentTask admission emits
+ * `agent.deprecated_used` whenever a task pins to an Agent CR carrying
+ * `kagent.knuteson.io/deprecated: 'true'` (warning, not refusal — the
+ * Agent still serves until `removed-at` fires). See docs/WAVES.md §6.4. */
+export const AGENT_PUBLISHED = 'agent.published' as const;
+export const AGENT_MUTATION_REFUSED = 'agent.mutation_refused' as const;
+export const AGENT_DEPRECATED_USED = 'agent.deprecated_used' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(30)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(33)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  *
- * v0.5.0-tenancy added 5 events but `tenant.updated` is folded into
- * the `tenant.created`/`tenant.deleted` lifecycle pair on the wire
- * (a tenant_updated emission is a tenant_created event with the
- * latest spec) — the catalog count mentioned in WAVES.md §6.1 reads
- * "25 → 29" because the `updated` literal exists for callsite
- * grep-ability but is type-aliased to the `tenant.updated` data
- * shape's discriminated union. The `ALL_EVENT_TYPES` array carries
- * all 5 literals.
+ * Catalog growth log (kept for forensics):
+ *   - v0.5.0-tenancy: 25 → 30 (5 added, see Tenancy block above)
+ *   - v0.5.3-versioning: 30 → 33 (3 added: agent.published,
+ *     agent.mutation_refused, agent.deprecated_used)
  */
 export const ALL_EVENT_TYPES = Object.freeze([
   TASK_ADMITTED,
@@ -143,4 +152,7 @@ export const ALL_EVENT_TYPES = Object.freeze([
   TENANT_DELETED,
   TENANT_ADMISSION_VIOLATION,
   TENANT_MIGRATION,
+  AGENT_PUBLISHED,
+  AGENT_MUTATION_REFUSED,
+  AGENT_DEPRECATED_USED,
 ] as const);

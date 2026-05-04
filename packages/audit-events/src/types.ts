@@ -81,7 +81,11 @@ export type AuditEventType =
   | 'tenant.updated'
   | 'tenant.deleted'
   | 'tenant.admission_violation'
-  | 'tenant.migration';
+  | 'tenant.migration'
+  /* v0.5.3-versioning — Wave 4 / Versioning sub-team. */
+  | 'agent.published'
+  | 'agent.mutation_refused'
+  | 'agent.deprecated_used';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -529,6 +533,57 @@ export interface TenantMigrationData {
 }
 
 /**
+ * `agent.published` — Wave 4 / Versioning sub-team. Emitted when the
+ * operator's Agent informer observes a NEW (name, version) pair via
+ * the `AgentVersionIndex.onAdd` insertion path. Re-emissions of the
+ * same (name, version) on informer resync DO NOT fire — the index
+ * tracks the inserted-vs-updated outcome and only inserted fires the
+ * event.
+ */
+export interface AgentPublishedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentVersion: string;
+  /** `metadata.uid` of the published Agent CR. */
+  readonly agentUid: string | undefined;
+}
+
+/**
+ * `agent.mutation_refused` — Wave 4 / Versioning sub-team. Emitted by
+ * the immutability admission webhook each time it rejects a
+ * post-publication mutation. Carries the structured refusal taxonomy
+ * (`agent_immutable_spec` | `agent_published_unflip`) plus the
+ * Agent's identity so audit warehouses can correlate to the upstream
+ * GitOps actor.
+ */
+export interface AgentMutationRefusedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentVersion: string;
+  /** Always one of `agent_immutable_spec` | `agent_published_unflip`. */
+  readonly reason: string;
+  readonly message: string;
+}
+
+/**
+ * `agent.deprecated_used` — Wave 4 / Versioning sub-team. Emitted at
+ * AgentTask admission time when the resolved (name, version) Agent CR
+ * carries `kagent.knuteson.io/deprecated: 'true'`. The substrate does
+ * NOT refuse the task; this event is a warning so operators see
+ * deprecated-Agent traffic and migrate at their own pace.
+ */
+export interface AgentDeprecatedUsedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentVersion: string;
+  readonly taskUid: string | undefined;
+  readonly taskName: string;
+  readonly taskNamespace: string;
+  /** RFC 3339 timestamp from the Agent's `removed-at` annotation, when set. */
+  readonly removedAt: string | undefined;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -584,7 +639,11 @@ export type AuditEventData =
   | { readonly type: 'tenant.updated'; readonly data: TenantLifecycleData }
   | { readonly type: 'tenant.deleted'; readonly data: TenantLifecycleData }
   | { readonly type: 'tenant.admission_violation'; readonly data: TenantAdmissionViolationData }
-  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData };
+  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData }
+  /* v0.5.3-versioning — Wave 4 / Versioning sub-team. */
+  | { readonly type: 'agent.published'; readonly data: AgentPublishedData }
+  | { readonly type: 'agent.mutation_refused'; readonly data: AgentMutationRefusedData }
+  | { readonly type: 'agent.deprecated_used'; readonly data: AgentDeprecatedUsedData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

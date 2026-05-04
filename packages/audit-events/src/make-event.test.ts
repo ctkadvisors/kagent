@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 30 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(30);
+  it('exports exactly 33 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy + 3 v0.5.3-versioning)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(33);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -456,6 +456,10 @@ describe('event-types catalog', () => {
       'tenant.deleted',
       'tenant.admission_violation',
       'tenant.migration',
+      // v0.5.3-versioning — Wave 4 / Versioning sub-team additions.
+      'agent.published',
+      'agent.mutation_refused',
+      'agent.deprecated_used',
     ]);
   });
 });
