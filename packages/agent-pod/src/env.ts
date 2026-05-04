@@ -93,6 +93,17 @@ export interface AgentTaskRunConfigEnv {
   readonly costLimitUsd?: number;
   readonly maxIterations?: number;
   readonly timeoutSeconds?: number;
+  /**
+   * v0.1.11 — W3C Trace Context propagation. Mirror of
+   * `AgentTaskRunConfig.traceparent`. The agent-pod itself does NOT
+   * read this from `taskSpec.runConfig` — the operator's job-spec
+   * builder is the one that threads the value into the spawned Job's
+   * container env as `OTEL_TRACEPARENT`, which `main.ts` then reads
+   * directly from `process.env`. The field is preserved in the env
+   * mirror only so a JSON round-trip of `KAGENT_TASK_SPEC` doesn't
+   * lose data.
+   */
+  readonly traceparent?: string;
 }
 
 export interface TaskSpecEnv {

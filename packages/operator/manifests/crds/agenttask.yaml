@@ -83,6 +83,22 @@ spec:
                       minimum: 1
                       maximum: 86400
                       description: 'Wall-clock deadline. Same semantics as the deprecated top-level field; wins when both are set.'
+                    traceparent:
+                      type: string
+                      maxLength: 128
+                      pattern: '^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+                      description: |
+                        v0.1.11 — W3C Trace Context propagation. When the
+                        parent agent-pod's `spawn_child_task` issues a child
+                        AgentTask, it stamps the parent's current OTel span
+                        context here as a `traceparent` header value
+                        (`00-<traceId 32hex>-<spanId 16hex>-<flags 2hex>`).
+                        The operator's job-spec builder threads this value
+                        into the spawned Job's container env as
+                        `OTEL_TRACEPARENT`; the agent-pod's main.ts seeds
+                        its OtelTraceSink root span context from that env so
+                        the child's trace tree becomes a child of the
+                        parent's trace, not a sibling.
                 parentTask:
                   type: string
                   description: UID of the AgentTask that delegated this one.

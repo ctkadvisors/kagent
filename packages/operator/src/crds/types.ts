@@ -165,6 +165,24 @@ export interface AgentTaskRunConfig {
   readonly maxIterations?: number;
   /** Wall-clock deadline; same semantics as the deprecated top-level field. */
   readonly timeoutSeconds?: number;
+  /**
+   * v0.1.11 — W3C Trace Context propagation. When the parent agent-pod's
+   * `spawn_child_task` issues a child AgentTask, it stamps the parent's
+   * current OTel span context here as a `traceparent` header value
+   * (`00-<32hex traceId>-<16hex spanId>-<2hex flags>`). The operator's
+   * job-spec builder threads the value into the spawned Job's container
+   * env as `OTEL_TRACEPARENT`; the agent-pod's main.ts seeds its
+   * OtelTraceSink root span context from that env so the child's trace
+   * tree becomes a child of the parent's trace, not a sibling.
+   *
+   * Format is the literal W3C Trace Context value — never re-encode.
+   * Substrate-opaque otherwise; nothing else in the operator inspects it.
+   *
+   * The CRD YAML mirror at
+   * `packages/operator/manifests/crds/agenttask.yaml` carries the same
+   * field under `spec.runConfig.traceparent`.
+   */
+  readonly traceparent?: string;
 }
 
 export interface AgentTaskSpec {
