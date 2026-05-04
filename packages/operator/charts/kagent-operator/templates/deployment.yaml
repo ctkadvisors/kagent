@@ -423,6 +423,31 @@ spec:
               value: {{ .Values.supervision.defaultStrategy | quote }}
             - name: KAGENT_SUPERVISION_MAX_RESTARTS
               value: {{ .Values.supervision.maxRestarts.default | quote }}
+            # ---------------------------------------------------------------
+            # Wave 2 — Workflows
+            # ---------------------------------------------------------------
+            # AgentWorkflow controller (per docs/SUBSTRATE-V1.md §3.3 +
+            # docs/WAVES.md §4.3). When `workflows.enabled=true`, the
+            # operator boots the AgentWorkflow controller's informer
+            # triplet (AgentWorkflow + label-selected Deployment +
+            # label-selected Service) and registers each workflow
+            # image with Restate via the admin API at reconcile time.
+            #
+            # Restate is NOT installed by this chart in v0.3.2 —
+            # operators install Restate independently via the upstream
+            # `restatedev/restate-helm` chart and point the addresses
+            # below at the resulting Service. v0.5 will lift a
+            # single-node Restate sub-chart inline; until then,
+            # KAGENT_WORKFLOWS_RESTATE_ADDRESS / _ADMIN_ADDRESS are the
+            # contract.
+            - name: KAGENT_WORKFLOWS_ENABLED
+              value: {{ .Values.workflows.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.workflows.enabled }}
+            - name: KAGENT_WORKFLOWS_RESTATE_ADDRESS
+              value: {{ .Values.workflows.restate.address | quote }}
+            - name: KAGENT_WORKFLOWS_RESTATE_ADMIN_ADDRESS
+              value: {{ .Values.workflows.restate.adminAddress | quote }}
+            {{- end }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).

@@ -138,3 +138,38 @@ rules:
   #   - agenttasks/status: [get,patch,update]     → restartCount + phase
   # No additional verbs required for v0.3.1-supervision; this comment
   # exists so future readers don't waste time looking for them.
+  # ---------------------------------------------------------------------
+  # Wave 2 — Workflows
+  # ---------------------------------------------------------------------
+  # AgentWorkflow controller needs:
+  #   - watch + read AgentWorkflow CRs (informer)
+  #   - patch AgentWorkflow.status (status subresource) + parent
+  #     metadata for the finalizer dance + capabilityRef stamp
+  #   - Deployments: create / patch / read / list / watch / delete
+  #     (the workflow runtime Deployment is 1:1 per AgentWorkflow,
+  #     ownerRef'd back to the parent so cascading delete reaps)
+  #   - Services: create / read / list / watch / delete (ClusterIP
+  #     fronting the workflow runtime's HTTP/2 endpoint for Restate)
+  #   - Secrets: create / patch (the cap JWT mounted into the
+  #     workflow runtime via Secret-volume; re-mint each reconcile)
+  #   - kagentschedules: create (workflow `schedule` triggers
+  #     materialize sibling KagentSchedule CRs); read/list/watch
+  #     already covered by the operator-wide rule above.
+  #
+  # The shared `agentworkflows` resource group + Deployments are
+  # additive on top of the existing operator verbs.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agentworkflows']
+    verbs: ['get', 'list', 'watch', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agentworkflows/status']
+    verbs: ['get', 'patch', 'update']
+  - apiGroups: ['apps']
+    resources: ['deployments']
+    verbs: ['get', 'list', 'watch', 'create', 'patch', 'delete']
+  - apiGroups: ['']
+    resources: ['services']
+    verbs: ['get', 'list', 'watch', 'create', 'delete']
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'create', 'patch', 'delete']

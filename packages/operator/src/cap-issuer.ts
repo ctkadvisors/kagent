@@ -40,7 +40,7 @@ import {
 } from '@kagent/capability-types';
 
 import type { CapCa, MintCapResult } from './cap-ca.js';
-import type { Agent, AgentTask } from './crds/index.js';
+import type { Agent, AgentTask, AgentWorkflow } from './crds/index.js';
 
 /**
  * Inputs to `mintCapabilityForTask`.
@@ -336,4 +336,114 @@ function assignArrayCategoryNarrowed(
       // Tenant is handled before this fn; included for exhaustiveness.
       return;
   }
+}
+
+/* =====================================================================
+ * AgentWorkflow (v0.3.2-workflows) — Wave 2 / Workflows sub-team.
+ *
+ * Workflows are spawn parents the same way Agents are: their own cap
+ * is the upper bound on what their spawned AgentTasks may carry. The
+ * minter here is a sibling to `mintCapabilityForTask` but works off
+ * an AgentWorkflow CR's `spec.capabilityClaims`.
+ *
+ * Subject convention: the JWT's `sub` claim is `workflow:<uid>` (vs.
+ * tasks' `task-uid:<uid>`). Verifiers downstream switch on the prefix
+ * to know whether the bundle came from an Agent loop or a Workflow
+ * runtime. Audit lookups distinguish without ambiguity.
+ *
+ * Parent narrowing: workflows are top-level (no parent task), so the
+ * minter accepts an optional `tenantCeiling` claim set the chart-side
+ * tenancy guard might apply at admission. v0.3.2 leaves this as a
+ * future hook; the typical caller passes `undefined` and the workflow's
+ * declared claims land verbatim.
+ * ===================================================================== */
+
+export interface MintCapForWorkflowInput {
+  readonly workflow: AgentWorkflow;
+  /**
+   * Optional tenant-level ceiling — the same shape as a parent
+   * bundle's claims. When set, the workflow's claims are intersected
+   * with this ceiling (defense in depth). When unset, the workflow's
+   * declared claims are minted verbatim.
+   */
+  readonly tenantCeiling?: CapabilityClaims;
+  /** Test-injectable jti override. */
+  readonly jtiOverride?: string;
+}
+
+export interface MintCapForWorkflowResult extends MintCapForTaskResult {
+  /** Always equals the workflow's UID for forensics correlation. */
+  readonly workflowUid: string;
+}
+
+/**
+ * Resolve effective `CapabilityClaims` from an AgentWorkflow. The
+ * workflow CRD has no legacy fields to fall back on (workflows are a
+ * new substrate primitive in v0.3.2), so this is a thin lookup.
+ */
+export function resolveWorkflowClaims(workflow: AgentWorkflow): CapabilityClaims {
+  return workflow.spec.capabilityClaims ?? {};
+}
+
+/**
+ * Mint a capability bundle for the given workflow. Algorithm mirrors
+ * `mintCapabilityForTask` but:
+ *   - Subject is `workflow:<uid>` (not `task-uid:<uid>`)
+ *   - There is no parent task; tenant ceiling is the optional outer
+ *     bound (typically supplied by Wave 4 Tenancy)
+ *   - JTI prefix is `cap-wf-<8>` so audit grep distinguishes from task
+ *     caps (`cap-<8>-<rand>`).
+ */
+export async function mintCapabilityForWorkflow(
+  ca: CapCa,
+  input: MintCapForWorkflowInput,
+): Promise<MintCapForWorkflowResult> {
+  const declared = resolveWorkflowClaims(input.workflow);
+
+  const narrowed =
+    input.tenantCeiling === undefined
+      ? declared
+      : narrowClaimsByParent(declared, input.tenantCeiling);
+
+  if (input.tenantCeiling !== undefined) {
+    const violations = claimsSubsetViolations(narrowed, input.tenantCeiling);
+    if (violations.length > 0) {
+      throw new CapabilityViolationError(violations, '<tenant-ceiling>');
+    }
+  }
+
+  const workflowUid = input.workflow.metadata.uid ?? '';
+  if (workflowUid.length === 0) {
+    throw new Error('mintCapabilityForWorkflow: AgentWorkflow has no metadata.uid');
+  }
+
+  const jti = input.jtiOverride ?? defaultWorkflowJti(workflowUid);
+
+  // Workflows don't carry a per-run timeoutSeconds the way AgentTasks
+  // do; the JWT helper's default TTL applies (DEFAULT_CAP_JWT_TTL_SECONDS
+  // ~ 600s). The controller re-mints periodically as part of its
+  // reconcile loop so the cap stays fresh.
+  const result: MintCapResult = await ca.mint({
+    subjectTaskUid: `workflow:${workflowUid}`,
+    jti,
+    claims: narrowed,
+  });
+
+  return {
+    jwt: result.jwt,
+    jti: result.jti,
+    expiresAt: result.expiresAt,
+    claims: narrowed,
+    workflowUid,
+  };
+}
+
+function defaultWorkflowJti(workflowUid: string): string {
+  // `cap-wf-<8>` — distinguishable from task caps' `cap-<8>-<rand>`.
+  const buf = new Uint8Array(4);
+  globalThis.crypto.getRandomValues(buf);
+  let hex = '';
+  for (const b of buf) hex += b.toString(16).padStart(2, '0');
+  const prefix = workflowUid.slice(0, 8);
+  return `cap-wf-${prefix}-${hex}`;
 }

@@ -38,9 +38,23 @@ export const SUPERVISION_APPLIED = 'supervision.applied' as const;
 export const SUPERVISION_RESTART_LIMIT_EXCEEDED = 'supervision.restart_limit_exceeded' as const;
 export const INFRA_FAULT_OBSERVED = 'infra.fault.observed' as const;
 
+/* v0.3.2-workflows — Wave 2 / Workflows sub-team. AgentWorkflow
+ * lifecycle events emitted by the operator's AgentWorkflow controller
+ * + the workflow runtime. The four states mirror Restate's invocation
+ * lifecycle plus an explicit step.completed for each ctx.spawnAgentTask
+ * await (audit warehouse can rebuild the workflow's task tree). The
+ * `event_subscription_pending` event documents an `event`-trigger
+ * subscription that's persisted-but-not-yet-dispatched (Wave 3 wires
+ * the dispatcher). */
+export const WORKFLOW_STARTED = 'workflow.started' as const;
+export const WORKFLOW_STEP_COMPLETED = 'workflow.step.completed' as const;
+export const WORKFLOW_COMPLETED = 'workflow.completed' as const;
+export const WORKFLOW_FAILED = 'workflow.failed' as const;
+export const WORKFLOW_EVENT_SUBSCRIPTION_PENDING = 'workflow.event_subscription_pending' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(13)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(18)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -57,4 +71,9 @@ export const ALL_EVENT_TYPES = Object.freeze([
   SUPERVISION_APPLIED,
   SUPERVISION_RESTART_LIMIT_EXCEEDED,
   INFRA_FAULT_OBSERVED,
+  WORKFLOW_STARTED,
+  WORKFLOW_STEP_COMPLETED,
+  WORKFLOW_COMPLETED,
+  WORKFLOW_FAILED,
+  WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
 ] as const);

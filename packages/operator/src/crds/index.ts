@@ -106,3 +106,27 @@ export type {
   WorkspaceSpec,
   WorkspaceStatus,
 } from './workspace.js';
+
+/* v0.3.2-workflows — AgentWorkflow primitive (Wave 2 / Workflows sub-team).
+ * See docs/SUBSTRATE-V1.md §3.3 + docs/WAVES.md §4.3. */
+export {
+  deploymentNameForAgentWorkflow,
+  isAgentWorkflow,
+  isAgentWorkflowFailed,
+  isAgentWorkflowReady,
+  isEventTrigger,
+  isScheduleTrigger,
+  isWebhookTrigger,
+  serviceNameForAgentWorkflow,
+} from './agent-workflow.js';
+export type {
+  AgentWorkflow,
+  AgentWorkflowCondition,
+  AgentWorkflowEventTrigger,
+  AgentWorkflowPhase,
+  AgentWorkflowScheduleTrigger,
+  AgentWorkflowSpec,
+  AgentWorkflowStatus,
+  AgentWorkflowTrigger,
+  AgentWorkflowWebhookTrigger,
+} from './agent-workflow.js';

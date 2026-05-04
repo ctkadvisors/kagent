@@ -1,0 +1,30 @@
+{
+  "name": "@kagent/agent-workflow-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wave 2 / Workflows host SDK — defineWorkflow + WorkflowContext (spawnAgentTask, awaitSignal, signal, sleep) over Restate's durable execution model. User-supplied workflow images import this package and Restate's TS SDK to register their handlers; the operator's AgentWorkflow controller deploys the image + registers it via Restate's admin API.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kagent/capability-types": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

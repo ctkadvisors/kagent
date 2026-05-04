@@ -59,7 +59,13 @@ export type AuditEventType =
   /* v0.3.1-supervision — Wave 2 / Supervision sub-team. */
   | 'supervision.applied'
   | 'supervision.restart_limit_exceeded'
-  | 'infra.fault.observed';
+  | 'infra.fault.observed'
+  /* v0.3.2-workflows — Wave 2 / Workflows sub-team. */
+  | 'workflow.started'
+  | 'workflow.step.completed'
+  | 'workflow.completed'
+  | 'workflow.failed'
+  | 'workflow.event_subscription_pending';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -298,6 +304,63 @@ export interface InfraFaultObservedData {
 }
 
 /**
+ * v0.3.2-workflows — AgentWorkflow lifecycle events. Emitted by the
+ * AgentWorkflow controller (operator) + the workflow runtime
+ * (`@kagent/agent-workflow-runtime`). `workflowName` is the
+ * AgentWorkflow CR name; `invocationId` is Restate's per-run UID,
+ * stable across replays.
+ */
+export interface WorkflowStartedData {
+  readonly workflowName: string;
+  readonly workflowNamespace: string;
+  readonly invocationId: string;
+  readonly handler: string;
+  readonly capabilityId: string | undefined;
+}
+
+export interface WorkflowStepCompletedData {
+  readonly workflowName: string;
+  readonly workflowNamespace: string;
+  readonly invocationId: string;
+  /** Step name from the workflow's `ctx.<op>(stepName, ...)` call. */
+  readonly stepName: string;
+  /** One of `spawn | await-task | signal | await-signal | sleep`. */
+  readonly stepKind: string;
+  /** Substrate-stamped task UID for spawn / await-task steps. */
+  readonly taskUid: string | undefined;
+}
+
+export interface WorkflowCompletedData {
+  readonly workflowName: string;
+  readonly workflowNamespace: string;
+  readonly invocationId: string;
+  /** Total number of journaled side effects on the run. */
+  readonly stepCount: number;
+}
+
+export interface WorkflowFailedData {
+  readonly workflowName: string;
+  readonly workflowNamespace: string;
+  readonly invocationId: string;
+  /** Error category; mirrors WorkflowTaskFailedError.reason / TerminalError class. */
+  readonly reason: string;
+  readonly message: string;
+}
+
+/**
+ * `workflow.event_subscription_pending` — emitted at AgentWorkflow
+ * reconcile time when an `event`-kind trigger is declared but the
+ * Wave 3 Events dispatcher hasn't yet wired the actual NATS
+ * subscription. Persists in `AgentWorkflow.status.eventSubscriptions`
+ * with `status: 'pending'` until Wave 3 lights it up.
+ */
+export interface WorkflowEventSubscriptionPendingData {
+  readonly workflowName: string;
+  readonly workflowNamespace: string;
+  readonly topic: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -319,7 +382,16 @@ export type AuditEventData =
       readonly type: 'supervision.restart_limit_exceeded';
       readonly data: SupervisionRestartLimitExceededData;
     }
-  | { readonly type: 'infra.fault.observed'; readonly data: InfraFaultObservedData };
+  | { readonly type: 'infra.fault.observed'; readonly data: InfraFaultObservedData }
+  /* v0.3.2-workflows — Wave 2 / Workflows sub-team. */
+  | { readonly type: 'workflow.started'; readonly data: WorkflowStartedData }
+  | { readonly type: 'workflow.step.completed'; readonly data: WorkflowStepCompletedData }
+  | { readonly type: 'workflow.completed'; readonly data: WorkflowCompletedData }
+  | { readonly type: 'workflow.failed'; readonly data: WorkflowFailedData }
+  | {
+      readonly type: 'workflow.event_subscription_pending';
+      readonly data: WorkflowEventSubscriptionPendingData;
+    };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

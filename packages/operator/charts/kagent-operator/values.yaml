@@ -539,6 +539,49 @@ workspaces:
   # completes. Go-style duration; `0` disables GC.
   defaultTtl: '24h'
 
+# ---------------------------------------------------------------------
+# Wave 2 — Workflows
+# ---------------------------------------------------------------------
+# AgentWorkflow primitive (per docs/SUBSTRATE-V1.md §3.3): durable
+# orchestrator. Each AgentWorkflow's runtime image consumes
+# @kagent/agent-workflow-runtime + @restatedev/restate-sdk; the
+# operator's controller deploys the image, registers it via Restate's
+# admin API, and wires triggers via Wave 0 Entry.
+#
+# DEFAULT-OFF until cluster operators have deployed Restate. When
+# `enabled: true`, the operator runs the AgentWorkflow controller's
+# informer triplet (AgentWorkflow + label-selected Deployment +
+# label-selected Service). Failed registration leaves the workflow in
+# `phase: Pending` with a clear status condition; the controller
+# retries on every reconcile event.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_WORKFLOWS_ENABLED=true|false
+#   KAGENT_WORKFLOWS_RESTATE_ADDRESS=http://...:8080
+#   KAGENT_WORKFLOWS_RESTATE_ADMIN_ADDRESS=http://...:9070
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 2 — Workflows" block.
+# CRD: `crds/agentworkflows.yaml`.
+#
+# Restate sub-chart sizing: the operator does NOT install Restate as
+# part of this chart in v0.3.2 — that's intentionally separate so a
+# cluster operator can swap in a managed Restate later. v0.3.2 ships
+# the AgentWorkflow controller + the env plumbing; expect to install
+# Restate independently (`restatedev/restate-helm` or equivalent) and
+# point KAGENT_WORKFLOWS_RESTATE_ADDRESS at the resulting Service.
+# v0.5 lifts a single-node Restate sub-chart into this repo.
+workflows:
+  enabled: false
+  # In-cluster URL of Restate's HTTP/2 ingress. Default points at the
+  # standard Restate Helm install; override when Restate lives in a
+  # different namespace or a different Service name.
+  restate:
+    # Override per-AgentWorkflow via spec.restateAddress.
+    address: 'http://restate.kagent-system.svc.cluster.local:8080'
+    # Admin API URL (Restate registers deployments here). Default:
+    # same host as `address`, port 9070 (Restate convention).
+    adminAddress: 'http://restate.kagent-system.svc.cluster.local:9070'
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

@@ -372,8 +372,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 13 event-type strings (10 Wave 0 + 3 v0.3.1-supervision)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(13);
+  it('exports exactly 18 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(18);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -392,6 +392,12 @@ describe('event-types catalog', () => {
       'supervision.applied',
       'supervision.restart_limit_exceeded',
       'infra.fault.observed',
+      // v0.3.2-workflows — Wave 2 / Workflows sub-team additions.
+      'workflow.started',
+      'workflow.step.completed',
+      'workflow.completed',
+      'workflow.failed',
+      'workflow.event_subscription_pending',
     ]);
   });
 });
