@@ -136,3 +136,25 @@ export type {
   AgentWorkflowTrigger,
   AgentWorkflowWebhookTrigger,
 } from './agent-workflow.js';
+
+/* v0.5.0-tenancy — Tenant primitive (Wave 4 / Tenancy sub-team).
+ * See docs/SUBSTRATE-V1.md §3.6 + docs/WAVES.md §6.1. */
+export {
+  TENANT_LABEL,
+  defaultAuditSubject,
+  isTenant,
+  isTenantFailed,
+  isTenantReady,
+  resolveTenantIssuer,
+  tenantAdmitsNamespace,
+} from './tenant.js';
+export type {
+  Tenant,
+  TenantCapabilityRoot,
+  TenantCondition,
+  TenantEgress,
+  TenantPhase,
+  TenantQuota,
+  TenantSpec,
+  TenantStatus,
+} from './tenant.js';

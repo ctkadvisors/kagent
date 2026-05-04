@@ -352,6 +352,30 @@ const expectations: readonly CRDExpectation[] = [
       'eventSubscriptions',
     ],
   },
+  // v0.5.0-tenancy — Wave 4 / Tenancy sub-team. See
+  // docs/SUBSTRATE-V1.md §3.6 + docs/WAVES.md §6.1.
+  {
+    file: 'tenants.yaml',
+    kind: 'Tenant',
+    plural: 'tenants',
+    specRequired: ['name', 'namespaceAllowlist'],
+    specProperties: [
+      'name',
+      'namespaceAllowlist',
+      'capabilityRoot',
+      'auditSubject',
+      'defaultQuota',
+      'defaultEgress',
+    ],
+    statusProperties: [
+      'phase',
+      'observedGeneration',
+      'conditions',
+      'namespaceCount',
+      'agentCount',
+      'activeTaskCount',
+    ],
+  },
 ];
 
 const errors: string[] = [];
