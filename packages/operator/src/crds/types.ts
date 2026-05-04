@@ -129,6 +129,111 @@ export interface AgentSpec {
    * suspended Jobs do not count against the cap.
    */
   readonly maxInFlightTasks?: number;
+
+  /* ---- v0.2.0-typed-io — Wave 1 sub-team I/O.
+   * Typed dataflow contract between the static Agent class and runtime
+   * AgentTask invocations. Per docs/SUBSTRATE-V1.md §3.1 + §3.2, every
+   * Agent declares the inputs it consumes and the outputs it produces;
+   * every AgentTask binds those inputs by reference (workspace name,
+   * upstream taskUid+output, scalar literal). Admission validates the
+   * contract; reconciler refuses `Completed` patches missing required
+   * outputs. The kind enum is the contract Workspace + CAS sub-teams
+   * branch from. */
+
+  /**
+   * Inputs this Agent consumes. Each entry's `kind` is one of
+   * `workspace | artifact | scalar`. Workspace inputs MUST declare a
+   * `mountPath` (admission rejects otherwise — Workspace sub-team
+   * mount plumbing depends on it); artifact inputs SHOULD declare one
+   * (CAS sub-team mounts artifact bytes the same way); scalars are
+   * passed through to the agent loop in-band.
+   *
+   * `required: true` (default) means an AgentTask must bind it at
+   * creation time; admission rejects creation otherwise.
+   * `optional: true` is the explicit opt-out and overrides any
+   * `required: true` on the same entry.
+   */
+  readonly inputs?: readonly InputDecl[];
+
+  /**
+   * Outputs this Agent produces. Reconciler validates each
+   * `required: true` entry is present in `AgentTask.status.outputs`
+   * before allowing a `phase=Completed` patch to land — missing
+   * required outputs force `Failed` with `reason: MissingRequiredOutputs`
+   * and emit a `contract.violated` audit event.
+   *
+   * `retention` is parsed in v0.2.2-cas; v0.2.0 only threads the
+   * field through the schema so authoring + admission round-trip it.
+   */
+  readonly outputs?: readonly OutputDecl[];
+
+  /**
+   * Reserved for the Workspace sub-team (v0.2.1-workspaces). Opaque
+   * object array at v0.2.0; the Workspace sub-team locks the shape in
+   * its release. Threaded through here so v0.2.0 schemas + admission
+   * accept the field without a CRD-bump dependency on Workspace.
+   */
+  readonly workspaceClaims?: readonly Record<string, unknown>[];
+}
+
+/* =====================================================================
+ * Typed I/O — input + output declarations on `Agent.spec`.
+ *
+ * The `kind` enum is the lowest-level contract Workspace + CAS sub-teams
+ * branch from. Workspace consumes `kind: 'workspace'` (RWX PVC, mounted
+ * via init-container clone, GC'd with the root task tree). CAS consumes
+ * `kind: 'artifact'` (content-addressed bytes, hashed `cas://` URIs).
+ * `kind: 'scalar'` is a literal value pass-through — substrate-opaque,
+ * forwarded to the agent loop in-band on the bound AgentTask.
+ *
+ * Mount-path discipline: every `kind: workspace | artifact` input MUST
+ * declare `mountPath` so the operator's job-spec builder mounts the
+ * underlying volume deterministically. Admission rejects otherwise —
+ * default-deny, NEVER pick a path on the agent's behalf.
+ * ===================================================================== */
+
+export type InputKind = 'workspace' | 'artifact' | 'scalar';
+export type OutputKind = 'artifact' | 'scalar';
+export type InputMode = 'ro' | 'rw';
+
+export interface InputDecl {
+  /** Stable name; AgentTask.spec.inputs[].name binds to this. */
+  readonly name: string;
+  readonly kind: InputKind;
+  /** RFC 6838 media type for documentation + downstream filtering. */
+  readonly mediaType?: string;
+  /**
+   * Container path the input is mounted at. Required for
+   * `kind: 'workspace' | 'artifact'`; ignored for `kind: 'scalar'`.
+   * Admission rejects when missing on a non-scalar input.
+   */
+  readonly mountPath?: string;
+  /** Read-only vs. read-write. Defaults to `'ro'` when unset. */
+  readonly mode?: InputMode;
+  /**
+   * Explicit opt-out from required-by-default. When true, the
+   * AgentTask may omit a binding for this input.
+   */
+  readonly optional?: boolean;
+  /**
+   * Belt-and-suspenders required marker. Defaults to `true` when
+   * unset and `optional` is unset. `optional: true` always wins.
+   */
+  readonly required?: boolean;
+}
+
+export interface OutputDecl {
+  readonly name: string;
+  readonly kind: OutputKind;
+  readonly mediaType?: string;
+  /** Defaults to true; reconciler force-fails Completed if missing. */
+  readonly required?: boolean;
+  /**
+   * Retention duration string (e.g. `7d`, `24h`). Parsed by the CAS
+   * sub-team in v0.2.2; v0.2.0 only threads the field through the
+   * schema for forward-compatibility.
+   */
+  readonly retention?: string;
 }
 
 export interface Agent {
@@ -220,7 +325,15 @@ export interface AgentTaskSpec {
    */
   readonly originalUserMessage?: string;
 
-  /** Optional parent-agent distillation of the request. Recommended. */
+  /**
+   * Optional parent-agent distillation of the request. Recommended.
+   *
+   * @deprecated v0.2.0-typed-io — superseded by typed inputs.
+   * Migration target: bind via
+   * `AgentTask.spec.inputs[{ name: 'distillation', from: { taskUid: <parent>, output: 'distillation' } }]`.
+   * The agent-pod logs a deprecation warning when this field is read.
+   * Field stays accepted for back-compat through one minor release.
+   */
   readonly parentDistillation?: string;
 
   /**
@@ -228,6 +341,74 @@ export interface AgentTaskSpec {
    * (e.g. ['fetch_url', 'web_search']). Feeds the F2 detector at run-end.
    */
   readonly expectedTools?: readonly string[];
+
+  /* ---- v0.2.0-typed-io — Wave 1 sub-team I/O.
+   *
+   * Each entry binds one of the target Agent's declared
+   * `Agent.spec.inputs[]` to an actual source (a workspace name, the
+   * output of an upstream AgentTask, or an inline scalar literal).
+   * Admission validates: every required Agent input is bound (or
+   * marked optional on the Agent declaration); every binding's
+   * `from` is exactly one of `workspace | taskUid+output | scalar`. */
+
+  /**
+   * Bindings that resolve `Agent.spec.inputs[]` at runtime. Admission
+   * cross-checks this against the target Agent's declared inputs and
+   * rejects when a required input is missing (`reason:
+   * 'InvalidInputs'`).
+   */
+  readonly inputs?: readonly InputBinding[];
+
+  /**
+   * Idempotency key (Stripe / Temporal pattern). When set, the
+   * operator's admission cache dedupes by
+   * (namespace, agent, idempotencyKey, inputHash) within a 24h TTL:
+   *
+   *   - cache hit, same input hash → mark `Completed` with the prior
+   *     task's outputs (cached replay); emit `task.deduped`.
+   *   - cache hit, different input hash → mark `Failed` with
+   *     `reason: 'IdempotencyConflict'`.
+   *   - cache miss → store + continue to normal admission.
+   *
+   * v0.2.0 cache is operator-local in-memory only. Distributed
+   * dedupe via etcd is a follow-up release; the schema field is
+   * stable across that change.
+   */
+  readonly idempotencyKey?: string;
+}
+
+/* =====================================================================
+ * Typed I/O — input bindings on `AgentTask.spec`.
+ *
+ * Exactly one of `from.workspace`, `from.taskUid + output`, or
+ * `from.scalar` MUST be set. The CRD YAML schema enforces this with a
+ * `oneOf` on the `from` block; the TS surface here makes the discriminant
+ * a tagged union so admission code reads cleanly without runtime sniffing.
+ * ===================================================================== */
+
+export type InputFrom =
+  | { readonly workspace: string }
+  | { readonly taskUid: string; readonly output: string }
+  | { readonly scalar: unknown };
+
+export interface InputBinding {
+  /** MUST match an `Agent.spec.inputs[].name` on the target Agent. */
+  readonly name: string;
+  readonly from: InputFrom;
+}
+
+/**
+ * Reference into a substrate output produced by an AgentTask. Populated
+ * on `AgentTask.status.outputs` by the operator's reconciler from the
+ * agent-pod's status patch — `ref` shape varies by output kind:
+ *   - `kind: 'artifact'` → CAS URI (`cas://sha256:<hex>/<name>` once
+ *     v0.2.2-cas lands; `pvc://kagent-artifacts/<task-uid>/<name>` in
+ *     v0.2.0).
+ *   - `kind: 'scalar'`   → string-encoded scalar (typically JSON).
+ */
+export interface OutputRef {
+  readonly name: string;
+  readonly ref: string;
 }
 
 /**
@@ -294,6 +475,15 @@ export interface AgentTaskStatus {
    * yet (writer lands in the next slice).
    */
   readonly artifacts?: readonly ArtifactRef[];
+  /**
+   * v0.2.0-typed-io — output references the agent-pod published, keyed
+   * by the `Agent.spec.outputs[].name`. Populated by the agent-pod's
+   * terminal status patch; the operator's reconciler validates that
+   * each `Agent.spec.outputs[].required` entry is present here before
+   * admitting `phase=Completed` (missing required → force `Failed`
+   * with `reason: MissingRequiredOutputs`).
+   */
+  readonly outputs?: readonly OutputRef[];
   /* ---- Workstream 5 / Phase 5 — parent/child task-graph projection.
    *
    * Populated by the operator's parent re-reconcile path

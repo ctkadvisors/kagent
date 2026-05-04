@@ -27,6 +27,15 @@ export type {
   ModelEndpointStatus,
   ModelEndpointInFlight,
   ModelEndpointBackendKind,
+  /* v0.2.0-typed-io — typed dataflow contract surface */
+  InputDecl,
+  InputKind,
+  InputMode,
+  OutputDecl,
+  OutputKind,
+  InputBinding,
+  InputFrom,
+  OutputRef,
 } from './types.js';
 
 export {
@@ -43,6 +52,25 @@ export type {
   InlineDecision,
   ParsedArtifactUri,
 } from './artifact-ref.js';
+
+/* v0.2.0-typed-io — typed dataflow contract helpers */
+export {
+  inputIsRequired,
+  inputsMissingMountPath,
+  outputIsRequired,
+  requiredInputNames,
+  requiredOutputNames,
+} from './agent.js';
+export {
+  fromKindOrNull,
+  hashTaskInputs,
+  isFromScalar,
+  isFromTaskUidOutput,
+  isFromWorkspace,
+  outputsByName,
+  validateInputBindings,
+} from './agent-task.js';
+export type { InputValidationResult } from './agent-task.js';
 
 export { isKagentSchedule } from './kagent-schedule.js';
 export type {
