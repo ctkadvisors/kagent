@@ -216,6 +216,18 @@ export async function loadFromMaterials(input: CapCaMaterials): Promise<CapCa> {
  *   - `KAGENT_CAP_SIGNING_PREV_PUB_FILE` — optional previous public
  *                                       key PEM (rotation cutover)
  *
+ * v0.4.3-identity (Wave 3 / Identity sub-team): when
+ * `KAGENT_IDENTITY_ENABLED=true` AND the operator's chart-mounted
+ * cap-ca Secret is empty/missing, fall back to the SPIRE-managed key
+ * pair at `KAGENT_SPIRE_CAP_SIGNING_KEY_FILE` /
+ * `KAGENT_SPIRE_CAP_SIGNING_PUB_FILE` (defaults
+ * `/var/kagent/spire-cap-ca/tls.{key,crt}`). When the SPIRE-managed
+ * pair IS present + healthy, the cap CA uses it; otherwise the
+ * canonical chart Secret path stays canonical. This lets a cluster
+ * operator run BOTH SPIFFE/SPIRE for workload identity AND the
+ * chart-managed Secret for cap signing without forcing a re-mint at
+ * SPIRE-cert rotation time.
+ *
  * `readFile` is dependency-injected so tests can drive both paths
  * without real filesystem access.
  */
@@ -223,6 +235,46 @@ export async function loadFromEnv(
   env: Readonly<Record<string, string | undefined>>,
   readFile: (path: string) => string = defaultReadFile,
 ): Promise<CapCa> {
+  // v0.4.3-identity — additive SPIRE-cert source. Tried FIRST when
+  // identity is enabled AND the SPIRE files are present + non-empty;
+  // a missing/empty SPIRE pair falls through to the canonical
+  // chart-Secret path. Wave 2 tests don't set KAGENT_IDENTITY_ENABLED
+  // so they take the same path they always did.
+  if (env.KAGENT_IDENTITY_ENABLED === 'true') {
+    const spireKeyPath =
+      env.KAGENT_SPIRE_CAP_SIGNING_KEY_FILE ?? '/var/kagent/spire-cap-ca/tls.key';
+    const spirePubPath =
+      env.KAGENT_SPIRE_CAP_SIGNING_PUB_FILE ?? '/var/kagent/spire-cap-ca/tls.crt';
+    let spireKeyPem: string | undefined;
+    let spirePubPem: string | undefined;
+    try {
+      spireKeyPem = readFile(spireKeyPath);
+      spirePubPem = readFile(spirePubPath);
+    } catch {
+      spireKeyPem = undefined;
+      spirePubPem = undefined;
+    }
+    if (
+      typeof spireKeyPem === 'string' &&
+      spireKeyPem.length > 0 &&
+      typeof spirePubPem === 'string' &&
+      spirePubPem.length > 0
+    ) {
+      console.log(`[kagent-operator] cap-ca: using SPIRE-managed signing key at ${spireKeyPath}`);
+      const alg = parseAlg(env.KAGENT_CAP_SIGNING_ALG) ?? detectAlgFromPem(spireKeyPem);
+      return await loadFromMaterials({
+        privatePem: spireKeyPem,
+        publicPem: spirePubPem,
+        alg,
+        ...(env.KAGENT_CAP_SIGNING_KID !== undefined && { kid: env.KAGENT_CAP_SIGNING_KID }),
+        ...(env.KAGENT_CAP_ISSUER !== undefined && { issuer: env.KAGENT_CAP_ISSUER }),
+      });
+    }
+    console.log(
+      '[kagent-operator] cap-ca: KAGENT_IDENTITY_ENABLED=true but SPIRE-cap-ca files are absent/empty; falling back to chart Secret',
+    );
+  }
+
   const privatePath = env.KAGENT_CAP_SIGNING_KEY_FILE ?? '/var/kagent/cap-ca/tls.key';
   const publicPath = env.KAGENT_CAP_SIGNING_PUB_FILE ?? '/var/kagent/cap-ca/tls.crt';
   const privatePem = readFile(privatePath);
