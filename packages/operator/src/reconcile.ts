@@ -1413,9 +1413,6 @@ async function emitTaskDedupedSafe(
       originalTaskUid,
     });
   } catch (err) {
-    console.warn(
-      '[kagent-operator] reconcile: emitTaskDeduped hook raised (audit dropped):',
-      err,
-    );
+    console.warn('[kagent-operator] reconcile: emitTaskDeduped hook raised (audit dropped):', err);
   }
 }

@@ -246,6 +246,38 @@ spec:
                   items:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                # ---- v0.4.2-cache — Wave 3 / Cache sub-team.
+                caches:
+                  type: array
+                  description: |
+                    Per-Agent persistent caches keyed by
+                    sha256(template-render). See docs/WAVES.md §5.3.
+                    Restored on task admission via init-container;
+                    saved on success via sidecar / watcher Job. Miss
+                    is NEVER an error.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - key
+                      - mountPath
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$'
+                      key:
+                        type: string
+                        minLength: 1
+                        description: |
+                          Template; recognized tokens:
+                          {input_artifact_hashes}, {image_digest},
+                          {model_name}. `default` sugars to
+                          `{input_artifact_hashes}+{image_digest}+{model_name}`.
+                      mountPath:
+                        type: string
+                        minLength: 1
                 # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
                 # The substrate's sealed-authority primitive per
                 # docs/SUBSTRATE-V1.md §3.6.

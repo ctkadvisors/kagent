@@ -33,9 +33,7 @@ import { inputIsRequired } from './agent.js';
  * Binding-shape predicates — narrow `InputFrom` at compile time.
  * ===================================================================== */
 
-export function isFromWorkspace(
-  from: InputFrom,
-): from is { readonly workspace: string } {
+export function isFromWorkspace(from: InputFrom): from is { readonly workspace: string } {
   return 'workspace' in from && typeof from.workspace === 'string';
 }
 

@@ -1546,6 +1546,52 @@ async function main(): Promise<void> {
     console.log('[kagent-operator] CAS GC disabled (set KAGENT_CAS_ENABLED=true to enable)');
   }
 
+  // === Wave 3 — Cache ===
+  // v0.4.2-cache per-Agent persistent caches. Off-by-default; flipped
+  // on by the chart's `cache.enabled: true`. When enabled the operator
+  // exposes `Agent.spec.caches[]` as the substrate-blessed cache
+  // declaration surface; cache identity is sha256 of the rendered
+  // `key` template.
+  //
+  // What's wired today (v0.4.2):
+  //   - `@kagent/cache-controller` package (pure-functional key
+  //     derivation + restore/save plumbing)
+  //   - `Agent.spec.caches[]` schema (CRD + TS + drift check)
+  //   - `buildCacheMounts` helper in `job-spec.ts` (callable by the
+  //     reconciler at Job spec build time)
+  //   - `BuildJobSpecOptions.cache` field — when set, `buildJobSpec`
+  //     splices the init-container + per-slot emptyDirs onto the Pod
+  //   - `cache.hit` / `cache.miss` audit event types in
+  //     `@kagent/audit-events`
+  //   - Helm `cache:` block (Helm-overridable; default `enabled: false`)
+  //
+  // What's documented as next-step (NOT auto-wired in this release):
+  //   - The reconciler does NOT yet auto-resolve `inputArtifactHashes`
+  //     from the AgentTask's bound `kind: 'artifact'` inputs. That
+  //     resolver requires walking upstream `taskUid+output` references
+  //     through the AgentTask informer; it's the same primitive the
+  //     CAS sub-team will need for `read_artifact` arg-resolution.
+  //     For v0.4.2 the substrate is feature-complete (key derivation,
+  //     restore init-container, save sidecar command, audit events);
+  //     the reconciler-side glue calling `buildCacheMounts` per task
+  //     lands in the follow-up release that introduces the
+  //     artifact-hash resolver.
+  if (process.env.KAGENT_CACHE_ENABLED === 'true') {
+    const pvcName =
+      normalizeOptionalEnv(process.env.KAGENT_CACHE_PVC_NAME) ??
+      normalizeOptionalEnv(process.env.KAGENT_CAS_PVC_NAME) ??
+      'kagent-cache';
+    const mountOnOperator =
+      normalizeOptionalEnv(process.env.KAGENT_CACHE_MOUNT_PATH) ?? '/var/kagent/cache';
+    const retention = process.env.KAGENT_CACHE_RETENTION_DEFAULT ?? '7d';
+    console.log(
+      `[kagent-operator] Cache enabled — pvcName=${pvcName} mountOnOperator=${mountOnOperator} retention=${retention} ` +
+        `(reconciler-side wiring to buildCacheMounts is forward-compat; see WAVES.md §5.3 deviation note)`,
+    );
+  } else {
+    console.log('[kagent-operator] Cache disabled (set KAGENT_CACHE_ENABLED=true to enable)');
+  }
+
   // === Wave 2 — Workflows ===
   // AgentWorkflow controller (per docs/SUBSTRATE-V1.md §3.3 +
   // docs/WAVES.md §4.3). Default-OFF until cluster operators have

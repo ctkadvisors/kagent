@@ -177,6 +177,31 @@ export interface AgentSpec {
    */
   readonly workspaceClaims?: readonly Record<string, unknown>[];
 
+  /* ---- v0.4.2-cache — Wave 3 / Cache sub-team.
+   * Per-Agent persistent caches keyed by sha256(template-render).
+   * See docs/SUBSTRATE-V1.md §3.5 (CAS — same sharded sha256 layout,
+   * different reachability semantics) + docs/WAVES.md §5.3.
+   *
+   * On task admission the operator's cache-controller derives a key
+   * from `key` (a template that interpolates `{input_artifact_hashes}`,
+   * `{image_digest}`, `{model_name}`, plus any literal text), looks up
+   * `cache://sha256:<key>/<name>` in the cache PVC, and:
+   *   - hit  → adds an init-container that copies bytes onto `mountPath`
+   *            inside the spawned pod; emits `cache.hit` audit
+   *   - miss → no init-container; the agent runs cold; emits
+   *            `cache.miss` audit
+   *
+   * On terminal `phase=Completed`, a sidecar (operator-spawned watcher
+   * Job per task — see WAVES.md §5.3 deviations note) tar-streams the
+   * mountPath contents back into `cache://sha256:<key>/...` so the
+   * next run that derives the same key warm-starts from disk.
+   *
+   * Cache miss is NEVER an error; cold fall-back is the contract.
+   * Failure to save a cache entry on completion is logged as a
+   * substrate-degraded WARN, never propagates to AgentTask status.
+   */
+  readonly caches?: readonly CacheDecl[];
+
   /* ---- v0.3.0-capabilities — Wave 2 sub-team Caps.
    * The substrate's sealed-authority primitive per docs/SUBSTRATE-V1.md
    * §3.6. When set, this is the upper bound on the capability bundle
@@ -313,6 +338,52 @@ export interface OutputDecl {
    * schema for forward-compatibility.
    */
   readonly retention?: string;
+}
+
+/* =====================================================================
+ * v0.4.2-cache — Wave 3 / Cache sub-team.
+ *
+ * `CacheDecl` declares one persistent, reusable cache slot on an Agent.
+ * Per docs/WAVES.md §5.3:
+ *
+ *   - `name`      — opaque, per-Agent stable identifier; the second
+ *                   path segment of the cache URI
+ *                   (`cache://sha256:<key>/<name>`).
+ *   - `key`       — template string. Tokens (`{input_artifact_hashes}`,
+ *                   `{image_digest}`, `{model_name}`) interpolate per
+ *                   `@kagent/cache-controller`'s `deriveCacheKey`. Any
+ *                   literal substring is preserved verbatim. `key:
+ *                   "default"` is sugar for the canonical recipe
+ *                   `"{input_artifact_hashes}+{image_digest}+{model_name}"`.
+ *   - `mountPath` — container path the cache contents land at on
+ *                   restore; same path the sidecar walks on save. The
+ *                   substrate never picks a path on the agent's behalf
+ *                   (default-deny per the typed-I/O mount-path
+ *                   discipline).
+ *
+ * Cache identity is `sha256(rendered-template)`; the URI shape mirrors
+ * CAS's `cas://sha256:<hex>/<name>` so the same shard + dedup tooling
+ * can back both. `cache://` and `cas://` MAY share a PVC.
+ */
+export interface CacheDecl {
+  /** Per-Agent stable identifier. ≤ 63 chars; `[a-z0-9-]` grammar. */
+  readonly name: string;
+  /**
+   * Template string that derives the cache key. Recognized tokens:
+   *
+   *   - `{input_artifact_hashes}` — joined CAS sha256 hashes of every
+   *     `kind: 'artifact'` input bound on the AgentTask (joined with
+   *     `+`, sorted lexicographically for stable hashing).
+   *   - `{image_digest}` — Agent's container image digest.
+   *   - `{model_name}` — `Agent.spec.model` verbatim.
+   *
+   * `key: "default"` is sugar for
+   * `"{input_artifact_hashes}+{image_digest}+{model_name}"`. Any
+   * literal substring (e.g. `npm-{image_digest}-v2`) is preserved.
+   */
+  readonly key: string;
+  /** Container path the cache mounts at. */
+  readonly mountPath: string;
 }
 
 export interface Agent {

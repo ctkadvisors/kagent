@@ -33,9 +33,9 @@ describe('inputIsRequired', () => {
   });
 
   it('optional: true wins over required: true (explicit opt-out)', () => {
-    expect(
-      inputIsRequired({ name: 'x', kind: 'scalar', required: true, optional: true }),
-    ).toBe(false);
+    expect(inputIsRequired({ name: 'x', kind: 'scalar', required: true, optional: true })).toBe(
+      false,
+    );
   });
 });
 

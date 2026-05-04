@@ -17,11 +17,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
 import { StubDispatcher } from './dispatcher.js';
-import {
-  enforceCompletionContract,
-  reconcileAgentTask,
-  type ReconcileDeps,
-} from './reconcile.js';
+import { enforceCompletionContract, reconcileAgentTask, type ReconcileDeps } from './reconcile.js';
 import { IdempotencyCache } from './task-admission.js';
 
 /* =====================================================================
@@ -267,7 +263,9 @@ describe('reconcileAgentTask — idempotency-key dedupe', () => {
       body: { status: { phase: string; outputs?: { name: string; ref: string }[] } };
     };
     expect(patchCall.body.status.phase).toBe('Completed');
-    expect(patchCall.body.status.outputs).toEqual([{ name: 'digest', ref: 'pvc://prior/digest.md' }]);
+    expect(patchCall.body.status.outputs).toEqual([
+      { name: 'digest', ref: 'pvc://prior/digest.md' },
+    ]);
   });
 
   it('conflict: same key + different input hash → marks Failed with IdempotencyConflict', async () => {
