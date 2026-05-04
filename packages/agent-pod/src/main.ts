@@ -182,6 +182,11 @@ async function main(): Promise<void> {
       uid: config.taskId,
       name: config.taskName,
       namespace: config.taskNamespace,
+      // v0.1.9 — thread this task's depth so K8sTaskCreator can stamp
+      // `kagent.knuteson.io/task-depth=<depth + 1>` on each spawned
+      // child. The cap is enforced in the spawn tool itself
+      // (defineSpawnChildTask) BEFORE we get here on a refused call.
+      depth: config.taskDepth,
     };
     // Compute remaining wall-clock budget against the runConfig
     // timeout so child timeouts get clamped to "what the parent could

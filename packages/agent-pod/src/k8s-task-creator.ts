@@ -52,11 +52,32 @@ export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
  */
 export const FROM_TEMPLATE_LABEL = 'kagent.knuteson.io/from-template';
 
+/**
+ * v0.1.9 — task-depth label. Local mirror of the operator's canonical
+ * `TASK_DEPTH_LABEL` constant in `packages/operator/src/job-spec.ts`.
+ * Kept inline so agent-pod stays a leaf in the workspace dep graph
+ * (no `@kagent/operator` cross-package import). Single source of truth
+ * is the string literal — both packages reference exactly
+ * `'kagent.knuteson.io/task-depth'`.
+ */
+export const TASK_DEPTH_LABEL = 'kagent.knuteson.io/task-depth';
+
 /** Parent identity threaded into child manifests. */
 export interface ParentIdentity {
   readonly uid: string;
   readonly name: string;
   readonly namespace: string;
+  /**
+   * v0.1.9 — parent's depth in the spawn tree (root = 0). Sourced from
+   * `PodConfig.taskDepth` in main.ts. Used by `createChildTask` to
+   * stamp `kagent.knuteson.io/task-depth=<parent.depth + 1>` on the
+   * child's metadata.labels — that label is what the operator reads
+   * when building the child's spawned Job env (KAGENT_TASK_DEPTH) and
+   * what the admission path uses to enforce the cluster cap. Optional
+   * (defaults to 0 = treat parent as root) so test fixtures + early
+   * callers don't have to thread depth through every path.
+   */
+  readonly depth?: number;
 }
 
 export interface ChildTaskInput {
@@ -135,6 +156,20 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
       parent: ParentIdentity,
       input: ChildTaskInput,
     ): Promise<ChildTaskCreated> {
+      // v0.1.9 — task-depth threading. Stamp child depth = parent + 1
+      // on the AgentTask label. The operator reads this same label
+      // (TASK_DEPTH_LABEL) when building the spawned Job env to set
+      // KAGENT_TASK_DEPTH on the child agent-pod, and the admission
+      // path uses it to enforce the cluster cap. Default the parent
+      // depth to 0 (root) when callers haven't threaded it through —
+      // the spawn tool always sets it; only legacy / test fixtures
+      // would omit.
+      const parentDepth =
+        typeof parent.depth === 'number' && Number.isInteger(parent.depth) && parent.depth >= 0
+          ? parent.depth
+          : 0;
+      const childDepth = parentDepth + 1;
+
       const manifest: Record<string, unknown> = {
         apiVersion: `${KAGENT_GROUP}/${KAGENT_VERSION}`,
         kind: 'AgentTask',
@@ -145,6 +180,7 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
             'kagent.knuteson.io/managed-by': 'kagent-operator',
             'app.kubernetes.io/created-by': 'kagent-agent-pod',
             [PARENT_TASK_UID_LABEL]: parent.uid,
+            [TASK_DEPTH_LABEL]: String(childDepth),
           },
           ownerReferences: [
             {
@@ -153,10 +189,14 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
               name: parent.name,
               uid: parent.uid,
               // Per TASK-GRAPH.md §5: NOT controller (Job is controller of
-              // the spawned Pod) and NOT blockOwnerDeletion (children
-              // shouldn't gate parent deletion).
+              // the spawned Pod). v0.1.9 — `blockOwnerDeletion=true` so
+              // the apiserver's GC waits for the child to acknowledge
+              // before finalizing the parent, mirroring the operator's
+              // own `buildChildTaskManifest` (task-graph.ts §5
+              // "Split owner-ref semantics"). Cascade-delete itself is
+              // unaffected; this just sequences it cleanly.
               controller: false,
-              blockOwnerDeletion: false,
+              blockOwnerDeletion: true,
             },
           ],
         },
