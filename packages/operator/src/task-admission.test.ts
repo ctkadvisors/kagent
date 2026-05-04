@@ -5,12 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  API_GROUP_VERSION,
-  type Agent,
-  type AgentTask,
-  type OutputRef,
-} from './crds/index.js';
+import { API_GROUP_VERSION, type Agent, type AgentTask, type OutputRef } from './crds/index.js';
 import {
   DEFAULT_IDEMPOTENCY_TTL_MS,
   IdempotencyCache,
@@ -354,5 +349,71 @@ describe('hashTaskInputs (re-export)', () => {
     const b = hashTaskInputs(baseTask);
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{8}$/);
+  });
+});
+
+/* =====================================================================
+ * validateCapabilityBounds (v0.3.0-capabilities)
+ * ===================================================================== */
+
+import { validateCapabilityBounds } from './task-admission.js';
+import { KAGENT_SUBSTRATE_AUDIENCE, type CapabilityBundle } from '@kagent/capability-types';
+
+describe('validateCapabilityBounds (v0.3.0)', () => {
+  const parentBundle: CapabilityBundle = {
+    iss: 'kagent.knuteson.io/operator',
+    sub: 'task-uid:parent',
+    aud: [KAGENT_SUBSTRATE_AUDIENCE],
+    exp: 9_999_999_999,
+    jti: 'cap-parent',
+    claims: { spawn: ['summarizer-*'], tools: ['http_get'] },
+  };
+
+  it('passes when no parent bundle (root task)', () => {
+    const r = validateCapabilityBounds(baseAgent, undefined);
+    expect(r.ok).toBe(true);
+  });
+
+  it('passes when Agent claims are subset of parent', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, capabilityClaims: { spawn: ['summarizer-1'] } },
+    };
+    const r = validateCapabilityBounds(agent, parentBundle);
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects when Agent claims escalate past parent', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, capabilityClaims: { spawn: ['evil-agent'] } },
+    };
+    const r = validateCapabilityBounds(agent, parentBundle);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('CapabilityViolation');
+      expect(r.message).toContain('policy_denied:capability_violation');
+      expect(r.message).toContain('cap-parent');
+    }
+  });
+
+  it('rejects when Agent declares a tools claim parent does not have', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, capabilityClaims: { tools: ['rogue_tool'] } },
+    };
+    const r = validateCapabilityBounds(agent, parentBundle);
+    expect(r.ok).toBe(false);
+  });
+
+  it('uses legacy allowedChildAgents fallback when capabilityClaims absent', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, allowedChildAgents: ['summarizer-1'] },
+    };
+    // Resolved claims become spawn=['summarizer-1'] which IS subset of
+    // parent.spawn=['summarizer-*'] — the legacy field passes.
+    const r = validateCapabilityBounds(agent, parentBundle);
+    expect(r.ok).toBe(true);
   });
 });
