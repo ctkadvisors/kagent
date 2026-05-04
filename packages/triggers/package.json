@@ -1,0 +1,30 @@
+{
+  "name": "@kagent/triggers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wave 0 entry-point primitives — KagentSchedule cron controller + HMAC-signed webhook receiver. Both routes mint AgentTasks via a shared placeholder capability until Wave 2 ships per-trigger caps.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kubernetes/client-node": "1.4.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
