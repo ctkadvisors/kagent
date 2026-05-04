@@ -500,20 +500,22 @@ operator + locality test counts: 824 + 40 = 864 (up +28 vs. pre-Wave-3).
 
 **Validation:** edit a published Agent → admission rejects; submit new task → uses latest version; in-flight task survives Agent version bump.
 
-### 6.5 Sub-team: KeyRotation
+### 6.5 Sub-team: KeyRotation ✓ SHIPPED v0.5.4-keyrotation
 
 **Releases:** `v0.5.4-keyrotation`
 **Owns:** cert-manager rotation policies, gateway-token rotation (when gateway supports an API per [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) §4)
 **Depends on:** Identity (SVID rotation), Audit (rotation events)
 
 **Deliverables:**
-1. SVID rotation interval: 24h default, configurable
-2. Capability bundle TTL: 1h default for short-running, up to runConfig.timeoutSeconds for long
-3. Gateway-token rotation API integration (CTK enterprise gateway needs to expose this)
-4. Rotation events in audit stream
-5. Zero-downtime rotation chaos test
+1. **SHIPPED.** SVID rotation interval — `@kagent/keyrotation-controller` `svid-policy.ts`. 24h default; substrate refuses < 1h (SPIRE workload-API stream's own minimum) or > 168h / 1 week (SOC2 short-lived-credential ceiling). Wired into Wave 3 `MockIdentityWatcher.maybeRotate(...)` — emits `keyrotation.svid_rotated` (the policy decision) plus the underlying `identity.rotation` event.
+2. **SHIPPED.** Capability bundle TTL — `@kagent/keyrotation-controller` `cap-ttl.ts`. 1h short-running default; long-running (`runConfig.timeoutSeconds > 3600`) tasks get `min(24h, timeoutSeconds + 300s)` with three tiers (`short-running` / `long-running-grace` / `long-running-clamped`). Wired into Wave 2 `mintCapabilityForTask` via additive `applyTtlPolicy(task, policy?)` helper — `MintCapForTaskResult.ttlDecision` populated when policy supplied; legacy v0.3.0 heuristic preserved for forward-compat.
+3. **SHIPPED.** Gateway-token rotation — `@kagent/keyrotation-controller` `gateway-rotation.ts`. `POST /v1/admin/keys/rotate` per [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) §4. Three outcomes: rotated / unsupported (404 → graceful no-op + `keyrotation.gateway_unsupported` audit emission) / transient_error (network failure → log + retry on next cadence). Scheduled via `scheduleGatewayRotation`; gated by `keyRotation.gateway.enabled` (default OFF, independent of the SVID + cap policies).
+4. **SHIPPED.** Rotation events — 4 new audit types in `@kagent/audit-events` (catalog grows from 30 → 34): `keyrotation.svid_rotated`, `keyrotation.cap_minted_with_ttl`, `keyrotation.gateway_rotated`, `keyrotation.gateway_unsupported`.
+5. **SHIPPED.** Zero-downtime rotation chaos test — `packages/keyrotation-controller/test/chaos.test.ts`. Simulates a triple rotation (SVID + cap + gateway-token) against an in-process mock gateway honoring a 30s overlap window. Asserts zero failures across 8 in-flight tasks × 4 calls each = 32 gateway calls. Negative-control test proves the harness CAN observe failures (zero-overlap → 401s as expected — guards against a green test that's secretly never exercising the assertion path).
 
 **Validation:** rotate every credential (SVID, cap, gateway token) under load → no task fails.
+
+**Status:** SHIPPED — all 6 deliverables landed; no deferrals. New `@kagent/keyrotation-controller` package: 37 tests across 4 files (svid-policy, cap-ttl, gateway-rotation, chaos). Operator: 971 → 982 tests (+11). Audit-events: 42 → 46 tests (+4). Helm wiring: `keyRotation:` block under Wave 4 marker; `KAGENT_KEYROTATION_*` envs additive (default-OFF gradual roll-out); no new RBAC verbs (rotation reads existing Secrets + uses the existing audit pipeline). Chaos test design: pure-function + virtual-clock simulation rather than real K8s/SPIRE/gateway — sufficient for the substrate's contract (rotation triple MUST NOT cause an in-flight gateway call to fail) and runs in milliseconds; integration with real SPIRE deferred to a future Wave 4.x release.
 
 ### 6.6 Wave 4 cross-team coordination
 

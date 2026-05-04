@@ -93,7 +93,12 @@ export type AuditEventType =
   /* v0.5.3-versioning — Wave 4 / Versioning sub-team. */
   | 'agent.published'
   | 'agent.mutation_refused'
-  | 'agent.deprecated_used';
+  | 'agent.deprecated_used'
+  /* v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. */
+  | 'keyrotation.svid_rotated'
+  | 'keyrotation.cap_minted_with_ttl'
+  | 'keyrotation.gateway_rotated'
+  | 'keyrotation.gateway_unsupported';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -647,6 +652,71 @@ export interface AgentDeprecatedUsedData {
 }
 
 /**
+ * v0.5.4-keyrotation — `keyrotation.svid_rotated`. Emitted by the
+ * Wave 4 / KeyRotation sub-team's policy controller when the configured
+ * rotation interval has been observed crossed for an SVID. Distinct
+ * from the underlying `identity.rotation` (which records the
+ * SPIRE-observed rotation event itself); this event records the
+ * substrate-policy decision that triggered the rotation cycle.
+ */
+export interface KeyrotationSvidRotatedData {
+  readonly spiffeId: string;
+  /** Configured interval at the time of the decision (seconds). */
+  readonly intervalSeconds: number;
+  /** Observed age at the trigger point (seconds since previous notBefore). */
+  readonly ageSeconds: number;
+  /** Source of the trigger; mirror of identity.ts source enum. */
+  readonly source: 'spire-agent' | 'mock';
+}
+
+/**
+ * v0.5.4-keyrotation — `keyrotation.cap_minted_with_ttl`. Additive
+ * companion to `capability.minted`; records the resolved TTL + the
+ * policy tier that produced it so compliance dashboards can split
+ * "default short-running" vs. "long-running grace" vs. "explicit
+ * override" without re-deriving from the cap JWT.
+ */
+export interface KeyrotationCapMintedWithTtlData {
+  readonly capabilityId: string;
+  readonly taskUid: string | undefined;
+  readonly taskNamespace: string | undefined;
+  readonly taskName: string | undefined;
+  /** Resolved TTL the cap-issuer applied (seconds). */
+  readonly ttlSeconds: number;
+  /** One of the policy tiers `cap-ttl.ts` reports. */
+  readonly tier: 'short-running' | 'long-running-grace' | 'long-running-clamped';
+}
+
+/**
+ * v0.5.4-keyrotation — `keyrotation.gateway_rotated`. Successful
+ * call into the gateway's `POST /v1/admin/keys/rotate` endpoint. One
+ * emission per successful rotation cycle.
+ */
+export interface KeyrotationGatewayRotatedData {
+  /** Gateway base URL (no path / no key material). */
+  readonly gatewayUrl: string;
+  /** Gateway-supplied rotation id when present (opaque to substrate). */
+  readonly rotationId: string | undefined;
+  /** Wall-clock time the request returned 2xx (RFC 3339). */
+  readonly rotatedAt: string;
+}
+
+/**
+ * v0.5.4-keyrotation — `keyrotation.gateway_unsupported`. Gateway
+ * returned 404 Not Found for the rotation endpoint. Substrate
+ * gracefully no-ops; this audit event records the unsupported
+ * condition so operators can tell apart "gateway behind on contract"
+ * from "rotation fired and succeeded".
+ */
+export interface KeyrotationGatewayUnsupportedData {
+  readonly gatewayUrl: string;
+  /** HTTP status the gateway returned (always 404 by contract). */
+  readonly status: number;
+  /** Wall-clock time the request returned (RFC 3339). */
+  readonly observedAt: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -720,7 +790,18 @@ export type AuditEventData =
   /* v0.5.3-versioning — Wave 4 / Versioning sub-team. */
   | { readonly type: 'agent.published'; readonly data: AgentPublishedData }
   | { readonly type: 'agent.mutation_refused'; readonly data: AgentMutationRefusedData }
-  | { readonly type: 'agent.deprecated_used'; readonly data: AgentDeprecatedUsedData };
+  | { readonly type: 'agent.deprecated_used'; readonly data: AgentDeprecatedUsedData }
+  /* v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. */
+  | { readonly type: 'keyrotation.svid_rotated'; readonly data: KeyrotationSvidRotatedData }
+  | {
+      readonly type: 'keyrotation.cap_minted_with_ttl';
+      readonly data: KeyrotationCapMintedWithTtlData;
+    }
+  | { readonly type: 'keyrotation.gateway_rotated'; readonly data: KeyrotationGatewayRotatedData }
+  | {
+      readonly type: 'keyrotation.gateway_unsupported';
+      readonly data: KeyrotationGatewayUnsupportedData;
+    };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

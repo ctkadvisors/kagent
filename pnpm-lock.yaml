@@ -163,6 +163,12 @@ importers:
         specifier: workspace:*
         version: link:../agent-loop
 
+  packages/keyrotation-controller:
+    dependencies:
+      '@kagent/audit-events':
+        specifier: workspace:*
+        version: link:../audit-events
+
   packages/llm-gateway:
     dependencies:
       '@kubernetes/client-node':
@@ -227,6 +233,9 @@ importers:
       '@kagent/events':
         specifier: workspace:*
         version: link:../events
+      '@kagent/keyrotation-controller':
+        specifier: workspace:*
+        version: link:../keyrotation-controller
       '@kagent/locality-controller':
         specifier: workspace:*
         version: link:../locality-controller

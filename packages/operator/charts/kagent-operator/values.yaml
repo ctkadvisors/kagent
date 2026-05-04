@@ -1094,6 +1094,79 @@ versioning:
     # Issuer (release-namespace-scoped).
     certIssuerKind: 'Issuer'
 
+# ---------------------------------------------------------------------
+# Wave 4 — KeyRotation (v0.5.4-keyrotation)
+# ---------------------------------------------------------------------
+# Substrate-level rotation policies for SVIDs, capability bundles, and
+# (when supported) gateway-tokens. Per docs/WAVES.md §6.5 +
+# docs/SUBSTRATE-V1.md §3.10.
+#
+# Three rotation surfaces composed here:
+#
+#   1. SVID rotation interval — `svid.intervalHours`. Default 24h;
+#      substrate refuses values < 1h (SPIRE workload-API stream's own
+#      default) or > 168h / 1 week (SOC2 short-lived-credential
+#      ceiling). The Wave 3 Identity watcher's `maybeRotate(...)`
+#      consumes this policy on each polled SVID.
+#
+#   2. Capability bundle TTL — `cap.shortTtlMinutes` +
+#      `cap.longTtlGraceSeconds`. Default 1h short-running TTL. Long-
+#      running tasks (`runConfig.timeoutSeconds > 3600`) get
+#      min(24h, runConfig.timeoutSeconds + grace). 24h is a hard
+#      ceiling; substrate clamps to it + emits the `long-running-clamped`
+#      tier on the audit envelope.
+#
+#   3. Gateway-token rotation — `gateway.enabled` toggles; cadence is
+#      `gateway.intervalHours` (default 24h). Schedules calls to the
+#      gateway's `POST /v1/admin/keys/rotate` per docs/GATEWAY-CONTRACT.md
+#      §4. 404 → graceful no-op + `keyrotation.gateway_unsupported`
+#      audit emission so operators can spot a deployment whose gateway
+#      lacks the contract version.
+#
+# Audit emissions (additive — catalog 30 → 34):
+#   - keyrotation.svid_rotated         (per SVID rotation policy fire)
+#   - keyrotation.cap_minted_with_ttl  (per cap mint with TTL tier)
+#   - keyrotation.gateway_rotated      (per successful gateway rotation)
+#   - keyrotation.gateway_unsupported  (per 404 from gateway)
+#
+# DEFAULT-OFF for gradual roll-out — existing installs continue to
+# work unchanged when `enabled: false`. The gateway sub-flag is
+# independent so a deploy can flip on SVID + cap policies without
+# committing to a gateway-rotation cadence.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_KEYROTATION_ENABLED                    = enabled
+#   KAGENT_KEYROTATION_SVID_INTERVAL_HOURS        = svid.intervalHours
+#   KAGENT_KEYROTATION_CAP_SHORT_TTL_MINUTES      = cap.shortTtlMinutes
+#   KAGENT_KEYROTATION_CAP_LONG_GRACE_SECONDS     = cap.longTtlGraceSeconds
+#   KAGENT_KEYROTATION_GATEWAY_ENABLED            = gateway.enabled
+#   KAGENT_KEYROTATION_GATEWAY_INTERVAL_HOURS     = gateway.intervalHours
+#   KAGENT_KEYROTATION_GATEWAY_URL                = gateway.url (operator-side override)
+#   KAGENT_KEYROTATION_GATEWAY_ADMIN_TOKEN        = sourced from K8s Secret (operator-side)
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 4 — KeyRotation" block —
+# rotation reads existing Secrets only; no new verbs needed.
+keyRotation:
+  enabled: false
+  svid:
+    # Rotation cadence the SVID policy enforces. 24h default (SOC2
+    # short-lived-credential best practice). 1h ≤ x ≤ 168h.
+    intervalHours: 24
+  cap:
+    # TTL applied to short-running tasks (no `runConfig.timeoutSeconds`
+    # OR `<= 3600s`). Default 60 minutes.
+    shortTtlMinutes: 60
+    # Grace seconds added beyond `runConfig.timeoutSeconds` for
+    # long-running tasks. Default 300s ("5min beyond timeout").
+    longTtlGraceSeconds: 300
+  gateway:
+    # Independent sub-flag — flip on once the gateway implements the
+    # rotation API per docs/GATEWAY-CONTRACT.md §4. Substrate
+    # gracefully no-ops on 404 (gateway lacks the surface).
+    enabled: false
+    # Cadence the substrate calls `POST /v1/admin/keys/rotate`.
+    intervalHours: 24
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

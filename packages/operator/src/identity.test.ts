@@ -309,3 +309,83 @@ describe('DEFAULT_TRUST_DOMAIN', () => {
     expect(DEFAULT_TRUST_DOMAIN).toBe('kagent.knuteson.io');
   });
 });
+
+describe('MockIdentityWatcher.maybeRotate (v0.5.4-keyrotation)', () => {
+  it('returns kept + emits no events when SVID is fresh', async () => {
+    const events: AuditEvent[] = [];
+    const watcher = new MockIdentityWatcher({
+      publish: (e) => {
+        events.push(e);
+      },
+      now: () => new Date('2026-05-04T01:00:00Z'),
+    });
+    const policy = resolveSvidRotationPolicyFromTest();
+    const outcome = await watcher.maybeRotate({
+      spiffeId: 'spiffe://kagent.knuteson.io/ns/default/sa/sa/agent/researcher',
+      notBefore: new Date('2026-05-04T00:00:00Z'),
+      notAfter: new Date('2026-05-05T00:00:00Z'),
+      policy,
+      source: 'mock',
+      now: new Date('2026-05-04T01:00:00Z'),
+    });
+    expect(outcome.verdict).toBe('kept');
+    expect(events).toHaveLength(0);
+  });
+
+  it('emits keyrotation.svid_rotated + identity.rotation when interval crossed', async () => {
+    const events: AuditEvent[] = [];
+    const watcher = new MockIdentityWatcher({
+      publish: (e) => {
+        events.push(e);
+      },
+      now: () => new Date('2026-05-05T01:00:00Z'),
+    });
+    const policy = resolveSvidRotationPolicyFromTest();
+    const outcome = await watcher.maybeRotate({
+      spiffeId: 'spiffe://kagent.knuteson.io/ns/default/sa/sa/agent/researcher',
+      notBefore: new Date('2026-05-04T00:00:00Z'),
+      notAfter: new Date('2026-05-05T00:00:00Z'),
+      policy,
+      source: 'mock',
+      now: new Date('2026-05-05T01:00:00Z'),
+    });
+    expect(outcome.verdict).toBe('rotated');
+    expect(events.map((e) => e.type)).toEqual(['keyrotation.svid_rotated', 'identity.rotation']);
+    const krEvent = events[0];
+    if (krEvent === undefined) throw new Error('no keyrotation event captured');
+    if (krEvent.type === 'keyrotation.svid_rotated') {
+      expect(krEvent.data.intervalSeconds).toBe(86400);
+      expect(krEvent.data.ageSeconds).toBeGreaterThanOrEqual(86400);
+      expect(krEvent.data.source).toBe('mock');
+    }
+  });
+
+  it('does not throw when publish throws (best-effort contract)', async () => {
+    let calls = 0;
+    const watcher = new MockIdentityWatcher({
+      publish: () => {
+        calls++;
+        throw new Error('downstream broken');
+      },
+    });
+    const policy = resolveSvidRotationPolicyFromTest();
+    const outcome = await watcher.maybeRotate({
+      spiffeId: 'spiffe://kagent.knuteson.io/ns/default/sa/sa/agent/researcher',
+      notBefore: new Date('2026-05-04T00:00:00Z'),
+      notAfter: new Date('2026-05-05T00:00:00Z'),
+      policy,
+      source: 'mock',
+      now: new Date('2026-05-05T01:00:00Z'),
+    });
+    expect(outcome.verdict).toBe('rotated');
+    // Both keyrotation + identity.rotation publish were attempted.
+    expect(calls).toBe(2);
+  });
+});
+
+// Inline import-helper kept local to the test to avoid a cross-package
+// import in the import block at the top of the file.
+function resolveSvidRotationPolicyFromTest(): { intervalSeconds: number } {
+  // 24h default — matches Wave 4 KeyRotation default.
+  return { intervalSeconds: 86400 };
+}

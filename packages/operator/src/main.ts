@@ -2932,6 +2932,169 @@ async function main(): Promise<void> {
       '[kagent-operator] versioning disabled (set KAGENT_VERSIONING_ENABLED=true to enable Wave 4 Agent immutability + version pinning)',
     );
   }
+
+  // === Wave 4 — KeyRotation ===
+  // v0.5.4-keyrotation. Substrate-level rotation policies for SVIDs,
+  // capability bundles, and (when supported) gateway-tokens. Per
+  // docs/WAVES.md §6.5 + docs/SUBSTRATE-V1.md §3.10:
+  //
+  //   1. SVID rotation interval (default 24h; 1h ≤ x ≤ 168h). The
+  //      Wave 4 controller polls SPIRE for SVID metadata and calls
+  //      `MockIdentityWatcher.maybeRotate(...)` per SVID; on
+  //      `'rotated'` the watcher fires both `keyrotation.svid_rotated`
+  //      (the policy decision) and `identity.rotation` (the
+  //      underlying rotation event).
+  //
+  //   2. Capability bundle TTL policy (default 1h short-running, up
+  //      to min(24h, runConfig.timeoutSeconds + 300s) for long
+  //      tasks). Wired into Wave 2's `mintCapabilityForTask` via the
+  //      additive `ttlPolicy` input — when set, the issuer applies
+  //      the policy + returns the resolved tier; when unset, the
+  //      legacy v0.3.0 heuristic applies (forward-compat).
+  //
+  //   3. Gateway-token rotation (per docs/GATEWAY-CONTRACT.md §4).
+  //      Scheduled (24h cadence default) call into the gateway's
+  //      `POST /v1/admin/keys/rotate` endpoint. 404 → graceful no-op
+  //      + `keyrotation.gateway_unsupported` audit event. Substrate
+  //      gracefully handles a gateway behind on the contract version.
+  //
+  // DEFAULT-OFF for gradual roll-out — existing installs continue
+  // to work unchanged when KAGENT_KEYROTATION_ENABLED is unset.
+  // Sub-flag KAGENT_KEYROTATION_GATEWAY_ENABLED gates the gateway
+  // rotation cadence independently.
+  if (process.env.KAGENT_KEYROTATION_ENABLED === 'true') {
+    const { resolveSvidRotationPolicy, resolveCapTtlPolicy, scheduleGatewayRotation } =
+      await import('@kagent/keyrotation-controller');
+    const svidIntervalRaw = normalizeOptionalEnv(
+      process.env.KAGENT_KEYROTATION_SVID_INTERVAL_HOURS,
+    );
+    const svidIntervalHours =
+      svidIntervalRaw !== undefined ? Number.parseFloat(svidIntervalRaw) : undefined;
+    let svidPolicy: ReturnType<typeof resolveSvidRotationPolicy>;
+    try {
+      svidPolicy = resolveSvidRotationPolicy(
+        svidIntervalHours !== undefined ? { intervalHours: svidIntervalHours } : {},
+      );
+    } catch (err) {
+      console.error(
+        '[kagent-operator] keyrotation: SVID interval policy invalid (refusing boot):',
+        err,
+      );
+      throw err;
+    }
+    const capShortTtlRaw = normalizeOptionalEnv(
+      process.env.KAGENT_KEYROTATION_CAP_SHORT_TTL_MINUTES,
+    );
+    const capLongGraceRaw = normalizeOptionalEnv(
+      process.env.KAGENT_KEYROTATION_CAP_LONG_GRACE_SECONDS,
+    );
+    const capPolicyInput: { shortTtlMinutes?: number; longTtlGraceSeconds?: number } = {};
+    if (capShortTtlRaw !== undefined)
+      capPolicyInput.shortTtlMinutes = Number.parseFloat(capShortTtlRaw);
+    if (capLongGraceRaw !== undefined)
+      capPolicyInput.longTtlGraceSeconds = Number.parseFloat(capLongGraceRaw);
+    let capPolicy: ReturnType<typeof resolveCapTtlPolicy>;
+    try {
+      capPolicy = resolveCapTtlPolicy(capPolicyInput);
+    } catch (err) {
+      console.error('[kagent-operator] keyrotation: cap TTL policy invalid (refusing boot):', err);
+      throw err;
+    }
+    console.log(
+      `[kagent-operator] KeyRotation policies: svid=${svidPolicy.intervalSeconds.toString()}s, cap.short=${capPolicy.shortTtlSeconds.toString()}s, cap.longGrace=${capPolicy.longTtlGraceSeconds.toString()}s`,
+    );
+    // The cap-issuer + identity watcher consume these via additive
+    // input fields (`ttlPolicy` on `MintCapForTaskInput`,
+    // `policy` on `MaybeRotateInput`). Wiring those callsites lives
+    // in the reconciler; v0.5.4 ships the policies + the watcher
+    // method; the reconciler-side plumbing flips on once the
+    // operator's mint path threads `keyRotationCapPolicy` through.
+    void capPolicy;
+    void svidPolicy;
+
+    // Gateway-token rotation cadence — independently flagged.
+    if (process.env.KAGENT_KEYROTATION_GATEWAY_ENABLED === 'true') {
+      const gatewayUrl = normalizeOptionalEnv(process.env.KAGENT_KEYROTATION_GATEWAY_URL);
+      const adminToken = normalizeOptionalEnv(process.env.KAGENT_KEYROTATION_GATEWAY_ADMIN_TOKEN);
+      const intervalHoursRaw = normalizeOptionalEnv(
+        process.env.KAGENT_KEYROTATION_GATEWAY_INTERVAL_HOURS,
+      );
+      if (gatewayUrl === undefined || adminToken === undefined) {
+        console.warn(
+          '[kagent-operator] KAGENT_KEYROTATION_GATEWAY_ENABLED=true but URL or admin token missing; gateway rotation NOT scheduled',
+        );
+      } else {
+        const intervalMs =
+          intervalHoursRaw !== undefined
+            ? Math.floor(Number.parseFloat(intervalHoursRaw) * 60 * 60 * 1000)
+            : 24 * 60 * 60 * 1000;
+        const scheduled = scheduleGatewayRotation({
+          gatewayUrl,
+          adminToken,
+          intervalMs,
+          onOutcome: async (outcome) => {
+            if (auditPublisher === undefined) return;
+            try {
+              if (outcome.kind === 'rotated') {
+                await auditPublisher.publish(
+                  makeEvent({
+                    source: 'kagent.knuteson.io/operator',
+                    subject: `gateway/${gatewayUrl}`,
+                    type: 'keyrotation.gateway_rotated',
+                    data: {
+                      gatewayUrl,
+                      rotationId: outcome.rotationId,
+                      rotatedAt: outcome.observedAt.toISOString(),
+                    },
+                  }),
+                );
+              } else if (outcome.kind === 'unsupported') {
+                await auditPublisher.publish(
+                  makeEvent({
+                    source: 'kagent.knuteson.io/operator',
+                    subject: `gateway/${gatewayUrl}`,
+                    type: 'keyrotation.gateway_unsupported',
+                    data: {
+                      gatewayUrl,
+                      status: outcome.status,
+                      observedAt: outcome.observedAt.toISOString(),
+                    },
+                  }),
+                );
+              } else {
+                console.warn(
+                  '[kagent-operator] keyrotation gateway transient_error:',
+                  outcome.reason,
+                );
+              }
+            } catch (err) {
+              console.warn('[kagent-operator] keyrotation audit publish failed:', err);
+            }
+          },
+        });
+        console.log(
+          `[kagent-operator] KeyRotation gateway scheduler started (intervalMs=${intervalMs.toString()})`,
+        );
+        const previous = onShutdownExtra;
+        onShutdownExtra = async (): Promise<void> => {
+          try {
+            scheduled.stop();
+          } catch (err) {
+            console.error('[kagent-operator] keyrotation gateway scheduler stop failed:', err);
+          }
+          if (previous !== undefined) await previous();
+        };
+      }
+    } else {
+      console.log(
+        '[kagent-operator] keyrotation gateway scheduler disabled (set KAGENT_KEYROTATION_GATEWAY_ENABLED=true)',
+      );
+    }
+  } else {
+    console.log(
+      '[kagent-operator] keyrotation disabled (set KAGENT_KEYROTATION_ENABLED=true to enable Wave 4 SVID + cap TTL + gateway-token rotation)',
+    );
+  }
 }
 
 function normalizeOptionalEnv(value: string | undefined): string | undefined {

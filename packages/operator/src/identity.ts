@@ -65,11 +65,14 @@
 import {
   IDENTITY_ROTATION,
   IDENTITY_SVID_ISSUED,
+  KEYROTATION_SVID_ROTATED,
   makeEvent,
   type AuditEvent,
   type IdentityRotationData,
   type IdentitySvidIssuedData,
+  type KeyrotationSvidRotatedData,
 } from '@kagent/audit-events';
+import { decideSvidRotation, type SvidRotationPolicy } from '@kagent/keyrotation-controller';
 
 /**
  * Default trust domain for kagent SPIFFE IDs. Must match the SPIRE
@@ -277,6 +280,15 @@ export interface IdentityWatcher {
    * previous notAfter; the watcher just stamps the audit envelope.
    */
   recordRotation(input: RecordRotationInput): Promise<void>;
+  /**
+   * v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. Decide
+   * whether to rotate the SVID per substrate policy + emit
+   * `keyrotation.svid_rotated` (plus the underlying
+   * `identity.rotation`) when the configured interval is crossed.
+   *
+   * Best-effort like `recordIssuance/recordRotation`: never throws.
+   */
+  maybeRotate(input: MaybeRotateInput): Promise<MaybeRotateOutcome>;
 }
 
 export interface RecordIssuanceInput {
@@ -297,6 +309,53 @@ export interface RecordRotationInput {
   readonly previousNotAfter?: Date;
   readonly source: 'spire-agent' | 'mock';
 }
+
+/**
+ * v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. Inputs to
+ * `MockIdentityWatcher.maybeRotate(...)`. The Wave 4 KeyRotation
+ * controller polls each SVID's metadata + the configured rotation
+ * policy; this method is the bridge that turns "policy fired"
+ * into a `keyrotation.svid_rotated` audit emission.
+ *
+ * Semantics:
+ *
+ *   - The watcher reads the SVID's current `notBefore` (i.e. when
+ *     the cert was issued).
+ *   - Calls `decideSvidRotation(...)` against the configured policy.
+ *   - On `'rotate'`, emits `keyrotation.svid_rotated` AND fires
+ *     `recordRotation(...)` so the underlying `identity.rotation`
+ *     event also lands (downstream consumers split on event type).
+ *
+ * Wave 3 v0.4.3 shipped the `recordIssuance/recordRotation`
+ * primitive surface; Wave 4 v0.5.4 layers policy decisions on top
+ * of it. The two surfaces compose: a SPIRE-real watcher streams
+ * `recordRotation` events organically (every successful SVID renewal),
+ * while the keyrotation policy fires `maybeRotate` on a substrate-
+ * configurable cadence to enforce the substrate-level interval policy
+ * even when SPIRE's own renewal cadence would otherwise admit a
+ * stale-but-not-expired SVID.
+ */
+export interface MaybeRotateInput {
+  readonly spiffeId: string;
+  /** SVID's current `notBefore` (when issued). */
+  readonly notBefore: Date;
+  /** SVID's current `notAfter`. */
+  readonly notAfter: Date;
+  /** Substrate policy resolved from the operator's Helm values. */
+  readonly policy: SvidRotationPolicy;
+  /** Source tag — mirrors `RecordRotationInput.source`. */
+  readonly source: 'spire-agent' | 'mock';
+  /** Test-injectable clock; defaults to the watcher's own clock. */
+  readonly now?: Date;
+}
+
+/**
+ * Outcome of a `maybeRotate(...)` call. Returned to callers so the
+ * Wave 4 controller can record metrics (rotations-fired counts, etc.).
+ */
+export type MaybeRotateOutcome =
+  | { readonly verdict: 'kept'; readonly ageSeconds: number; readonly intervalSeconds: number }
+  | { readonly verdict: 'rotated'; readonly ageSeconds: number; readonly intervalSeconds: number };
 
 /**
  * Test-injection seam. Production wiring constructs a
@@ -383,6 +442,77 @@ export class MockIdentityWatcher implements IdentityWatcher {
     } catch (err) {
       console.warn('[kagent-operator/identity] recordRotation: publish failed (best-effort):', err);
     }
+  }
+
+  /**
+   * v0.5.4-keyrotation — apply the Wave 4 SVID rotation interval
+   * policy. Decides whether the SVID should rotate now; on
+   * `'rotate'`, fires `keyrotation.svid_rotated` (the policy
+   * decision) and `identity.rotation` (the rotation event itself).
+   * Returns the outcome to the caller for metrics; never throws.
+   *
+   * Note: this method does NOT issue a fresh SVID — that's SPIRE's
+   * job, triggered by the renewal stream. The substrate's
+   * contribution is the policy DECISION + the audit emission. A real
+   * deployment wires the policy controller to call `maybeRotate` per
+   * polled SVID; SPIRE then re-issues on its next cycle and the
+   * renewal stream invokes `recordIssuance` for the new SVID.
+   */
+  async maybeRotate(input: MaybeRotateInput): Promise<MaybeRotateOutcome> {
+    const nowDate = input.now ?? this.now();
+    const decision = decideSvidRotation({
+      spiffeId: input.spiffeId,
+      notBefore: input.notBefore,
+      now: nowDate,
+      policy: input.policy,
+    });
+    if (decision.verdict === 'keep') {
+      return {
+        verdict: 'kept',
+        ageSeconds: decision.ageSeconds,
+        intervalSeconds: decision.intervalSeconds,
+      };
+    }
+    // Emit `keyrotation.svid_rotated` first (the policy decision),
+    // then fire `recordRotation` so the underlying `identity.rotation`
+    // event also lands. Audit consumers can split on event type.
+    const data: KeyrotationSvidRotatedData = {
+      spiffeId: input.spiffeId,
+      intervalSeconds: decision.intervalSeconds,
+      ageSeconds: decision.ageSeconds,
+      source: input.source,
+    };
+    const event = makeEvent(
+      {
+        type: KEYROTATION_SVID_ROTATED,
+        source: 'kagent.knuteson.io/operator',
+        subject: `SVID/${input.spiffeId}`,
+        data,
+      },
+      { now: this.now },
+    );
+    try {
+      await this.publish(event);
+    } catch (err) {
+      console.warn(
+        '[kagent-operator/identity] maybeRotate: keyrotation publish failed (best-effort):',
+        err,
+      );
+    }
+    // Fire the underlying `identity.rotation` (gapSeconds undefined —
+    // we don't have a previous notAfter at policy-decision time; the
+    // SPIRE renewal stream will fill that in on the next observation).
+    await this.recordRotation({
+      spiffeId: input.spiffeId,
+      newNotBefore: input.notBefore,
+      newNotAfter: input.notAfter,
+      source: input.source,
+    });
+    return {
+      verdict: 'rotated',
+      ageSeconds: decision.ageSeconds,
+      intervalSeconds: decision.intervalSeconds,
+    };
   }
 }
 
