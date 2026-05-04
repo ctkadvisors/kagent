@@ -1,0 +1,37 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Wave 0 sub-team Entry — Service exposing the operator's HMAC-signed
+webhook receiver to other pods (and, via the optional Ingress in
+webhook-ingress.yaml, to off-cluster callers).
+
+ClusterIP-only — the trust boundary is the HMAC signature, not the
+network. Per-trigger secrets live in the chart-managed
+`<release>-trigger-secrets` Secret; the operator deployment mounts
+them as env (`KAGENT_TRIGGER_SECRET_<ID>`) so a leaked URL slug
+without the matching secret returns 401.
+
+Gated on `triggers.enabled` — when triggers are disabled the chart
+materializes neither this Service nor the Ingress nor the env on the
+deployment that would bind a port the Service would point at.
+*/}}
+{{- if .Values.triggers.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: triggers-webhook
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: webhook
+      port: {{ .Values.triggers.webhook.port }}
+      targetPort: webhook
+      protocol: TCP
+{{- end }}

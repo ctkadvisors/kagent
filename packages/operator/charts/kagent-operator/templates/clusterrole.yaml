@@ -24,15 +24,32 @@ metadata:
 rules:
   # Read CRDs the operator owns + WS-M agenttemplates (read-only;
   # template authorship is GitOps) + v0.1.5 modelendpoints (read-only;
-  # ModelEndpoint authorship is GitOps; the gateway writes status).
+  # ModelEndpoint authorship is GitOps; the gateway writes status) +
+  # v0.1.16 kagentschedules (Wave 0 entry-point CRD).
   - apiGroups: ['kagent.knuteson.io']
-    resources: ['agents', 'agenttasks', 'agentcapabilities', 'agenttemplates', 'modelendpoints']
+    resources:
+      [
+        'agents',
+        'agenttasks',
+        'agentcapabilities',
+        'agenttemplates',
+        'modelendpoints',
+        'kagentschedules',
+      ]
     verbs: ['get', 'list', 'watch']
-  # Patch AgentTask.status + AgentTemplate.status (operator-owned
-  # subresources).
+  # Patch AgentTask.status + AgentTemplate.status + KagentSchedule.status
+  # (operator-owned subresources).
   - apiGroups: ['kagent.knuteson.io']
-    resources: ['agenttasks/status', 'agenttemplates/status']
+    resources: ['agenttasks/status', 'agenttemplates/status', 'kagentschedules/status']
     verbs: ['get', 'patch', 'update']
+  # Wave 0 sub-team Entry — operator creates AgentTasks from each
+  # KagentSchedule tick and from each valid HMAC-signed webhook POST.
+  # The agent-pod's own RBAC also includes `agenttasks: [create]` for
+  # the WS-K spawn_child_task path; same verb on the operator floor
+  # for the trigger paths.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['create']
   # WS-M — operator mints Agent CRs from templates via the
   # template-server. Needed for `agents:create` (POST), `update/patch`
   # (lastUsedAt annotation bumps), and `delete` (idle-GC sweeper).
