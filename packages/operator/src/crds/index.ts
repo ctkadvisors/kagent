@@ -39,11 +39,13 @@ export type {
 } from './types.js';
 
 export {
+  casUri,
   DEFAULT_ARTIFACT_PVC,
   INLINE_DEFAULT_MAX_BYTES,
   inlineSafe,
   isArtifactRef,
   parseArtifactUri,
+  parseUri,
   pvcUri,
 } from './artifact-ref.js';
 export type {
@@ -51,6 +53,7 @@ export type {
   ArtifactScheme,
   InlineDecision,
   ParsedArtifactUri,
+  ParsedUri,
 } from './artifact-ref.js';
 
 /* v0.2.0-typed-io — typed dataflow contract helpers */
