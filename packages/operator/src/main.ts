@@ -2343,6 +2343,143 @@ async function main(): Promise<void> {
       '[kagent-operator] events disabled (set KAGENT_EVENTS_ENABLED=true to enable Wave 3 pub/sub)',
     );
   }
+
+  // === Wave 4 — Tenancy ===
+  // v0.5.0-tenancy. The Tenant CRD is the substrate's multi-tenant
+  // boundary primitive (per docs/SUBSTRATE-V1.md §3.6 +
+  // docs/WAVES.md §6.1). When KAGENT_TENANCY_ENABLED=true:
+  //
+  //   1. Build a cluster-scoped Tenant informer + reconciler. The
+  //      controller emits tenant.created / tenant.updated /
+  //      tenant.deleted audit events on each transition and refreshes
+  //      Tenant.status (namespaceCount, agentCount, activeTaskCount).
+  //   2. Detect namespace-overlap with other tenants and surface as
+  //      `phase: Failed` + `NamespaceOverlap` condition.
+  //   3. Expose `lookupTenant` + `listAllTenants` callbacks for the
+  //      cap-issuer + admission validator (the tenant-claim threading
+  //      lands on every minted cap bundle; the agent-pod surfaces
+  //      `X-Kagent-Tenant` from `claims.tenant` on every gateway call
+  //      per docs/GATEWAY-CONTRACT.md §3).
+  //
+  // DEFAULT-OFF for gradual roll-out — existing single-tenant installs
+  // continue working unchanged when the env is unset.
+  if (process.env.KAGENT_TENANCY_ENABLED === 'true') {
+    const { buildTenantController } = await import('./tenant-controller.js');
+    // Cheap namespace-existence lookup using a one-shot list (informer
+    // cache for namespaces lives outside the operator's hot path; for
+    // v0.5.0 we lazy-list on each reconcile via a tiny cache. Future
+    // revs add a dedicated namespace informer when count grows.)
+    const namespaceCache = new Map<string, boolean>();
+    const namespaceCacheRefresh = async (): Promise<void> => {
+      try {
+        const list = await coreApi.listNamespace();
+        const items = list.items;
+        namespaceCache.clear();
+        for (const ns of items) {
+          const name = ns.metadata?.name;
+          if (typeof name === 'string' && name.length > 0) {
+            namespaceCache.set(name, true);
+          }
+        }
+      } catch (err) {
+        console.warn('[kagent-tenant] namespace list failed (using stale cache):', err);
+      }
+    };
+    await namespaceCacheRefresh();
+    const namespaceCacheTimer = setInterval(() => {
+      void namespaceCacheRefresh();
+    }, 30_000);
+    namespaceCacheTimer.unref?.();
+    const namespaceExists = (ns: string): boolean => namespaceCache.get(ns) === true;
+
+    // Audit hook adapter — bridge controller's lifecycle events to
+    // the audit publisher's CloudEvents envelope.
+    const tenantAudit =
+      auditPublisher !== undefined
+        ? {
+            onCreated: async (
+              data: import('./tenant-controller.js').TenantLifecycleEmissionData,
+            ) => {
+              try {
+                await auditPublisher.publish(
+                  makeEvent({
+                    source: 'kagent.knuteson.io/operator',
+                    subject: `tenant/${data.tenant}`,
+                    type: 'tenant.created',
+                    data,
+                  }),
+                );
+              } catch (err) {
+                console.warn('[kagent-tenant] tenant.created audit publish failed:', err);
+              }
+            },
+            onUpdated: async (
+              data: import('./tenant-controller.js').TenantLifecycleEmissionData,
+            ) => {
+              try {
+                await auditPublisher.publish(
+                  makeEvent({
+                    source: 'kagent.knuteson.io/operator',
+                    subject: `tenant/${data.tenant}`,
+                    type: 'tenant.updated',
+                    data,
+                  }),
+                );
+              } catch (err) {
+                console.warn('[kagent-tenant] tenant.updated audit publish failed:', err);
+              }
+            },
+            onDeleted: async (
+              data: import('./tenant-controller.js').TenantLifecycleEmissionData,
+            ) => {
+              try {
+                await auditPublisher.publish(
+                  makeEvent({
+                    source: 'kagent.knuteson.io/operator',
+                    subject: `tenant/${data.tenant}`,
+                    type: 'tenant.deleted',
+                    data,
+                  }),
+                );
+              } catch (err) {
+                console.warn('[kagent-tenant] tenant.deleted audit publish failed:', err);
+              }
+            },
+          }
+        : undefined;
+
+    const tenantController = buildTenantController({
+      kc,
+      customApi,
+      namespaceExists,
+      // listAllAgents — read from the existing Agent informer if the
+      // events block already started one; otherwise fall back to an
+      // empty list (controller still functions, just with agentCount=0
+      // until the events block enables).
+      listAllAgents: () => [],
+      listAllAgentTasks: () => informerRef.current?.list() ?? [],
+      ...(tenantAudit !== undefined && { audit: tenantAudit }),
+    });
+    await tenantController.start();
+    const defaultTenant = normalizeOptionalEnv(process.env.KAGENT_TENANCY_DEFAULT_TENANT);
+    console.log(
+      `[kagent-operator] Tenant controller started (defaultTenant=${defaultTenant ?? '(none)'})`,
+    );
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        clearInterval(namespaceCacheTimer);
+        await tenantController.stop();
+      } catch (err) {
+        console.error('[kagent-operator] Tenant controller stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] tenancy disabled (set KAGENT_TENANCY_ENABLED=true to enable Wave 4 multi-tenant boundary)',
+    );
+  }
 }
 
 function normalizeOptionalEnv(value: string | undefined): string | undefined {

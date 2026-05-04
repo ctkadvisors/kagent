@@ -889,6 +889,48 @@ events:
   # informer events. 30s is fast enough for human-time GitOps loops.
   reapplyIntervalMs: 30000
 
+# ---------------------------------------------------------------------
+# Wave 4 — Tenancy (v0.5.0-tenancy)
+# ---------------------------------------------------------------------
+# Multi-tenant boundary primitive (per docs/SUBSTRATE-V1.md §3.6 +
+# docs/WAVES.md §6.1). When `enabled: true`, the operator runs the
+# Tenant controller's informer (cluster-scoped) and threads
+# `claims.tenant` into every minted capability bundle. The agent-pod
+# stamps `X-Kagent-Tenant` on every gateway call per
+# docs/GATEWAY-CONTRACT.md §3.
+#
+# DEFAULT-OFF — gradual roll-out posture. Existing single-tenant
+# installs continue to work unchanged; flipping this on requires the
+# cluster admin to provision Tenant CRs declaring the
+# namespaceAllowlist for each tenant.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_TENANCY_ENABLED=true|false
+#   KAGENT_TENANCY_DEFAULT_TENANT=<tenant-name>  (optional fallback)
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 4 — Tenancy" block.
+# CRD: `crds/tenants.yaml`.
+#
+# Cross-tenant K8s RBAC (recommended overlay; chart does NOT
+# materialize because tenant identities are install-time-known):
+#
+#   For each tenant `<name>`, the cluster admin creates a Role +
+#   RoleBinding in each allowlisted namespace so users in tenant
+#   `<name>` can list/watch Agents + AgentTasks ONLY when their
+#   metadata.labels.tenant matches. Cite documentation:
+#   https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+#
+# Substrate-level visibility enforcement (refusing one tenant's
+# users to LIST another tenant's resources) is K8s RBAC's job — kagent
+# stamps the labels and provides the lookup surface; the cluster admin
+# composes the per-tenant RoleBindings.
+tenancy:
+  enabled: false
+  # Optional cluster-wide default tenant. Used when an Agent has no
+  # tenant label AND no namespace-default exists. Leave empty for the
+  # strict "explicit tenant required" posture.
+  defaultTenant: ''
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

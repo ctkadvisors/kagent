@@ -142,3 +142,71 @@ plumbing took effect):
   kubectl --namespace {{ .Release.Namespace }} \
     get deploy {{ include "kagent-operator.fullname" . }} \
     -o jsonpath='{.spec.template.spec.containers[0].env}' | jq
+
+{{- if .Values.tenancy.enabled }}
+
+╔══════════════════════════════════════════════════════════════════╗
+║ Wave 4 — Tenancy ENABLED (v0.5.0-tenancy)                         ║
+╚══════════════════════════════════════════════════════════════════╝
+
+The operator runs the Tenant controller (cluster-scoped). Each
+Tenant CR declares a `namespaceAllowlist`; the operator stamps
+`kagent.knuteson.io/tenant=<name>` on every Agent + AgentTask at
+admission time, and the cap-issuer threads `claims.tenant` into the
+JWT bundle. The agent-pod stamps `X-Kagent-Tenant` on every
+gateway call (per docs/GATEWAY-CONTRACT.md §3).
+
+Provision a Tenant CR:
+
+  apiVersion: kagent.knuteson.io/v1alpha1
+  kind: Tenant
+  metadata:
+    name: acme
+  spec:
+    name: acme
+    namespaceAllowlist:
+      - acme-prod
+      - acme-staging
+    capabilityRoot:
+      issuer: kagent.knuteson.io/operator/acme  # optional override
+
+Recommended cross-tenant K8s RBAC overlay (cluster admin authors;
+chart does NOT materialize because tenant identities are install-
+time-known):
+
+  For each tenant <name>, create a Role + RoleBinding in each
+  allowlisted namespace so users in <name> can list/watch Agents +
+  AgentTasks ONLY when their `metadata.labels.tenant` matches.
+  K8s RBAC enforces the visibility refusal; kagent stamps the
+  labels and provides the cap-bundle / gateway-header threading.
+
+  Example (per namespace per tenant):
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata: { name: kagent-tenant-acme, namespace: acme-prod }
+    rules:
+      - apiGroups: [kagent.knuteson.io]
+        resources: [agents, agenttasks]
+        verbs: [get, list, watch]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata: { name: kagent-tenant-acme, namespace: acme-prod }
+    subjects:
+      - kind: Group
+        name: oidc:tenant-acme
+    roleRef:
+      kind: Role
+      name: kagent-tenant-acme
+
+Migrate an Agent between tenants:
+
+  node packages/operator/scripts/migrate-tenants.ts move \
+    <agent-name> --from-tenant <a> --to-tenant <b> \
+    [--namespace <ns>] [--apply]   # dry-run by default
+
+The CLI cascades the label rewrite to all in-flight AgentTasks
+(non-Completed, non-Failed). Refuses on namespace mismatch +
+missing target tenant CR.
+
+{{- end }}

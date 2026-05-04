@@ -541,6 +541,22 @@ spec:
             - name: KAGENT_EVENTS_REAPPLY_INTERVAL_MS
               value: {{ .Values.events.reapplyIntervalMs | quote }}
             {{- end }}
+            # ---------------------------------------------------------------
+            # Wave 4 — Tenancy (v0.5.0-tenancy)
+            # ---------------------------------------------------------------
+            # When `tenancy.enabled=true`, the operator runs the
+            # Tenant controller (cluster-scoped informer) and threads
+            # `claims.tenant` into every minted cap bundle. The
+            # agent-pod stamps `X-Kagent-Tenant` on every gateway call
+            # per docs/GATEWAY-CONTRACT.md §3. Default-OFF for gradual
+            # roll-out — existing single-tenant installs continue
+            # working unchanged.
+            - name: KAGENT_TENANCY_ENABLED
+              value: {{ .Values.tenancy.enabled | ternary "true" "false" | quote }}
+            {{- with .Values.tenancy.defaultTenant }}
+            - name: KAGENT_TENANCY_DEFAULT_TENANT
+              value: {{ . | quote }}
+            {{- end }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).
