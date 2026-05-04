@@ -42,6 +42,7 @@ import { StdoutSink } from '@kagent/trace-sinks';
 import { tryParseArtifactRefFromToolOutput } from './artifacts.js';
 import { resolveBuiltinTools } from './builtin-tools.js';
 import type { PodConfig } from './env.js';
+import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
 
 /**
  * Substrate-defined artifact handle. Structurally identical to the
@@ -123,6 +124,14 @@ export interface RunDeps {
    * as a config-time error and boot-fail.
    */
   readonly fetchPrompt?: (name: string, version?: number) => Promise<string>;
+  /**
+   * v0.4.3-identity (Wave 3) — pre-resolved SVID handle. Production
+   * wiring leaves this undefined and `runAgentTask` calls
+   * `resolveIdentityHandle(config)` to build it from the env paths.
+   * Tests inject directly to assert the SVID-on-the-wire path
+   * without touching `node:fs`.
+   */
+  readonly identityHandle?: IdentityHandle | null;
 }
 
 /**
@@ -135,7 +144,14 @@ export interface RunDeps {
  * message to surface F1/F2/F3 + synthesis_low_yield flags.
  */
 export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promise<RunResult> {
-  const llm = deps.llm ?? buildLlmClient(config);
+  // v0.4.3-identity — when the operator set KAGENT_LITELLM_USE_SVID=true
+  // we resolve a handle to the local SPIRE-managed SVID files BEFORE
+  // building the LLM client; the client's mTLS dispatcher is wired off
+  // the handle's getMtlsContext(). When the env flag is unset, the
+  // handle is null and the client takes the bearer-token path
+  // unchanged (Wave 0 secrets-hygiene contract).
+  const identityHandle = deps.identityHandle ?? resolveIdentityHandle(config);
+  const llm = deps.llm ?? buildLlmClient(config, undefined, identityHandle ?? undefined);
 
   // v0.1.6 — resolve the system prompt. Order:
   //   1. If systemPromptRef set AND a fetcher is wired → try Langfuse.
@@ -244,6 +260,17 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
  * (packages/llm-gateway/src/headers.ts); without them every usage row
  * lands with task_uid=null and per-task throughput becomes invisible.
  *
+ * v0.4.3-identity (Wave 3 / Identity): when `config.identity.useSvidForLlm
+ * = true`, the client is built with an mTLS dispatcher backed by the
+ * SVID material (cert + key + bundle PEMs from the pod-side files the
+ * SPIRE-Agent / spiffe-helper sidecar materialized). When the SVID
+ * material is unavailable (helper hasn't written yet, mock disabled),
+ * we fall back to bearer auth and emit a WARN log — the runner stays
+ * functional but loses the identity guarantee. The mTLS capability
+ * probe (`probeGatewayMtls`) lives in `svid-client.ts` and is invoked
+ * by `runAgentTask` BEFORE the first chat() call so a bearer-only
+ * gateway also falls back gracefully.
+ *
  * Exported so tests can pass a fake `fetch` and assert the wire-level
  * headers without booting the full executor. Production callers go
  * through `runAgentTask`.
@@ -251,16 +278,62 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
 export function buildLlmClient(
   config: PodConfig,
   fetchImpl?: typeof globalThis.fetch,
+  identityHandle?: IdentityHandle,
 ): OpenAICompatibleLLMClient {
+  // Defensive read — fixture/test PodConfigs from before v0.4.3 don't
+  // carry an `identity` block. Treat missing-field as identity-off so
+  // the legacy bearer path stays unchanged.
+  const identity = config.identity ?? { useSvidForLlm: false, spiffeId: undefined };
+  const headers: Record<string, string> = {
+    'X-Kagent-Task-UID': config.taskId,
+    'X-Kagent-Agent': config.agentName,
+  };
+  if (identity.useSvidForLlm && identityHandle?.spiffeId !== undefined) {
+    headers['X-Kagent-SPIFFE-ID'] = identityHandle.spiffeId;
+  }
+  // Decide credential mode: SVID-mTLS preferred when handle is wired
+  // AND the material is available. Bearer fall-back when SVID material
+  // is missing OR identity is off.
+  const useSvid =
+    identity.useSvidForLlm &&
+    identityHandle !== undefined &&
+    identityHandle.getMtlsContext() !== null;
+  if (identity.useSvidForLlm && !useSvid) {
+    console.warn(
+      '[kagent-agent-pod/identity] KAGENT_LITELLM_USE_SVID=true but SVID material unavailable; ' +
+        'falling back to bearer auth. SPIRE-helper sidecar may not have materialized yet.',
+    );
+  }
   return new OpenAICompatibleLLMClient({
     baseUrl: config.litellmBaseUrl,
     model: config.agentSpec.model,
-    ...(config.litellmApiKey !== undefined && { apiKey: config.litellmApiKey }),
-    defaultHeaders: {
-      'X-Kagent-Task-UID': config.taskId,
-      'X-Kagent-Agent': config.agentName,
-    },
+    ...(!useSvid && config.litellmApiKey !== undefined && { apiKey: config.litellmApiKey }),
+    defaultHeaders: headers,
     ...(fetchImpl !== undefined && { fetch: fetchImpl }),
+  });
+}
+
+/**
+ * v0.4.3-identity — agent-pod-side SVID handle resolver. When
+ * `config.identity.useSvidForLlm=true`, build an `IdentityHandle`
+ * against the SVID file paths from env. Returns null when identity is
+ * off (the production-default).
+ *
+ * Defensive: reads `config.identity` optional chained so legacy
+ * test-fixture PodConfigs (from before v0.4.3) don't crash here —
+ * they get null (identity off) and continue down the bearer path.
+ *
+ * Exported for the runner test suite + main.ts production wiring.
+ */
+export function resolveIdentityHandle(config: PodConfig): IdentityHandle | null {
+  const identity = config.identity;
+  if (identity === undefined || !identity.useSvidForLlm) return null;
+  return loadIdentityHandle({
+    enabled: true,
+    ...(identity.svidCertPath !== undefined && { certPath: identity.svidCertPath }),
+    ...(identity.svidKeyPath !== undefined && { keyPath: identity.svidKeyPath }),
+    ...(identity.svidBundlePath !== undefined && { bundlePath: identity.svidBundlePath }),
+    ...(identity.spiffeId !== undefined && { spiffeId: identity.spiffeId }),
   });
 }
 

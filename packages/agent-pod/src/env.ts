@@ -217,6 +217,36 @@ export interface PodConfig {
    * values (negative / non-integer) parse to 0 — fail-closed.
    */
   readonly taskDepth: number;
+  /**
+   * v0.4.3-identity (Wave 3 / Identity sub-team). When
+   * `KAGENT_LITELLM_USE_SVID=true`, the agent-pod's LLM client wires
+   * an SVID-backed mTLS context against the SPIRE workload-API socket
+   * (or the spiffe-helper-materialized cert files). When unset / false,
+   * the bearer-token fall-back path is used.
+   *
+   * The probe outcome (`probeGatewayMtls`) decides at runtime whether
+   * mTLS is actually live; this flag just gates the probe attempt.
+   */
+  readonly identity: PodIdentityConfig;
+}
+
+/**
+ * v0.4.3-identity — agent-pod-side identity config snapshot. Built
+ * from KAGENT_IDENTITY_ENABLED + KAGENT_LITELLM_USE_SVID +
+ * KAGENT_SVID_* env vars. `enabled=false` is the production-default
+ * (until ops flips the chart `identity.enabled=true`).
+ */
+export interface PodIdentityConfig {
+  /** True when KAGENT_LITELLM_USE_SVID=true (set by the operator chart). */
+  readonly useSvidForLlm: boolean;
+  /** SPIFFE ID this pod attests as. Operator stamps via env. */
+  readonly spiffeId: string | undefined;
+  /** Override path for SVID cert PEM. Defaults to /var/kagent/svid/tls.crt. */
+  readonly svidCertPath: string | undefined;
+  /** Override path for SVID key PEM. Defaults to /var/kagent/svid/tls.key. */
+  readonly svidKeyPath: string | undefined;
+  /** Override path for SVID bundle PEM. Defaults to /var/kagent/svid/bundle.pem. */
+  readonly svidBundlePath: string | undefined;
 }
 
 const DEFAULT_LITELLM_BASE_URL = 'http://litellm.kagent-system.svc.cluster.local:4000/v1';
@@ -266,6 +296,7 @@ export function parseEnv(
   const logLevel = env.LOG_LEVEL === 'debug' ? 'debug' : 'info';
   const traceContentMode = parseTraceContentMode(env.KAGENT_TRACE_CONTENT_MODE);
   const taskDepth = parseTaskDepth(env.KAGENT_TASK_DEPTH);
+  const identity = parseIdentityConfig(env);
 
   const config: PodConfig = {
     taskId,
@@ -281,8 +312,40 @@ export function parseEnv(
     logLevel,
     traceContentMode,
     taskDepth,
+    identity,
   };
   return config;
+}
+
+/**
+ * v0.4.3-identity — parse the Wave 3 SVID env contract into a
+ * `PodIdentityConfig`. Defaults are explicit so an operator running
+ * with identity disabled still gets a typed `identity.useSvidForLlm
+ * = false` value. Exported for the unit-test suite.
+ */
+export function parseIdentityConfig(
+  env: Readonly<Record<string, string | undefined>>,
+): PodIdentityConfig {
+  const useSvidForLlm = env.KAGENT_LITELLM_USE_SVID === 'true';
+  return {
+    useSvidForLlm,
+    spiffeId:
+      typeof env.KAGENT_SPIFFE_ID === 'string' && env.KAGENT_SPIFFE_ID.length > 0
+        ? env.KAGENT_SPIFFE_ID
+        : undefined,
+    svidCertPath:
+      typeof env.KAGENT_SVID_CERT_FILE === 'string' && env.KAGENT_SVID_CERT_FILE.length > 0
+        ? env.KAGENT_SVID_CERT_FILE
+        : undefined,
+    svidKeyPath:
+      typeof env.KAGENT_SVID_KEY_FILE === 'string' && env.KAGENT_SVID_KEY_FILE.length > 0
+        ? env.KAGENT_SVID_KEY_FILE
+        : undefined,
+    svidBundlePath:
+      typeof env.KAGENT_SVID_BUNDLE_FILE === 'string' && env.KAGENT_SVID_BUNDLE_FILE.length > 0
+        ? env.KAGENT_SVID_BUNDLE_FILE
+        : undefined,
+  };
 }
 
 /**

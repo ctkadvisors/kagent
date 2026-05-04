@@ -69,6 +69,9 @@ export type AuditEventType =
   /* v0.4.2-cache — Wave 3 / Cache sub-team. */
   | 'cache.hit'
   | 'cache.miss'
+  /* v0.4.3-identity — Wave 3 / Identity sub-team. */
+  | 'identity.svid_issued'
+  | 'identity.rotation'
   /* v0.4.4-locality — Wave 3 / Locality sub-team. */
   | 'locality.speculative_spawned'
   | 'locality.speculative_superseded'
@@ -370,29 +373,21 @@ export interface WorkflowEventSubscriptionPendingData {
 /**
  * v0.4.2-cache — Wave 3 / Cache sub-team. Per-Agent persistent cache
  * lookup outcome. One emission per declared `Agent.spec.caches[]` slot
- * at AgentTask admission time. The `key` field is the sha256 hex
- * string the substrate derived from the slot's `key` template;
- * downstream telemetry can group by `key` to find cache-effectiveness
- * cohorts (same image-digest + same input artifacts → same key →
- * should hit on repeat invocations).
+ * at AgentTask admission time.
  */
 export interface CacheHitData {
   readonly taskUid: string;
   readonly taskNamespace: string;
   readonly taskName: string;
   readonly agentName: string;
-  /** Per-Agent stable cache slot id (`Agent.spec.caches[].name`). */
   readonly slotName: string;
-  /** sha256-hex of the rendered key template. */
   readonly key: string;
-  /** Container path the cache was restored to (`Agent.spec.caches[].mountPath`). */
   readonly mountPath: string;
 }
 
 /**
- * v0.4.2-cache — same shape as `CacheHitData` (operator emits one or
- * the other per slot, never both). Cache miss is NEVER an error;
- * cold fall-back is the contract.
+ * v0.4.2-cache — same shape as `CacheHitData`. Cache miss is NEVER
+ * an error; cold fall-back is the contract.
  */
 export interface CacheMissData {
   readonly taskUid: string;
@@ -405,12 +400,37 @@ export interface CacheMissData {
 }
 
 /**
+ * v0.4.3-identity — `identity.svid_issued`. Emitted by the operator's
+ * Wave 3 / Identity reconciler each time a workload SVID is observed
+ * for an agent-pod (or workflow-runtime pod).
+ */
+export interface IdentitySvidIssuedData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly spiffeId: string;
+  readonly notBefore: string;
+  readonly notAfter: string;
+  readonly source: 'spire-agent' | 'mock';
+}
+
+/**
+ * v0.4.3-identity — `identity.rotation`. Emitted when the
+ * cert-watcher / spiffe-helper observes a fresh SVID replacing an
+ * older one for the same SPIFFE ID.
+ */
+export interface IdentityRotationData {
+  readonly spiffeId: string;
+  readonly newNotBefore: string;
+  readonly newNotAfter: string;
+  readonly previousNotAfter: string | undefined;
+  readonly gapSeconds: number | undefined;
+  readonly source: 'spire-agent' | 'mock';
+}
+
+/**
  * `locality.speculative_spawned` — Wave 3 / Locality sub-team.
- * Operator's locality engine spawned a duplicate of an in-flight
- * AgentTask whose elapsed time crossed `threshold × median(historical)`
- * for that Agent. The twin shares the primary's idempotency key; the
- * Wave 1 cache prevents double-effect. First to terminal Completed
- * wins; loser → `locality.speculative_superseded` + status `superseded`.
  */
 export interface LocalitySpeculativeSpawnedData {
   readonly primaryTaskUid: string;
@@ -418,20 +438,13 @@ export interface LocalitySpeculativeSpawnedData {
   readonly primaryTaskName: string;
   readonly twinTaskName: string;
   readonly agentName: string;
-  /** Elapsed wall-clock ms between dispatch and the spawn decision. */
   readonly elapsedMs: number;
-  /** Per-Agent median latency the engine compared elapsed against. */
   readonly medianMs: number;
-  /** `threshold × medianMs`. Effective spawn boundary. */
   readonly thresholdMs: number;
 }
 
 /**
  * `locality.speculative_superseded` — Wave 3 / Locality sub-team.
- * The race-loser of a speculative duplicate transitioned to the
- * non-Failed terminal state `superseded`. The winner's outputs are
- * the source of truth (recorded in the Wave 1 idempotency cache);
- * the loser's loop work is discarded.
  */
 export interface LocalitySpeculativeSupersededData {
   readonly loserTaskUid: string;
@@ -443,21 +456,13 @@ export interface LocalitySpeculativeSupersededData {
 
 /**
  * `admission.pod_pressure_deferred` — Wave 3 / Locality sub-team.
- * Admission refused to admit an AgentTask because the pending
- * agent-pod count crossed `KAGENT_LOCALITY_MAX_PENDING_PODS`. The
- * AgentTask stays Pending; the next informer event triggers
- * re-evaluation. Distinct from `quota.breached` (Wave 4) which
- * fires on quota-cap exhaustion — pod-pressure is a substrate-side
- * backstop against pending-pod overload.
  */
 export interface AdmissionPodPressureDeferredData {
   readonly taskUid: string;
   readonly taskNamespace: string;
   readonly taskName: string;
   readonly agentName: string;
-  /** Pending-pod count observed when admission deferred. */
   readonly observed: number;
-  /** Threshold (default 50) the count crossed. */
   readonly threshold: number;
 }
 
@@ -496,6 +501,9 @@ export type AuditEventData =
   /* v0.4.2-cache — Wave 3 / Cache sub-team. */
   | { readonly type: 'cache.hit'; readonly data: CacheHitData }
   | { readonly type: 'cache.miss'; readonly data: CacheMissData }
+  /* v0.4.3-identity — Wave 3 / Identity sub-team. */
+  | { readonly type: 'identity.svid_issued'; readonly data: IdentitySvidIssuedData }
+  | { readonly type: 'identity.rotation'; readonly data: IdentityRotationData }
   /* v0.4.4-locality — Wave 3 / Locality sub-team. */
   | {
       readonly type: 'locality.speculative_spawned';

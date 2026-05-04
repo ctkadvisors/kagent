@@ -171,4 +171,99 @@ describe('loadFromEnv', () => {
       loadFromEnv({}, (p) => (p === '/var/kagent/cap-ca/tls.key' ? privatePem : '')),
     ).rejects.toThrow(/KAGENT_CAP_SIGNING_PUB_FILE/);
   });
+
+  /* v0.4.3-identity — additive SPIRE-managed key source. Wave 2's
+   * existing tests are the spec for back-compat; these tests cover the
+   * Wave 3 additive paths. */
+  describe('Wave 3 — Identity SPIRE source', () => {
+    it('uses SPIRE-managed key when KAGENT_IDENTITY_ENABLED=true and SPIRE files present', async () => {
+      const spireKeys = await makeEsKeys();
+      const chartKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+        ['/var/kagent/cap-ca/tls.key', chartKeys.privatePem],
+        ['/var/kagent/cap-ca/tls.crt', chartKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv(
+        { KAGENT_IDENTITY_ENABLED: 'true', KAGENT_CAP_ISSUER: 'urn:spire-test' },
+        (p) => {
+          const v = fakeFiles.get(p);
+          if (v === undefined) return '';
+          return v;
+        },
+      );
+      // SPIRE-source CA verifies a JWT minted with the SPIRE key.
+      const minted = await ca.mint({
+        subjectTaskUid: 'spire-task',
+        jti: 'cap-spire',
+        claims: {},
+      });
+      expect(minted.jwt.split('.').length).toBe(3);
+      expect(ca.issuer).toBe('urn:spire-test');
+    });
+
+    it('falls back to chart Secret when KAGENT_IDENTITY_ENABLED=true but SPIRE files absent', async () => {
+      const chartKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/cap-ca/tls.key', chartKeys.privatePem],
+        ['/var/kagent/cap-ca/tls.crt', chartKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv({ KAGENT_IDENTITY_ENABLED: 'true' }, (p) => {
+        const v = fakeFiles.get(p);
+        // Empty string for SPIRE paths → fall-back path.
+        if (v === undefined) return '';
+        return v;
+      });
+      // Chart-source CA still mints + verifies (proves Wave 2 fall-back still works).
+      const minted = await ca.mint({
+        subjectTaskUid: 'fallback-task',
+        jti: 'cap-fb',
+        claims: {},
+      });
+      expect(minted.jwt.split('.').length).toBe(3);
+    });
+
+    it('honors override SPIRE paths via env', async () => {
+      const spireKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/etc/spire/cap.key', spireKeys.privatePem],
+        ['/etc/spire/cap.crt', spireKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv(
+        {
+          KAGENT_IDENTITY_ENABLED: 'true',
+          KAGENT_SPIRE_CAP_SIGNING_KEY_FILE: '/etc/spire/cap.key',
+          KAGENT_SPIRE_CAP_SIGNING_PUB_FILE: '/etc/spire/cap.crt',
+        },
+        (p) => fakeFiles.get(p) ?? '',
+      );
+      expect(ca.alg).toBe('ES256');
+    });
+
+    it('Wave 2 flag-disabled path: SPIRE files ignored when KAGENT_IDENTITY_ENABLED unset', async () => {
+      const spireKeys = await makeEsKeys();
+      const chartKeys = await makeEsKeys();
+      // Two distinct key pairs; if Wave 3 path were taken the test
+      // would mint with the SPIRE key. Without the env flag the
+      // Wave 2 chart path MUST be taken.
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+        ['/var/kagent/cap-ca/tls.key', chartKeys.privatePem],
+        ['/var/kagent/cap-ca/tls.crt', chartKeys.publicPem],
+      ]);
+      const askedPaths: string[] = [];
+      const ca = await loadFromEnv({}, (p) => {
+        askedPaths.push(p);
+        const v = fakeFiles.get(p);
+        if (v === undefined) throw new Error(`unexpected read: ${p}`);
+        return v;
+      });
+      // Wave 2 path should NEVER ask for the SPIRE files when identity disabled.
+      expect(askedPaths).not.toContain('/var/kagent/spire-cap-ca/tls.key');
+      expect(askedPaths).not.toContain('/var/kagent/spire-cap-ca/tls.crt');
+      expect(ca.alg).toBe('ES256');
+    });
+  });
 });

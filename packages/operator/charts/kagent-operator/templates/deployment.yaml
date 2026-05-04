@@ -470,8 +470,6 @@ spec:
             # NodeAffinity from Workspace placement (`enabled`),
             # speculative execution (`speculative.enabled`), and
             # pod-pressure circuit breaker (`circuitBreaker.enabled`).
-            # See packages/operator/src/admission.ts (checkPodPressure)
-            # + @kagent/locality-controller for the implementations.
             - name: KAGENT_LOCALITY_ENABLED
               value: {{ .Values.locality.enabled | ternary "true" "false" | quote }}
             - name: KAGENT_LOCALITY_SPECULATIVE_ENABLED
@@ -482,6 +480,28 @@ spec:
               value: {{ .Values.locality.circuitBreaker.enabled | ternary "true" "false" | quote }}
             - name: KAGENT_LOCALITY_MAX_PENDING_PODS
               value: {{ .Values.locality.circuitBreaker.maxPendingPods | quote }}
+            # ---------------------------------------------------------------
+            # Wave 3 — Identity (v0.4.3-identity)
+            # ---------------------------------------------------------------
+            # SPIFFE/SPIRE per-pod SVID issuance. When
+            # `identity.enabled=true`, the embedded SPIRE sub-chart at
+            # `charts/spire/` is rendered. Spawned agent-pods get
+            # hostPath volumeMount on SPIRE Agent's Workload-API UDS +
+            # KAGENT_LITELLM_USE_SVID=true → mTLS LLM client.
+            - name: KAGENT_IDENTITY_ENABLED
+              value: {{ .Values.identity.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.identity.enabled }}
+            - name: KAGENT_IDENTITY_TRUST_DOMAIN
+              value: {{ .Values.identity.trustDomain | quote }}
+            - name: KAGENT_IDENTITY_MOCK_ENABLED
+              value: {{ .Values.identity.mock.enabled | ternary "true" "false" | quote }}
+            - name: KAGENT_AGENT_POD_LITELLM_USE_SVID
+              value: {{ and .Values.identity.litellmUseSvid (not .Values.identity.mock.enabled) | ternary "true" "false" | quote }}
+            - name: KAGENT_AGENT_POD_SPIRE_HOST_SOCKET_DIR
+              value: {{ .Values.identity.hostSocketDir | quote }}
+            - name: KAGENT_AGENT_POD_SPIRE_SOCKET_PATH
+              value: {{ .Values.identity.podSocketPath | quote }}
+            {{- end }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).

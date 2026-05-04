@@ -21,3 +21,12 @@ keywords:
   - kubernetes
   - operator
   - llm
+# Wave 3 / Identity (v0.4.3-identity) — embedded SPIFFE/SPIRE
+# sub-chart at `charts/spire/`. Default OFF; enable via
+# `identity.enabled=true`. The condition keeps the sub-chart
+# resources out of the rendered manifest unless the flag is set.
+dependencies:
+  - name: spire
+    version: 0.0.1
+    repository: 'file://./charts/spire'
+    condition: identity.enabled

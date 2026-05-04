@@ -1,0 +1,189 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+SPIRE Server StatefulSet. Single replica in v0.4.3 — Wave 4 will
+add HA + persistent SQL backend. The Server runs the in-memory
+data-store sufficient for homelab single-node K3s.
+
+Trust domain comes from the parent chart's `identity.trustDomain`
+(default `kagent.knuteson.io`); MUST match the value the operator's
+`buildSpiffeId` emits and the agent-pod's `KAGENT_SPIFFE_ID` env.
+
+Default OFF — gated on `global.identity.enabled`. Mock mode renders
+zero workloads (the operator IdentityWatcher fires synthetic events
+without a real SPIRE).
+*/}}
+
+{{- if and (eq (include "kagent-spire.enabled" .) "true") (not (eq (include "kagent-spire.mockMode" .) "true")) }}
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kagent-spire.serverName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kagent-spire.serverName" . }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+rules:
+  # SPIRE Server's K8s workload-attestor needs read access to pods +
+  # nodes for the K8s_PSAT plugin (Projected SA Token verification).
+  # See https://github.com/spiffe/spire/blob/main/doc/plugin_server_nodeattestor_k8s_psat.md
+  - apiGroups: ['']
+    resources: ['pods', 'nodes']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['authentication.k8s.io']
+    resources: ['tokenreviews']
+    verbs: ['create']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kagent-spire.serverName" . }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kagent-spire.serverName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-spire.serverName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kagent-spire.serverName" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+data:
+  server.conf: |
+    server {
+      bind_address = "0.0.0.0"
+      bind_port = "{{ .Values.server.servicePort }}"
+      trust_domain = "{{ include "kagent-spire.trustDomain" . }}"
+      data_dir = "/run/spire/data"
+      log_level = "INFO"
+      ca_ttl = "168h"
+      default_x509_svid_ttl = "1h"
+    }
+    plugins {
+      DataStore "sql" {
+        plugin_data {
+          database_type = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "kagent-cluster" = {
+              service_account_allow_list = ["{{ .Release.Namespace }}:{{ include "kagent-spire.agentName" . }}"]
+            }
+          }
+        }
+      }
+      KeyManager "memory" {
+        plugin_data = {}
+      }
+      Notifier "k8sbundle" {
+        plugin_data {
+          namespace = "{{ .Release.Namespace }}"
+        }
+      }
+    }
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-spire.serverName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: {{ .Values.server.servicePort }}
+      targetPort: {{ .Values.server.servicePort }}
+      protocol: TCP
+  selector:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "kagent-spire.serverName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  serviceName: {{ include "kagent-spire.serverName" . }}
+  selector:
+    matchLabels:
+      {{- include "kagent-spire.labels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-spire.labels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      serviceAccountName: {{ include "kagent-spire.serverName" . }}
+      containers:
+        - name: spire-server
+          image: '{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}'
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          args:
+            - '-config'
+            - '/run/spire/config/server.conf'
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.server.servicePort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: data
+              mountPath: /run/spire/data
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kagent-spire.serverName" . }}-config
+        - name: data
+          emptyDir: {}
+
+{{- end }}

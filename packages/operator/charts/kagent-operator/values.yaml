@@ -9,6 +9,22 @@
 # local. Set watchAllNamespaces=true only if you provision equivalent
 # ServiceAccounts/PVCs in every workload namespace.
 
+# Wave 3 — Identity (v0.4.3-identity) — the embedded SPIRE sub-chart
+# at `charts/spire/` is gated by Chart.yaml's `condition:
+# identity.enabled`. When that flag is on the sub-chart's templates
+# render; when off, helm skips them entirely. The sub-chart's helpers
+# additionally inspect `.Values.global.identity.*` so a values overlay
+# can override sub-chart specifics without touching the kagent-operator
+# values surface — uncomment + adjust the block below to drive the
+# sub-chart from the parent.
+#
+# global:
+#   identity:
+#     enabled: true
+#     trustDomain: 'kagent.knuteson.io'
+#     mock:
+#       enabled: false
+
 # MUST be 1 in v0.1. The chart's deployment template hard-fails at
 # `helm template` time on any other value because the reconcile loop
 # isn't coordination-aware — two replicas would race the WS-F suspended-
@@ -702,6 +718,88 @@ locality:
     # K3s node comfortably; bump for multi-node clusters with
     # adequate scheduler capacity.
     maxPendingPods: 50
+
+# ---------------------------------------------------------------------
+# Wave 3 — Identity (v0.4.3-identity)
+# ---------------------------------------------------------------------
+# SPIFFE/SPIRE per-pod SVID issuance + mTLS LLM-gateway hand-off.
+# Default OFF — when off the operator continues with the Wave 0
+# secrets-hygiene bearer-token path (KAGENT_LITELLM_API_KEY via
+# secretKeyRef). When on, the embedded SPIRE sub-chart at
+# `charts/spire/` is rendered: a single-node SPIRE Server StatefulSet
+# + a SPIRE Agent DaemonSet exposing the Workload-API UDS at
+# `hostPath: /run/kagent-spire/sockets`. Spawned agent-pods receive
+# the mount + KAGENT_LITELLM_USE_SVID=true env, switching their LLM
+# client into mTLS mode (graceful fall-back to bearer when the
+# gateway lacks mTLS — see GATEWAY-CONTRACT.md §4.3).
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_IDENTITY_ENABLED=true|false
+#   KAGENT_IDENTITY_TRUST_DOMAIN=kagent.knuteson.io
+#   KAGENT_IDENTITY_MOCK_ENABLED=true|false
+#   KAGENT_AGENT_POD_LITELLM_USE_SVID=true|false  (forwarded to spawned Jobs)
+#   KAGENT_AGENT_POD_SPIRE_HOST_SOCKET_DIR=/run/kagent-spire/sockets
+#
+# Mock mode: when `mock.enabled=true` AND `enabled=true`, the SPIRE
+# sub-chart renders ZERO real workloads (just a marker ConfigMap).
+# The operator's IdentityWatcher fires synthetic identity.svid_issued
+# audit events from a test fixture, exercising the audit pipeline +
+# dashboards without bringing real SPIRE up. Useful for first-bringup
+# clusters where SPIRE install is deferred to a follow-up cluster-ops
+# PR. Default OFF (real SPIRE is the path forward).
+#
+# RBAC: SPIRE-required verbs live in the sub-chart's own ClusterRoles
+# (charts/spire/templates/{server,agent}.yaml). The parent operator's
+# ClusterRole adds NO Wave 3 verbs (the operator does NOT register
+# SPIRE entries directly in v0.4.3 — the SPIRE Server's own k8s_psat
+# attestor binds workloads to entries). When the Wave 3 follow-up
+# wires a kagent-side RegistrationEntry controller, that controller's
+# verbs go under the section header in `templates/clusterrole.yaml`
+# "Wave 3 — Identity" already reserved there.
+#
+# infra/spire/ values block (forwarded to the sub-chart at chart
+# install/upgrade time via `global:` namespacing):
+identity:
+  # Master switch. Default OFF — bearer-token auth (Wave 0) stays
+  # canonical until ops flips this on AND validates SPIRE health.
+  enabled: false
+  # Trust domain stamped on every kagent-issued SPIFFE ID. MUST match
+  # the operator's `buildSpiffeId` default + the spire sub-chart's
+  # server config. Override BOTH ends in lockstep.
+  trustDomain: 'kagent.knuteson.io'
+  # The agent-pod's LLM client switches into mTLS mode when this is
+  # true. When `enabled=false`, this is forced to false regardless.
+  litellmUseSvid: true
+  # Mock-mode flag — see comment block above. When true, the SPIRE
+  # sub-chart renders zero real workloads and the operator fires
+  # synthetic SVID events from a test fixture. Useful for dev/CI.
+  mock:
+    enabled: false
+  # SPIRE Workload-API socket layout. Mirror of
+  # DEFAULT_SPIRE_HOST_SOCKET_DIR / DEFAULT_SPIRE_SOCKET_PATH in
+  # packages/operator/src/identity.ts. The sub-chart exposes the
+  # Agent UDS at `hostSocketDir/agent.sock`; spawned agent-pods
+  # receive a hostPath volumeMount on the same dir + the
+  # KAGENT_SPIRE_SOCKET_PATH env pointing at the in-pod path.
+  hostSocketDir: '/run/kagent-spire/sockets'
+  podSocketPath: '/run/kagent-spire/sockets/agent.sock'
+
+  # ------------------------------------------------------------------
+  # infra/spire/ — SPIRE sub-chart values forwarded via the helm
+  # `global:` mechanism. Cluster operators usually leave these defaults
+  # alone; tune at the spire/ values.yaml layer when you need richer
+  # control (image registry mirror, log level, resource sizing).
+  # ------------------------------------------------------------------
+  spire:
+    # Image overrides — pin tags in production; loose tags in dev.
+    server:
+      image:
+        repository: 'ghcr.io/spiffe/spire-server'
+        tag: '1.9.0'
+    agent:
+      image:
+        repository: 'ghcr.io/spiffe/spire-agent'
+        tag: '1.9.0'
 
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production

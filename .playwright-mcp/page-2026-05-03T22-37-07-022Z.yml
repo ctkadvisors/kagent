@@ -1,0 +1,336 @@
+- generic [ref=e3]:
+    - generic [ref=e4]:
+        - heading "Tasks" [level=1] [ref=e5]
+        - generic [ref=e6]:
+            - button "+ New Task" [ref=e7] [cursor=pointer]
+            - generic [ref=e8]: stream live
+    - table [ref=e9]:
+        - rowgroup [ref=e10]:
+            - row "Name Namespace Phase Children / Artifacts Target Created Pod Failure" [ref=e11]:
+                - columnheader "Name" [ref=e12]
+                - columnheader "Namespace" [ref=e13]
+                - columnheader "Phase" [ref=e14]
+                - columnheader "Children / Artifacts" [ref=e15]
+                - columnheader "Target" [ref=e16]
+                - columnheader "Created" [ref=e17]
+                - columnheader "Pod" [ref=e18]
+                - columnheader "Failure" [ref=e19]
+        - rowgroup [ref=e20]:
+            - row "manual-bfp3vedz kagent-system Completed — summarizer-rust 2026-05-03T22:32:42Z — —" [ref=e21]:
+                - cell "manual-bfp3vedz" [ref=e22]:
+                    - link "manual-bfp3vedz" [ref=e23] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-bfp3vedz'
+                - cell "kagent-system" [ref=e24]
+                - cell "Completed" [ref=e25]:
+                    - generic [ref=e26]: Completed
+                - cell "—" [ref=e27]
+                - cell "summarizer-rust" [ref=e28]
+                - cell "2026-05-03T22:32:42Z" [ref=e29]
+                - cell "—" [ref=e30]
+                - cell "—" [ref=e31]
+            - row "manual-sdz2jgs2 kagent-system Completed — summarizer-rust 2026-05-03T22:28:16Z — —" [ref=e32]:
+                - cell "manual-sdz2jgs2" [ref=e33]:
+                    - link "manual-sdz2jgs2" [ref=e34] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-sdz2jgs2'
+                - cell "kagent-system" [ref=e35]
+                - cell "Completed" [ref=e36]:
+                    - generic [ref=e37]: Completed
+                - cell "—" [ref=e38]
+                - cell "summarizer-rust" [ref=e39]
+                - cell "2026-05-03T22:28:16Z" [ref=e40]
+                - cell "—" [ref=e41]
+                - cell "—" [ref=e42]
+            - row "manual-c9mqiwrv kagent-system Failed — summarizer-rust 2026-05-03T22:10:23Z — LLM backend returned HTTP 401" [ref=e43]:
+                - cell "manual-c9mqiwrv" [ref=e44]:
+                    - link "manual-c9mqiwrv" [ref=e45] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-c9mqiwrv'
+                - cell "kagent-system" [ref=e46]
+                - cell "Failed" [ref=e47]:
+                    - generic [ref=e48]: Failed
+                - cell "—" [ref=e49]
+                - cell "summarizer-rust" [ref=e50]
+                - cell "2026-05-03T22:10:23Z" [ref=e51]
+                - cell "—" [ref=e52]
+                - cell "LLM backend returned HTTP 401" [ref=e53]
+            - row "cli-62j6741q-c-48ex11 kagent-system Failed — summarizer-rust 2026-05-01T20:57:51Z kat-067f102b-494e-44e7-8805-b9d633e459a0 LLM backend returned HTTP 0" [ref=e54]:
+                - cell "cli-62j6741q-c-48ex11" [ref=e55]:
+                    - link "cli-62j6741q-c-48ex11" [ref=e56] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-62j6741q-c-48ex11'
+                - cell "kagent-system" [ref=e57]
+                - cell "Failed" [ref=e58]:
+                    - generic [ref=e59]: Failed
+                - cell "—" [ref=e60]
+                - cell "summarizer-rust" [ref=e61]
+                - cell "2026-05-01T20:57:51Z" [ref=e62]
+                - cell "kat-067f102b-494e-44e7-8805-b9d633e459a0" [ref=e63]
+                - cell "LLM backend returned HTTP 0" [ref=e64]
+            - row "cli-62j6741q-c-tizziw kagent-system Failed — summarizer-k8s 2026-05-01T20:57:51Z kat-7f1bb299-668a-4a68-8846-52f18edfa750 LLM backend returned HTTP 0" [ref=e65]:
+                - cell "cli-62j6741q-c-tizziw" [ref=e66]:
+                    - link "cli-62j6741q-c-tizziw" [ref=e67] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-62j6741q-c-tizziw'
+                - cell "kagent-system" [ref=e68]
+                - cell "Failed" [ref=e69]:
+                    - generic [ref=e70]: Failed
+                - cell "—" [ref=e71]
+                - cell "summarizer-k8s" [ref=e72]
+                - cell "2026-05-01T20:57:51Z" [ref=e73]
+                - cell "kat-7f1bb299-668a-4a68-8846-52f18edfa750" [ref=e74]
+                - cell "LLM backend returned HTTP 0" [ref=e75]
+            - row "cli-62j6741q-c-ci94se kagent-system Failed — summarizer-postgres 2026-05-01T20:57:51Z kat-56856ca3-de28-4ed3-ae26-c4b3d8e1ce4f LLM backend returned HTTP 0" [ref=e76]:
+                - cell "cli-62j6741q-c-ci94se" [ref=e77]:
+                    - link "cli-62j6741q-c-ci94se" [ref=e78] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-62j6741q-c-ci94se'
+                - cell "kagent-system" [ref=e79]
+                - cell "Failed" [ref=e80]:
+                    - generic [ref=e81]: Failed
+                - cell "—" [ref=e82]
+                - cell "summarizer-postgres" [ref=e83]
+                - cell "2026-05-01T20:57:51Z" [ref=e84]
+                - cell "kat-56856ca3-de28-4ed3-ae26-c4b3d8e1ce4f" [ref=e85]
+                - cell "LLM backend returned HTTP 0" [ref=e86]
+            - row "cli-o0t8sofu-c-y4n9pa kagent-system Failed — summarizer-rust 2026-05-01T20:57:24Z kat-58341a37-bec7-47a2-a3d6-7a894096ed2a LLM backend returned HTTP 0" [ref=e87]:
+                - cell "cli-o0t8sofu-c-y4n9pa" [ref=e88]:
+                    - link "cli-o0t8sofu-c-y4n9pa" [ref=e89] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-o0t8sofu-c-y4n9pa'
+                - cell "kagent-system" [ref=e90]
+                - cell "Failed" [ref=e91]:
+                    - generic [ref=e92]: Failed
+                - cell "—" [ref=e93]
+                - cell "summarizer-rust" [ref=e94]
+                - cell "2026-05-01T20:57:24Z" [ref=e95]
+                - cell "kat-58341a37-bec7-47a2-a3d6-7a894096ed2a" [ref=e96]
+                - cell "LLM backend returned HTTP 0" [ref=e97]
+            - row "cli-o0t8sofu-c-my5mb7 kagent-system Failed — summarizer-k8s 2026-05-01T20:57:24Z kat-3ee5f275-aed1-4ae8-a1fa-98b899c8e3d3 LLM backend returned HTTP 0" [ref=e98]:
+                - cell "cli-o0t8sofu-c-my5mb7" [ref=e99]:
+                    - link "cli-o0t8sofu-c-my5mb7" [ref=e100] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-o0t8sofu-c-my5mb7'
+                - cell "kagent-system" [ref=e101]
+                - cell "Failed" [ref=e102]:
+                    - generic [ref=e103]: Failed
+                - cell "—" [ref=e104]
+                - cell "summarizer-k8s" [ref=e105]
+                - cell "2026-05-01T20:57:24Z" [ref=e106]
+                - cell "kat-3ee5f275-aed1-4ae8-a1fa-98b899c8e3d3" [ref=e107]
+                - cell "LLM backend returned HTTP 0" [ref=e108]
+            - row "cli-o0t8sofu-c-gwdmm5 kagent-system Failed — summarizer-postgres 2026-05-01T20:57:24Z kat-8626b356-abf5-4833-a19d-8ae3f56fee6a LLM backend returned HTTP 0" [ref=e109]:
+                - cell "cli-o0t8sofu-c-gwdmm5" [ref=e110]:
+                    - link "cli-o0t8sofu-c-gwdmm5" [ref=e111] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-o0t8sofu-c-gwdmm5'
+                - cell "kagent-system" [ref=e112]
+                - cell "Failed" [ref=e113]:
+                    - generic [ref=e114]: Failed
+                - cell "—" [ref=e115]
+                - cell "summarizer-postgres" [ref=e116]
+                - cell "2026-05-01T20:57:24Z" [ref=e117]
+                - cell "kat-8626b356-abf5-4833-a19d-8ae3f56fee6a" [ref=e118]
+                - cell "LLM backend returned HTTP 0" [ref=e119]
+            - row "cli-lgkvd4wd-c-r5glhh kagent-system Completed — summarizer-rust 2026-05-01T20:56:57Z kat-586a9868-5105-446b-ab2d-c4e0c5536d8a —" [ref=e120]:
+                - cell "cli-lgkvd4wd-c-r5glhh" [ref=e121]:
+                    - link "cli-lgkvd4wd-c-r5glhh" [ref=e122] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-lgkvd4wd-c-r5glhh'
+                - cell "kagent-system" [ref=e123]
+                - cell "Completed" [ref=e124]:
+                    - generic [ref=e125]: Completed
+                - cell "—" [ref=e126]
+                - cell "summarizer-rust" [ref=e127]
+                - cell "2026-05-01T20:56:57Z" [ref=e128]
+                - cell "kat-586a9868-5105-446b-ab2d-c4e0c5536d8a" [ref=e129]
+                - cell "—" [ref=e130]
+            - row "cli-lgkvd4wd-c-oxj4t2 kagent-system Failed — summarizer-k8s 2026-05-01T20:56:57Z kat-add3b18a-1423-4508-9e2a-348e41349336 LLM backend returned HTTP 0" [ref=e131]:
+                - cell "cli-lgkvd4wd-c-oxj4t2" [ref=e132]:
+                    - link "cli-lgkvd4wd-c-oxj4t2" [ref=e133] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-lgkvd4wd-c-oxj4t2'
+                - cell "kagent-system" [ref=e134]
+                - cell "Failed" [ref=e135]:
+                    - generic [ref=e136]: Failed
+                - cell "—" [ref=e137]
+                - cell "summarizer-k8s" [ref=e138]
+                - cell "2026-05-01T20:56:57Z" [ref=e139]
+                - cell "kat-add3b18a-1423-4508-9e2a-348e41349336" [ref=e140]
+                - cell "LLM backend returned HTTP 0" [ref=e141]
+            - row "cli-lgkvd4wd-c-me5i9b kagent-system Failed — summarizer-postgres 2026-05-01T20:56:57Z kat-de9f5d66-393b-4522-afe4-7e13ab6aa170 LLM backend returned HTTP 0" [ref=e142]:
+                - cell "cli-lgkvd4wd-c-me5i9b" [ref=e143]:
+                    - link "cli-lgkvd4wd-c-me5i9b" [ref=e144] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-lgkvd4wd-c-me5i9b'
+                - cell "kagent-system" [ref=e145]
+                - cell "Failed" [ref=e146]:
+                    - generic [ref=e147]: Failed
+                - cell "—" [ref=e148]
+                - cell "summarizer-postgres" [ref=e149]
+                - cell "2026-05-01T20:56:57Z" [ref=e150]
+                - cell "kat-de9f5d66-393b-4522-afe4-7e13ab6aa170" [ref=e151]
+                - cell "LLM backend returned HTTP 0" [ref=e152]
+            - row "cli-hwelncvg-c-b86ujo kagent-system Completed — summarizer-rust 2026-05-01T20:56:36Z kat-a1dbf640-1262-4e8f-a3fc-9f518bc5b15f —" [ref=e153]:
+                - cell "cli-hwelncvg-c-b86ujo" [ref=e154]:
+                    - link "cli-hwelncvg-c-b86ujo" [ref=e155] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-hwelncvg-c-b86ujo'
+                - cell "kagent-system" [ref=e156]
+                - cell "Completed" [ref=e157]:
+                    - generic [ref=e158]: Completed
+                - cell "—" [ref=e159]
+                - cell "summarizer-rust" [ref=e160]
+                - cell "2026-05-01T20:56:36Z" [ref=e161]
+                - cell "kat-a1dbf640-1262-4e8f-a3fc-9f518bc5b15f" [ref=e162]
+                - cell "—" [ref=e163]
+            - row "cli-hwelncvg-c-i4mcps kagent-system Completed — summarizer-k8s 2026-05-01T20:56:36Z kat-dc9f350e-0be7-422a-a53d-221e906a34fb —" [ref=e164]:
+                - cell "cli-hwelncvg-c-i4mcps" [ref=e165]:
+                    - link "cli-hwelncvg-c-i4mcps" [ref=e166] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-hwelncvg-c-i4mcps'
+                - cell "kagent-system" [ref=e167]
+                - cell "Completed" [ref=e168]:
+                    - generic [ref=e169]: Completed
+                - cell "—" [ref=e170]
+                - cell "summarizer-k8s" [ref=e171]
+                - cell "2026-05-01T20:56:36Z" [ref=e172]
+                - cell "kat-dc9f350e-0be7-422a-a53d-221e906a34fb" [ref=e173]
+                - cell "—" [ref=e174]
+            - row "cli-hwelncvg-c-9oxlpy kagent-system Completed — summarizer-postgres 2026-05-01T20:56:36Z kat-963180a3-ced0-4f3b-8036-07dea301d9b7 —" [ref=e175]:
+                - cell "cli-hwelncvg-c-9oxlpy" [ref=e176]:
+                    - link "cli-hwelncvg-c-9oxlpy" [ref=e177] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-hwelncvg-c-9oxlpy'
+                - cell "kagent-system" [ref=e178]
+                - cell "Completed" [ref=e179]:
+                    - generic [ref=e180]: Completed
+                - cell "—" [ref=e181]
+                - cell "summarizer-postgres" [ref=e182]
+                - cell "2026-05-01T20:56:36Z" [ref=e183]
+                - cell "kat-963180a3-ced0-4f3b-8036-07dea301d9b7" [ref=e184]
+                - cell "—" [ref=e185]
+            - row "cli-o0t8sofu kagent-system Completed synthesis_low_yield 3 child AnyFailed orchestrator 2026-05-01T20:54:43Z kat-b60f9acb-3a4e-4df4-889e-69cdca4fc4b6 —" [ref=e186]:
+                - cell "cli-o0t8sofu" [ref=e187]:
+                    - link "cli-o0t8sofu" [ref=e188] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-o0t8sofu'
+                - cell "kagent-system" [ref=e189]
+                - cell "Completed synthesis_low_yield" [ref=e190]:
+                    - generic [ref=e191]: Completed
+                    - generic [ref=e192]: synthesis_low_yield
+                - cell "3 child AnyFailed" [ref=e193]:
+                    - generic [ref=e194]:
+                        - generic "Child tasks delegated by this task" [ref=e195]: 3 child
+                        - generic "Aggregate phase across child tasks" [ref=e196]: AnyFailed
+                - cell "orchestrator" [ref=e197]
+                - cell "2026-05-01T20:54:43Z" [ref=e198]
+                - cell "kat-b60f9acb-3a4e-4df4-889e-69cdca4fc4b6" [ref=e199]
+                - cell "—" [ref=e200]
+            - row "cli-62j6741q kagent-system Completed synthesis_low_yield 3 child AnyFailed orchestrator 2026-05-01T20:54:43Z kat-572e19c3-9c01-4cbf-8137-e4d45a21e12a —" [ref=e201]:
+                - cell "cli-62j6741q" [ref=e202]:
+                    - link "cli-62j6741q" [ref=e203] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-62j6741q'
+                - cell "kagent-system" [ref=e204]
+                - cell "Completed synthesis_low_yield" [ref=e205]:
+                    - generic [ref=e206]: Completed
+                    - generic [ref=e207]: synthesis_low_yield
+                - cell "3 child AnyFailed" [ref=e208]:
+                    - generic [ref=e209]:
+                        - generic "Child tasks delegated by this task" [ref=e210]: 3 child
+                        - generic "Aggregate phase across child tasks" [ref=e211]: AnyFailed
+                - cell "orchestrator" [ref=e212]
+                - cell "2026-05-01T20:54:43Z" [ref=e213]
+                - cell "kat-572e19c3-9c01-4cbf-8137-e4d45a21e12a" [ref=e214]
+                - cell "—" [ref=e215]
+            - row "cli-lgkvd4wd kagent-system Completed truncated_synthesis 3 child AnyFailed orchestrator 2026-05-01T20:54:42Z kat-7c423375-8a0b-4852-b9d0-d648528b2aa2 —" [ref=e216]:
+                - cell "cli-lgkvd4wd" [ref=e217]:
+                    - link "cli-lgkvd4wd" [ref=e218] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-lgkvd4wd'
+                - cell "kagent-system" [ref=e219]
+                - cell "Completed truncated_synthesis" [ref=e220]:
+                    - generic [ref=e221]: Completed
+                    - generic [ref=e222]: truncated_synthesis
+                - cell "3 child AnyFailed" [ref=e223]:
+                    - generic [ref=e224]:
+                        - generic "Child tasks delegated by this task" [ref=e225]: 3 child
+                        - generic "Aggregate phase across child tasks" [ref=e226]: AnyFailed
+                - cell "orchestrator" [ref=e227]
+                - cell "2026-05-01T20:54:42Z" [ref=e228]
+                - cell "kat-7c423375-8a0b-4852-b9d0-d648528b2aa2" [ref=e229]
+                - cell "—" [ref=e230]
+            - row "cli-hwelncvg kagent-system Completed 3 child AllComplete orchestrator 2026-05-01T20:54:28Z kat-5e45d86b-8d09-4d37-9b5a-0da536b8c335 —" [ref=e231]:
+                - cell "cli-hwelncvg" [ref=e232]:
+                    - link "cli-hwelncvg" [ref=e233] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/cli-hwelncvg'
+                - cell "kagent-system" [ref=e234]
+                - cell "Completed" [ref=e235]:
+                    - generic [ref=e236]: Completed
+                - cell "3 child AllComplete" [ref=e237]:
+                    - generic [ref=e238]:
+                        - generic "Child tasks delegated by this task" [ref=e239]: 3 child
+                        - generic "Aggregate phase across child tasks" [ref=e240]: AllComplete
+                - cell "orchestrator" [ref=e241]
+                - cell "2026-05-01T20:54:28Z" [ref=e242]
+                - cell "kat-5e45d86b-8d09-4d37-9b5a-0da536b8c335" [ref=e243]
+                - cell "—" [ref=e244]
+            - row "manual-zarpdgz8-c-yqwfeb kagent-system Completed — summarizer-rust 2026-05-01T19:18:05Z kat-2260b50c-b5c3-4ee8-b8ff-6e8de3a1736c —" [ref=e245]:
+                - cell "manual-zarpdgz8-c-yqwfeb" [ref=e246]:
+                    - link "manual-zarpdgz8-c-yqwfeb" [ref=e247] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-zarpdgz8-c-yqwfeb'
+                - cell "kagent-system" [ref=e248]
+                - cell "Completed" [ref=e249]:
+                    - generic [ref=e250]: Completed
+                - cell "—" [ref=e251]
+                - cell "summarizer-rust" [ref=e252]
+                - cell "2026-05-01T19:18:05Z" [ref=e253]
+                - cell "kat-2260b50c-b5c3-4ee8-b8ff-6e8de3a1736c" [ref=e254]
+                - cell "—" [ref=e255]
+            - row "manual-zarpdgz8-c-bhdng2 kagent-system Completed — summarizer-k8s 2026-05-01T19:18:05Z kat-9bf8897b-5db0-43a1-8935-3a4e0b55dc2a —" [ref=e256]:
+                - cell "manual-zarpdgz8-c-bhdng2" [ref=e257]:
+                    - link "manual-zarpdgz8-c-bhdng2" [ref=e258] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-zarpdgz8-c-bhdng2'
+                - cell "kagent-system" [ref=e259]
+                - cell "Completed" [ref=e260]:
+                    - generic [ref=e261]: Completed
+                - cell "—" [ref=e262]
+                - cell "summarizer-k8s" [ref=e263]
+                - cell "2026-05-01T19:18:05Z" [ref=e264]
+                - cell "kat-9bf8897b-5db0-43a1-8935-3a4e0b55dc2a" [ref=e265]
+                - cell "—" [ref=e266]
+            - row "manual-zarpdgz8-c-ghe35q kagent-system Completed — summarizer-postgres 2026-05-01T19:18:05Z kat-4778e6a0-a2b4-40ae-b607-a9da6a4933c8 —" [ref=e267]:
+                - cell "manual-zarpdgz8-c-ghe35q" [ref=e268]:
+                    - link "manual-zarpdgz8-c-ghe35q" [ref=e269] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-zarpdgz8-c-ghe35q'
+                - cell "kagent-system" [ref=e270]
+                - cell "Completed" [ref=e271]:
+                    - generic [ref=e272]: Completed
+                - cell "—" [ref=e273]
+                - cell "summarizer-postgres" [ref=e274]
+                - cell "2026-05-01T19:18:05Z" [ref=e275]
+                - cell "kat-4778e6a0-a2b4-40ae-b607-a9da6a4933c8" [ref=e276]
+                - cell "—" [ref=e277]
+            - row "manual-zarpdgz8 kagent-system Completed 3 child AllComplete orchestrator 2026-05-01T19:17:22Z kat-8d5e6b23-e710-4c6a-8f16-5a77cb20c6bb —" [ref=e278]:
+                - cell "manual-zarpdgz8" [ref=e279]:
+                    - link "manual-zarpdgz8" [ref=e280] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-zarpdgz8'
+                - cell "kagent-system" [ref=e281]
+                - cell "Completed" [ref=e282]:
+                    - generic [ref=e283]: Completed
+                - cell "3 child AllComplete" [ref=e284]:
+                    - generic [ref=e285]:
+                        - generic "Child tasks delegated by this task" [ref=e286]: 3 child
+                        - generic "Aggregate phase across child tasks" [ref=e287]: AllComplete
+                - cell "orchestrator" [ref=e288]
+                - cell "2026-05-01T19:17:22Z" [ref=e289]
+                - cell "kat-8d5e6b23-e710-4c6a-8f16-5a77cb20c6bb" [ref=e290]
+                - cell "—" [ref=e291]
+            - row "manual-2ifu7bwr kagent-system Failed — orchestrator 2026-05-01T19:11:49Z kat-1cfeb2e8-e774-4683-bbf8-be6f4235e4ac LLM backend returned HTTP 0" [ref=e292]:
+                - cell "manual-2ifu7bwr" [ref=e293]:
+                    - link "manual-2ifu7bwr" [ref=e294] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-2ifu7bwr'
+                - cell "kagent-system" [ref=e295]
+                - cell "Failed" [ref=e296]:
+                    - generic [ref=e297]: Failed
+                - cell "—" [ref=e298]
+                - cell "orchestrator" [ref=e299]
+                - cell "2026-05-01T19:11:49Z" [ref=e300]
+                - cell "kat-1cfeb2e8-e774-4683-bbf8-be6f4235e4ac" [ref=e301]
+                - cell "LLM backend returned HTTP 0" [ref=e302]
+            - row "manual-siywoa3l kagent-system Failed — orchestrator 2026-05-01T18:17:36Z kat-94acf2eb-aa83-447d-878e-2b4998198dfc LLM backend returned HTTP 0" [ref=e303]:
+                - cell "manual-siywoa3l" [ref=e304]:
+                    - link "manual-siywoa3l" [ref=e305] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/manual-siywoa3l'
+                - cell "kagent-system" [ref=e306]
+                - cell "Failed" [ref=e307]:
+                    - generic [ref=e308]: Failed
+                - cell "—" [ref=e309]
+                - cell "orchestrator" [ref=e310]
+                - cell "2026-05-01T18:17:36Z" [ref=e311]
+                - cell "kat-94acf2eb-aa83-447d-878e-2b4998198dfc" [ref=e312]
+                - cell "LLM backend returned HTTP 0" [ref=e313]

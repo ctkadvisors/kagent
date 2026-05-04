@@ -1,0 +1,27 @@
+- generic [ref=e343]:
+    - generic [ref=e344]:
+        - heading "← Tasks kagent-system/manual-u7zlnias" [level=1] [ref=e345]:
+            - button "← Tasks" [ref=e346] [cursor=pointer]
+            - generic [ref=e347]: kagent-system/
+            - text: manual-u7zlnias
+        - generic [ref=e348]: last event 0s ago
+    - generic [ref=e349]:
+        - heading "Identity" [level=2] [ref=e350]
+        - generic [ref=e351]:
+            - generic [ref=e352]: UID
+            - generic [ref=e353]: 1a99f586-678c-4d17-9481-e32489d9e553
+        - generic [ref=e354]:
+            - generic [ref=e355]: Phase
+            - generic [ref=e356]: —
+        - generic [ref=e357]:
+            - generic [ref=e358]: Target
+            - generic [ref=e359]: summarizer-rust
+        - generic [ref=e360]:
+            - generic [ref=e361]: Model
+            - generic [ref=e362]: nemotron-3-nano:4b
+        - generic [ref=e363]:
+            - generic [ref=e364]: Created
+            - generic [ref=e365]: 2026-05-03T22:37:39Z
+    - generic [ref=e366]:
+        - heading "Payload" [level=2] [ref=e367]
+        - generic [ref=e368]: '{}'

@@ -1,0 +1,53 @@
+- generic [ref=e3]:
+    - generic [ref=e4]:
+        - heading "Tasks" [level=1] [ref=e5]
+        - generic [ref=e6]:
+            - button "+ New Task" [ref=e7] [cursor=pointer]
+            - generic [ref=e8]: stream live
+    - dialog "New Task" [ref=e33]:
+        - generic [ref=e34]:
+            - heading "New Task" [level=2] [ref=e35]
+            - button "Close" [ref=e36] [cursor=pointer]: ×
+        - generic [ref=e37]:
+            - generic [ref=e38]:
+                - generic [ref=e39]: Target Agent
+                - combobox "Target Agent" [ref=e40]:
+                    - option "orchestrator" [selected]
+                    - option "smoke-test"
+                    - option "summarizer-k8s"
+                    - option "summarizer-postgres"
+                    - option "summarizer-rust"
+            - generic [ref=e41]:
+                - generic [ref=e42]: Prompt
+                - textbox "Prompt" [active] [ref=e43]:
+                    - /placeholder: What do you want the agent to do?
+            - generic [ref=e44]:
+                - generic [ref=e45]: Timeout (seconds, optional)
+                - spinbutton "Timeout (seconds, optional)" [ref=e46]
+            - generic [ref=e47]:
+                - button "Cancel" [ref=e48] [cursor=pointer]
+                - button "Create Task" [ref=e49] [cursor=pointer]
+    - table [ref=e9]:
+        - rowgroup [ref=e10]:
+            - row "Name Namespace Phase Children / Artifacts Target Created Pod Failure" [ref=e11]:
+                - columnheader "Name" [ref=e12]
+                - columnheader "Namespace" [ref=e13]
+                - columnheader "Phase" [ref=e14]
+                - columnheader "Children / Artifacts" [ref=e15]
+                - columnheader "Target" [ref=e16]
+                - columnheader "Created" [ref=e17]
+                - columnheader "Pod" [ref=e18]
+                - columnheader "Failure" [ref=e19]
+        - rowgroup [ref=e20]:
+            - row "smoke-test-r1 kagent-system — — smoke-test 2026-05-01T18:16:14Z — —" [ref=e21]:
+                - cell "smoke-test-r1" [ref=e22]:
+                    - link "smoke-test-r1" [ref=e23] [cursor=pointer]:
+                        - /url: '#/tasks/kagent-system/smoke-test-r1'
+                - cell "kagent-system" [ref=e24]
+                - cell "—" [ref=e25]:
+                    - generic [ref=e26]: —
+                - cell "—" [ref=e27]
+                - cell "smoke-test" [ref=e28]
+                - cell "2026-05-01T18:16:14Z" [ref=e29]
+                - cell "—" [ref=e30]
+                - cell "—" [ref=e31]

@@ -1,0 +1,50 @@
+- generic [ref=e343]:
+    - generic [ref=e344]:
+        - heading "← Tasks kagent-system/manual-u7zlnias" [level=1] [ref=e345]:
+            - button "← Tasks" [ref=e346] [cursor=pointer]
+            - generic [ref=e347]: kagent-system/
+            - text: manual-u7zlnias
+        - generic [ref=e348]: last event 0s ago
+    - generic [ref=e349]:
+        - heading "Identity" [level=2] [ref=e350]
+        - generic [ref=e351]:
+            - generic [ref=e352]: UID
+            - generic [ref=e353]: 1a99f586-678c-4d17-9481-e32489d9e553
+        - generic [ref=e354]:
+            - generic [ref=e355]: Phase
+            - generic [ref=e356]: Completed
+        - generic [ref=e357]:
+            - generic [ref=e358]: Target
+            - generic [ref=e359]: summarizer-rust
+        - generic [ref=e360]:
+            - generic [ref=e361]: Model
+            - generic [ref=e362]: nemotron-3-nano:4b
+        - generic [ref=e363]:
+            - generic [ref=e364]: Created
+            - generic [ref=e365]: 2026-05-03T22:37:39Z
+        - generic [ref=e369]:
+            - generic [ref=e370]: Completed
+            - generic [ref=e371]: 2026-05-03T22:38:47.428Z
+    - generic [ref=e372]:
+        - heading "Containers" [level=2] [ref=e373]
+        - table [ref=e374]:
+            - rowgroup [ref=e375]:
+                - row "Name State Ready Restarts Detail" [ref=e376]:
+                    - columnheader "Name" [ref=e377]
+                    - columnheader "State" [ref=e378]
+                    - columnheader "Ready" [ref=e379]
+                    - columnheader "Restarts" [ref=e380]
+                    - columnheader "Detail" [ref=e381]
+            - rowgroup [ref=e382]:
+                - row "agent terminated no 0 Completed · exit 0" [ref=e383]:
+                    - cell "agent" [ref=e384]
+                    - cell "terminated" [ref=e385]
+                    - cell "no" [ref=e386]
+                    - cell "0" [ref=e387]
+                    - cell "Completed · exit 0" [ref=e388]
+    - generic [ref=e366]:
+        - heading "Payload" [level=2] [ref=e367]
+        - generic [ref=e368]: '{}'
+    - generic [ref=e389]:
+        - heading "Result" [level=2] [ref=e390]
+        - generic [ref=e391]: "{ \"content\": \"Tokio is a fully asynchronous runtime for Rust that abstracts I/O and concurrency through the `tokio::task` type, delivering high‑yield loops and scheduler‑free task execution. It uses the `tokio::spawn` function to create independent `JoinHandle`s, enabling concurrent async futures to run without CPU stalls. The core mechanism is a non‑blocking event loop driven by the Rust `poll` trait and a bump‑allocator‑backed heap for task data, producing deterministic latency. Key abstractions include `async` functions, `Future`s as combinable work pipelines, and the `tokio::sync::mpsc` channel for lock‑free communication. \\nkey takeaway: Tokio provides a high‑performance, non‑blocking asynchronous runtime for Rust using async/await and tokio::task.\" }"

@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Default values for the kagent SPIRE sub-chart. The parent
+# (`kagent-operator/values.yaml`) routes `identity.*` keys here via
+# the `global:` prefix; cluster operators usually override at the
+# parent layer (`identity.trustDomain`, `identity.spire.image`, …).
+
+# `enabled` is read from `.Values.global.identity.enabled` (parent
+# chart sets this — see `templates/_globals.tpl`). When false the
+# sub-chart renders zero resources.
+
+trustDomain: kagent.knuteson.io
+
+# Single-node SPIRE Server. Wave 4 KeyRotation re-evaluates HA.
+server:
+  image:
+    repository: ghcr.io/spiffe/spire-server
+    tag: '1.9.0'
+    pullPolicy: IfNotPresent
+  # CPU/mem requests + limits. Server runs lightweight in-memory
+  # data-store for v0.4.3; SQL-backed Wave 4 will need more memory.
+  resources:
+    requests:
+      cpu: '50m'
+      memory: '128Mi'
+    limits:
+      cpu: '500m'
+      memory: '512Mi'
+  # ClusterIP service for Agents to reach the Server gRPC endpoint
+  # at port 8081 (SPIRE convention).
+  servicePort: 8081
+
+# DaemonSet on every node. Mounts the host's
+# `/run/kagent-spire/sockets` so agent-pods can `connect()` against
+# the Workload-API UDS without per-pod sidecars.
+agent:
+  image:
+    repository: ghcr.io/spiffe/spire-agent
+    tag: '1.9.0'
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: '20m'
+      memory: '64Mi'
+    limits:
+      cpu: '200m'
+      memory: '256Mi'
+  # Host path the Workload-API UDS lives on. Mirror of
+  # `DEFAULT_SPIRE_HOST_SOCKET_DIR` in `packages/operator/src/identity.ts`.
+  hostSocketDir: /run/kagent-spire/sockets
+  # Agent log level (info | debug | warn | error).
+  logLevel: info
+
+# Mock mode: when global.identity.mock.enabled=true the sub-chart
+# renders a no-op ConfigMap instead of the real SPIRE workloads.
+# Exists so dev clusters can flip identity on without installing
+# SPIRE — the operator's IdentityWatcher fires synthetic
+# identity.svid_issued events from a test fixture.

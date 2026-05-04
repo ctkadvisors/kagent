@@ -1,0 +1,42 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Mock-mode marker ConfigMap. When `global.identity.mock.enabled=true`
+this ConfigMap is the ONLY artifact this sub-chart renders — no
+real SPIRE Server / Agent is deployed. The operator's
+IdentityWatcher fires synthetic identity.svid_issued events from a
+test fixture, exercising the audit-event emission path so dashboard
++ alerting integrators can validate the wire shape without
+installing real SPIRE.
+
+Useful for:
+  - Homelab demo clusters that want the audit dashboard lit up
+  - CI gates running the operator against a fake SVID source
+  - First-bringup environments where SPIRE bring-up is deferred to
+    a follow-up cluster-ops PR
+*/}}
+
+{{- if and (eq (include "kagent-spire.enabled" .) "true") (eq (include "kagent-spire.mockMode" .) "true") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-spire-mock-mode
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+data:
+  README: |
+    Wave 3 / Identity (v0.4.3-identity) mock mode is ACTIVE.
+
+    The kagent operator's IdentityWatcher will fire synthetic
+    identity.svid_issued + identity.rotation audit events without a
+    real SPIRE backend. agent-pods do NOT receive real SVID
+    material; the operator stamps `KAGENT_LITELLM_USE_SVID=false`
+    on spawned Jobs (the chart's `identity.enabled=true` flag does
+    NOT switch the LLM client into mTLS mode while mock is on).
+
+    Flip `identity.mock.enabled=false` AND keep
+    `identity.enabled=true` to bring up real SPIRE.
+  trustDomain: {{ include "kagent-spire.trustDomain" . | quote }}
+{{- end }}

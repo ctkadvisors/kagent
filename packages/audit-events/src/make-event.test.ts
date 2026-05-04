@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 23 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 3 v0.4.4-locality)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(23);
+  it('exports exactly 25 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(25);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -443,6 +443,9 @@ describe('event-types catalog', () => {
       // v0.4.2-cache — Wave 3 / Cache sub-team additions.
       'cache.hit',
       'cache.miss',
+      // v0.4.3-identity — Wave 3 / Identity sub-team additions.
+      'identity.svid_issued',
+      'identity.rotation',
       // v0.4.4-locality — Wave 3 / Locality sub-team additions.
       'locality.speculative_spawned',
       'locality.speculative_superseded',

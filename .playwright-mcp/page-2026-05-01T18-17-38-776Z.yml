@@ -1,0 +1,27 @@
+- generic [ref=e50]:
+    - generic [ref=e51]:
+        - heading "← Tasks kagent-system/manual-siywoa3l" [level=1] [ref=e52]:
+            - button "← Tasks" [ref=e53] [cursor=pointer]
+            - generic [ref=e54]: kagent-system/
+            - text: manual-siywoa3l
+        - generic [ref=e55]: last event 0s ago
+    - generic [ref=e56]:
+        - heading "Identity" [level=2] [ref=e57]
+        - generic [ref=e58]:
+            - generic [ref=e59]: UID
+            - generic [ref=e60]: 94acf2eb-aa83-447d-878e-2b4998198dfc
+        - generic [ref=e61]:
+            - generic [ref=e62]: Phase
+            - generic [ref=e63]: —
+        - generic [ref=e64]:
+            - generic [ref=e65]: Target
+            - generic [ref=e66]: orchestrator
+        - generic [ref=e67]:
+            - generic [ref=e68]: Model
+            - generic [ref=e69]: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+        - generic [ref=e70]:
+            - generic [ref=e71]: Created
+            - generic [ref=e72]: 2026-05-01T18:17:36Z
+    - generic [ref=e73]:
+        - heading "Payload" [level=2] [ref=e74]
+        - generic [ref=e75]: '{}'

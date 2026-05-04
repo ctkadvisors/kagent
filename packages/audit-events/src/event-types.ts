@@ -61,6 +61,18 @@ export const WORKFLOW_EVENT_SUBSCRIPTION_PENDING = 'workflow.event_subscription_
 export const CACHE_HIT = 'cache.hit' as const;
 export const CACHE_MISS = 'cache.miss' as const;
 
+/* v0.4.3-identity — Wave 3 / Identity sub-team. SPIFFE/SPIRE per-pod
+ * SVID issuance + rotation. `identity.svid_issued` fires when an
+ * agent-pod (or workflow-runtime pod) successfully fetched a fresh
+ * SVID from the local SPIRE Workload API socket. `identity.rotation`
+ * fires when the SPIRE-helper / cert-watcher observes a rotation
+ * (cert age delta crosses the rotation threshold). Both are
+ * substrate-attributable: we record the SPIFFE ID + the rotation
+ * source so SOC2 audit warehouses can join SVID lifecycle to per-task
+ * activity. */
+export const IDENTITY_SVID_ISSUED = 'identity.svid_issued' as const;
+export const IDENTITY_ROTATION = 'identity.rotation' as const;
+
 /* v0.4.4-locality — Wave 3 / Locality sub-team. Three substrate
  * decisions the locality engine emits: a speculative duplicate was
  * spawned for a slow primary (`locality.speculative_spawned`), a
@@ -74,7 +86,7 @@ export const ADMISSION_POD_PRESSURE_DEFERRED = 'admission.pod_pressure_deferred'
 
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(23)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(25)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -98,6 +110,8 @@ export const ALL_EVENT_TYPES = Object.freeze([
   WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
   CACHE_HIT,
   CACHE_MISS,
+  IDENTITY_SVID_ISSUED,
+  IDENTITY_ROTATION,
   LOCALITY_SPECULATIVE_SPAWNED,
   LOCALITY_SPECULATIVE_SUPERSEDED,
   ADMISSION_POD_PRESSURE_DEFERRED,
