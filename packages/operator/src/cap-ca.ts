@@ -102,6 +102,15 @@ export interface MintCapInput {
   readonly ttlSeconds?: number;
   /** Extra audiences appended after `'kagent-substrate'`. */
   readonly audiences?: readonly string[];
+  /**
+   * v0.5.0-tenancy — Wave 4 / Tenancy sub-team. Per-mint issuer
+   * override (RFC 7519 §4.1.1 `iss`). When set, the JWT carries this
+   * value as its issuer instead of the CA's default. Used to route
+   * caps through a per-tenant issuer subject when the Tenant CR
+   * declares `spec.capabilityRoot.issuer`. Unset = use the CA's
+   * default issuer.
+   */
+  readonly issuerOverride?: string;
 }
 
 export interface MintCapResult {
@@ -168,8 +177,15 @@ export async function loadFromMaterials(input: CapCaMaterials): Promise<CapCa> {
     kid,
     issuer,
     async mint(req: MintCapInput): Promise<MintCapResult> {
+      // v0.5.0-tenancy — per-mint `iss` override. Tenant CRs that
+      // declare `spec.capabilityRoot.issuer` route their caps through
+      // a per-tenant issuer subject; absent override = CA default.
+      const effectiveIssuer =
+        typeof req.issuerOverride === 'string' && req.issuerOverride.length > 0
+          ? req.issuerOverride
+          : issuer;
       const builder = buildCapabilityJwt({
-        issuer,
+        issuer: effectiveIssuer,
         subjectTaskUid: req.subjectTaskUid,
         jti: req.jti,
         claims: req.claims,

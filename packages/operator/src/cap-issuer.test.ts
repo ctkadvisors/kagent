@@ -10,11 +10,13 @@ import { KAGENT_SUBSTRATE_AUDIENCE, type CapabilityBundle } from '@kagent/capabi
 import { loadFromMaterials } from './cap-ca.js';
 import {
   CapabilityViolationError,
+  applyTenantClaim,
   mintCapabilityForTask,
   narrowClaimsByParent,
   resolveAgentClaims,
 } from './cap-issuer.js';
-import type { Agent, AgentTask } from './crds/index.js';
+import { API_GROUP_VERSION } from './crds/index.js';
+import type { Agent, AgentTask, Tenant } from './crds/index.js';
 
 async function makeCa() {
   const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
@@ -234,5 +236,108 @@ describe('CapabilityViolationError', () => {
     expect(err.message).toContain('capability_violation');
     expect(err.message).toContain('[spawn]');
     expect(err.parentJti).toBe('cap-parent');
+  });
+});
+
+/* =====================================================================
+ * v0.5.0-tenancy — Wave 4 / Tenancy sub-team coverage.
+ * ===================================================================== */
+
+function makeTenant(overrides: Partial<Tenant['spec']> = {}): Tenant {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'Tenant',
+    metadata: { name: 'acme', uid: 'uid-acme' },
+    spec: {
+      name: 'acme',
+      namespaceAllowlist: ['default'],
+      ...overrides,
+    },
+  };
+}
+
+describe('applyTenantClaim (v0.5.0-tenancy)', () => {
+  it('returns claims unchanged when tenant is undefined', () => {
+    const claims = { tools: ['http_get'] };
+    expect(applyTenantClaim(claims, undefined)).toBe(claims);
+  });
+
+  it('stamps tenant.spec.name onto claims.tenant when unset', () => {
+    const result = applyTenantClaim({ tools: ['http_get'] }, makeTenant());
+    expect(result.tenant).toBe('acme');
+    expect(result.tools).toEqual(['http_get']);
+  });
+
+  it('preserves Agent-pinned tenant when already set', () => {
+    const result = applyTenantClaim({ tenant: 'globex' }, makeTenant());
+    expect(result.tenant).toBe('globex');
+  });
+
+  it('skips stamping when tenant.spec.name is empty', () => {
+    const t = makeTenant({ name: '' });
+    const result = applyTenantClaim({ tools: ['http_get'] }, t);
+    expect(result.tenant).toBeUndefined();
+  });
+});
+
+describe('mintCapabilityForTask — tenant integration (v0.5.0-tenancy)', () => {
+  it('stamps claims.tenant from the resolved Tenant CR', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: { tools: ['http_get'] } });
+    const task = makeTask({ uid: 'tenant-task' });
+    const tenant = makeTenant();
+    const result = await mintCapabilityForTask(ca, { task, agent, tenant });
+    expect(result.claims.tenant).toBe('acme');
+    expect(result.claims.tools).toEqual(['http_get']);
+  });
+
+  it('honors per-tenant capabilityRoot.issuer override on the JWT iss claim', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: {} });
+    const task = makeTask({ uid: 'tenant-issuer-task' });
+    const tenant = makeTenant({
+      capabilityRoot: { issuer: 'kagent.knuteson.io/operator/acme' },
+    });
+    const result = await mintCapabilityForTask(ca, { task, agent, tenant });
+    // Decode the JWT payload (no verify needed — we just signed it).
+    const [, payloadB64] = result.jwt.split('.');
+    const payload = JSON.parse(
+      Buffer.from(payloadB64 ?? '', 'base64url').toString('utf8'),
+    ) as Record<string, unknown>;
+    expect(payload.iss).toBe('kagent.knuteson.io/operator/acme');
+    expect(payload.sub).toBe('task-uid:tenant-issuer-task');
+  });
+
+  it('falls back to operator default issuer when tenant has no override', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: {} });
+    const task = makeTask({ uid: 'no-issuer-override' });
+    const tenant = makeTenant();
+    const result = await mintCapabilityForTask(ca, { task, agent, tenant });
+    const [, payloadB64] = result.jwt.split('.');
+    const payload = JSON.parse(
+      Buffer.from(payloadB64 ?? '', 'base64url').toString('utf8'),
+    ) as Record<string, unknown>;
+    expect(payload.iss).toBe('kagent.knuteson.io/operator');
+  });
+
+  it('Agent-pinned tenant wins over Tenant CR default', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tenant: 'globex' },
+    });
+    const task = makeTask({ uid: 'agent-pin' });
+    // No parent bundle — root task; Agent's tenant claim flows through.
+    const tenant = makeTenant();
+    const result = await mintCapabilityForTask(ca, { task, agent, tenant });
+    expect(result.claims.tenant).toBe('globex');
+  });
+
+  it('without tenant CR, claims.tenant stays unset (legacy behavior)', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: { tools: ['http_get'] } });
+    const task = makeTask({ uid: 'legacy-task' });
+    const result = await mintCapabilityForTask(ca, { task, agent });
+    expect(result.claims.tenant).toBeUndefined();
   });
 });
