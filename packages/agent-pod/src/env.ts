@@ -95,6 +95,54 @@ export interface AgentSpecEnv {
    * admission layer.
    */
   readonly maxInFlightTasks?: number;
+  /**
+   * v0.2.0-typed-io / v0.2.2-cas — typed input declarations. Carried
+   * verbatim from `Agent.spec.inputs[]`; the agent-pod's substrate
+   * tools (currently `read_artifact`) gate registration on whether at
+   * least one input has `kind: 'artifact'`. Substrate-side admission
+   * validates the full schema at AgentTask creation time; the agent-pod
+   * trusts the value here.
+   */
+  readonly inputs?: readonly {
+    readonly name: string;
+    readonly kind: 'workspace' | 'artifact' | 'scalar';
+    readonly mediaType?: string;
+    readonly mountPath?: string;
+    readonly mode?: 'ro' | 'rw';
+    readonly optional?: boolean;
+    readonly required?: boolean;
+  }[];
+  /**
+   * v0.2.0-typed-io / v0.2.2-cas — typed output declarations. Same
+   * source-of-truth and capability-gate role as `inputs[]` above.
+   */
+  readonly outputs?: readonly {
+    readonly name: string;
+    readonly kind: 'artifact' | 'scalar';
+    readonly mediaType?: string;
+    readonly required?: boolean;
+    readonly retention?: string;
+  }[];
+}
+
+/**
+ * v0.2.2-cas — capability gate for the `read_artifact` substrate tool.
+ * Returns true when the Agent declares at least one input or output of
+ * `kind: 'artifact'`. The tool is registered ONLY when this is true,
+ * mirroring the spawn / templates substrate-tool pattern: presence in
+ * `Agent.spec.tools` is necessary but not sufficient — the schema-level
+ * declaration is the authoritative gate.
+ */
+export function agentHasArtifactInputOrOutput(spec: AgentSpecEnv): boolean {
+  const inputs = spec.inputs ?? [];
+  for (const i of inputs) {
+    if (i.kind === 'artifact') return true;
+  }
+  const outputs = spec.outputs ?? [];
+  for (const o of outputs) {
+    if (o.kind === 'artifact') return true;
+  }
+  return false;
 }
 
 /**
@@ -199,7 +247,9 @@ export function parseEnv(
   const taskSpec = loadTaskSpec(env, readFile);
 
   if (typeof agentSpec.model !== 'string' || agentSpec.model.length === 0) {
-    throw new Error('agent spec.model is required (from /var/kagent/config/agent.spec.json or KAGENT_AGENT_SPEC env)');
+    throw new Error(
+      'agent spec.model is required (from /var/kagent/config/agent.spec.json or KAGENT_AGENT_SPEC env)',
+    );
   }
 
   if (taskSpec.parentDistillation !== undefined) {
@@ -304,10 +354,7 @@ function loadAgentSpec(
     return parseJson<AgentSpecEnv>(fileBody, CONFIG_AGENT_SPEC_PATH);
   }
   // Back-compat env-JSON path.
-  return parseJson<AgentSpecEnv>(
-    requireEnv(env, 'KAGENT_AGENT_SPEC'),
-    'KAGENT_AGENT_SPEC',
-  );
+  return parseJson<AgentSpecEnv>(requireEnv(env, 'KAGENT_AGENT_SPEC'), 'KAGENT_AGENT_SPEC');
 }
 
 function loadTaskSpec(
@@ -318,10 +365,7 @@ function loadTaskSpec(
   if (fileBody !== undefined) {
     return parseJson<TaskSpecEnv>(fileBody, CONFIG_TASK_SPEC_PATH);
   }
-  return parseJson<TaskSpecEnv>(
-    requireEnv(env, 'KAGENT_TASK_SPEC'),
-    'KAGENT_TASK_SPEC',
-  );
+  return parseJson<TaskSpecEnv>(requireEnv(env, 'KAGENT_TASK_SPEC'), 'KAGENT_TASK_SPEC');
 }
 
 /**

@@ -54,6 +54,7 @@ import {
   validateArtifactName,
   writeArtifactToDisk,
 } from './artifacts.js';
+import type { CasBackend } from './cas-backend.js';
 
 /* =====================================================================
  * Constants — kept module-scoped for unit-test visibility.
@@ -974,6 +975,123 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
         ctx.parentUid = parentUid;
       }
       return jsonContent(ctx);
+    },
+  });
+}
+
+/* =====================================================================
+ * v0.2.2-cas — read_artifact substrate tool
+ *
+ * Lets the in-pod agent loop fetch the bytes behind an `ArtifactRef.uri`
+ * (typically passed in via `AgentTask.spec.inputs[]`). The tool is
+ * capability-gated: the runner registers it ONLY when the Agent's spec
+ * declares an artifact input or output (see `agentHasArtifactInputOrOutput`
+ * in `env.ts`). Without that schema-level declaration the tool is absent
+ * entirely from the registry — the LLM cannot call a tool it never sees.
+ *
+ * Wire pattern mirrors `defineSpawnChildTask` / `defineGetMyContext`:
+ * a separate factory function (vs. an entry in `buildBuiltinToolRegistry`)
+ * because the data source is per-task-instance — the CasBackend is
+ * resolved at runner boot from `KAGENT_CAS_*` env, then injected here.
+ *
+ * Returned content shape:
+ *   - `text/*` / `application/json` / `application/xml` payloads decode
+ *     to a single `{ type: 'text', text: <utf-8> }` ContentBlock.
+ *   - Anything else returns a single `{ type: 'text', text: <base64> }`
+ *     ContentBlock with the body marked `base64Encoded: true` in the
+ *     surrounding JSON envelope so the LLM unambiguously knows it's not
+ *     human-readable.
+ *
+ * The tool accepts EITHER `uri` (canonical CAS URI; preferred) or
+ * `hash` (bare sha256 hex; the runner recovers the URI under the agent's
+ * known artifact namespace). Tests cover both code paths.
+ * ===================================================================== */
+
+const READ_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024; // 8 MiB hard cap on returned bytes
+const READ_ARTIFACT_TEXT_MEDIA_PREFIXES = ['text/', 'application/json', 'application/xml'];
+
+/**
+ * Heuristic — does this media type round-trip cleanly through a JSON
+ * string? Anything else is base64-encoded for the LLM. Conservative:
+ * we'd rather a downstream model see well-marked base64 than land on
+ * mojibake from a charset mismatch.
+ */
+function isTextLikeMediaType(mediaType: string | undefined): boolean {
+  if (typeof mediaType !== 'string') return false;
+  const lc = mediaType.toLowerCase();
+  for (const prefix of READ_ARTIFACT_TEXT_MEDIA_PREFIXES) {
+    if (lc === prefix || lc.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+export interface ReadArtifactDeps {
+  /**
+   * The CAS backend instance the runner constructed at boot from
+   * `KAGENT_CAS_*` env. Tests inject a fake backend that round-trips
+   * a fixed Uint8Array.
+   */
+  readonly backend: CasBackend;
+}
+
+/**
+ * Build the `read_artifact` tool definition. Capability gate (Agent
+ * declares an artifact I/O) is the caller's responsibility — see
+ * `agentHasArtifactInputOrOutput` in `env.ts`.
+ */
+export function defineReadArtifact(deps: ReadArtifactDeps): InProcessToolDefinition {
+  const { backend } = deps;
+  return defineInProcessTool({
+    name: 'read_artifact',
+    description:
+      'Fetch the bytes behind an artifact URI (cas:// or pvc://). Verifies ' +
+      'the sha256 hash post-fetch and refuses on mismatch (corruption / ' +
+      'tampering / mid-write). Text-like media types round-trip as UTF-8 ' +
+      'strings; binary payloads return base64-encoded bytes with ' +
+      'base64Encoded: true. Capped at 8 MiB. Use this to read inputs ' +
+      'declared on the AgentTask via spec.inputs[] of kind: artifact.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uri: { type: 'string' },
+        mediaType: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'artifacts', 'read-only'],
+    handler: async (args) => {
+      const uri = args.uri;
+      if (typeof uri !== 'string' || uri.length === 0) {
+        throw new Error('read_artifact: "uri" must be a non-empty string');
+      }
+      const bytes = await backend.read(uri);
+      if (bytes.byteLength > READ_ARTIFACT_MAX_BYTES) {
+        throw new Error(
+          `read_artifact: payload exceeds ${String(READ_ARTIFACT_MAX_BYTES)} bytes ` +
+            `(got ${String(bytes.byteLength)}); fetch via spec.inputs[] mountPath instead`,
+        );
+      }
+      const mediaType = typeof args.mediaType === 'string' ? args.mediaType : undefined;
+      if (isTextLikeMediaType(mediaType)) {
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+        return jsonContent({
+          uri,
+          mediaType: mediaType ?? 'text/plain',
+          base64Encoded: false,
+          sizeBytes: bytes.byteLength,
+          content: text,
+        });
+      }
+      const base64 = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString(
+        'base64',
+      );
+      return jsonContent({
+        uri,
+        mediaType: mediaType ?? 'application/octet-stream',
+        base64Encoded: true,
+        sizeBytes: bytes.byteLength,
+        content: base64,
+      });
     },
   });
 }
