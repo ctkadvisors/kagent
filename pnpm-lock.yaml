@@ -136,6 +136,12 @@ importers:
         specifier: 1.4.0
         version: 1.4.0
 
+  packages/egress-controller:
+    dependencies:
+      '@kubernetes/client-node':
+        specifier: 1.4.0
+        version: 1.4.0
+
   packages/events:
     dependencies:
       '@kagent/capability-types':
@@ -215,6 +221,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/egress-controller':
+        specifier: workspace:*
+        version: link:../egress-controller
       '@kagent/events':
         specifier: workspace:*
         version: link:../events

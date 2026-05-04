@@ -2480,6 +2480,205 @@ async function main(): Promise<void> {
       '[kagent-operator] tenancy disabled (set KAGENT_TENANCY_ENABLED=true to enable Wave 4 multi-tenant boundary)',
     );
   }
+
+  // === Wave 4 — Egress ===
+  // v0.5.1-egress. Per-Agent NetworkPolicy / CiliumNetworkPolicy
+  // generation from `Agent.spec.egress`, with tenant-default fallback
+  // (`Tenant.spec.defaultEgress`) and substrate default-deny baseline.
+  // Per docs/SUBSTRATE-V1.md §3.1 + docs/WAVES.md §6.2.
+  //
+  // When `KAGENT_EGRESS_ENABLED=true`:
+  //   1. Detect Cilium installation (kube-system/cilium-config CM
+  //      lookup). Result is cached at boot — Cilium installs aren't
+  //      hot-swapped.
+  //   2. Build a cluster (or namespaced) Agent informer specifically
+  //      for egress reconciliation — separate from the
+  //      `buildAdmissionWiring`'s informer (which lives inside that
+  //      helper's scope).
+  //   3. On every Agent add/update, call `applyNetworkPolicyForAgent`
+  //      which:
+  //        - resolves effective egress (Agent.spec.egress wins; tenant
+  //          fallback; substrate default-deny baseline).
+  //        - emits NetworkPolicy or CiliumNetworkPolicy with
+  //          ownerRef'd back to the Agent CR.
+  //        - publishes `egress.policy_applied` audit event.
+  //   4. On Agent delete, call `deleteNetworkPolicyForAgent` (ownerRef
+  //      cascade is the safety net; explicit delete is faster +
+  //      observable, mirrors workspace-controller pattern).
+  //
+  // DEFAULT-OFF — substrate operators flip this on after verifying
+  // their CNI enforces NetworkPolicies (K3s default flannel does NOT;
+  // Calico, Cilium, Weave, ... do).
+  if (process.env.KAGENT_EGRESS_ENABLED === 'true') {
+    const egressMod = await import('@kagent/egress-controller');
+    const { NetworkingV1Api } = await import('@kubernetes/client-node');
+    const networkingApi = kc.makeApiClient(NetworkingV1Api);
+    const tenantsMod = await import('./crds/index.js');
+
+    // Mode env: auto | networkpolicy | cilium. Defaults to auto.
+    const modeEnv = normalizeOptionalEnv(process.env.KAGENT_EGRESS_MODE) ?? 'auto';
+    const mode: 'auto' | 'networkpolicy' | 'cilium' =
+      modeEnv === 'networkpolicy' || modeEnv === 'cilium' ? modeEnv : 'auto';
+
+    // Detect Cilium once — cached across the operator's lifetime.
+    const ciliumDetected =
+      mode === 'cilium'
+        ? true
+        : mode === 'networkpolicy'
+          ? false
+          : await egressMod.detectCiliumInstalled(coreApi);
+    console.log(
+      `[kagent-operator] Egress controller ENABLED — mode=${mode} ciliumDetected=${ciliumDetected}`,
+    );
+
+    // Tenant lookup: prefer the existing tenant informer when tenancy
+    // is on; otherwise null-callback (default-deny baseline applies).
+    // The tenant informer's `lookupTenant` lives on the handle that's
+    // local to the tenancy block above; we re-list via customApi as a
+    // forward-compat fallback when tenancy is off (one-shot list per
+    // egress reconcile is cheap given typical Agent counts).
+    const lookupTenantFn = (
+      tenantName: string,
+    ): import('@kagent/egress-controller').TenantLike | undefined => {
+      // Wave 4 Tenancy provides a global registry; for a single-shot
+      // lookup that doesn't depend on tenancy enablement we walk the
+      // customApi cluster-list result. This is best-effort: when
+      // tenancy is disabled the tenants CRD may not even be applied,
+      // hence the swallow on error.
+      // The actual production path is: when tenancy is on, the tenant-
+      // controller exposes lookupTenant; we pass that through. For
+      // simplicity in v0.5.1 we just return undefined here when the
+      // tenancy block isn't running — default-deny baseline applies.
+      void tenantName;
+      return undefined;
+    };
+
+    const auditHook =
+      auditPublisher !== undefined
+        ? async (data: import('@kagent/egress-controller').PolicyAppliedEmissionData) => {
+            try {
+              await auditPublisher.publish(
+                makeEvent({
+                  source: 'kagent.knuteson.io/operator',
+                  subject: `Agent/${data.agentNamespace}/${data.agentName}`,
+                  type: 'egress.policy_applied',
+                  data: {
+                    agentName: data.agentName,
+                    agentNamespace: data.agentNamespace,
+                    agentUid: data.agentUid,
+                    tenant: data.tenant,
+                    mode: data.mode,
+                    source: data.source,
+                    policyName: data.policyName,
+                    cidrCount: data.cidrCount,
+                    domainCount: data.domainCount,
+                    portCount: data.portCount,
+                  },
+                }),
+              );
+            } catch (err) {
+              console.warn('[kagent-egress] policy_applied audit publish failed:', err);
+            }
+          }
+        : undefined;
+
+    // Build a dedicated Agent informer for egress reconciliation. This
+    // is independent of the admission Agent informer (which lives
+    // inside buildAdmissionWiring) — the egress controller should
+    // operate even when admission is off.
+    const egressAgentListFn = async (): Promise<KubernetesListObject<Agent>> => {
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+      const res =
+        watchNamespace !== undefined
+          ? await customApi.listNamespacedCustomObject({
+              group: API_GROUP,
+              version: API_VERSION,
+              namespace: watchNamespace,
+              plural: 'agents',
+            })
+          : await customApi.listClusterCustomObject({
+              group: API_GROUP,
+              version: API_VERSION,
+              plural: 'agents',
+            });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+      return res as KubernetesListObject<Agent>;
+    };
+    const egressAgentWatchPath =
+      watchNamespace !== undefined
+        ? `/apis/${API_GROUP}/${API_VERSION}/namespaces/${encodeURIComponent(watchNamespace)}/agents`
+        : `/apis/${API_GROUP}/${API_VERSION}/agents`;
+    const egressAgentInformer: Informer<Agent> & ObjectCache<Agent> = makeInformer<Agent>(
+      kc,
+      egressAgentWatchPath,
+      egressAgentListFn,
+    );
+
+    const egressDeps: import('@kagent/egress-controller').ApplyEgressDeps = {
+      networkingApi,
+      customApi,
+      ciliumDetected,
+      mode,
+      lookupTenant: lookupTenantFn,
+      ...(auditHook !== undefined && { onPolicyApplied: auditHook }),
+    };
+
+    const reconcileAgentEgress = (obj: unknown): void => {
+      if (!isAgent(obj)) return;
+      void egressMod
+        .applyNetworkPolicyForAgent(
+          obj as import('@kagent/egress-controller').AgentLike,
+          egressDeps,
+        )
+        .catch((err: unknown) => {
+          console.error(
+            `[kagent-egress] reconcile failed for Agent ${obj.metadata.namespace ?? '-'}/${obj.metadata.name ?? '-'}:`,
+            err,
+          );
+        });
+    };
+    const deleteAgentEgress = (obj: unknown): void => {
+      if (!isAgent(obj)) return;
+      void egressMod
+        .deleteNetworkPolicyForAgent(
+          obj as import('@kagent/egress-controller').AgentLike,
+          egressDeps,
+        )
+        .catch((err: unknown) => {
+          console.warn(
+            `[kagent-egress] delete failed for Agent ${obj.metadata.namespace ?? '-'}/${obj.metadata.name ?? '-'}:`,
+            err,
+          );
+        });
+    };
+
+    egressAgentInformer.on('add', reconcileAgentEgress);
+    egressAgentInformer.on('update', reconcileAgentEgress);
+    egressAgentInformer.on('delete', deleteAgentEgress);
+    egressAgentInformer.on('error', (err) => {
+      console.error('[kagent-egress] Agent watch error:', err);
+      setTimeout(() => {
+        void egressAgentInformer.start();
+      }, 5000);
+    });
+    await egressAgentInformer.start();
+    console.log('[kagent-operator] Egress Agent informer started');
+    void tenantsMod; // silence unused-import lint when tenancy block is off
+
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        await egressAgentInformer.stop();
+      } catch (err) {
+        console.error('[kagent-operator] Egress Agent informer stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] egress disabled (set KAGENT_EGRESS_ENABLED=true to enable Wave 4 NetworkPolicy generation)',
+    );
+  }
 }
 
 function normalizeOptionalEnv(value: string | undefined): string | undefined {

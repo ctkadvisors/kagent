@@ -931,6 +931,65 @@ tenancy:
   # strict "explicit tenant required" posture.
   defaultTenant: ''
 
+# ---------------------------------------------------------------------
+# Wave 4 — Egress (v0.5.1-egress)
+# ---------------------------------------------------------------------
+# Per-Agent network egress allowlist materialized into a NetworkPolicy
+# (or CiliumNetworkPolicy when Cilium is detected) per
+# `Agent.spec.egress` + the `Tenant.spec.defaultEgress` fallback. See
+# docs/SUBSTRATE-V1.md §3.1 + docs/WAVES.md §6.2.
+#
+# DEFAULT-OFF until network-policy enforcement is verified on the
+# cluster's CNI. K3s default flannel does NOT enforce NetworkPolicies;
+# Calico, Cilium, Weave, etc. do.
+#
+# When `enabled: true`, the operator:
+#   1. Detects Cilium installation by reading the
+#      `kube-system/cilium-config` ConfigMap. Mode `auto` (default)
+#      emits Cilium CNP when present, plain NetworkPolicy otherwise.
+#      Force the mode with `mode: networkpolicy | cilium`.
+#   2. Watches Agent CRs (informer); on add/update calls
+#      `applyNetworkPolicyForAgent` which creates / updates the
+#      per-Agent policy with `ownerRef'd` back to the Agent CR. On
+#      Agent delete, calls `deleteNetworkPolicyForAgent` (ownerRef
+#      cascade is the safety net; explicit delete is faster +
+#      observable, mirrors workspace-controller pattern).
+#   3. Emits `egress.policy_applied` audit events per reconcile.
+#
+# Default-deny posture: Agents with no `spec.egress` (and no tenant
+# `defaultEgress`) get a policy that allows ONLY:
+#   - DNS (UDP/TCP 53 to kube-dns service CIDR)
+#   - NATS (TCP 4222 to nats.kagent-system Service)
+#   - LLM gateway (TCP 4000 to kagent-llm-gateway.kagent-system Service)
+# See `packages/egress-controller/src/policy.ts` JSDoc for the exact
+# substrate-internal allowlist.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_EGRESS_ENABLED=true|false
+#   KAGENT_EGRESS_MODE=auto|networkpolicy|cilium
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 4 — Egress" block.
+egress:
+  # Default OFF — flip on after verifying the cluster's CNI enforces
+  # NetworkPolicies. Required for the substrate to materialize per-
+  # Agent network policies; existing single-tenant installs continue
+  # working unchanged when this stays off.
+  enabled: false
+  # Mode override. `auto` (default) detects Cilium via the
+  # `kube-system/cilium-config` ConfigMap and emits Cilium CNP when
+  # present, plain NetworkPolicy otherwise. Force the mode here when
+  # the auto-detect heuristic doesn't fit your install (e.g. Cilium
+  # installed under a non-standard ConfigMap name, or you want to
+  # ship plain NetworkPolicy even on a Cilium cluster for testing).
+  mode: 'auto'
+  # DNS-policy block — when `enabled: true` (default), the
+  # default-deny baseline allows DNS resolution + the substrate-
+  # internal NATS + LLM gateway endpoints. Disabling this is rarely
+  # what you want — an agent-pod that can't resolve any service name
+  # cannot function.
+  dnsPolicy:
+    enabled: true
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

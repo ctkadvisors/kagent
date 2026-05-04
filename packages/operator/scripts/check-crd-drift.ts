@@ -248,6 +248,8 @@ const expectations: readonly CRDExpectation[] = [
       // v0.3.1-supervision — Wave 2 / Supervision sub-team.
       'supervisionStrategy',
       'maxRestarts',
+      // v0.5.1-egress — Wave 4 / Egress sub-team.
+      'egress',
     ],
   },
   {

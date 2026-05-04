@@ -31,6 +31,7 @@
     "@kagent/blackboard": "workspace:*",
     "@kagent/cache-controller": "workspace:*",
     "@kagent/capability-types": "workspace:*",
+    "@kagent/egress-controller": "workspace:*",
     "@kagent/events": "workspace:*",
     "@kagent/locality-controller": "workspace:*",
     "@kagent/supervision": "workspace:*",
