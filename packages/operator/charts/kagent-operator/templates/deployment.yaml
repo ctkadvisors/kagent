@@ -75,6 +75,20 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.cas.enabled }}
+        # Wave 1 — CAS
+        # The operator's GC controller walks the CAS tree on disk to
+        # decide what's reachable + age-eligible. It MUST mount the
+        # same PVC the agent-pods write to (no other authoritative
+        # source for the on-disk layout). Read-only mount: the GC
+        # uses unlinkSync, which on K8s RWX mounts requires the
+        # mount NOT be flagged read-only at the K8s level — but the
+        # GC itself is the only operator-side writer, so we elide
+        # readOnly here.
+        - name: kagent-cas
+          persistentVolumeClaim:
+            claimName: {{ .Values.cas.pvcName | quote }}
+        {{- end }}
       containers:
         - name: operator
           image: {{ include "kagent-operator.image" . }}
@@ -87,6 +101,13 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.cas.enabled }}
+            # Wave 1 — CAS — same mountPath the operator advertises to
+            # spawned Jobs via KAGENT_CAS_MOUNT_PATH so the GC walker
+            # and the agent-pod's read_artifact tool agree on the layout.
+            - name: kagent-cas
+              mountPath: {{ .Values.cas.mountPath | quote }}
+            {{- end }}
           {{- if or .Values.agentPod.templates.enabled .Values.triggers.enabled }}
           ports:
             {{- if .Values.agentPod.templates.enabled }}
@@ -193,6 +214,27 @@ spec:
               value: {{ .Values.agentPod.artifactStorage.pvcName | quote }}
             - name: KAGENT_ARTIFACT_MOUNT_PATH
               value: {{ .Values.agentPod.artifactStorage.mountPath | quote }}
+            {{- end }}
+            {{- if .Values.cas.enabled }}
+            # Wave 1 — CAS
+            # v0.2.2-cas content-addressed storage. The operator runs
+            # the GC sweep against KAGENT_CAS_MOUNT_PATH; the agent-pod
+            # consumes the same env via the CAS-aware
+            # `buildArtifactMounts` helper. The GC controller is
+            # gated on KAGENT_CAS_ENABLED so this whole block stays
+            # off by default.
+            - name: KAGENT_CAS_ENABLED
+              value: "true"
+            - name: KAGENT_CAS_PVC_NAME
+              value: {{ .Values.cas.pvcName | quote }}
+            - name: KAGENT_CAS_MOUNT_PATH
+              value: {{ .Values.cas.mountPath | quote }}
+            - name: KAGENT_CAS_RETENTION_DEFAULT
+              value: {{ .Values.cas.retention.default | quote }}
+            - name: KAGENT_CAS_GC_INTERVAL_SECONDS
+              value: {{ .Values.cas.gc.intervalSeconds | quote }}
+            - name: KAGENT_CAS_GC_DRY_RUN
+              value: {{ .Values.cas.gc.dryRun | quote }}
             {{- end }}
             # WS-A — security context defaults for spawned agent pods.
             # Operator's main.ts buildJobSpecOptionsFromEnv parses these

@@ -270,6 +270,56 @@ agentPod:
     # execution.
     accessMode: 'ReadWriteMany'
 
+# Wave 1 — CAS
+# Content-addressed storage (v0.2.2-cas; docs/SUBSTRATE-V1.md §3.5,
+# docs/WAVES.md §3.3). Off by default — flip on once a shared RWX PVC
+# exists and the operator + agent-pod images are at v0.2.2-cas+.
+#
+# When enabled, the operator:
+#   1. Mounts the CAS PVC into every spawned agent-pod Job (read-only,
+#      via `buildArtifactMounts` — only when the Agent declares an
+#      artifact input or output, else no mount is added).
+#   2. Runs the CAS GC controller on `gc.intervalSeconds`. The GC walks
+#      `<mountPath>/cas/sha256/**`, computes a reachability set from
+#      every non-Completed AgentTask's `status.outputs[].ref`, and
+#      unlinks blobs that are BOTH older than `retention.default` AND
+#      not reachable. Off-by-default; set `cas.gc.dryRun: true` to
+#      log eligible blobs without unlinking.
+#
+# Sharing a backend with the v0.1 `agentPod.artifactStorage` PVC is
+# fine (the layouts don't collide — CAS lives under `cas/sha256/`,
+# v0.1 artifacts under `<task-uid>/<name>`). Operators may keep both
+# pointed at the same volume during the migration window, then drop
+# `agentPod.artifactStorage` once all in-flight v0.1 artifacts have
+# expired.
+cas:
+  enabled: false
+  # PVC claim name in the AgentTask's namespace. Provision separately
+  # (or reuse the existing `kagent-artifacts` PVC if its StorageClass
+  # is RWX).
+  pvcName: 'kagent-cas'
+  # Container path the PVC mounts at inside every agent-pod (when the
+  # Agent declares an artifact I/O). Operator-side GC walks the same
+  # path on its own filesystem (the operator pod must mount it too —
+  # see `templates/deployment.yaml`).
+  mountPath: '/var/kagent/cas'
+  retention:
+    # Default retention window for any blob not reachable from a live
+    # AgentTask. Format: integer + unit (`s|m|h|d`); single-unit only
+    # (composite forms like `1d6h` are rejected). The GC refuses to run
+    # with retention < 1 minute (defense in depth against typos).
+    default: '7d'
+  gc:
+    # Tick interval for the GC sweep (seconds). Each tick walks the
+    # CAS tree once + checks reachability. Default 1h matches a
+    # conservative "low-pressure" sweep cadence; raise on high-churn
+    # workloads, lower on disk-tight clusters.
+    intervalSeconds: 3600
+    # When true, the GC logs eligible blobs but does NOT unlink. Use
+    # this BEFORE flipping retention down on a populated PVC to make
+    # sure the reachability set is what you think it is.
+    dryRun: false
+
 # LLM gateway integration (spec §3, §3.2 admission flow). Off by default
 # — kagent works without the gateway (agents talk to backends via
 # litellmBaseUrl as today). Set enabled=true to:

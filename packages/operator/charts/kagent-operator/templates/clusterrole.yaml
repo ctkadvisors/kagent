@@ -88,3 +88,11 @@ rules:
   - apiGroups: ['']
     resources: ['configmaps']
     verbs: ['get', 'list', 'watch', 'create', 'delete']
+  # Wave 1 — CAS
+  # The CAS GC controller (cas-gc.ts) walks the AgentTask informer
+  # cache for reachability — the existing `agenttasks: [get,list,watch]`
+  # rule above already covers that. The actual blob delete is
+  # `unlinkSync` on the operator's mounted PVC, which is a node-local
+  # FS operation, not a K8s API call. No additional verbs are required
+  # for the GC; this comment exists so future readers don't waste time
+  # looking for them.

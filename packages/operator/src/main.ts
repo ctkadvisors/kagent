@@ -35,6 +35,7 @@ import {
   type EmitTaskAdmittedFn,
 } from './admission.js';
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
+import * as casGc from './cas-gc.js';
 import {
   API_GROUP,
   API_VERSION,
@@ -1265,6 +1266,54 @@ async function main(): Promise<void> {
       }
       if (previous !== undefined) await previous();
     };
+  }
+
+  // === Wave 1 — CAS GC ===
+  // v0.2.2-cas content-addressed-storage GC. Off by default; flipped on
+  // by the chart's `cas.enabled: true`. Walks
+  // `<KAGENT_CAS_MOUNT_PATH>/cas/sha256/**` on every
+  // `KAGENT_CAS_GC_INTERVAL_SECONDS` and unlinks blobs older than
+  // `KAGENT_CAS_RETENTION_DEFAULT` UNLESS reachable from a non-Completed
+  // AgentTask's `status.outputs[].ref`. Reachability is computed against
+  // the same AgentTask informer cache the rest of the operator uses;
+  // `informerRef.current.list()` is the snapshot source.
+  if (process.env.KAGENT_CAS_ENABLED === 'true') {
+    const mountPath = normalizeOptionalEnv(process.env.KAGENT_CAS_MOUNT_PATH) ?? '/var/kagent/cas';
+    const retentionRaw = process.env.KAGENT_CAS_RETENTION_DEFAULT ?? '7d';
+    const intervalSecondsRaw = process.env.KAGENT_CAS_GC_INTERVAL_SECONDS ?? '3600';
+    const retentionMs = casGc.parseRetention(retentionRaw);
+    if (retentionMs === null) {
+      console.error(
+        `[kagent-operator/cas-gc] invalid KAGENT_CAS_RETENTION_DEFAULT="${retentionRaw}"; CAS GC disabled`,
+      );
+    } else {
+      const intervalSeconds = Number.parseInt(intervalSecondsRaw, 10);
+      const intervalMs =
+        Number.isFinite(intervalSeconds) && intervalSeconds > 0
+          ? intervalSeconds * 1000
+          : 60 * 60 * 1000;
+      const dryRun = process.env.KAGENT_CAS_GC_DRY_RUN === 'true';
+      const gcHandle = casGc.startCasGc(
+        { mountPath, retentionMs, intervalMs, dryRun },
+        {
+          listAgentTasks: () => informerRef.current?.list() ?? [],
+          log: (m) => {
+            console.log(m);
+          },
+        },
+      );
+      const previous = onShutdownExtra;
+      onShutdownExtra = async (): Promise<void> => {
+        try {
+          gcHandle.stop();
+        } catch (err) {
+          console.error('[kagent-operator/cas-gc] stop failed:', err);
+        }
+        if (previous !== undefined) await previous();
+      };
+    }
+  } else {
+    console.log('[kagent-operator] CAS GC disabled (set KAGENT_CAS_ENABLED=true to enable)');
   }
 }
 
