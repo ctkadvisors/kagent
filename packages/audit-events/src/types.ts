@@ -55,7 +55,11 @@ export type AuditEventType =
   | 'capability.used'
   | 'secret.accessed'
   | 'quota.breached'
-  | 'contract.violated';
+  | 'contract.violated'
+  /* v0.3.1-supervision — Wave 2 / Supervision sub-team. */
+  | 'supervision.applied'
+  | 'supervision.restart_limit_exceeded'
+  | 'infra.fault.observed';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -232,6 +236,68 @@ export interface ContractViolatedData {
 }
 
 /**
+ * `supervision.applied` — Wave 2 / Supervision sub-team. Emitted by
+ * the operator each time the supervision strategy engine returns a
+ * decision the operator dispatches against an AgentTask tree. One
+ * emission per decision (NOT per target).
+ *
+ * `targets[]` is the in-order list of task UIDs the operator
+ * applied the action to. `failedTaskUid` is the trigger.
+ */
+export interface SupervisionAppliedData {
+  readonly parentTaskUid: string | undefined;
+  readonly parentTaskNamespace: string;
+  readonly parentTaskName: string | undefined;
+  readonly agentName: string;
+  readonly strategy: 'one_for_one' | 'one_for_all' | 'rest_for_one' | 'escalate';
+  readonly action:
+    | 'restart'
+    | 'terminate-and-restart-tree'
+    | 'terminate-and-restart-subset'
+    | 'escalate-to-parent';
+  readonly failedTaskUid: string;
+  readonly failureReason: string;
+  readonly targets: readonly string[];
+  readonly reason: string;
+}
+
+/**
+ * `supervision.restart_limit_exceeded` — Wave 2 / Supervision
+ * sub-team. Emitted by the operator when supervision would have
+ * restarted a task but `restartCount >= Agent.spec.maxRestarts`.
+ * The task is marked Failed (`reason: restart_limit_exceeded`)
+ * instead of restarted.
+ */
+export interface SupervisionRestartLimitExceededData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly restartCount: number;
+  readonly maxRestarts: number;
+}
+
+/**
+ * `infra.fault.observed` — Wave 2 / Supervision sub-team.
+ * Operator observed an infrastructure-level fault (Job pod
+ * OOMKilled, image pull error, NodeNotReady, ...) that does NOT
+ * trigger supervision (let K8s Job backoffLimit handle infra).
+ * Emitted so operators can spot infra vs application failure modes
+ * in audit dashboards.
+ */
+export interface InfraFaultObservedData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  /** Pod / Job source the verdict came from. */
+  readonly source: 'job' | 'pod';
+  /** Short tag, e.g. `OOMKilled`, `ImagePullBackOff`, `Unschedulable`. */
+  readonly reason: string;
+  readonly message: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -246,7 +312,14 @@ export type AuditEventData =
   | { readonly type: 'capability.used'; readonly data: CapabilityUsedData }
   | { readonly type: 'secret.accessed'; readonly data: SecretAccessedData }
   | { readonly type: 'quota.breached'; readonly data: QuotaBreachedData }
-  | { readonly type: 'contract.violated'; readonly data: ContractViolatedData };
+  | { readonly type: 'contract.violated'; readonly data: ContractViolatedData }
+  /* v0.3.1-supervision — Wave 2 / Supervision sub-team. */
+  | { readonly type: 'supervision.applied'; readonly data: SupervisionAppliedData }
+  | {
+      readonly type: 'supervision.restart_limit_exceeded';
+      readonly data: SupervisionRestartLimitExceededData;
+    }
+  | { readonly type: 'infra.fault.observed'; readonly data: InfraFaultObservedData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

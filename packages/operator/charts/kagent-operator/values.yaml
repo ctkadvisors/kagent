@@ -458,6 +458,52 @@ triggers:
   secrets: {}
 
 # ---------------------------------------------------------------------
+# Wave 2 — Supervision
+# ---------------------------------------------------------------------
+# Erlang/OTP-style supervision strategies for AgentTask trees
+# (v0.3.1-supervision). When `enabled: true` (default — supervision
+# is the substrate's job, not application opt-in), every AgentTask
+# transition to phase=Failed runs through the supervision router:
+#
+#   1. failure-classifier separates structured violations (supervision
+#      applies) from infra faults (K8s Job backoffLimit handles)
+#   2. for structured failures, the parent's Agent's
+#      `supervisionStrategy` (Agent.spec.supervisionStrategy; default
+#      `one_for_one`) drives the action set per
+#      `@kagent/supervision`'s evaluateStrategy()
+#   3. `Agent.spec.maxRestarts` (default 3) bounds restart loops —
+#      tasks past the cap fail-closed with `reason:
+#      restart_limit_exceeded`
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_SUPERVISION_ENABLED=true|false
+#   KAGENT_SUPERVISION_DEFAULT_STRATEGY=one_for_one|one_for_all|rest_for_one|escalate
+#   KAGENT_SUPERVISION_MAX_RESTARTS=<integer>
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 2 — Supervision"
+# block (no new verbs required; agents:get,list,watch +
+# agenttasks/status:get,patch,update from existing rules cover it).
+supervision:
+  # Substrate-level — leave on. Set `false` only for tests / installs
+  # that explicitly want every Failed AgentTask to terminate without
+  # any restart routing. Disabling supervision does NOT disable
+  # `infra.fault.observed` audit emission (audit visibility is
+  # always-on); it just makes the operator skip the supervision
+  # routing path.
+  enabled: true
+  # Default strategy used when an Agent doesn't declare
+  # `Agent.spec.supervisionStrategy`. The Wave 2 brief locks the
+  # substrate default at `one_for_one` so existing v0.1 Agents that
+  # don't declare the field don't change behavior.
+  defaultStrategy: 'one_for_one'
+  maxRestarts:
+    # Default `Agent.spec.maxRestarts` cap. Each AgentTask gets at
+    # most this many restart attempts before the operator
+    # fails-closed with `reason: restart_limit_exceeded`. Setting 0
+    # disables restarts entirely (first failure is terminal).
+    default: 3
+
+# ---------------------------------------------------------------------
 # Wave 1 — Workspace
 # ---------------------------------------------------------------------
 # Workspace primitive (per docs/SUBSTRATE-V1.md §3.4): pre-populated,

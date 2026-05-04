@@ -219,7 +219,7 @@ Capability bundles + supervision strategies + durable orchestrators. v0.3.0 is f
 | Tag | Scope | Sub-team | Effort |
 |---|---|---|---|
 | `v0.3.0-capabilities` | Sealed JWT capability bundle (signed by operator CA); per-Agent claims for tools/models/spawn/read/write/egress/tenant; narrows-on-spawn (substrate-validated); `verify_completion` substrate hook; replaces `allowedChildAgents`/`allowedChildTemplates`/inline tool allowlists | Caps | 3 weeks |
-| `v0.3.1-supervision` | `Agent.spec.supervisionStrategy` (one_for_one, one_for_all, rest_for_one, escalate); substrate-handled child-failure routing; structured contract-violation errors | Supervision | 1.5 weeks |
+| `v0.3.1-supervision` ✅ SHIPPED | `Agent.spec.supervisionStrategy` (one_for_one, one_for_all, rest_for_one, escalate); substrate-handled child-failure routing; structured contract-violation errors | Supervision | 1.5 weeks |
 | `v0.3.2-workflows` | `AgentWorkflow` CRD distinct from `Agent`; Restate-backed durable orchestrator; event-log replay on crash; signal/query API | Workflows | 2.5 weeks |
 
 ### Wave 3 — v0.4 coordination at scale (~2-3 weeks with full parallelism)

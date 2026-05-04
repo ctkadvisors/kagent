@@ -36,6 +36,8 @@ export type {
   InputBinding,
   InputFrom,
   OutputRef,
+  /* v0.3.1-supervision — Wave 2 / Supervision sub-team */
+  SupervisionStrategy,
 } from './types.js';
 
 export {

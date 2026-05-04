@@ -372,8 +372,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 10 event-type strings (matches SUBSTRATE-V1.md §4.3)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(10);
+  it('exports exactly 13 event-type strings (10 Wave 0 + 3 v0.3.1-supervision)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(13);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -388,6 +388,10 @@ describe('event-types catalog', () => {
       'secret.accessed',
       'quota.breached',
       'contract.violated',
+      // v0.3.1-supervision — Wave 2 / Supervision sub-team.
+      'supervision.applied',
+      'supervision.restart_limit_exceeded',
+      'infra.fault.observed',
     ]);
   });
 });

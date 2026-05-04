@@ -125,3 +125,16 @@ rules:
   # FS operation, not a K8s API call. No additional verbs are required
   # for the GC; this comment exists so future readers don't waste time
   # looking for them.
+  # ---------------------------------------------------------------------
+  # Wave 2 — Supervision
+  # ---------------------------------------------------------------------
+  # The supervision-router walks the parent chain via the
+  # `kagent.knuteson.io/parent-task-uid` label, fetches the parent
+  # AgentTask + parent Agent, and patches sibling AgentTask.status
+  # (restartCount + supervision_terminated condition / phase=Failed).
+  # Every verb the router needs is already covered by the rules above:
+  #   - agents: [get,list,watch]                  → strategy/maxRestarts
+  #   - agenttasks: [get,list,watch]              → parent + sibling reads
+  #   - agenttasks/status: [get,patch,update]     → restartCount + phase
+  # No additional verbs required for v0.3.1-supervision; this comment
+  # exists so future readers don't waste time looking for them.

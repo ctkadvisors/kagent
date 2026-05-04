@@ -408,6 +408,21 @@ spec:
             - name: KAGENT_WORKSPACES_DEFAULT_STORAGE_CLASS
               value: {{ . | quote }}
             {{- end }}
+            # ---------------------------------------------------------------
+            # Wave 2 — Supervision
+            # ---------------------------------------------------------------
+            # When `supervision.enabled=true` (default), the operator
+            # routes every AgentTask phase=Failed through the
+            # supervision-router (see packages/operator/src/supervision-router.ts).
+            # The default strategy + max-restarts cap apply when an
+            # Agent doesn't declare `supervisionStrategy` /
+            # `maxRestarts` in its CR.
+            - name: KAGENT_SUPERVISION_ENABLED
+              value: {{ .Values.supervision.enabled | ternary "true" "false" | quote }}
+            - name: KAGENT_SUPERVISION_DEFAULT_STRATEGY
+              value: {{ .Values.supervision.defaultStrategy | quote }}
+            - name: KAGENT_SUPERVISION_MAX_RESTARTS
+              value: {{ .Values.supervision.maxRestarts.default | quote }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).
