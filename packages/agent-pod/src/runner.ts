@@ -116,6 +116,14 @@ export interface RunDeps {
    */
   readonly spawnTools?: ToolProvider;
   /**
+   * v0.4.0-events — Wave 3 events sub-team. `publish_event` tool
+   * provider, registered when the Agent declares at least one
+   * `publishes[]` entry AND `KAGENT_EVENTS_NATS_URL` is set. Composed
+   * with `spawnTools` + `builtin` so the executor sees one flat
+   * resolution surface.
+   */
+  readonly eventsTools?: ToolProvider;
+  /**
    * v0.1.6 — Langfuse-managed prompt fetcher. Production wires this
    * in main.ts from KAGENT_LANGFUSE_HOST + creds (see
    * `buildLangfusePromptFetcher`). Tests inject directly. When the
@@ -342,6 +350,7 @@ export function resolveToolProviders(config: PodConfig, deps: RunDeps): readonly
   const builtin = resolveBuiltinTools(config.agentSpec.tools);
   if (builtin !== null) out.push(builtin);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
+  if (deps.eventsTools !== undefined) out.push(deps.eventsTools);
   return out;
 }
 

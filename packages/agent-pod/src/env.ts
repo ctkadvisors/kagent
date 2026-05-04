@@ -123,6 +123,49 @@ export interface AgentSpecEnv {
     readonly required?: boolean;
     readonly retention?: string;
   }[];
+  /**
+   * v0.4.0-events — Wave 3 / Events sub-team. Each entry is a CONCRETE
+   * topic (no NATS wildcards). Carried verbatim from
+   * `Agent.spec.publishes[].topic`; the in-pod `publish_event` tool
+   * gates registration on the presence of at least one entry AND
+   * cross-checks every emission's topic against this set.
+   */
+  readonly publishes?: readonly {
+    readonly topic: string;
+    readonly schema?: Readonly<Record<string, unknown>>;
+  }[];
+  /**
+   * v0.4.0-events — Wave 3 / Events sub-team. Threaded for
+   * completeness so in-pod observability can surface "what topics
+   * could have triggered this run". The agent-pod itself does NOT
+   * subscribe — the operator's `EventDispatcher` provisions the NATS
+   * pull-consumers.
+   */
+  readonly subscribes?: readonly {
+    readonly topic: string;
+    readonly schema?: Readonly<Record<string, unknown>>;
+    readonly trigger?: { readonly inputBinding?: string };
+  }[];
+  /**
+   * v0.3.0-capabilities — pass-through of the same Agent's
+   * `capabilityClaims`. The publish_event tool reads
+   * `capabilityClaims.publish` here when the cap-bundle JWT mount is
+   * absent (legacy / pre-Wave-2 deploy) so admission's authority
+   * surface is consulted regardless of issuer-controller wiring.
+   *
+   * Substrate-opaque otherwise.
+   */
+  readonly capabilityClaims?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * v0.4.0-events — capability gate for the `publish_event` substrate
+ * tool. Returns true when the Agent declares at least one entry in
+ * `publishes[]`. The tool is registered ONLY when this is true,
+ * mirroring the artifact-input gate above.
+ */
+export function agentHasEventPublishes(spec: AgentSpecEnv): boolean {
+  return Array.isArray(spec.publishes) && spec.publishes.length > 0;
 }
 
 /**
