@@ -242,12 +242,51 @@ export function narrowClaimsByParent(
       continue;
     }
 
+    if (cat === 'blackboard') {
+      // v0.4.1-blackboard — nested-object claim. Intersect each
+      // sub-list (read/write) independently using the same pattern
+      // as top-level array categories.
+      const childBb = child.blackboard;
+      if (childBb === undefined) continue;
+      const parentBb = parent.blackboard;
+      const narrowed: { read?: readonly string[]; write?: readonly string[] } = {};
+      for (const sub of ['read', 'write'] as const) {
+        const cList = childBb[sub] ?? [];
+        if (cList.length === 0) continue;
+        const pList = parentBb?.[sub] ?? [];
+        const filtered: string[] = [];
+        for (const pat of cList) {
+          if (patternIsAdmittedByList(pat, pList)) filtered.push(pat);
+        }
+        if (filtered.length > 0) narrowed[sub] = filtered;
+      }
+      if (narrowed.read !== undefined || narrowed.write !== undefined) {
+        out.blackboard = narrowed;
+      }
+      continue;
+    }
+
     const childList = child[cat] ?? [];
+    if (!Array.isArray(childList)) continue;
     if (childList.length === 0) continue;
-    const parentList = parent[cat] ?? [];
+    // Narrow widened types back to readonly string[] for both lists.
+    // `Array.isArray` widens to `any[]`; we re-typecheck contents
+    // before forwarding into pattern-matching to keep the no-unsafe-
+    // argument lint clean.
+    const childPatterns: readonly string[] = (childList as readonly unknown[]).every(
+      (x): x is string => typeof x === 'string',
+    )
+      ? (childList as readonly string[])
+      : [];
+    const parentArr = parent[cat];
+    const parentPatterns: readonly string[] =
+      Array.isArray(parentArr) &&
+      (parentArr as readonly unknown[]).every((x): x is string => typeof x === 'string')
+        ? (parentArr as readonly string[])
+        : [];
     const filtered: string[] = [];
-    for (const pat of childList) {
-      if (patternIsAdmittedByList(pat, parentList)) filtered.push(pat);
+    for (const pat of childPatterns) {
+      if (patternIsAdmittedByList(pat, parentPatterns)) filtered.push(pat);
     }
     if (filtered.length > 0) assignArrayCategoryNarrowed(out, cat, filtered);
   }
@@ -334,6 +373,10 @@ function assignArrayCategoryNarrowed(
       return;
     case 'tenant':
       // Tenant is handled before this fn; included for exhaustiveness.
+      return;
+    case 'blackboard':
+      // v0.4.1-blackboard — nested-object claim handled before this
+      // fn; included for exhaustiveness.
       return;
   }
 }

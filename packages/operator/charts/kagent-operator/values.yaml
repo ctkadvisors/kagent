@@ -582,6 +582,49 @@ workflows:
     # same host as `address`, port 9070 (Restate convention).
     adminAddress: 'http://restate.kagent-system.svc.cluster.local:9070'
 
+# ---------------------------------------------------------------------
+# Wave 3 — Blackboard
+# ---------------------------------------------------------------------
+# Per-task-tree NATS JetStream KV bucket (per docs/SUBSTRATE-V1.md §3.7
+# + WAVES.md §5.2). One bucket per root AgentTask
+# (`kagent-kv-<root-uid>`); GC'd on root completion + ttl. The four
+# built-in tools (`read_blackboard`, `write_blackboard`,
+# `list_blackboard`, `append_blackboard`) gate against a per-Agent
+# `capabilityClaims.blackboard.{read,write}` glob ACL.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_BLACKBOARD_ENABLED=true|false  — operator-side switch
+#   KAGENT_NATS_URL=...                   — shared with dispatcher /
+#                                           audit / capability registry
+#
+# Per spawned-Job env (agent-pod side, set by job-spec.ts):
+#   KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>
+#
+# The agent-pod runtime registers the four tools when both
+# KAGENT_BLACKBOARD_BUCKET and KAGENT_NATS_URL are set; otherwise the
+# tools are absent from the registry — an LLM that tries to call them
+# gets the executor's standard "unknown tool" error.
+#
+# Subject namespace: `kagent.kv.*` (Wave 3 / Blackboard sub-team's
+# slice). Events owns `kagent.events.*`; both teams share NATS.
+blackboard:
+  # Operator-side switch. When false, the operator does NOT provision
+  # buckets on root admission and does NOT GC on root completion. Per-
+  # Job env still gets stamped (via job-spec.ts) — the agent-pod's
+  # connect attempt will materialize buckets on first write (NATS
+  # views.kv is get-or-create). Set false to opt out cleanly.
+  enabled: true
+  # Default bucket TTL in seconds. The operator overrides this per-
+  # bucket from `AgentTask.spec.runConfig.timeoutSeconds` when set.
+  # Mirrors the Workspace TTL default (24h) so a typical pipeline has
+  # the same scratch-FS + scratch-KV horizon.
+  defaultTtlSeconds: 86400
+  # Per-value byte cap. Refused at the agent-pod tool layer + the NATS
+  # bucket level. Bound runaway agent writes.
+  maxValueBytes: 1048576 # 1 MiB
+  # Per-bucket total byte cap.
+  maxBucketBytes: 67108864 # 64 MiB
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

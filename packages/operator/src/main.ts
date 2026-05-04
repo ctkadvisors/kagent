@@ -42,6 +42,7 @@ import {
   type AdmissionReconciler,
   type EmitTaskAdmittedFn,
 } from './admission.js';
+import { decideBlackboardAction } from './blackboard-router.js';
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import * as casGc from './cas-gc.js';
 import {
@@ -701,6 +702,7 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
 export function buildHandler(
   deps: ReconcileDeps,
   supervisionDeps?: SupervisionHandlerDeps,
+  blackboardHandler?: BlackboardHandlerDeps,
 ): AgentTaskHandler {
   return {
     async onAdd(task) {
@@ -708,6 +710,13 @@ export function buildHandler(
       logResult('add', task, result);
       await maybeReconcileParent('add', task, deps);
       await maybeRouteSupervision(task, supervisionDeps);
+      // === Wave 3 — Blackboard ===
+      // v0.4.1-blackboard. Provision the per-task-tree NATS KV
+      // bucket on root admission. No-op for child tasks + for root
+      // tasks already in a terminal phase (the destroy path on
+      // onUpdate handles GC). See blackboard-router.ts for the pure
+      // decision logic.
+      await maybeRouteBlackboard(task, blackboardHandler);
     },
     async onUpdate(task) {
       const result = await reconcileAgentTask(task, deps);
@@ -728,6 +737,11 @@ export function buildHandler(
       // supervision-router.ts for the routing semantics + the
       // `@kagent/supervision` package for the pure decision engine.
       await maybeRouteSupervision(task, supervisionDeps);
+      // === Wave 3 — Blackboard ===
+      // GC the bucket on terminal phase transition. Re-fires safely
+      // on relist (manager.destroyBucket is idempotent on
+      // bucket-not-found).
+      await maybeRouteBlackboard(task, blackboardHandler);
     },
     onDelete(task) {
       console.log(
@@ -738,6 +752,47 @@ export function buildHandler(
       console.error('[kagent-operator] watch error:', err);
     },
   };
+}
+
+/* === Wave 3 — Blackboard ===
+ * v0.4.1-blackboard. The handler routes AgentTask events through
+ * `decideBlackboardAction` and dispatches `ensureBucket` /
+ * `destroyBucket` on the operator's `BlackboardBucketManager`.
+ * Best-effort: failures log loudly but never propagate.
+ */
+export interface BlackboardHandlerDeps {
+  readonly enabled: boolean;
+  readonly manager: BlackboardManagerLike;
+}
+
+export interface BlackboardManagerLike {
+  ensureBucket(rootUid: string, opts?: { readonly ttlMs?: number }): Promise<unknown>;
+  destroyBucket(rootUid: string): Promise<{ destroyed: boolean }>;
+}
+
+async function maybeRouteBlackboard(
+  task: import('./crds/index.js').AgentTask,
+  blackboard: BlackboardHandlerDeps | undefined,
+): Promise<void> {
+  if (blackboard === undefined) return;
+  if (!blackboard.enabled) return;
+  const decision = decideBlackboardAction(task);
+  if (decision.kind === 'noop') return;
+  const id = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
+  try {
+    if (decision.kind === 'ensure') {
+      await blackboard.manager.ensureBucket(decision.rootUid, {
+        ...(decision.ttlMs !== undefined && { ttlMs: decision.ttlMs }),
+      });
+    } else {
+      await blackboard.manager.destroyBucket(decision.rootUid);
+    }
+  } catch (err) {
+    // Best-effort — keep the operator running.
+    console.warn(
+      `[kagent-operator/blackboard] ${decision.kind} for ${id} failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /* === Wave 2 — Supervision ===
@@ -1108,7 +1163,72 @@ async function main(): Promise<void> {
     router: supervisionRouterDeps,
   };
 
-  const handler = buildHandler(deps, supervisionHandlerDeps);
+  // === Wave 3 — Blackboard ===
+  // v0.4.1-blackboard. Provision the per-task-tree NATS KV bucket
+  // manager when KAGENT_NATS_URL is set (we re-use the same NATS
+  // server the dispatcher / audit stream / capability registry use).
+  // Default OFF when KAGENT_BLACKBOARD_ENABLED=false (Helm value
+  // `blackboard.enabled=true` is the on-switch). Best-effort wiring:
+  // any boot-time NATS error logs warning + leaves the manager
+  // undefined → blackboard handler no-ops on every event.
+  let blackboardHandlerDeps: BlackboardHandlerDeps | undefined;
+  const blackboardEnabled = process.env.KAGENT_BLACKBOARD_ENABLED !== 'false';
+  if (blackboardEnabled && typeof natsUrl === 'string' && natsUrl.length > 0) {
+    try {
+      const { BlackboardBucketManager } = await import('@kagent/blackboard');
+      const lazyConnect = async (): Promise<NatsConnection> => {
+        return await connect({ servers: natsUrl });
+      };
+      // Lazy NATS connection for the bucket manager. We don't share
+      // the operator's main `sharedConnection` here because the
+      // dispatcher's connection lifetime is dispatch-scoped; bucket
+      // ops need a stable handle. Wired as a thin adapter over
+      // `views`. Best-effort: any failure throws on first use, the
+      // handler logs + continues.
+      let viewsCache: { kv: (name: string, opts: unknown) => Promise<unknown> } | undefined;
+      const views = {
+        kv: async (
+          name: string,
+          opts: { ttl: number; maxValueSize: number; max_bytes: number; history: number },
+        ) => {
+          if (viewsCache === undefined) {
+            const nc = await lazyConnect();
+            const js = nc.jetstream();
+            viewsCache = js.views as unknown as {
+              kv: (name: string, opts: unknown) => Promise<unknown>;
+            };
+          }
+          return (await viewsCache.kv(name, opts)) as { destroy(): Promise<boolean> };
+        },
+      };
+      const manager = new BlackboardBucketManager({
+        views,
+        // Audit hook: emit a structured log line on every bucket
+        // destroy so operators can spot GC events. The full audit
+        // event type (`blackboard.gc`) is reserved for a follow-up
+        // (audit-events catalog needs a SemVer-minor bump to add the
+        // type literal); for v0.4.1 we surface the GC via stdout.
+        onDestroyed: ({ rootUid, bucketName }) => {
+          console.log(`[kagent-operator/blackboard.gc] bucket=${bucketName} rootUid=${rootUid}`);
+        },
+      });
+      blackboardHandlerDeps = {
+        enabled: true,
+        manager,
+      };
+      console.log('[kagent-operator] Blackboard bucket manager ENABLED (Wave 3)');
+    } catch (err) {
+      console.warn(
+        `[kagent-operator] Blackboard bucket manager DISABLED — boot failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  } else {
+    console.log(
+      `[kagent-operator] Blackboard bucket manager disabled (KAGENT_BLACKBOARD_ENABLED=${String(blackboardEnabled)}, KAGENT_NATS_URL=${typeof natsUrl === 'string' && natsUrl.length > 0 ? 'set' : 'unset'})`,
+    );
+  }
+
+  const handler = buildHandler(deps, supervisionHandlerDeps, blackboardHandlerDeps);
   // Single informer-opts object reused for both the AgentTask and the
   // Job/Pod informers — keeps the namespace toggle in lockstep so a
   // misconfiguration can't scope one watch but not the other.

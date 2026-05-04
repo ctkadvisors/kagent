@@ -150,6 +150,21 @@ export const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 300;
 export const TASK_DEPTH_LABEL = 'kagent.knuteson.io/task-depth';
 
 /**
+ * v0.4.1-blackboard — Wave 3 / Blackboard sub-team.
+ *
+ * AgentTask label whose value carries the *root* task UID. Root
+ * tasks themselves carry no label; the job-spec falls back to
+ * `task.metadata.uid` when the label is absent. Children get the
+ * parent's resolved root-uid stamped on by K8sTaskCreator at child-
+ * create time so a deep spawn tree shares ONE bucket across every
+ * descendant. Read by `buildJobSpec` to emit
+ * `KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>` on every spawned
+ * pod's env. Per-task-tree NATS KV bucket lifecycle lives in
+ * `blackboard-router.ts` + `@kagent/blackboard`.
+ */
+export const ROOT_TASK_UID_LABEL = 'kagent.knuteson.io/root-task-uid';
+
+/**
  * Single env-var entry on a spawned Job. Either an inline plaintext
  * value or a `valueFrom.secretKeyRef` pointing at an existing Secret in
  * the AgentTask's namespace.
@@ -385,6 +400,27 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   // in-pod `get_my_context()` and the spawn-tool cap check.
   const taskDepth = parseTaskDepthLabel(task.metadata.labels?.[TASK_DEPTH_LABEL]);
 
+  // v0.4.1-blackboard — Wave 3 / Blackboard sub-team.
+  // Per-task-tree NATS KV bucket env. The bucket is named
+  // `kagent-kv-<root-uid>` where root-uid is read from the
+  // `ROOT_TASK_UID_LABEL` (stamped by K8sTaskCreator on every spawned
+  // child) OR `task.metadata.uid` itself for root tasks. Empty string
+  // when no UID is available (defensive — pre-K8s-persist task can't
+  // have a bucket; the agent-pod's main.ts main-loop sees an empty
+  // `KAGENT_BLACKBOARD_BUCKET` and skips registering blackboard tools).
+  const labeledRootUid = task.metadata.labels?.[ROOT_TASK_UID_LABEL];
+  const ownUid = task.metadata.uid;
+  const blackboardRootUid =
+    typeof labeledRootUid === 'string' && labeledRootUid.length > 0
+      ? labeledRootUid
+      : typeof ownUid === 'string' && ownUid.length > 0
+        ? ownUid
+        : undefined;
+  const blackboardEnv: { name: string; value: string }[] =
+    blackboardRootUid !== undefined
+      ? [{ name: 'KAGENT_BLACKBOARD_BUCKET', value: `kagent-kv-${blackboardRootUid}` }]
+      : [];
+
   // v0.1.8 — secret-hygiene. Each env entry is one of:
   //   - inline plaintext: { name, value }
   //   - secret-ref:       { name, valueFrom: { secretKeyRef: { name, key } } }
@@ -431,6 +467,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_TASK_DEPTH', value: String(taskDepth) },
     ...artifactEnv,
     ...traceparentEnv,
+    ...blackboardEnv,
     ...(opts.extraEnv ?? []).map((e): RenderedEnv => {
       // Discriminate by presence of valueFrom. The EnvVarSpec union
       // makes the two arms mutually exclusive; we forward the

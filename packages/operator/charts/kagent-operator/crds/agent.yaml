@@ -302,6 +302,19 @@ spec:
                       items:
                         type: string
                         minLength: 1
+                    blackboard:
+                      type: object
+                      properties:
+                        read:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                        write:
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
                 # ---- v0.3.1-supervision — Wave 2 / Supervision sub-team.
                 supervisionStrategy:
                   type: string
