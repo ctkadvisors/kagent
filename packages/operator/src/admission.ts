@@ -78,6 +78,45 @@ export const AGENT_LABEL = 'kagent.knuteson.io/agent';
  * ===================================================================== */
 
 /**
+ * v0.1.9 — read the operator-stamped `KAGENT_TASK_DEPTH` env off a Job.
+ * Mirror of `extractModelFromJob`; reuses the single source of truth
+ * from `job-spec.ts:buildJobSpec`. Returns `0` (root) when the env is
+ * missing or malformed — same fail-closed posture as the agent-pod
+ * `parseTaskDepth` and operator `parseTaskDepthLabel`.
+ */
+export function extractTaskDepthFromJob(job: V1Job): number {
+  const containers = job.spec?.template?.spec?.containers;
+  if (!Array.isArray(containers) || containers.length === 0) return 0;
+  const env = containers[0]?.env;
+  if (!Array.isArray(env)) return 0;
+  const depthEnv = env.find((e) => e.name === 'KAGENT_TASK_DEPTH');
+  const value = depthEnv?.value;
+  if (typeof value !== 'string' || value.length === 0) return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
+  return n;
+}
+
+/**
+ * v0.1.9 — find suspended Jobs whose decoded depth exceeds `maxDepth`.
+ * The operator's reconciler uses this to enumerate Jobs to mark Failed
+ * (with `policy_denied:depth_exceeded`) so they don't sit suspended
+ * forever waiting for capacity that should never come. Returns an
+ * empty list when `maxDepth` is undefined (cap opt-in).
+ */
+export function findDepthViolatingJobs(
+  jobs: readonly V1Job[],
+  maxDepth: number | undefined,
+): readonly V1Job[] {
+  if (maxDepth === undefined) return [];
+  const out: V1Job[] = [];
+  for (const job of jobs) {
+    if (extractTaskDepthFromJob(job) > maxDepth) out.push(job);
+  }
+  return out;
+}
+
+/**
  * Decode the model name from a Job's `KAGENT_AGENT_SPEC` env var.
  * Returns undefined when the env is missing, malformed JSON, or
  * doesn't carry a `model` field.
@@ -191,6 +230,16 @@ export interface SelectAdmittableInput {
   readonly modelEndpoints: ReadonlyMap<string, ModelEndpoint>;
   /** Per-Agent maxInFlightTasks override (Agent.spec.maxInFlightTasks). Absent agent = no cap. */
   readonly agentMaxInFlight: ReadonlyMap<string, number>;
+  /**
+   * v0.1.9 — cluster-level depth cap. When set, suspended Jobs whose
+   * decoded `KAGENT_TASK_DEPTH` exceeds the cap are skipped (never
+   * un-suspended). Mirror of the in-pod spawn-tool guardrail; the
+   * operator's reconciler additionally walks `findDepthViolatingJobs`
+   * to mark the underlying AgentTasks Failed. Undefined = no cap
+   * (back-compat with installs that haven't set
+   * KAGENT_AGENT_POD_MAX_DEPTH on the operator deployment).
+   */
+  readonly maxDepth?: number;
 }
 
 /**
@@ -216,7 +265,7 @@ export interface SelectAdmittableInput {
  *        (so subsequent decisions account for this admission).
  */
 export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[] {
-  const { suspendedJobs, runningJobs, modelEndpoints, agentMaxInFlight } = input;
+  const { suspendedJobs, runningJobs, modelEndpoints, agentMaxInFlight, maxDepth } = input;
 
   // Initialize live counters from currently-running Jobs.
   // Skip terminal Jobs — Kubernetes leaves succeeded/failed Jobs
@@ -249,6 +298,13 @@ export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[
     const namespace = job.metadata?.namespace ?? 'default';
     const name = job.metadata?.name;
     if (typeof name !== 'string' || name.length === 0) continue;
+
+    // v0.1.9 — cluster-level depth cap. When set, skip Jobs that exceed
+    // it; the reconciler's `runEvaluatePass` separately walks
+    // `findDepthViolatingJobs` and marks the underlying AgentTasks
+    // Failed so the Job doesn't sit suspended forever. Cheaper than
+    // the model lookup → run first.
+    if (maxDepth !== undefined && extractTaskDepthFromJob(job) > maxDepth) continue;
 
     const model = extractModelFromJob(job);
     if (model === undefined) continue; // fail-closed
@@ -341,6 +397,30 @@ export interface AdmissionDeps {
   readonly listModelEndpoints: ModelEndpointLister;
   readonly lookupAgent: AgentLookupFn;
   readonly unsuspendJob: UnsuspendJobFn;
+  /**
+   * v0.1.9 — cluster-level cap on AgentTask spawn-tree depth. Sourced
+   * from `KAGENT_AGENT_POD_MAX_DEPTH` on the operator deployment.
+   * When set, the admission scheduler skips suspended Jobs whose
+   * decoded `KAGENT_TASK_DEPTH` exceeds the cap, AND
+   * `runEvaluatePass` walks `findDepthViolatingJobs` to mark the
+   * underlying AgentTasks Failed via `markTaskFailed`. Undefined =
+   * no cap (back-compat).
+   */
+  readonly maxDepth?: number;
+  /**
+   * v0.1.9 — callback that marks an AgentTask Failed when its Job
+   * exceeds the cluster depth cap. Wired in main.ts to
+   * `markAgentTaskFailedFromExternal` so the resulting status patch
+   * passes through the existing WS-E condition-merge pipeline. Tests
+   * inject a spy. When undefined, depth-violating Jobs are still
+   * skipped at admission but their AgentTasks aren't actively
+   * Failed — they just stay suspended forever (which is also the
+   * pre-v0.1.9 behavior for any unschedulable Job).
+   */
+  readonly markTaskFailed?: (
+    ref: { readonly namespace: string; readonly name: string },
+    reason: string,
+  ) => Promise<void>;
 }
 
 export interface AdmissionSummary {
@@ -411,6 +491,36 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
   let conflicts = 0;
   let skipped = 0;
   let errors = 0;
+
+  // v0.1.9 — sweep depth-violators. List all suspended Jobs whose
+  // decoded KAGENT_TASK_DEPTH exceeds the cluster cap and (when
+  // `markTaskFailed` is wired) mark the underlying AgentTasks Failed
+  // with `policy_denied:depth_exceeded`. The Job's name is the
+  // task UID-derived `kat-<uid>`; we recover the AgentTask via the
+  // operator-stamped `kagent.knuteson.io/task` label. Errors are
+  // logged + counted but never thrown — the marking is best-effort
+  // and the `selectAdmittable` skip below is a hard backstop.
+  if (deps.maxDepth !== undefined && deps.markTaskFailed !== undefined) {
+    const allJobs = deps.listJobs();
+    const suspended = allJobs.filter((j) => j.spec?.suspend === true);
+    const violators = findDepthViolatingJobs(suspended, deps.maxDepth);
+    for (const job of violators) {
+      const ns = job.metadata?.namespace ?? 'default';
+      const taskName = job.metadata?.labels?.['kagent.knuteson.io/task'];
+      if (typeof taskName !== 'string' || taskName.length === 0) continue;
+      const depth = extractTaskDepthFromJob(job);
+      const reason = `policy_denied:depth_exceeded — depth=${String(depth)} exceeds cluster cap=${String(deps.maxDepth)} (KAGENT_AGENT_POD_MAX_DEPTH)`;
+      try {
+        await deps.markTaskFailed({ namespace: ns, name: taskName }, reason);
+      } catch (err) {
+        console.error(
+          `[kagent-operator] admission: failed to mark depth-violating AgentTask ${ns}/${taskName} Failed:`,
+          err,
+        );
+        errors++;
+      }
+    }
+  }
 
   // Snapshot 1 — initial decision pass.
   const decision1 = computeDecision(deps);
@@ -532,6 +642,7 @@ function computeDecision(deps: AdmissionDeps): DecisionPass {
     runningJobs,
     modelEndpoints,
     agentMaxInFlight,
+    ...(deps.maxDepth !== undefined && { maxDepth: deps.maxDepth }),
   });
 
   // "Skipped" = suspended Jobs we did NOT admit. Useful for
