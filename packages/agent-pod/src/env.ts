@@ -217,6 +217,21 @@ export interface PodConfig {
    * values (negative / non-integer) parse to 0 — fail-closed.
    */
   readonly taskDepth: number;
+  /**
+   * v0.4.1-blackboard — Wave 3 / Blackboard sub-team. The resolved
+   * root-task UID for this task's tree. Set on root tasks to their
+   * own UID; children inherit from the operator-stamped
+   * `KAGENT_BLACKBOARD_BUCKET` (which carries `kagent-kv-<root-uid>`).
+   * Surfaced here so K8sTaskCreator's `parent.rootUid` field is
+   * populated when this pod spawns children — every descendant
+   * shares the same bucket.
+   *
+   * Optional: legacy pods without the env entry (or before Wave 3
+   * lands fully) carry `undefined` and the spawn path treats the
+   * parent's own UID as the new root, which is the same behavior as
+   * before Wave 3 — fail-back-compat.
+   */
+  readonly rootTaskUid?: string;
 }
 
 const DEFAULT_LITELLM_BASE_URL = 'http://litellm.kagent-system.svc.cluster.local:4000/v1';
@@ -266,6 +281,12 @@ export function parseEnv(
   const logLevel = env.LOG_LEVEL === 'debug' ? 'debug' : 'info';
   const traceContentMode = parseTraceContentMode(env.KAGENT_TRACE_CONTENT_MODE);
   const taskDepth = parseTaskDepth(env.KAGENT_TASK_DEPTH);
+  // v0.4.1-blackboard — derive the root-task UID from the
+  // `KAGENT_BLACKBOARD_BUCKET` env (operator stamps
+  // `kagent-kv-<root-uid>`). When the env is absent (pre-Wave 3
+  // deploy or local dev), rootTaskUid is undefined; downstream code
+  // treats the parent UID as the root for spawn purposes.
+  const rootTaskUid = parseRootTaskUidFromBucket(env.KAGENT_BLACKBOARD_BUCKET);
 
   const config: PodConfig = {
     taskId,
@@ -281,6 +302,7 @@ export function parseEnv(
     logLevel,
     traceContentMode,
     taskDepth,
+    ...(rootTaskUid !== undefined && { rootTaskUid }),
   };
   return config;
 }
@@ -297,6 +319,22 @@ export function parseTaskDepth(raw: string | undefined): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
   return n;
+}
+
+/**
+ * v0.4.1-blackboard — Parse the root-task UID out of
+ * `KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>`. Returns undefined
+ * when the env is absent / malformed. Defensive: an unparseable value
+ * silently maps to undefined rather than throwing — the agent loop
+ * runs without blackboard tools rather than refusing to boot.
+ * Exported for unit tests.
+ */
+export function parseRootTaskUidFromBucket(raw: string | undefined): string | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const prefix = 'kagent-kv-';
+  if (!raw.startsWith(prefix)) return undefined;
+  const rest = raw.slice(prefix.length);
+  return rest.length > 0 ? rest : undefined;
 }
 
 /**

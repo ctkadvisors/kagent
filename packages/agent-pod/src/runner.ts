@@ -116,6 +116,15 @@ export interface RunDeps {
    */
   readonly spawnTools?: ToolProvider;
   /**
+   * v0.4.1-blackboard — Wave 3 Blackboard sub-team. Provider hosting
+   * the four blackboard tools. Wired by main.ts when
+   * `KAGENT_BLACKBOARD_BUCKET` + `KAGENT_NATS_URL` are set. Appended
+   * to the resolved provider list alongside `spawnTools`. When
+   * undefined, the four tools are absent — the LLM never sees them
+   * even if `Agent.spec.tools` lists them.
+   */
+  readonly blackboardTools?: ToolProvider;
+  /**
    * v0.1.6 — Langfuse-managed prompt fetcher. Production wires this
    * in main.ts from KAGENT_LANGFUSE_HOST + creds (see
    * `buildLangfusePromptFetcher`). Tests inject directly. When the
@@ -342,6 +351,11 @@ export function resolveToolProviders(config: PodConfig, deps: RunDeps): readonly
   const builtin = resolveBuiltinTools(config.agentSpec.tools);
   if (builtin !== null) out.push(builtin);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
+  // v0.4.1-blackboard — Wave 3 Blackboard sub-team. Appended after
+  // spawn tools so a tool-name collision (none today, but defense in
+  // depth) would surface from this provider, matching the
+  // "spawn-then-blackboard" mental order in main.ts logs.
+  if (deps.blackboardTools !== undefined) out.push(deps.blackboardTools);
   return out;
 }
 

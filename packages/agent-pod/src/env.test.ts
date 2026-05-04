@@ -141,6 +141,48 @@ describe('parseEnv', () => {
     });
   });
 
+  /* =====================================================================
+   * v0.4.1-blackboard — Wave 3 Blackboard sub-team.
+   *
+   * `KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>` is stamped by the
+   * operator's job-spec render path. parseEnv extracts the
+   * `<root-uid>` portion onto `PodConfig.rootTaskUid` so
+   * K8sTaskCreator's spawn path can stamp the same root UID on every
+   * descendant. Defensive: a missing or malformed env value silently
+   * maps to undefined — the agent loop runs without blackboard tools
+   * rather than refusing to boot.
+   * ===================================================================== */
+  describe('KAGENT_BLACKBOARD_BUCKET', () => {
+    it('parses rootTaskUid from a well-formed bucket name', () => {
+      const cfg = parseEnv({
+        ...baseEnv,
+        KAGENT_BLACKBOARD_BUCKET: 'kagent-kv-abc-123',
+      });
+      expect(cfg.rootTaskUid).toBe('abc-123');
+    });
+
+    it('leaves rootTaskUid undefined when env unset', () => {
+      const cfg = parseEnv(baseEnv);
+      expect(cfg.rootTaskUid).toBeUndefined();
+    });
+
+    it('leaves rootTaskUid undefined when bucket name has wrong prefix', () => {
+      const cfg = parseEnv({
+        ...baseEnv,
+        KAGENT_BLACKBOARD_BUCKET: 'other-prefix-abc',
+      });
+      expect(cfg.rootTaskUid).toBeUndefined();
+    });
+
+    it('leaves rootTaskUid undefined for the bare prefix', () => {
+      const cfg = parseEnv({
+        ...baseEnv,
+        KAGENT_BLACKBOARD_BUCKET: 'kagent-kv-',
+      });
+      expect(cfg.rootTaskUid).toBeUndefined();
+    });
+  });
+
   describe('KAGENT_TRACE_CONTENT_MODE', () => {
     it('defaults to preview when unset', () => {
       expect(parseEnv(baseEnv).traceContentMode).toBe('preview');
@@ -209,9 +251,7 @@ describe('parseEnv', () => {
     it('falls back to env JSON when ConfigMap files are absent (back-compat)', () => {
       const reader: (path: string) => string | undefined = () => undefined;
       const cfg = parseEnv(baseEnv, reader);
-      expect(cfg.agentSpec.model).toBe(
-        'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-      );
+      expect(cfg.agentSpec.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
     });
 
     it('boot-fails with descriptive error when both file path and env are absent', () => {
