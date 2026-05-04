@@ -29,6 +29,7 @@
     "@kagent/agent-loop": "workspace:*",
     "@kagent/audit-events": "workspace:*",
     "@kagent/capability-types": "workspace:*",
+    "@kagent/events": "workspace:*",
     "@kagent/supervision": "workspace:*",
     "@kagent/triggers": "workspace:*",
     "@kubernetes/client-node": "1.4.0",

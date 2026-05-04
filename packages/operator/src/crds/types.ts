@@ -244,6 +244,86 @@ export interface AgentSpec {
    * application is genuinely transient-failure prone.
    */
   readonly maxRestarts?: number;
+
+  /* ---- v0.4.0-events — Wave 3 / Events sub-team.
+   * Typed pub/sub registration on the `kagent.events.*` JetStream
+   * stream per docs/SUBSTRATE-V1.md §3.7 + WAVES.md §5.1. Each entry
+   * is a CONCRETE topic (no NATS wildcards — the cap claim list is
+   * the glob authority). Admission validates the topic ⊆ the same
+   * Agent's `capabilityClaims.publish` / `capabilityClaims.subscribe`
+   * glob list — fail-closed on a topic outside the claim. */
+
+  /**
+   * Topics this Agent's tasks may publish to via the in-pod
+   * `publish_event` built-in tool. Each topic is exact (validated by
+   * `@kagent/events:validateTopic`) and MUST be admitted by
+   * `capabilityClaims.publish` — admission refuses otherwise with
+   * `reason: 'invalid_publishes'`.
+   */
+  readonly publishes?: readonly EventPublishDecl[];
+
+  /**
+   * Topics this Agent subscribes to. The operator's Wave 3 events
+   * dispatcher provisions a NATS pull-consumer per entry; on
+   * delivery, mints an AgentTask whose payload (or
+   * `inputs[trigger.inputBinding]` when set) carries the event's
+   * `data` field. Each topic MUST be admitted by
+   * `capabilityClaims.subscribe`.
+   */
+  readonly subscribes?: readonly EventSubscribeDecl[];
+}
+
+/* =====================================================================
+ * v0.4.0-events — Wave 3 / Events sub-team.
+ *
+ * Two declarative entries on `Agent.spec` express the Agent's pub/sub
+ * footprint. They mirror the example shape in docs/SUBSTRATE-V1.md
+ * §3.7 + WAVES.md §5.1 deliverable 1. Schema (JSON-Schema'd payload)
+ * is OPTIONAL at the CRD level — the substrate's CloudEvents envelope
+ * always wraps the payload regardless; per-topic application
+ * validators are the inner shape gate (registered via
+ * `@kagent/events:buildEventValidatorRegistry`).
+ * ===================================================================== */
+
+export interface EventPublishDecl {
+  /**
+   * Concrete topic — `[a-z0-9_-]+(\.[a-z0-9_-]+)*`, no NATS wildcards.
+   * Validated by `@kagent/events:validateTopic`.
+   */
+  readonly topic: string;
+  /**
+   * Optional JSON-Schema (or a forward-compat opaque object)
+   * describing the payload shape. Substrate-opaque at v0.4.0 — the
+   * Wave 3 brief carves payload schema gates as application-layer.
+   * The CRD persists the field verbatim so consumers can introspect
+   * publishers' declared schemas via `kubectl get agents -o yaml`.
+   */
+  readonly schema?: Readonly<Record<string, unknown>>;
+}
+
+export interface EventSubscribeDecl {
+  /** Same dialect + validator as `publishes[].topic`. */
+  readonly topic: string;
+  /** Optional JSON-Schema; substrate-opaque (see `EventPublishDecl.schema`). */
+  readonly schema?: Readonly<Record<string, unknown>>;
+  /**
+   * Operator-side trigger config — what the dispatcher does when an
+   * event arrives. Mirrors the `Wave 0 Entry` / `KagentSchedule`
+   * pattern: declare which Agent to mint, optionally bind the
+   * payload into a typed input (Wave 1 typed-I/O).
+   */
+  readonly trigger?: EventSubscribeTrigger;
+}
+
+export interface EventSubscribeTrigger {
+  /**
+   * Optional input-binding name. When set, the dispatcher renders
+   * `AgentTask.spec.inputs[<inputBinding>] = { scalar: <event.data> }`
+   * so the agent loop receives the payload through the Wave 1 typed-
+   * input pipeline. When unset, the event's `data` is forwarded as
+   * `AgentTask.spec.payload` (legacy / opaque path).
+   */
+  readonly inputBinding?: string;
 }
 
 /**

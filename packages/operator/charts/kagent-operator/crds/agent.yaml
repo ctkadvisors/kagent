@@ -329,6 +329,50 @@ spec:
                     time supervision restarts a task; once
                     restartCount >= maxRestarts the operator
                     fails-closed with reason=restart_limit_exceeded.
+                # ---- v0.4.0-events — Wave 3 / Events sub-team.
+                publishes:
+                  type: array
+                  description: |
+                    Topics this Agent's tasks may emit on via the
+                    in-pod publish_event tool. Topic ⊆
+                    capabilityClaims.publish (admission validates).
+                  items:
+                    type: object
+                    required:
+                      - topic
+                    properties:
+                      topic:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      schema:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                subscribes:
+                  type: array
+                  description: |
+                    Topics this Agent's tasks subscribe to. Operator
+                    provisions a NATS pull-consumer per entry; on
+                    delivery, mints an AgentTask. Topic ⊆
+                    capabilityClaims.subscribe.
+                  items:
+                    type: object
+                    required:
+                      - topic
+                    properties:
+                      topic:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      schema:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      trigger:
+                        type: object
+                        properties:
+                          inputBinding:
+                            type: string
+                            minLength: 1
       additionalPrinterColumns:
         - name: Model
           type: string

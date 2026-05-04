@@ -259,6 +259,76 @@ spec:
                     restartCount >= maxRestarts the operator
                     fails-closed with reason=restart_limit_exceeded.
                     Setting 0 disables restarts entirely.
+                # ---- v0.4.0-events — Wave 3 / Events sub-team.
+                # Pub/sub on `kagent.events.*` per
+                # docs/SUBSTRATE-V1.md §3.7 + WAVES.md §5.1.
+                # Topics are CONCRETE (no NATS wildcards); the cap
+                # claim list is the glob authority — admission
+                # validates each topic ⊆ claims.publish / .subscribe.
+                publishes:
+                  type: array
+                  description: |
+                    Topics this Agent's tasks may emit on via the
+                    in-pod publish_event tool. Each topic MUST be
+                    admitted by capabilityClaims.publish — admission
+                    refuses with reason=invalid_publishes otherwise.
+                  items:
+                    type: object
+                    required:
+                      - topic
+                    properties:
+                      topic:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                        description: |
+                          Concrete topic — [a-z0-9_-]+(\.[a-z0-9_-]+)*.
+                          No NATS wildcards (* / >).
+                      schema:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        description: |
+                          Optional JSON-Schema describing the payload
+                          shape. Substrate-opaque at v0.4.0;
+                          consumers introspect via
+                          kubectl get agents -o yaml.
+                subscribes:
+                  type: array
+                  description: |
+                    Topics this Agent's tasks subscribe to. The
+                    operator provisions a NATS pull-consumer per
+                    entry; on delivery, mints an AgentTask whose
+                    payload (or inputs[trigger.inputBinding] when
+                    set) carries the event's data.
+                  items:
+                    type: object
+                    required:
+                      - topic
+                    properties:
+                      topic:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      schema:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      trigger:
+                        type: object
+                        description: |
+                          Operator-side trigger config — input
+                          binding for typed I/O (Wave 1).
+                        properties:
+                          inputBinding:
+                            type: string
+                            minLength: 1
+                            description: |
+                              When set, the dispatcher renders
+                              AgentTask.spec.inputs[<inputBinding>]
+                              = { scalar: <event.data> } so the
+                              agent loop receives the payload via
+                              the Wave 1 typed-input pipeline.
+                              When unset, event.data is forwarded
+                              as AgentTask.spec.payload.
       additionalPrinterColumns:
         - name: Model
           type: string

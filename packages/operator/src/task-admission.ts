@@ -402,3 +402,69 @@ export function deriveIdempotencyKey(
 /** Compute the hash over the task's bound inputs + payload. Re-export
  * via the typed-IO surface so admission callers only need one import. */
 export { hashTaskInputs };
+
+/* =====================================================================
+ * v0.4.0-events — Wave 3 / Events sub-team admission validator.
+ *
+ * Walks `Agent.spec.publishes[]` + `Agent.spec.subscribes[]` and
+ * confirms every topic is admitted by the same Agent's
+ * `capabilityClaims.publish` / `.subscribe` glob list. Refusal lands
+ * as `reason: 'invalid_publishes'` / `'invalid_subscribes'` so the
+ * substrate's structured-cause discipline holds — operators see
+ * which topic violated the cap, not just "the Agent CR was
+ * rejected".
+ *
+ * Same defense-in-depth pattern as the in-pod publish_event tool:
+ * cap-claim is the GLOB authority; publishes/subscribes are CONCRETE
+ * topics. Rejecting at admission keeps malformed Agent specs out of
+ * the cluster before any Job is ever materialized.
+ * ===================================================================== */
+
+import type { EventTopicSubsetViolation } from '@kagent/events';
+import { topicSubsetViolations } from '@kagent/events';
+
+export type EventTopicsValidation =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: 'InvalidEventTopics';
+      readonly message: string;
+      readonly violations: readonly EventTopicSubsetViolation[];
+    };
+
+/**
+ * Validate every `Agent.spec.publishes[].topic` ⊆
+ * `capabilityClaims.publish` AND every
+ * `Agent.spec.subscribes[].topic` ⊆ `capabilityClaims.subscribe`.
+ * Returns `ok: true` for Agents that declare neither (back-compat
+ * with pre-Wave-3 Agents).
+ *
+ * Used by the Agent admission path AND the AgentTask admission path
+ * (the latter so a stale Agent informer cache doesn't slip an
+ * unauthorized topic past once admission already accepted the Agent
+ * CR but its claims tightened in a later GitOps update).
+ */
+export function validateEventTopicsAgainstClaims(agent: Agent | AgentSpec): EventTopicsValidation {
+  const spec = 'spec' in agent ? agent.spec : agent;
+  const publishes = (spec.publishes ?? []).map((p) => p.topic);
+  const subscribes = (spec.subscribes ?? []).map((s) => s.topic);
+  if (publishes.length === 0 && subscribes.length === 0) return { ok: true };
+  const claims = spec.capabilityClaims ?? {};
+  const violations = topicSubsetViolations({
+    publishes,
+    subscribes,
+    ...(claims.publish !== undefined && { publishClaims: claims.publish }),
+    ...(claims.subscribe !== undefined && { subscribeClaims: claims.subscribe }),
+  });
+  if (violations.length === 0) return { ok: true };
+  const lines = violations.map(
+    (v) =>
+      `${v.category} topic "${v.topic}" → ${v.reason === 'invalid_topic' ? 'malformed' : 'not admitted by claims'}`,
+  );
+  return {
+    ok: false,
+    reason: 'InvalidEventTopics',
+    message: `Agent.spec.publishes/subscribes admission failed: ${lines.join('; ')}`,
+    violations,
+  };
+}
