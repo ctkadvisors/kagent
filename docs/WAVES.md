@@ -308,7 +308,7 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 All five sub-teams are mostly independent. Some share NATS JetStream as backbone; coordination is on subject namespacing.
 
-### 5.1 Sub-team: Events
+### 5.1 Sub-team: Events ✓ SHIPPED v0.4.0-events
 
 **Releases:** `v0.4.0-events`
 **Owns:** new `packages/events`, NATS JetStream stream provisioning, `Agent.spec.publishes/subscribes` schema
@@ -321,6 +321,8 @@ All five sub-teams are mostly independent. Some share NATS JetStream as backbone
 5. Trigger integration: an event subscription can mint an AgentTask via the Wave 0 Entry plumbing
 
 **Validation:** agent A publishes; agent B subscribes; B's AgentTask is minted on each event; cap denies cross-tenant subscribe.
+
+**Status:** SHIPPED — `@kagent/events` package (CloudEvents v1.0 envelope, `validateTopic` lowercase reverse-DNS dialect, `EventValidator` registry, `EventPublisher` with cap-claim glob gate + best-effort infra contract, `EventDispatcher` with idempotent `applySubscriptions` + per-(agent, topic) durable pull-consumer + nak-on-error); `Agent.spec.publishes[] / subscribes[]` extension across `crds/types.ts` + manifest CRD YAML + chart CRD YAML; `validateEventTopicsAgainstClaims` admission validator (returns structured `EventTopicSubsetViolation[]` with `not_admitted_by_claims | invalid_topic` reasons); `definePublishEvent` agent-pod tool (declared-publishes membership check + cap-claim subset check + 64KiB payload cap + `policy_denied:` taxonomy mirroring spawn-tool); operator-side `events-bootstrap.ts` (idempotent stream provision over `JetStreamManager.streams.add/update`; `buildNatsPullConsumerFactory` over `consumer.consume({ callback })`; `buildEventTriggerAgentTaskCreator` rendering `AgentTask.spec.inputs[<inputBinding>] = { scalar: event.data }` for the typed-input pipeline or as `spec.payload` legacy path); operator main.ts Wave 3 events block (Agent informer + 30s reapply tick); Helm `events:` values block + `KAGENT_EVENTS_*` env wiring + spawned-Job env forwarding (`KAGENT_EVENTS_NATS_URL`). Tests: `@kagent/events` 53; `@kagent/operator` 829 (+5); `@kagent/agent-pod` 332 (+8). Subject namespace `kagent.events.*` locked (Blackboard owns `kagent.kv.*`, Audit owns `audit.*`).
 
 ### 5.2 Sub-team: Blackboard
 

@@ -58,6 +58,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/events':
+        specifier: workspace:*
+        version: link:../events
       '@kagent/in-process-tool-provider':
         specifier: workspace:*
         version: link:../in-process-tool-provider
@@ -111,6 +114,15 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+
+  packages/events:
+    dependencies:
+      '@kagent/capability-types':
+        specifier: workspace:*
+        version: link:../capability-types
+      nats:
+        specifier: 2.29.3
+        version: 2.29.3
 
   packages/http-tool-provider:
     dependencies:
@@ -170,6 +182,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/events':
+        specifier: workspace:*
+        version: link:../events
       '@kagent/supervision':
         specifier: workspace:*
         version: link:../supervision
