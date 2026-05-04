@@ -1,0 +1,102 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Wave 4 — Versioning (v0.5.3-versioning) — Agent immutability admission
+webhook. Per docs/WAVES.md §6.4 deliverable 2:
+
+  - The webhook validator (`@kagent/versioning-controller`'s
+    `validateAgentMutation`) refuses any post-publication mutation to
+    `Agent.spec.*`. The operator serves the validator over an HTTPS
+    endpoint at `https://<service>.<release-ns>.svc:443/validate-agents`.
+
+  - This template materializes the ValidatingWebhookConfiguration that
+    routes UPDATEs of Agent CRs to that endpoint. The cert is provisioned
+    by cert-manager (the chart leans on cert-manager for serving certs
+    rather than implementing a bootstrap-cert dance — homelab K3s already
+    has cert-manager via new_localai/).
+
+DEFAULT-OFF — gated on `versioning.enabled`. Cluster operators verify
+the cert plumbing BEFORE flipping `versioning.enabled: true`. Setting
+`versioning.webhook.failurePolicy: Ignore` during initial roll-out lets
+the operator deploy without breaking GitOps when the webhook isn't yet
+healthy; flip back to `Fail` once verified.
+
+Audit emission:
+  - `agent.mutation_refused` — fired by the operator's webhook handler
+    each time the validator returns a refusal. Catalog growth from
+    30 → 33 in `@kagent/audit-events` (this Wave 4 sub-team).
+*/}}
+{{- if .Values.versioning.enabled -}}
+{{- $serviceName := .Values.versioning.webhook.serviceName | default (printf "%s-versioning" (include "kagent-operator.fullname" .)) -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-versioning
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: versioning-webhook
+  {{- with .Values.versioning.webhook.certIssuer }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-versioning-cert" $.Release.Namespace (include "kagent-operator.fullname" $) | quote }}
+  {{- end }}
+webhooks:
+  - name: agents.versioning.kagent.knuteson.io
+    admissionReviewVersions: ['v1']
+    sideEffects: None
+    timeoutSeconds: 10
+    failurePolicy: {{ .Values.versioning.webhook.failurePolicy | default "Fail" | quote }}
+    rules:
+      - apiGroups: ['kagent.knuteson.io']
+        apiVersions: ['v1alpha1']
+        operations: ['UPDATE']
+        resources: ['agents']
+        scope: 'Namespaced'
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace }}
+        name: {{ $serviceName | quote }}
+        path: '/validate-agents'
+        port: 443
+{{- if .Values.versioning.webhook.certIssuer }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $serviceName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: versioning-webhook
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: {{ .Values.versioning.webhook.port }}
+      protocol: TCP
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-versioning-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: versioning-webhook
+spec:
+  # Mounted via Secret-volume on the operator Deployment at /tls
+  # when versioning.enabled=true. The operator picks the cert up
+  # from KAGENT_VERSIONING_TLS_CERT / KAGENT_VERSIONING_TLS_KEY
+  # paths to bind the HTTPS server.
+  secretName: {{ include "kagent-operator.fullname" . }}-versioning-tls
+  dnsNames:
+    - {{ printf "%s.%s.svc" $serviceName .Release.Namespace }}
+    - {{ printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace }}
+  issuerRef:
+    name: {{ .Values.versioning.webhook.certIssuer | quote }}
+    kind: {{ .Values.versioning.webhook.certIssuerKind | default "Issuer" | quote }}
+{{- end }}
+{{- end }}

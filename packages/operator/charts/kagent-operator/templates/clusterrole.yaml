@@ -214,3 +214,24 @@ rules:
     resources: ['namespaces']
     verbs: ['get', 'list', 'watch']
   # ---------------------------------------------------------------------
+  # Wave 4 — Versioning (v0.5.3-versioning)
+  # ---------------------------------------------------------------------
+  # The Versioning sub-team:
+  #   - Reads Agent CRs (already covered by the agents:list,watch verb
+  #     above used by the per-Agent maxInFlightTasks lookup); the
+  #     AgentVersionIndex hydrates from the SAME informer.
+  #   - Patches AgentTask.status.agentVersion (already covered by the
+  #     agenttasks/status:patch,update verbs above).
+  #   - Manages the cluster-scoped ValidatingWebhookConfiguration that
+  #     gates Agent updates. The operator's chart materializes the
+  #     resource at install time so the operator doesn't need
+  #     create/update verbs at runtime, BUT we declare them here for
+  #     forward-compat with a future runtime-bootstrapped variant +
+  #     so cluster admins reviewing the ClusterRole understand the
+  #     blast radius. Re-using `validatingwebhookconfigurations` verbs
+  #     for the operator's lifecycle keeps the substrate honest if
+  #     the Helm chart is bypassed (kustomize / argocd direct-apply).
+  - apiGroups: ['admissionregistration.k8s.io']
+    resources: ['validatingwebhookconfigurations']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch']
+  # ---------------------------------------------------------------------
