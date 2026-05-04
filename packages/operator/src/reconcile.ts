@@ -54,6 +54,7 @@ import {
   type Agent,
   type AgentTask,
   type AgentTaskCondition,
+  type OutputRef,
   isAgent,
 } from './crds/index.js';
 import type { CapabilityRegistry } from './capability-registry.js';
@@ -70,6 +71,13 @@ import {
   type ChildRef,
   type ParentStatusProjection,
 } from './task-graph.js';
+import {
+  IdempotencyCache,
+  deriveIdempotencyKey,
+  hashTaskInputs,
+  validateAgentTaskInputs,
+  validateRequiredOutputsPresent,
+} from './task-admission.js';
 
 export interface ReconcileDeps {
   readonly customApi: CustomObjectsApi;
@@ -119,6 +127,63 @@ export interface ReconcileDeps {
    * deployment, which `main.ts` reads + threads here.
    */
   readonly admissionControlEnabled?: boolean;
+
+  /* ---- v0.2.0-typed-io — Wave 1 / I/O sub-team.
+   * Idempotency-key dedupe + contract-violation audit. The cache is
+   * shared across reconciles — main.ts builds one and threads it
+   * here. Tests typically inject a fresh `new IdempotencyCache()`. */
+
+  /**
+   * Operator-local idempotency cache. When supplied AND the task has
+   * `spec.idempotencyKey` set, admission consults this BEFORE Job
+   * creation:
+   *   - hit + same input hash → mark Completed with the prior task's
+   *     cached outputs; emit `task.deduped`.
+   *   - hit + different input hash → mark Failed with
+   *     `reason: 'IdempotencyConflict'`.
+   *   - miss → store + proceed to normal admission.
+   * Absent / undefined = idempotency dedupe is OFF (back-compat).
+   */
+  readonly idempotencyCache?: IdempotencyCache;
+
+  /**
+   * Optional audit-emission hook for `contract.violated` events. Wave
+   * 0 Audit integration — main.ts wires this to the
+   * `@kagent/audit-events` AuditPublisher in production. Best-effort
+   * (the publisher swallows its own errors); a thrown promise here is
+   * caught + logged so a buggy override never breaks dispatch.
+   */
+  readonly emitContractViolated?: (fields: ContractViolatedAuditFields) => Promise<void>;
+
+  /**
+   * Optional audit-emission hook for `task.deduped` events fired by
+   * the idempotency cache replay path. Same best-effort contract.
+   */
+  readonly emitTaskDeduped?: (fields: TaskDedupedAuditFields) => Promise<void>;
+}
+
+/**
+ * Audit fields for `contract.violated` events (Wave 0 / Audit
+ * sub-team). Emitted on InvalidInputs (admission-time) AND
+ * MissingRequiredOutputs (terminal-time, when the agent-pod's
+ * Completed write doesn't satisfy the Agent.spec.outputs contract).
+ */
+export interface ContractViolatedAuditFields {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly reason: 'InvalidInputs' | 'MissingRequiredOutputs' | 'IdempotencyConflict';
+  readonly message: string;
+}
+
+export interface TaskDedupedAuditFields {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly idempotencyKey: string;
+  readonly originalTaskUid: string;
 }
 
 export interface ReconcileResult {
@@ -128,8 +193,23 @@ export interface ReconcileResult {
    * the admission reconciler (`admission.ts`). Status stays Pending
    * — the AgentTask transitions to Dispatched only when admission
    * un-suspends the Job.
+   *
+   * v0.2.0-typed-io additions:
+   * - `invalid-inputs`     → typed-input contract failed admission;
+   *                          task marked Failed with structured reason.
+   * - `idempotent-replay`  → idempotency cache hit (same input hash);
+   *                          task marked Completed with cached outputs.
+   * - `idempotency-conflict` → cache hit with DIFFERENT input hash;
+   *                          task marked Failed.
    */
-  readonly action: 'skipped' | 'dispatched' | 'admission-pending' | 'failed';
+  readonly action:
+    | 'skipped'
+    | 'dispatched'
+    | 'admission-pending'
+    | 'failed'
+    | 'invalid-inputs'
+    | 'idempotent-replay'
+    | 'idempotency-conflict';
   readonly reason?: string;
   readonly jobName?: string;
 }
@@ -158,6 +238,40 @@ export async function reconcileAgentTask(
     const reason = err instanceof Error ? err.message : String(err);
     await markFailed(task, reason, deps);
     return { action: 'failed', reason };
+  }
+
+  /* ---- v0.2.0-typed-io — Wave 1 / I/O sub-team.
+   * Step 2.1 — typed-input admission validation. Runs after Agent
+   * resolution so the validator has the target's spec.inputs[] in
+   * hand. On failure: mark AgentTask Failed with structured
+   * reason='InvalidInputs', emit `contract.violated` audit event,
+   * skip Job creation.
+   * Back-compat: a v0.1 Agent without inputs[] + a v0.1 task without
+   * inputs[] passes the validator trivially (empty contract). */
+  const inputValidation = validateAgentTaskInputs(agent, task);
+  if (!inputValidation.ok) {
+    await markFailed(
+      task,
+      `policy_denied:${inputValidation.reason} — ${inputValidation.message}`,
+      deps,
+    );
+    await emitContractViolatedSafe(deps, task, agent, {
+      reason: inputValidation.reason,
+      message: inputValidation.message,
+    });
+    return { action: 'invalid-inputs', reason: inputValidation.message };
+  }
+
+  /* ---- v0.2.0-typed-io — Wave 1 / I/O sub-team.
+   * Step 2.2 — idempotency-key dedupe. Operator-local in-memory cache
+   * keyed by (namespace, agent name, idempotencyKey). Cache miss
+   * (or no key set) → fall through to normal dispatch; cache hit
+   * with same input hash → mark Completed with cached outputs +
+   * emit `task.deduped`; cache hit with different input hash →
+   * mark Failed with `IdempotencyConflict`. */
+  const dedupeOutcome = await applyIdempotencyDedupe(task, agent, deps);
+  if (dedupeOutcome !== null) {
+    return dedupeOutcome;
   }
 
   // Step 3 — build + create the Job, SUSPENDED. K8s won't schedule
@@ -985,4 +1099,268 @@ function childRefArraysEqual(
     if (x.error !== y.error) return false;
   }
   return true;
+}
+
+/* =====================================================================
+ * v0.2.0-typed-io — typed-input + idempotency helpers.
+ * ===================================================================== */
+
+/**
+ * Apply the operator-local idempotency-key dedupe BEFORE Job creation.
+ * Returns:
+ *   - null            → cache disabled, key absent, or miss → caller
+ *                        proceeds with normal dispatch.
+ *   - 'idempotent-replay'    → cache hit (same input hash). Task
+ *                        has been marked Completed with cached
+ *                        outputs; caller short-circuits.
+ *   - 'idempotency-conflict' → cache hit (different input hash).
+ *                        Task marked Failed; caller short-circuits.
+ */
+async function applyIdempotencyDedupe(
+  task: AgentTask,
+  agent: Agent,
+  deps: ReconcileDeps,
+): Promise<ReconcileResult | null> {
+  if (deps.idempotencyCache === undefined) return null;
+  const agentName = agent.metadata.name ?? '';
+  const key = deriveIdempotencyKey(task, agentName);
+  if (key === null) return null;
+
+  const inputHash = hashTaskInputs(task);
+  const taskUid = task.metadata.uid ?? '';
+  const decision = deps.idempotencyCache.checkAndStore(key, inputHash, taskUid);
+
+  if (decision.kind === 'miss') return null;
+
+  if (decision.kind === 'replay') {
+    // Stripe-pattern replay: surface the cached outputs verbatim, mark
+    // Completed without ever invoking the agent loop. Best-effort
+    // status patch — informer relist re-fires reconcile if it failed.
+    await markCompletedFromIdempotentReplay(task, decision.outputs, deps);
+    await emitTaskDedupedSafe(deps, task, agent, key.idempotencyKey, decision.originalTaskUid);
+    return {
+      action: 'idempotent-replay',
+      reason: `replayed outputs from ${decision.originalTaskUid}`,
+    };
+  }
+
+  // conflict
+  const message =
+    `idempotencyKey '${key.idempotencyKey}' was first used by task ` +
+    `${decision.originalTaskUid} with a different input hash ` +
+    `(stored=${decision.storedHash}, incoming=${decision.incomingHash}); ` +
+    'idempotency requires same key + same inputs to dedupe.';
+  await markFailed(task, `policy_denied:IdempotencyConflict — ${message}`, deps);
+  await emitContractViolatedSafe(deps, task, agent, {
+    reason: 'IdempotencyConflict',
+    message,
+  });
+  return { action: 'idempotency-conflict', reason: message };
+}
+
+/**
+ * Mark a task Completed with the cached outputs from an idempotent
+ * replay. Mirrors the agent-pod's terminal status patch shape.
+ * Routed through `patchStatusWithRetry` for the standard 409 + WS-E
+ * regression-guard handling.
+ */
+async function markCompletedFromIdempotentReplay(
+  task: AgentTask,
+  outputs: readonly OutputRef[],
+  deps: ReconcileDeps,
+): Promise<void> {
+  const now = deps.now ?? (() => new Date());
+  const ts = now().toISOString();
+  try {
+    await patchStatusWithRetry(task, deps.customApi, (current) => {
+      const proposed = nextPhase(current.status?.phase, 'Completed');
+      if (proposed === null) return null;
+      return {
+        phase: proposed,
+        completedAt: ts,
+        observedGeneration: current.metadata.generation ?? 0,
+        outputs: [...outputs],
+        conditions: mergeCondition(current.status?.conditions, {
+          type: 'IdempotentReplay',
+          status: 'True',
+          reason: 'IdempotencyReplay',
+          message: 'replayed cached outputs from prior task with same idempotencyKey',
+          lastTransitionTime: ts,
+          ...(current.metadata.generation !== undefined && {
+            observedGeneration: current.metadata.generation,
+          }),
+        }),
+      };
+    });
+  } catch (err) {
+    console.error(
+      `[kagent-operator] failed to patch idempotent-replay status for ${task.metadata.namespace ?? '?'}/${task.metadata.name ?? '?'}:`,
+      err,
+    );
+  }
+}
+
+/**
+ * v0.2.0-typed-io — observe an agent-pod's `phase=Completed` status
+ * patch and validate that every required Agent output is present.
+ * When the contract is violated, force the AgentTask back to Failed
+ * via a raw merge-patch (bypassing WS-E's terminal-absorbing rule —
+ * this is the operator overriding the agent-pod's terminal write,
+ * which is structurally distinct from the regression cases WS-E
+ * guards against).
+ *
+ * Idempotent: re-firing on every relist is safe — the operator
+ * stamps a `MissingRequiredOutputs` condition the first time and
+ * the merge-patch with `phase: Failed` is a no-op once landed.
+ *
+ * Returns one of:
+ *   - 'no-op'           → phase != Completed, or no required outputs
+ *                          declared, or all required outputs present.
+ *   - 'forced-failed'   → required outputs missing; phase forced to
+ *                          Failed; audit emitted; cache cleared.
+ *   - 'cached-replay'   → required outputs present; if an idempotency
+ *                          cache is wired, the outputs are recorded
+ *                          for future replay.
+ */
+export async function enforceCompletionContract(
+  task: AgentTask,
+  agent: Agent,
+  deps: ReconcileDeps,
+): Promise<'no-op' | 'forced-failed' | 'cached-replay'> {
+  if (task.status?.phase !== 'Completed') return 'no-op';
+
+  const validation = validateRequiredOutputsPresent(agent, task.status.outputs);
+  if (validation.ok) {
+    // Successful Completed — record cached outputs for future replay
+    // when an idempotency key was used.
+    if (deps.idempotencyCache !== undefined) {
+      const agentName = agent.metadata.name ?? '';
+      const key = deriveIdempotencyKey(task, agentName);
+      if (key !== null) {
+        deps.idempotencyCache.recordOutputs(key, task.status.outputs ?? []);
+      }
+    }
+    return 'cached-replay';
+  }
+
+  // Contract violation — force Failed via raw merge-patch. Skip
+  // patchStatusWithRetry's nextPhase guard (Completed→Failed is the
+  // intended override here). Append the structured condition so
+  // observers see why.
+  const now = deps.now ?? (() => new Date());
+  const ts = now().toISOString();
+  const namespace = task.metadata.namespace ?? 'default';
+  const name = task.metadata.name;
+  if (typeof name !== 'string' || name.length === 0) return 'no-op';
+
+  const newCondition: AgentTaskCondition = {
+    type: 'MissingRequiredOutputs',
+    status: 'True',
+    reason: validation.reason,
+    message: validation.message,
+    lastTransitionTime: ts,
+    ...(task.metadata.generation !== undefined && {
+      observedGeneration: task.metadata.generation,
+    }),
+  };
+
+  try {
+    await deps.customApi.patchNamespacedCustomObjectStatus(
+      {
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace,
+        plural: 'agenttasks',
+        name,
+        body: {
+          status: {
+            phase: 'Failed' as const,
+            error: `policy_denied:${validation.reason} — ${validation.message}`,
+            completedAt: ts,
+            ...(task.metadata.generation !== undefined && {
+              observedGeneration: task.metadata.generation,
+            }),
+            conditions: mergeCondition(task.status?.conditions, newCondition),
+          },
+        },
+      },
+      mergePatchOptions,
+    );
+  } catch (err) {
+    console.error(
+      `[kagent-operator] failed to force AgentTask ${namespace}/${name} Failed for contract violation:`,
+      err,
+    );
+    return 'no-op';
+  }
+
+  await emitContractViolatedSafe(deps, task, agent, {
+    reason: validation.reason,
+    message: validation.message,
+  });
+
+  // Clear any cached idempotency entry for this key — we don't want
+  // a violated Completed to seed a future replay with broken outputs.
+  if (deps.idempotencyCache !== undefined) {
+    const agentName = agent.metadata.name ?? '';
+    const key = deriveIdempotencyKey(task, agentName);
+    if (key !== null) {
+      deps.idempotencyCache.recordOutputs(key, []);
+    }
+  }
+  return 'forced-failed';
+}
+
+/** Best-effort `contract.violated` audit emission. */
+async function emitContractViolatedSafe(
+  deps: ReconcileDeps,
+  task: AgentTask,
+  agent: Agent,
+  fields: {
+    readonly reason: ContractViolatedAuditFields['reason'];
+    readonly message: string;
+  },
+): Promise<void> {
+  if (deps.emitContractViolated === undefined) return;
+  try {
+    await deps.emitContractViolated({
+      taskUid: task.metadata.uid ?? '',
+      taskNamespace: task.metadata.namespace ?? 'default',
+      taskName: task.metadata.name ?? '',
+      agentName: agent.metadata.name ?? '',
+      reason: fields.reason,
+      message: fields.message,
+    });
+  } catch (err) {
+    console.warn(
+      '[kagent-operator] reconcile: emitContractViolated hook raised (audit dropped):',
+      err,
+    );
+  }
+}
+
+/** Best-effort `task.deduped` audit emission. */
+async function emitTaskDedupedSafe(
+  deps: ReconcileDeps,
+  task: AgentTask,
+  agent: Agent,
+  idempotencyKey: string,
+  originalTaskUid: string,
+): Promise<void> {
+  if (deps.emitTaskDeduped === undefined) return;
+  try {
+    await deps.emitTaskDeduped({
+      taskUid: task.metadata.uid ?? '',
+      taskNamespace: task.metadata.namespace ?? 'default',
+      taskName: task.metadata.name ?? '',
+      agentName: agent.metadata.name ?? '',
+      idempotencyKey,
+      originalTaskUid,
+    });
+  } catch (err) {
+    console.warn(
+      '[kagent-operator] reconcile: emitTaskDeduped hook raised (audit dropped):',
+      err,
+    );
+  }
 }
