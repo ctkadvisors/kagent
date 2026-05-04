@@ -7,10 +7,13 @@ import { describe, expect, it } from 'vitest';
 import { generateKeyPair, exportPKCS8, exportSPKI } from 'jose';
 import { KAGENT_SUBSTRATE_AUDIENCE, type CapabilityBundle } from '@kagent/capability-types';
 
+import { resolveCapTtlPolicy } from '@kagent/keyrotation-controller';
+
 import { loadFromMaterials } from './cap-ca.js';
 import {
   CapabilityViolationError,
   applyTenantClaim,
+  applyTtlPolicy,
   mintCapabilityForTask,
   narrowClaimsByParent,
   resolveAgentClaims,
@@ -339,5 +342,101 @@ describe('mintCapabilityForTask — tenant integration (v0.5.0-tenancy)', () => 
     const task = makeTask({ uid: 'legacy-task' });
     const result = await mintCapabilityForTask(ca, { task, agent });
     expect(result.claims.tenant).toBeUndefined();
+  });
+});
+
+describe('applyTtlPolicy (v0.5.4-keyrotation)', () => {
+  it('falls back to legacy heuristic (timeout + 60s) when policy is undefined', () => {
+    const task = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: { name: 't', namespace: 'default', uid: 'u' },
+      spec: { targetAgent: 'a', payload: {}, runConfig: { timeoutSeconds: 600 } },
+    } as unknown as AgentTask;
+    const result = applyTtlPolicy(task, undefined);
+    expect(result.ttlSeconds).toBe(660);
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('returns undefined ttlSeconds (JWT helper default) when no timeout + no policy', () => {
+    const task = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: { name: 't', namespace: 'default', uid: 'u' },
+      spec: { targetAgent: 'a', payload: {} },
+    } as unknown as AgentTask;
+    const result = applyTtlPolicy(task, undefined);
+    expect(result.ttlSeconds).toBeUndefined();
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('applies short-running policy tier when timeout missing', () => {
+    const task = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: { name: 't', namespace: 'default', uid: 'u' },
+      spec: { targetAgent: 'a', payload: {} },
+    } as unknown as AgentTask;
+    const policy = resolveCapTtlPolicy({});
+    const result = applyTtlPolicy(task, policy);
+    expect(result.ttlSeconds).toBe(3600);
+    expect(result.decision?.tier).toBe('short-running');
+  });
+
+  it('applies long-running-grace tier for >1h timeoutSeconds', () => {
+    const task = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: { name: 't', namespace: 'default', uid: 'u' },
+      spec: { targetAgent: 'a', payload: {}, runConfig: { timeoutSeconds: 2 * 60 * 60 } },
+    } as unknown as AgentTask;
+    const policy = resolveCapTtlPolicy({});
+    const result = applyTtlPolicy(task, policy);
+    expect(result.ttlSeconds).toBe(2 * 60 * 60 + 300);
+    expect(result.decision?.tier).toBe('long-running-grace');
+  });
+
+  it('clamps to 24h ceiling for absurdly long timeouts', () => {
+    const task = {
+      apiVersion: API_GROUP_VERSION,
+      kind: 'AgentTask',
+      metadata: { name: 't', namespace: 'default', uid: 'u' },
+      spec: { targetAgent: 'a', payload: {}, runConfig: { timeoutSeconds: 48 * 60 * 60 } },
+    } as unknown as AgentTask;
+    const policy = resolveCapTtlPolicy({});
+    const result = applyTtlPolicy(task, policy);
+    expect(result.ttlSeconds).toBe(24 * 60 * 60);
+    expect(result.decision?.tier).toBe('long-running-clamped');
+  });
+});
+
+describe('mintCapabilityForTask — TTL policy integration (v0.5.4-keyrotation)', () => {
+  it('mints with the short-running TTL when policy is applied + timeout missing', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: { tools: ['http_get'] } });
+    const task = makeTask();
+    const policy = resolveCapTtlPolicy({});
+    const result = await mintCapabilityForTask(ca, { task, agent, ttlPolicy: policy });
+    expect(result.ttlDecision).toBeDefined();
+    expect(result.ttlDecision?.tier).toBe('short-running');
+    expect(result.ttlDecision?.ttlSeconds).toBe(3600);
+  });
+
+  it('mints with the long-running-grace TTL when policy is applied + timeout > 1h', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: { tools: ['http_get'] } });
+    const task = makeTask({ runConfig: { timeoutSeconds: 7200 } });
+    const policy = resolveCapTtlPolicy({});
+    const result = await mintCapabilityForTask(ca, { task, agent, ttlPolicy: policy });
+    expect(result.ttlDecision?.tier).toBe('long-running-grace');
+    expect(result.ttlDecision?.ttlSeconds).toBe(7500);
+  });
+
+  it('omits ttlDecision when no policy supplied (legacy path)', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: { tools: ['http_get'] } });
+    const task = makeTask();
+    const result = await mintCapabilityForTask(ca, { task, agent });
+    expect(result.ttlDecision).toBeUndefined();
   });
 });

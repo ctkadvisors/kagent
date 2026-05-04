@@ -38,6 +38,11 @@ import {
   type CapabilityClaims,
   type SubsetViolation,
 } from '@kagent/capability-types';
+import {
+  decideCapTtl,
+  type CapTtlDecision,
+  type CapTtlPolicy,
+} from '@kagent/keyrotation-controller';
 
 import type { CapCa, MintCapResult } from './cap-ca.js';
 import type { Agent, AgentTask, AgentWorkflow, Tenant } from './crds/index.js';
@@ -86,6 +91,19 @@ export interface MintCapForTaskInput {
    *   3. Operator default (none) — `claims.tenant` left unset.
    */
   readonly tenant?: Tenant;
+  /**
+   * v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. The resolved
+   * cap TTL policy from `@kagent/keyrotation-controller`. When
+   * provided, `mintCapabilityForTask` consumes it via `applyTtlPolicy`
+   * to compute `exp`; the resolved tier is exposed on the result so
+   * the reconciler can emit `keyrotation.cap_minted_with_ttl`.
+   *
+   * When undefined (legacy / pre-Wave-4 install), the issuer falls
+   * back to its v0.3.0 heuristic (`runConfig.timeoutSeconds + 60s`,
+   * else JWT helper default). Forward-compat: a deployment can flip
+   * Wave 4 keyrotation on without breaking pre-Wave-4 callsites.
+   */
+  readonly ttlPolicy?: CapTtlPolicy;
 }
 
 /**
@@ -104,6 +122,15 @@ export interface MintCapForTaskResult {
   readonly jti: string;
   readonly expiresAt: number;
   readonly claims: CapabilityClaims;
+  /**
+   * v0.5.4-keyrotation — populated when `MintCapForTaskInput.ttlPolicy`
+   * was supplied. Records the decision the cap-TTL policy made (the
+   * resolved seconds + the tier — short-running / long-running-grace /
+   * long-running-clamped) so the reconciler can emit
+   * `keyrotation.cap_minted_with_ttl`. Undefined when the legacy
+   * (pre-Wave-4) TTL heuristic was used.
+   */
+  readonly ttlDecision?: CapTtlDecision;
 }
 
 /**
@@ -179,7 +206,10 @@ export async function mintCapabilityForTask(
   }
   const jti = input.jtiOverride ?? defaultJti(taskUid);
 
-  const ttlSeconds = pickTtlSeconds(input.task);
+  // v0.5.4-keyrotation — apply Wave 4 cap-TTL policy when present;
+  // fall back to the v0.3.0 heuristic otherwise.
+  const ttlPolicyDecision = applyTtlPolicy(input.task, input.ttlPolicy);
+  const ttlSeconds = ttlPolicyDecision.ttlSeconds;
 
   // Per-tenant issuer override — when the Tenant declares
   // `spec.capabilityRoot.issuer`, that's the JWT `iss`; otherwise
@@ -203,6 +233,9 @@ export async function mintCapabilityForTask(
     jti: result.jti,
     expiresAt: result.expiresAt,
     claims: withTenant,
+    ...(ttlPolicyDecision.decision !== undefined && {
+      ttlDecision: ttlPolicyDecision.decision,
+    }),
   };
 }
 
@@ -220,6 +253,38 @@ export async function mintCapabilityForTask(
  *
  * Pure helper exported for cap-issuer test coverage.
  */
+/**
+ * v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. Apply the Wave 4
+ * cap-TTL policy when present; fall back to the legacy
+ * `pickTtlSeconds` heuristic when the policy is undefined (pre-Wave-4
+ * install or operator booted with KAGENT_KEYROTATION_ENABLED unset).
+ *
+ * Returns:
+ *   - `ttlSeconds` — the value the CA's `mint()` consumes (undefined
+ *     means "let the JWT helper apply its own default").
+ *   - `decision` — present ONLY when the Wave 4 policy was applied;
+ *     carries the resolved tier so the reconciler can emit
+ *     `keyrotation.cap_minted_with_ttl` with the policy attribution.
+ *
+ * Pure helper — exported for cap-issuer test coverage. Both inputs
+ * are immutable; output reads through to `CapTtlDecision` from
+ * `@kagent/keyrotation-controller`.
+ */
+export function applyTtlPolicy(
+  task: AgentTask,
+  policy: CapTtlPolicy | undefined,
+): { ttlSeconds: number | undefined; decision: CapTtlDecision | undefined } {
+  if (policy === undefined) {
+    return { ttlSeconds: pickTtlSeconds(task), decision: undefined };
+  }
+  const timeoutSeconds = task.spec.runConfig?.timeoutSeconds ?? task.spec.timeoutSeconds;
+  const decision = decideCapTtl({
+    timeoutSeconds: typeof timeoutSeconds === 'number' ? timeoutSeconds : undefined,
+    policy,
+  });
+  return { ttlSeconds: decision.ttlSeconds, decision };
+}
+
 export function applyTenantClaim(
   claims: CapabilityClaims,
   tenant: Tenant | undefined,

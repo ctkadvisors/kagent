@@ -32,6 +32,7 @@
     "@kagent/cache-controller": "workspace:*",
     "@kagent/capability-types": "workspace:*",
     "@kagent/events": "workspace:*",
+    "@kagent/keyrotation-controller": "workspace:*",
     "@kagent/locality-controller": "workspace:*",
     "@kagent/supervision": "workspace:*",
     "@kagent/triggers": "workspace:*",
