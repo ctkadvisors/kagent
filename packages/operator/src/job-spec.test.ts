@@ -12,12 +12,15 @@ import {
   buildArtifactMounts,
   buildCacheMounts,
   buildJobSpec,
+  CAP_JWT_SECRET_KEY,
+  CAP_JWT_VOLUME_NAME,
   CAS_VOLUME_NAME,
   CONFIG_AGENT_SPEC_KEY,
   CONFIG_MOUNT_PATH,
   CONFIG_TASK_SPEC_KEY,
   CONFIG_VOLUME_NAME,
   configMapNameForTask,
+  DEFAULT_CAP_JWT_FILE,
   DEFAULT_ARTIFACT_MOUNT_PATH,
   DEFAULT_BACKOFF_LIMIT,
   DEFAULT_CAS_MOUNT_PATH,
@@ -155,6 +158,45 @@ describe('buildJobSpec', () => {
     );
     // KAGENT_* defaults are still present.
     expect(byName.get('KAGENT_TASK_ID')).toBe('task-uid-12345');
+  });
+
+  it('mounts a per-task capability JWT Secret when capabilityJwt is supplied', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      capabilityJwt: {
+        secretName: 'kagent-cap-task-uid-12345',
+        jwksUrl: 'http://operator-templates.default.svc.cluster.local:8081/.well-known/jwks.json',
+        issuer: 'kagent.knuteson.io/operator',
+      },
+    });
+    const pod = job.spec?.template?.spec;
+    const container = pod?.containers?.[0];
+    const env = new Map((container?.env ?? []).map((e) => [e.name, e.value]));
+    expect(env.get('KAGENT_CAP_JWT_FILE')).toBe(DEFAULT_CAP_JWT_FILE);
+    expect(env.get('KAGENT_CAP_JWKS_URL')).toBe(
+      'http://operator-templates.default.svc.cluster.local:8081/.well-known/jwks.json',
+    );
+    expect(env.get('KAGENT_CAP_ISSUER')).toBe('kagent.knuteson.io/operator');
+
+    expect(pod?.volumes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: CAP_JWT_VOLUME_NAME,
+          secret: {
+            secretName: 'kagent-cap-task-uid-12345',
+            items: [{ key: CAP_JWT_SECRET_KEY, path: 'cap.jwt' }],
+          },
+        }),
+      ]),
+    );
+    expect(container?.volumeMounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: CAP_JWT_VOLUME_NAME,
+          mountPath: '/var/kagent/cap',
+          readOnly: true,
+        }),
+      ]),
+    );
   });
 
   it('uses placeholder image by default', () => {

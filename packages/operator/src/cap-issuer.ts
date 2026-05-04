@@ -120,6 +120,7 @@ export interface MintCapForTaskInput {
 export interface MintCapForTaskResult {
   readonly jwt: string;
   readonly jti: string;
+  readonly issuer: string;
   readonly expiresAt: number;
   readonly claims: CapabilityClaims;
   /**
@@ -231,6 +232,7 @@ export async function mintCapabilityForTask(
   return {
     jwt: result.jwt,
     jti: result.jti,
+    issuer: tenantIssuer ?? ca.issuer,
     expiresAt: result.expiresAt,
     claims: withTenant,
     ...(ttlPolicyDecision.decision !== undefined && {
@@ -629,6 +631,7 @@ export async function mintCapabilityForWorkflow(
     jti: result.jti,
     expiresAt: result.expiresAt,
     claims: withTenant,
+    issuer: tenantIssuer ?? ca.issuer,
     workflowUid,
   };
 }

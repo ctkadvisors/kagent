@@ -28,13 +28,21 @@ import {
 } from '@kubernetes/client-node';
 import {
   AuditPublisher,
+  CAPABILITY_MINTED,
   INFRA_FAULT_OBSERVED,
+  KEYROTATION_CAP_MINTED_WITH_TTL,
   SUPERVISION_APPLIED,
   SUPERVISION_RESTART_LIMIT_EXCEEDED,
   TASK_ADMITTED,
   makeEvent,
 } from '@kagent/audit-events';
 import { buildEventDispatcher, type EventDispatcher, type EventSubscription } from '@kagent/events';
+import {
+  resolveCapTtlPolicy,
+  resolveSvidRotationPolicy,
+  scheduleGatewayRotation,
+  type CapTtlPolicy,
+} from '@kagent/keyrotation-controller';
 import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import {
@@ -49,6 +57,7 @@ import * as casGc from './cas-gc.js';
 import {
   API_GROUP,
   API_VERSION,
+  TENANT_LABEL,
   isAgent,
   isModelEndpoint,
   type Agent,
@@ -78,6 +87,7 @@ import {
 import { IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
+import { loadFromEnv as loadCapCa } from './cap-ca.js';
 import {
   buildEventTriggerAgentTaskCreator,
   buildNatsPullConsumerFactory,
@@ -337,6 +347,16 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
         value: env.KAGENT_EVENTS_NATS_URL,
       });
     }
+  }
+  // === Wave 0 / Wave 2 — Audit ===
+  // Forward the audit stream endpoint into spawned agent-pods so
+  // substrate tools can emit their own accepted-claim events
+  // (`capability.used`) without routing through operator state.
+  if (typeof env.KAGENT_AUDIT_NATS_URL === 'string' && env.KAGENT_AUDIT_NATS_URL.length > 0) {
+    extraEnv.push({
+      name: 'KAGENT_AUDIT_NATS_URL',
+      value: env.KAGENT_AUDIT_NATS_URL,
+    });
   }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
@@ -1050,6 +1070,21 @@ async function main(): Promise<void> {
   }
 
   const jobSpecOptions = buildJobSpecOptionsFromEnv();
+  const capabilitiesEnabled = process.env.KAGENT_CAPABILITIES_ENABLED === 'true';
+  const capCa = capabilitiesEnabled ? await loadCapCa(process.env) : undefined;
+  const capJwksUrl = normalizeOptionalEnv(process.env.KAGENT_CAP_JWKS_URL);
+  const capJwtFile = normalizeOptionalEnv(process.env.KAGENT_CAP_JWT_FILE);
+  const keyRotationEnabled = process.env.KAGENT_KEYROTATION_ENABLED === 'true';
+  const capTtlPolicy = keyRotationEnabled ? resolveCapTtlPolicyFromEnv(process.env) : undefined;
+  if (capCa !== undefined) {
+    console.log(
+      `[kagent-operator] capability issuer ENABLED (kid=${capCa.kid}, issuer=${capCa.issuer})`,
+    );
+  } else {
+    console.log(
+      '[kagent-operator] capability issuer disabled (set KAGENT_CAPABILITIES_ENABLED=true to mint per-task caps)',
+    );
+  }
 
   // Phase 4.x — Job/Pod failure watcher. The agent-pod owns success-
   // path status writeback; this watcher closes the loop on failures
@@ -1293,6 +1328,22 @@ async function main(): Promise<void> {
     );
   }
 
+  const defaultTenantName = normalizeOptionalEnv(process.env.KAGENT_TENANCY_DEFAULT_TENANT);
+  let tenantControllerHandle: import('./tenant-controller.js').TenantControllerHandle | undefined;
+  const resolveTenantForTask: ReconcileDeps['resolveTenantForTask'] = (task, agent) => {
+    const tenantName =
+      task.metadata.labels?.[TENANT_LABEL] ??
+      agent.metadata.labels?.[TENANT_LABEL] ??
+      defaultTenantName;
+    if (tenantName === undefined || tenantName.length === 0) return undefined;
+    return tenantControllerHandle?.lookupTenant(tenantName);
+  };
+
+  const capabilityAuditHolder: {
+    emitCapabilityMinted?: NonNullable<ReconcileDeps['emitCapabilityMinted']>;
+    emitKeyrotationCapMintedWithTtl?: NonNullable<ReconcileDeps['emitKeyrotationCapMintedWithTtl']>;
+  } = {};
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
@@ -1306,6 +1357,17 @@ async function main(): Promise<void> {
     idempotencyCache,
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
     ...(deriveNodeAffinityCb !== undefined && { deriveNodeAffinity: deriveNodeAffinityCb }),
+    ...(capCa !== undefined && { capCa }),
+    ...(capJwksUrl !== undefined && { capJwksUrl }),
+    ...(capJwtFile !== undefined && { capJwtFile }),
+    ...(capTtlPolicy !== undefined && { capTtlPolicy }),
+    resolveTenantForTask,
+    emitCapabilityMinted: async (fields) => {
+      await capabilityAuditHolder.emitCapabilityMinted?.(fields);
+    },
+    emitKeyrotationCapMintedWithTtl: async (fields) => {
+      await capabilityAuditHolder.emitKeyrotationCapMintedWithTtl?.(fields);
+    },
   };
 
   // === Wave 2 — Supervision ===
@@ -1559,6 +1621,28 @@ async function main(): Promise<void> {
         await publisher.publish(event);
       },
     };
+
+    capabilityAuditHolder.emitCapabilityMinted = async (fields) => {
+      const event = makeEvent({
+        type: CAPABILITY_MINTED,
+        source: auditSource,
+        subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+        data: fields,
+      });
+      await publisher.publish(event);
+    };
+    capabilityAuditHolder.emitKeyrotationCapMintedWithTtl = async (fields) => {
+      const event = makeEvent({
+        type: KEYROTATION_CAP_MINTED_WITH_TTL,
+        source: auditSource,
+        subject:
+          fields.taskNamespace !== undefined && fields.taskName !== undefined
+            ? `AgentTask/${fields.taskNamespace}/${fields.taskName}`
+            : `AgentTask/${fields.taskUid ?? 'unknown'}`,
+        data: fields,
+      });
+      await publisher.publish(event);
+    };
   } else {
     console.log(
       '[kagent-operator] no KAGENT_AUDIT_NATS_URL set — audit emission disabled (set audit.enabled=true in chart values)',
@@ -1633,20 +1717,28 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   const scope = watchNamespace ?? 'all namespaces';
-  console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
-  await informer.start();
-  await jobPodInformer.start();
-  if (admissionWiring !== undefined) {
-    await admissionWiring.start();
-    console.log(
-      `[kagent-operator] admission control ENABLED — Job + ModelEndpoint + Agent informers started`,
-    );
-  } else {
-    console.log(
-      '[kagent-operator] admission control disabled (set KAGENT_ADMISSION_CONTROL_ENABLED=true to enable)',
-    );
+  let primaryInformersStarted = false;
+  const startPrimaryInformers = async (): Promise<void> => {
+    if (primaryInformersStarted) return;
+    console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
+    await informer.start();
+    await jobPodInformer.start();
+    if (admissionWiring !== undefined) {
+      await admissionWiring.start();
+      console.log(
+        `[kagent-operator] admission control ENABLED — Job + ModelEndpoint + Agent informers started`,
+      );
+    } else {
+      console.log(
+        '[kagent-operator] admission control disabled (set KAGENT_ADMISSION_CONTROL_ENABLED=true to enable)',
+      );
+    }
+    primaryInformersStarted = true;
+    console.log('[kagent-operator] informers started');
+  };
+  if (process.env.KAGENT_TENANCY_ENABLED !== 'true') {
+    await startPrimaryInformers();
   }
-  console.log('[kagent-operator] informers started');
 
   // Wave 0 / sub-team Entry — KagentSchedule controller + HMAC webhook
   // receiver (see docs/WAVES.md §2.6). Default-OFF: when
@@ -1683,18 +1775,18 @@ async function main(): Promise<void> {
     console.log('[kagent-operator] triggers disabled (set KAGENT_TRIGGERS_ENABLED=true to enable)');
   }
 
-  // WS-M — boot the template-server when enabled. Default-OFF; the
-  // chart's `agentPod.templates.enabled=true` flips
-  // KAGENT_TEMPLATES_ENABLED on this deployment AND
-  // KAGENT_TEMPLATE_SERVER_URL on every spawned agent-pod Job. The
-  // namespace-resolver short-circuits to the operator's release
-  // namespace; v0.1 is single-namespace per AGENT-TEMPLATES.md §8.4.
-  if (process.env.KAGENT_TEMPLATES_ENABLED === 'true') {
+  // WS-M / Wave 2 Caps — boot the template-server when templates are
+  // enabled OR when the capability issuer is enabled. The same
+  // in-cluster HTTP surface hosts both template instantiation and the
+  // JWKS endpoint used by agent-pod cap verification.
+  if (process.env.KAGENT_TEMPLATES_ENABLED === 'true' || capCa !== undefined) {
     const port = Number.parseInt(process.env.KAGENT_TEMPLATE_SERVER_PORT ?? '8081', 10);
     const releaseNamespace = watchNamespace ?? process.env.KAGENT_RELEASE_NAMESPACE ?? 'default';
     const tplServer = startTemplateServer(port, {
       customApi,
       resolveNamespace: () => releaseNamespace,
+      templatesEnabled: process.env.KAGENT_TEMPLATES_ENABLED === 'true',
+      ...(capCa !== undefined && { jwksProvider: () => capCa.jwks() }),
     });
     console.log(
       `[kagent-operator] template-server listening on :${String(port)} (namespace=${releaseNamespace})`,
@@ -1914,22 +2006,17 @@ async function main(): Promise<void> {
     );
     const { buildAgentWorkflowController } = await import('./agent-workflow-controller.js');
     const appsApi = kc.makeApiClient(AppsV1Api);
-    // CapCa wiring is the cross-team handoff with the Caps sub-team —
-    // the issuer + CA are tested + ready (per WAVES.md §4.1
-    // deliverable 3 SHIPPED logic), but the reconciler-side wiring
-    // that actually loads CapCa from the chart-mounted Secret is the
-    // glue follow-up release. v0.3.2 leaves capCa undefined; the
-    // controller surfaces a CapMintFailed status condition until the
-    // issuer-controller wiring lands. Not a substrate-correctness
-    // blocker — workflows still deploy, register with Restate, and
-    // accept triggers; spawn-narrowing on their AgentTasks comes
-    // online when the CA is wired.
+    // CapCa is shared with the AgentTask reconciler. When capabilities
+    // are enabled the workflow controller can mint workflow-runtime
+    // bundles from the same chart-mounted signing key; otherwise it
+    // surfaces its existing CapMintFailed condition while still
+    // deploying/registering the workflow runtime.
     const wfController = buildAgentWorkflowController({
       kc,
       customApi,
       coreApi,
       appsApi,
-      capCa: undefined,
+      capCa,
       ...(watchNamespace !== undefined && { watchNamespace }),
       options: {
         defaultRestateAddress: restateAddress,
@@ -2363,9 +2450,6 @@ async function main(): Promise<void> {
   //
   // DEFAULT-OFF for gradual roll-out — existing single-tenant installs
   // continue working unchanged when the env is unset.
-  // Hoisted out of the if-block so the Wave 4 — Quotas section below
-  // can read `lookupTenant` to resolve per-tenant quota caps.
-  let tenantControllerHandle: import('./tenant-controller.js').TenantControllerHandle | undefined;
   if (process.env.KAGENT_TENANCY_ENABLED === 'true') {
     const { buildTenantController } = await import('./tenant-controller.js');
     // Cheap namespace-existence lookup using a one-shot list (informer
@@ -2465,9 +2549,8 @@ async function main(): Promise<void> {
     });
     await tenantController.start();
     tenantControllerHandle = tenantController;
-    const defaultTenant = normalizeOptionalEnv(process.env.KAGENT_TENANCY_DEFAULT_TENANT);
     console.log(
-      `[kagent-operator] Tenant controller started (defaultTenant=${defaultTenant ?? '(none)'})`,
+      `[kagent-operator] Tenant controller started (defaultTenant=${defaultTenantName ?? '(none)'})`,
     );
     const previous = onShutdownExtra;
     onShutdownExtra = async (): Promise<void> => {
@@ -2483,6 +2566,9 @@ async function main(): Promise<void> {
     console.log(
       '[kagent-operator] tenancy disabled (set KAGENT_TENANCY_ENABLED=true to enable Wave 4 multi-tenant boundary)',
     );
+  }
+  if (process.env.KAGENT_TENANCY_ENABLED === 'true') {
+    await startPrimaryInformers();
   }
 
   // === Wave 4 — Egress ===
@@ -2962,9 +3048,7 @@ async function main(): Promise<void> {
   // to work unchanged when KAGENT_KEYROTATION_ENABLED is unset.
   // Sub-flag KAGENT_KEYROTATION_GATEWAY_ENABLED gates the gateway
   // rotation cadence independently.
-  if (process.env.KAGENT_KEYROTATION_ENABLED === 'true') {
-    const { resolveSvidRotationPolicy, resolveCapTtlPolicy, scheduleGatewayRotation } =
-      await import('@kagent/keyrotation-controller');
+  if (keyRotationEnabled) {
     const svidIntervalRaw = normalizeOptionalEnv(
       process.env.KAGENT_KEYROTATION_SVID_INTERVAL_HOURS,
     );
@@ -2982,24 +3066,7 @@ async function main(): Promise<void> {
       );
       throw err;
     }
-    const capShortTtlRaw = normalizeOptionalEnv(
-      process.env.KAGENT_KEYROTATION_CAP_SHORT_TTL_MINUTES,
-    );
-    const capLongGraceRaw = normalizeOptionalEnv(
-      process.env.KAGENT_KEYROTATION_CAP_LONG_GRACE_SECONDS,
-    );
-    const capPolicyInput: { shortTtlMinutes?: number; longTtlGraceSeconds?: number } = {};
-    if (capShortTtlRaw !== undefined)
-      capPolicyInput.shortTtlMinutes = Number.parseFloat(capShortTtlRaw);
-    if (capLongGraceRaw !== undefined)
-      capPolicyInput.longTtlGraceSeconds = Number.parseFloat(capLongGraceRaw);
-    let capPolicy: ReturnType<typeof resolveCapTtlPolicy>;
-    try {
-      capPolicy = resolveCapTtlPolicy(capPolicyInput);
-    } catch (err) {
-      console.error('[kagent-operator] keyrotation: cap TTL policy invalid (refusing boot):', err);
-      throw err;
-    }
+    const capPolicy = capTtlPolicy ?? resolveCapTtlPolicyFromEnv(process.env);
     console.log(
       `[kagent-operator] KeyRotation policies: svid=${svidPolicy.intervalSeconds.toString()}s, cap.short=${capPolicy.shortTtlSeconds.toString()}s, cap.longGrace=${capPolicy.longTtlGraceSeconds.toString()}s`,
     );
@@ -3007,9 +3074,8 @@ async function main(): Promise<void> {
     // input fields (`ttlPolicy` on `MintCapForTaskInput`,
     // `policy` on `MaybeRotateInput`). Wiring those callsites lives
     // in the reconciler; v0.5.4 ships the policies + the watcher
-    // method; the reconciler-side plumbing flips on once the
-    // operator's mint path threads `keyRotationCapPolicy` through.
-    void capPolicy;
+    // method. `capPolicy` is now threaded through ReconcileDeps so
+    // every minted per-task cap gets the same resolved TTL policy.
     void svidPolicy;
 
     // Gateway-token rotation cadence — independently flagged.
@@ -3094,6 +3160,20 @@ async function main(): Promise<void> {
     console.log(
       '[kagent-operator] keyrotation disabled (set KAGENT_KEYROTATION_ENABLED=true to enable Wave 4 SVID + cap TTL + gateway-token rotation)',
     );
+  }
+}
+
+function resolveCapTtlPolicyFromEnv(env: NodeJS.ProcessEnv): CapTtlPolicy {
+  const capShortTtlRaw = normalizeOptionalEnv(env.KAGENT_KEYROTATION_CAP_SHORT_TTL_MINUTES);
+  const capLongGraceRaw = normalizeOptionalEnv(env.KAGENT_KEYROTATION_CAP_LONG_GRACE_SECONDS);
+  const input: { shortTtlMinutes?: number; longTtlGraceSeconds?: number } = {};
+  if (capShortTtlRaw !== undefined) input.shortTtlMinutes = Number.parseFloat(capShortTtlRaw);
+  if (capLongGraceRaw !== undefined) input.longTtlGraceSeconds = Number.parseFloat(capLongGraceRaw);
+  try {
+    return resolveCapTtlPolicy(input);
+  } catch (err) {
+    console.error('[kagent-operator] keyrotation: cap TTL policy invalid (refusing boot):', err);
+    throw err;
   }
 }
 
