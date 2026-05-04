@@ -1,0 +1,262 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# AgentWorkflow — durable orchestrator (Wave 2 / Workflows sub-team,
+# v0.3.2-workflows). See packages/operator/src/crds/agent-workflow.ts for
+# the TS surface and docs/SUBSTRATE-V1.md §3.3 for the primitive's role
+# in the substrate. Backed by Restate's TS SDK; the operator's
+# AgentWorkflow controller deploys the user-supplied workflow image,
+# registers it with Restate's admin API, and wires triggers through
+# Wave 0 Entry (schedule + webhook) and Wave 3 Events (event;
+# v0.3.2 schema-only stub).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentworkflows.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: AgentWorkflow
+    listKind: AgentWorkflowList
+    plural: agentworkflows
+    singular: agentworkflow
+    shortNames:
+      - kawf
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - image
+                - handler
+              properties:
+                image:
+                  type: string
+                  minLength: 1
+                  description: |
+                    OCI image of the workflow runtime container. Must
+                    import @kagent/agent-workflow-runtime and call
+                    defineWorkflow(...).serve() at startup so the
+                    handler registers with Restate via the admin API.
+                handler:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Exported handler name. Mirrors the `name` arg to
+                    defineWorkflow(); passed verbatim to Restate's admin
+                    API as the registered service name.
+                triggers:
+                  type: array
+                  description: |
+                    Trigger sources. Each entry is one of three kinds:
+                    schedule (delegates to KagentSchedule from Wave 0
+                    Entry), webhook (delegates to the Wave 0 Entry
+                    receiver with HMAC validation), or event (Wave 3
+                    Events forward-compat schema; persisted as a
+                    'pending' subscription until the dispatcher lands).
+                  items:
+                    type: object
+                    required:
+                      - kind
+                    oneOf:
+                      - required: [schedule]
+                      - required: [webhook]
+                      - required: [event]
+                    properties:
+                      kind:
+                        type: string
+                        enum:
+                          - schedule
+                          - webhook
+                          - event
+                      schedule:
+                        type: string
+                        minLength: 1
+                        description: |
+                          5-field cron expression, UTC. Same dialect as
+                          KagentSchedule.spec.schedule.
+                      webhook:
+                        type: object
+                        required:
+                          - path
+                          - hmacSecretRef
+                        properties:
+                          path:
+                            type: string
+                            minLength: 1
+                            description: 'URL path the receiver matches; must be unique in namespace.'
+                          hmacSecretRef:
+                            type: object
+                            required:
+                              - name
+                              - key
+                            properties:
+                              name:
+                                type: string
+                                minLength: 1
+                              key:
+                                type: string
+                                minLength: 1
+                      event:
+                        type: object
+                        required:
+                          - topic
+                          - schema
+                        properties:
+                          topic:
+                            type: string
+                            minLength: 1
+                            description: 'NATS subject the workflow subscribes to (Wave 3-defined).'
+                          schema:
+                            type: object
+                            description: |
+                              Forward-compat opaque object describing the
+                              payload shape (typically a JSON-Schema).
+                              v0.3.2 STUB — controller persists the value
+                              verbatim in status.eventSubscriptions and
+                              emits a `workflow.event_subscription_pending`
+                              audit event; Wave 3 wires the dispatcher.
+                            x-kubernetes-preserve-unknown-fields: true
+                capabilityRef:
+                  type: string
+                  description: |
+                    Pre-minted JWT capability bundle reference (`<jti>`).
+                    When set, controller forwards the existing bundle
+                    instead of minting a new one. Production workflows
+                    should leave this unset and use capabilityClaims.
+                capabilityClaims:
+                  type: object
+                  description: |
+                    Capability claims this workflow is permitted to
+                    mint into a JWT bundle for any AgentTasks it spawns.
+                    Same shape + glob dialect as Agent.spec.capabilityClaims
+                    (see @kagent/capability-types).
+                  x-kubernetes-preserve-unknown-fields: true
+                replicas:
+                  type: integer
+                  minimum: 1
+                  description: |
+                    Number of workflow runtime pods. Defaults to 1;
+                    Restate handles replay across replica failures so
+                    HA is opportunistic.
+                restateAddress:
+                  type: string
+                  description: |
+                    Override the cluster Restate address. Defaults to
+                    KAGENT_WORKFLOWS_RESTATE_ADDRESS on the operator
+                    deployment.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Ready
+                    - Failed
+                  description: |
+                    Lifecycle phase. Pending until the workflow image is
+                    deployed AND registered with Restate; Ready once
+                    both succeed; Failed if either step is irrecoverable.
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                lastTickAt:
+                  type: string
+                  format: date-time
+                  description: |
+                    RFC 3339 timestamp of the most recent reconcile that
+                    touched the Deployment + Restate registration.
+                activeRunCount:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    In-flight workflow invocations the controller most
+                    recently saw via Restate's admin API. May lag
+                    reality by up to one polling interval.
+                conditions:
+                  type: array
+                  description: |
+                    Append-only condition log. Known types:
+                    RestateRegistered, DeploymentReady, Ready, Failed,
+                    EventSubscriptionPending.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
+                capabilityRef:
+                  type: string
+                  description: |
+                    Capability bundle the controller minted for this
+                    workflow. Threaded into spawned AgentTasks as
+                    parentCapabilityRef.
+                eventSubscriptions:
+                  type: array
+                  description: |
+                    Persisted summary of `event`-kind triggers. v0.3.2
+                    STUB — one entry per event trigger, status starts
+                    as 'pending' until Wave 3 lights the dispatcher.
+                  items:
+                    type: object
+                    required:
+                      - topic
+                      - status
+                    properties:
+                      topic:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - pending
+                          - subscribed
+                          - failed
+                      message:
+                        type: string
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Image
+          type: string
+          jsonPath: .spec.image
+        - name: Handler
+          type: string
+          jsonPath: .spec.handler
+        - name: ActiveRuns
+          type: integer
+          jsonPath: .status.activeRunCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

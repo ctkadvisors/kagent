@@ -319,6 +319,32 @@ const expectations: readonly CRDExpectation[] = [
       'pvcName',
     ],
   },
+  // v0.3.2-workflows — Wave 2 / Workflows sub-team. See
+  // docs/SUBSTRATE-V1.md §3.3 + docs/WAVES.md §4.3.
+  {
+    file: 'agentworkflows.yaml',
+    kind: 'AgentWorkflow',
+    plural: 'agentworkflows',
+    specRequired: ['image', 'handler'],
+    specProperties: [
+      'image',
+      'handler',
+      'triggers',
+      'capabilityRef',
+      'capabilityClaims',
+      'replicas',
+      'restateAddress',
+    ],
+    statusProperties: [
+      'phase',
+      'observedGeneration',
+      'lastTickAt',
+      'activeRunCount',
+      'conditions',
+      'capabilityRef',
+      'eventSubscriptions',
+    ],
+  },
 ];
 
 const errors: string[] = [];
