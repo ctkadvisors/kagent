@@ -372,8 +372,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 18 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(18);
+  it('exports exactly 21 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 3 v0.4.4-locality)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(21);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -398,6 +398,10 @@ describe('event-types catalog', () => {
       'workflow.completed',
       'workflow.failed',
       'workflow.event_subscription_pending',
+      // v0.4.4-locality — Wave 3 / Locality sub-team additions.
+      'locality.speculative_spawned',
+      'locality.speculative_superseded',
+      'admission.pod_pressure_deferred',
     ]);
   });
 });

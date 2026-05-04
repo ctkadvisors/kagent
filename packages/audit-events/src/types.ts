@@ -65,7 +65,11 @@ export type AuditEventType =
   | 'workflow.step.completed'
   | 'workflow.completed'
   | 'workflow.failed'
-  | 'workflow.event_subscription_pending';
+  | 'workflow.event_subscription_pending'
+  /* v0.4.4-locality — Wave 3 / Locality sub-team. */
+  | 'locality.speculative_spawned'
+  | 'locality.speculative_superseded'
+  | 'admission.pod_pressure_deferred';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -361,6 +365,63 @@ export interface WorkflowEventSubscriptionPendingData {
 }
 
 /**
+ * `locality.speculative_spawned` — Wave 3 / Locality sub-team.
+ * Operator's locality engine spawned a duplicate of an in-flight
+ * AgentTask whose elapsed time crossed `threshold × median(historical)`
+ * for that Agent. The twin shares the primary's idempotency key; the
+ * Wave 1 cache prevents double-effect. First to terminal Completed
+ * wins; loser → `locality.speculative_superseded` + status `superseded`.
+ */
+export interface LocalitySpeculativeSpawnedData {
+  readonly primaryTaskUid: string;
+  readonly primaryTaskNamespace: string;
+  readonly primaryTaskName: string;
+  readonly twinTaskName: string;
+  readonly agentName: string;
+  /** Elapsed wall-clock ms between dispatch and the spawn decision. */
+  readonly elapsedMs: number;
+  /** Per-Agent median latency the engine compared elapsed against. */
+  readonly medianMs: number;
+  /** `threshold × medianMs`. Effective spawn boundary. */
+  readonly thresholdMs: number;
+}
+
+/**
+ * `locality.speculative_superseded` — Wave 3 / Locality sub-team.
+ * The race-loser of a speculative duplicate transitioned to the
+ * non-Failed terminal state `superseded`. The winner's outputs are
+ * the source of truth (recorded in the Wave 1 idempotency cache);
+ * the loser's loop work is discarded.
+ */
+export interface LocalitySpeculativeSupersededData {
+  readonly loserTaskUid: string;
+  readonly loserTaskNamespace: string;
+  readonly loserTaskName: string;
+  readonly winnerTaskUid: string;
+  readonly agentName: string;
+}
+
+/**
+ * `admission.pod_pressure_deferred` — Wave 3 / Locality sub-team.
+ * Admission refused to admit an AgentTask because the pending
+ * agent-pod count crossed `KAGENT_LOCALITY_MAX_PENDING_PODS`. The
+ * AgentTask stays Pending; the next informer event triggers
+ * re-evaluation. Distinct from `quota.breached` (Wave 4) which
+ * fires on quota-cap exhaustion — pod-pressure is a substrate-side
+ * backstop against pending-pod overload.
+ */
+export interface AdmissionPodPressureDeferredData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  /** Pending-pod count observed when admission deferred. */
+  readonly observed: number;
+  /** Threshold (default 50) the count crossed. */
+  readonly threshold: number;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -391,6 +452,19 @@ export type AuditEventData =
   | {
       readonly type: 'workflow.event_subscription_pending';
       readonly data: WorkflowEventSubscriptionPendingData;
+    }
+  /* v0.4.4-locality — Wave 3 / Locality sub-team. */
+  | {
+      readonly type: 'locality.speculative_spawned';
+      readonly data: LocalitySpeculativeSpawnedData;
+    }
+  | {
+      readonly type: 'locality.speculative_superseded';
+      readonly data: LocalitySpeculativeSupersededData;
+    }
+  | {
+      readonly type: 'admission.pod_pressure_deferred';
+      readonly data: AdmissionPodPressureDeferredData;
     };
 
 /**

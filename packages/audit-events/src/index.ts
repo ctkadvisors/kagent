@@ -23,6 +23,7 @@
  */
 
 export type {
+  AdmissionPodPressureDeferredData,
   AuditEvent,
   AuditEventData,
   AuditEventType,
@@ -32,6 +33,8 @@ export type {
   CloudEvent,
   ContractViolatedData,
   InfraFaultObservedData,
+  LocalitySpeculativeSpawnedData,
+  LocalitySpeculativeSupersededData,
   QuotaBreachedData,
   SecretAccessedData,
   SupervisionAppliedData,
@@ -48,12 +51,15 @@ export type {
 } from './types.js';
 
 export {
+  ADMISSION_POD_PRESSURE_DEFERRED,
   ALL_EVENT_TYPES,
   CAPABILITY_MINTED,
   CAPABILITY_USED,
   CHILD_SPAWNED,
   CONTRACT_VIOLATED,
   INFRA_FAULT_OBSERVED,
+  LOCALITY_SPECULATIVE_SPAWNED,
+  LOCALITY_SPECULATIVE_SUPERSEDED,
   QUOTA_BREACHED,
   SECRET_ACCESSED,
   SUPERVISION_APPLIED,
