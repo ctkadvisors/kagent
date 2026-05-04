@@ -40,6 +40,8 @@ import {
   taskDetail,
   taskSummary,
   traceLink,
+  type Agent,
+  type AgentTask,
   type TaskSummary,
 } from '@kagent/dto';
 
@@ -287,9 +289,9 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
         ? traceLink(task, { provider: 'langfuse', baseUrl: deps.langfuseBaseUrl })
         : null;
     if (link !== null) {
-      return c.json({ ...detail, traceLink: link });
+      return c.json({ ...detail, traceLink: link, pilotEvidence: pilotEvidence(task, agent) });
     }
-    return c.json(detail);
+    return c.json({ ...detail, pilotEvidence: pilotEvidence(task, agent) });
   });
 
   return app;
@@ -379,6 +381,194 @@ function formatFieldError(e: ValidationError): {
     case 'invalid-name':
       return { field: e.field, code: e.code };
   }
+}
+
+interface PilotEvidence {
+  readonly audit: {
+    readonly labels: Readonly<Record<string, string>>;
+    readonly annotations: Readonly<Record<string, string>>;
+    readonly tenant?: string;
+    readonly createdBy?: string;
+    readonly managedBy?: string;
+    readonly parentTaskUid?: string;
+  };
+  readonly policy: {
+    readonly agentResolved: boolean;
+    readonly tools?: readonly string[];
+    readonly capabilities?: readonly string[];
+    readonly allowedChildAgents?: readonly string[];
+    readonly allowedChildTemplates?: readonly string[];
+    readonly maxConcurrentChildren?: number;
+    readonly maxInFlightTasks?: number;
+  };
+  readonly taskGraph: {
+    readonly childCount?: number;
+    readonly successCount?: number;
+    readonly failureCount?: number;
+    readonly inFlightCount?: number;
+    readonly aggregatePhase?: string;
+    readonly parentTask?: string;
+  };
+  readonly artifacts: {
+    readonly count?: number;
+  };
+  readonly structuralVerdict?: {
+    readonly suspicious: readonly string[];
+  };
+  readonly verification?: {
+    readonly passed: boolean;
+    readonly mode: string;
+    readonly reason?: string;
+    readonly completedAt?: string;
+  };
+  readonly capabilityRef?: string;
+  readonly runConfig?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Enterprise-pilot evidence projection. This intentionally stays local
+ * to the Workbench API instead of expanding @kagent/dto: the fields are
+ * read-only and already present on cached CRD objects, but some are
+ * forward-wave status/spec fields whose DTO mirror may lag the operator
+ * schema. The route surfaces them for RC evidence capture without
+ * changing controllers or reconciler contracts.
+ */
+function pilotEvidence(task: AgentTask, agent: Agent | undefined): PilotEvidence {
+  const labels = filteredStringMap(task.metadata.labels);
+  const annotations = filteredStringMap(task.metadata.annotations);
+  const status = recordOrEmpty(task.status);
+  const spec = recordOrEmpty(task.spec);
+  const agentSpec = recordOrEmpty(agent?.spec);
+  const tenant = readString(labels['kagent.knuteson.io/tenant']);
+  const createdBy = readString(labels['app.kubernetes.io/created-by']);
+  const managedBy = readString(labels['kagent.knuteson.io/managed-by']);
+  const parentTaskUid = readString(labels['kagent.knuteson.io/parent-task-uid']);
+  const tools = readStringArray(agentSpec.tools);
+  const capabilities = readStringArray(agentSpec.capabilities);
+  const allowedChildAgents = readStringArray(agentSpec.allowedChildAgents);
+  const allowedChildTemplates = readStringArray(agentSpec.allowedChildTemplates);
+  const parentTask = readString(spec.parentTask);
+  const structuralVerdict = readStructuralVerdict(status.structuralVerdict);
+  const verification = readVerification(status.verification);
+  const capabilityRef = readString(status.capabilityRef);
+  const runConfig = readRunConfig(spec);
+
+  return {
+    audit: {
+      labels,
+      annotations,
+      ...(tenant !== undefined && { tenant }),
+      ...(createdBy !== undefined && { createdBy }),
+      ...(managedBy !== undefined && { managedBy }),
+      ...(parentTaskUid !== undefined && { parentTaskUid }),
+    },
+    policy: {
+      agentResolved: agent !== undefined,
+      ...(tools !== undefined && { tools }),
+      ...(capabilities !== undefined && { capabilities }),
+      ...(allowedChildAgents !== undefined && { allowedChildAgents }),
+      ...(allowedChildTemplates !== undefined && { allowedChildTemplates }),
+      ...(typeof agentSpec.maxConcurrentChildren === 'number' && {
+        maxConcurrentChildren: agentSpec.maxConcurrentChildren,
+      }),
+      ...(typeof agentSpec.maxInFlightTasks === 'number' && {
+        maxInFlightTasks: agentSpec.maxInFlightTasks,
+      }),
+    },
+    taskGraph: {
+      ...(typeof status.successCount === 'number' && { successCount: status.successCount }),
+      ...(typeof status.failureCount === 'number' && { failureCount: status.failureCount }),
+      ...(typeof status.inFlightCount === 'number' && { inFlightCount: status.inFlightCount }),
+      ...(typeof status.aggregatePhase === 'string' && { aggregatePhase: status.aggregatePhase }),
+      ...(parentTask !== undefined && { parentTask }),
+      ...(Array.isArray(status.children) && { childCount: status.children.length }),
+    },
+    artifacts: {
+      ...(Array.isArray(status.artifacts) && { count: status.artifacts.length }),
+    },
+    ...(structuralVerdict !== undefined && { structuralVerdict }),
+    ...(verification !== undefined && { verification }),
+    ...(capabilityRef !== undefined && { capabilityRef }),
+    ...(runConfig !== undefined && { runConfig }),
+  };
+}
+
+function filteredStringMap(value: unknown): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (value === null || typeof value !== 'object') return out;
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw !== 'string') continue;
+    if (isEvidenceMetadataKey(key)) out[key] = raw;
+  }
+  return out;
+}
+
+function isEvidenceMetadataKey(key: string): boolean {
+  return (
+    key.startsWith('kagent.knuteson.io/') ||
+    key === 'app.kubernetes.io/created-by' ||
+    key === 'app.kubernetes.io/managed-by' ||
+    key.startsWith('argocd.argoproj.io/')
+  );
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return {};
+  return value as Record<string, unknown>;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readStringArray(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((item): item is string => typeof item === 'string');
+  return strings.length === value.length ? strings : undefined;
+}
+
+function readStructuralVerdict(
+  value: unknown,
+): { readonly suspicious: readonly string[] } | undefined {
+  const verdict = recordOrEmpty(value);
+  const suspicious = readStringArray(verdict.suspicious);
+  if (suspicious === undefined) return undefined;
+  return { suspicious };
+}
+
+function readVerification(value: unknown):
+  | {
+      readonly passed: boolean;
+      readonly mode: string;
+      readonly reason?: string;
+      readonly completedAt?: string;
+    }
+  | undefined {
+  const verification = recordOrEmpty(value);
+  if (typeof verification.passed !== 'boolean') return undefined;
+  if (typeof verification.mode !== 'string' || verification.mode.length === 0) return undefined;
+  const reason = readString(verification.reason);
+  const completedAt = readString(verification.completedAt);
+  return {
+    passed: verification.passed,
+    mode: verification.mode,
+    ...(reason !== undefined && { reason }),
+    ...(completedAt !== undefined && { completedAt }),
+  };
+}
+
+function readRunConfig(
+  spec: Record<string, unknown>,
+): Readonly<Record<string, unknown>> | undefined {
+  const runConfig = recordOrEmpty(spec.runConfig);
+  const out: Record<string, unknown> = {};
+  for (const key of ['timeoutSeconds', 'maxIterations', 'tokenLimit', 'costLimitUsd']) {
+    const value = runConfig[key] ?? spec[key];
+    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**

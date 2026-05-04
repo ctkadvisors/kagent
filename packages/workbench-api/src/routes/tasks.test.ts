@@ -289,6 +289,142 @@ describe('tasksRoute', () => {
     expect(body.traceLink?.url).not.toContain('uid-trace-fixture');
   });
 
+  it('attaches pilot evidence from task metadata, status, and agent policy', async () => {
+    const cache = new SnapshotCache();
+    const agent = {
+      ...makeAgent('orchestrator', 'kagent-system'),
+      spec: {
+        ...makeAgent('orchestrator', 'kagent-system').spec,
+        tools: ['spawn_child_task', 'write_artifact'],
+        capabilities: ['orchestrate'],
+        allowedChildAgents: ['summarizer'],
+        allowedChildTemplates: ['researcher'],
+        maxConcurrentChildren: 3,
+        maxInFlightTasks: 2,
+      },
+    };
+    const baseTask = makeTask({
+      name: 'pilot-parent',
+      namespace: 'kagent-system',
+      uid: 'uid-pilot-parent',
+      targetAgent: 'orchestrator',
+      phase: 'Completed',
+    });
+    const task = {
+      ...baseTask,
+      metadata: {
+        ...baseTask.metadata,
+        labels: {
+          'kagent.knuteson.io/tenant': 'enterprise-pilot',
+          'kagent.knuteson.io/managed-by': 'kagent-operator',
+          'kagent.knuteson.io/parent-task-uid': 'uid-root',
+          'app.kubernetes.io/created-by': 'kagent-workbench-api',
+          'unrelated.example.com/noise': 'drop-me',
+        },
+        annotations: {
+          'kagent.knuteson.io/evidence-id': 'rc-2026-05-04',
+          'opaque.example.com/noise': 'drop-me',
+        },
+      },
+      spec: {
+        ...baseTask.spec,
+        parentTask: 'uid-root',
+        runConfig: { timeoutSeconds: 120, maxIterations: 8 },
+      },
+      status: {
+        ...baseTask.status,
+        structuralVerdict: { suspicious: [] },
+        artifacts: [{ uri: 'pvc://kagent-artifacts/uid-pilot-parent/digest.md' }],
+        children: [
+          {
+            name: 'pilot-child',
+            namespace: 'kagent-system',
+            uid: 'uid-child',
+            phase: 'Completed',
+          },
+        ],
+        aggregatePhase: 'AllComplete',
+        successCount: 1,
+        failureCount: 0,
+        inFlightCount: 0,
+        verification: {
+          passed: true,
+          mode: 'script',
+          completedAt: '2026-05-04T12:00:00Z',
+        },
+        capabilityRef: 'cap-jti-123',
+      },
+    } as AgentTask;
+    cache.upsertAgent(agent);
+    cache.upsertTask(task);
+
+    const res = await buildApp(cache).request('/api/tasks/kagent-system/pilot-parent');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      readonly pilotEvidence?: {
+        readonly audit: {
+          readonly labels: Readonly<Record<string, string>>;
+          readonly annotations: Readonly<Record<string, string>>;
+          readonly tenant?: string;
+          readonly createdBy?: string;
+          readonly managedBy?: string;
+          readonly parentTaskUid?: string;
+        };
+        readonly policy: {
+          readonly agentResolved: boolean;
+          readonly tools?: readonly string[];
+          readonly allowedChildAgents?: readonly string[];
+          readonly allowedChildTemplates?: readonly string[];
+          readonly maxConcurrentChildren?: number;
+          readonly maxInFlightTasks?: number;
+        };
+        readonly taskGraph: {
+          readonly childCount?: number;
+          readonly successCount?: number;
+          readonly failureCount?: number;
+          readonly inFlightCount?: number;
+          readonly aggregatePhase?: string;
+          readonly parentTask?: string;
+        };
+        readonly artifacts: { readonly count?: number };
+        readonly verification?: { readonly passed: boolean; readonly mode: string };
+        readonly capabilityRef?: string;
+        readonly runConfig?: Readonly<Record<string, unknown>>;
+      };
+    };
+    expect(body.pilotEvidence?.audit.tenant).toBe('enterprise-pilot');
+    expect(body.pilotEvidence?.audit.createdBy).toBe('kagent-workbench-api');
+    expect(body.pilotEvidence?.audit.managedBy).toBe('kagent-operator');
+    expect(body.pilotEvidence?.audit.parentTaskUid).toBe('uid-root');
+    expect(body.pilotEvidence?.audit.labels['unrelated.example.com/noise']).toBeUndefined();
+    expect(body.pilotEvidence?.audit.annotations['kagent.knuteson.io/evidence-id']).toBe(
+      'rc-2026-05-04',
+    );
+    expect(body.pilotEvidence?.policy.agentResolved).toBe(true);
+    expect(body.pilotEvidence?.policy.tools).toEqual(['spawn_child_task', 'write_artifact']);
+    expect(body.pilotEvidence?.policy.allowedChildAgents).toEqual(['summarizer']);
+    expect(body.pilotEvidence?.policy.allowedChildTemplates).toEqual(['researcher']);
+    expect(body.pilotEvidence?.policy.maxConcurrentChildren).toBe(3);
+    expect(body.pilotEvidence?.policy.maxInFlightTasks).toBe(2);
+    expect(body.pilotEvidence?.taskGraph).toMatchObject({
+      childCount: 1,
+      successCount: 1,
+      failureCount: 0,
+      inFlightCount: 0,
+      aggregatePhase: 'AllComplete',
+      parentTask: 'uid-root',
+    });
+    expect(body.pilotEvidence?.artifacts.count).toBe(1);
+    expect(body.pilotEvidence?.verification).toEqual({
+      passed: true,
+      mode: 'script',
+      completedAt: '2026-05-04T12:00:00Z',
+    });
+    expect(body.pilotEvidence?.capabilityRef).toBe('cap-jti-123');
+    expect(body.pilotEvidence?.runConfig).toEqual({ timeoutSeconds: 120, maxIterations: 8 });
+  });
+
   /* ===================================================================
    * POST /api/tasks — WS-J write surface
    * =================================================================== */
