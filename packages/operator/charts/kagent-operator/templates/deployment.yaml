@@ -558,7 +558,6 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             # ---------------------------------------------------------------
-<<<<<<< HEAD
             # Wave 4 — Egress (v0.5.1-egress)
             # ---------------------------------------------------------------
             - name: KAGENT_EGRESS_ENABLED
@@ -576,24 +575,15 @@ spec:
               value: {{ .Values.quotas.defaultCasBytesGiB | quote }}
             - name: KAGENT_QUOTAS_CAS_WALK_INTERVAL_MINUTES
               value: {{ .Values.quotas.casWalkIntervalMinutes | quote }}
-=======
+            # ---------------------------------------------------------------
             # Wave 4 — Versioning (v0.5.3-versioning)
             # ---------------------------------------------------------------
-            # When `versioning.enabled=true`, the operator runs the
-            # AgentVersionIndex hydration + the deprecation lifecycle
-            # sweeper (1h tick). The Agent immutability admission
-            # webhook itself is served via a K8s
-            # ValidatingWebhookConfiguration the chart provisions
-            # alongside (templates/versioning-webhook.yaml).
-            # Default-OFF for gradual roll-out — existing installs
-            # continue working unchanged when the env is unset.
             - name: KAGENT_VERSIONING_ENABLED
               value: {{ .Values.versioning.enabled | ternary "true" "false" | quote }}
             {{- if .Values.versioning.enabled }}
             - name: KAGENT_VERSIONING_WEBHOOK_PORT
               value: {{ .Values.versioning.webhook.port | quote }}
             {{- end }}
->>>>>>> origin/feat/wave4-versioning
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).
