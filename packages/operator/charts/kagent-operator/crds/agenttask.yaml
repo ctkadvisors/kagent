@@ -298,6 +298,17 @@ spec:
                     Agent.spec.maxRestarts; when >= maxRestarts the
                     operator fails-closed with
                     reason=restart_limit_exceeded.
+                # ---- v0.5.3-versioning — Wave 4 / Versioning sub-team.
+                agentVersion:
+                  type: string
+                  description: |
+                    Resolved Agent.spec.version at AgentTask admission
+                    time. IMMUTABLE on the AgentTask post-admission —
+                    the operator fetches the EXACT (name, version)
+                    Agent CR for Job-build even when newer versions
+                    have since been published. Defaults to '0.0.0' on
+                    admission when the resolved Agent declared no
+                    version (legacy v0.1 CR).
                 verification:
                   type: object
                   description: |

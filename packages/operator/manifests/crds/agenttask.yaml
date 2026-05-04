@@ -384,6 +384,18 @@ spec:
                     Compared against Agent.spec.maxRestarts; when
                     >= maxRestarts the operator fails-closed instead
                     of restarting.
+                # ---- v0.5.3-versioning — Wave 4 / Versioning sub-team.
+                agentVersion:
+                  type: string
+                  description: |
+                    Resolved Agent.spec.version at AgentTask admission
+                    time. IMMUTABLE on the AgentTask after admission —
+                    the operator's Job builder uses (metadata.name +
+                    spec.version === task.status.agentVersion) to fetch
+                    the EXACT Agent CR even when newer versions of the
+                    same Agent name have since been published.
+                    Defaults to '0.0.0' on admission when the resolved
+                    Agent declared no version (legacy v0.1 CR).
                 verification:
                   type: object
                   description: |

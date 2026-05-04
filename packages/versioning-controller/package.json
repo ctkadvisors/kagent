@@ -1,0 +1,27 @@
+{
+  "name": "@kagent/versioning-controller",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wave 4 / Versioning sub-team — Agent immutability admission webhook + version-pinning + multi-version Agent registry + deprecation lifecycle. Pure helpers consumed by the operator.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -1032,6 +1032,68 @@ quotas:
   # CAS walker cadence. Lower bound 1 minute (defense against typo'd 0).
   casWalkIntervalMinutes: 10
 
+# ---------------------------------------------------------------------
+# Wave 4 — Versioning (v0.5.3-versioning)
+# ---------------------------------------------------------------------
+# Agent immutability admission webhook + multi-version registry +
+# deprecation lifecycle. Per docs/SUBSTRATE-V1.md §3.1 (Agent —
+# immutable + versioned) + docs/WAVES.md §6.4.
+#
+# Once enabled, the operator:
+#   1. Refuses any `Agent.spec.*` mutation post-publication via a K8s
+#      ValidatingAdmissionWebhook (the only allowed mutation is
+#      flipping `kagent.knuteson.io/published: false → true` once).
+#   2. Indexes Agents by (name, version). NEW AgentTasks pin to the
+#      LATEST version of their target Agent at admission time;
+#      in-flight tasks pinned to OLDER versions continue against the
+#      immutable older Agent CR.
+#   3. Walks the index every hour and classifies each Agent as
+#      `active` / `deprecated` / `removed` per its
+#      `kagent.knuteson.io/deprecated` + `kagent.knuteson.io/removed-at`
+#      annotations. Removed Agents refuse NEW tasks with
+#      `policy_denied:agent_removed`; deprecated Agents emit
+#      `agent.deprecated_used` warnings (no refusal).
+#
+# DEFAULT-OFF — gradual roll-out. Cluster operators verify the
+# webhook cert provisioning (cert-manager-issued, mounted via the
+# `webhook-secret.yaml` template added by this sub-team) BEFORE
+# flipping `versioning.enabled: true`. The ValidatingWebhookConfiguration
+# is rendered alongside; flipping `enabled: false` un-renders both
+# (no orphan webhook config refusing mutations).
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_VERSIONING_ENABLED=true|false
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 4 — Versioning" block.
+# CRD additions: `Agent.spec.version: string` is additive on the
+# existing Agent CRD; `AgentTask.status.agentVersion: string` is
+# additive on the existing AgentTask CRD. Both are optional in the
+# OpenAPI schema (back-compat with v0.1 Agents).
+versioning:
+  enabled: false
+  webhook:
+    # Service exposing the operator's ValidatingAdmissionWebhook
+    # endpoint. Defaults to the operator's existing service. The
+    # apiserver POSTs AdmissionReview payloads to
+    # `https://<serviceName>.<release-namespace>.svc:443/validate-agents`.
+    serviceName: ''
+    # K8s ValidatingWebhookConfiguration `failurePolicy`. Default
+    # `Fail` (refuse on webhook unreachable) — stricter than the K8s
+    # default `Ignore`. Flip to `Ignore` only during initial cert
+    # provisioning when the webhook isn't yet healthy.
+    failurePolicy: 'Fail'
+    # Webhook bind port on the operator container (HTTPS). cert-manager
+    # provisions the serving cert; the operator mounts it at /tls.
+    port: 9443
+    # cert-manager Issuer name in the release namespace. The webhook
+    # secret references this issuer via cert-manager.io/inject-ca-from
+    # annotations on the ValidatingWebhookConfiguration. Empty leaves
+    # the templates in place but unrendered until set.
+    certIssuer: ''
+    # cert-manager Issuer kind (Issuer | ClusterIssuer). Default
+    # Issuer (release-namespace-scoped).
+    certIssuerKind: 'Issuer'
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

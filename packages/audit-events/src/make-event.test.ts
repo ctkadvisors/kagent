@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 36 event-type strings (Wave 0-4 sum incl. egress + quotas)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(36);
+  it('exports exactly 39 event-type strings (Wave 0-4 sum incl. egress + quotas + versioning)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(39);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -464,6 +464,10 @@ describe('event-types catalog', () => {
       'quota.storage_exceeded',
       'quota.compute_warning',
       'quota.resource_quota_applied',
+      // v0.5.3-versioning — Wave 4 / Versioning sub-team additions.
+      'agent.published',
+      'agent.mutation_refused',
+      'agent.deprecated_used',
     ]);
   });
 });

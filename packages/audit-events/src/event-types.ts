@@ -110,9 +110,15 @@ export const QUOTA_STORAGE_EXCEEDED = 'quota.storage_exceeded' as const;
 export const QUOTA_COMPUTE_WARNING = 'quota.compute_warning' as const;
 export const QUOTA_RESOURCE_QUOTA_APPLIED = 'quota.resource_quota_applied' as const;
 
+/* v0.5.3-versioning — Wave 4 / Versioning sub-team. Agent immutability +
+ * version-pinning + deprecation lifecycle audit events. */
+export const AGENT_PUBLISHED = 'agent.published' as const;
+export const AGENT_MUTATION_REFUSED = 'agent.mutation_refused' as const;
+export const AGENT_DEPRECATED_USED = 'agent.deprecated_used' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(36)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(39)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -152,4 +158,7 @@ export const ALL_EVENT_TYPES = Object.freeze([
   QUOTA_STORAGE_EXCEEDED,
   QUOTA_COMPUTE_WARNING,
   QUOTA_RESOURCE_QUOTA_APPLIED,
+  AGENT_PUBLISHED,
+  AGENT_MUTATION_REFUSED,
+  AGENT_DEPRECATED_USED,
 ] as const);

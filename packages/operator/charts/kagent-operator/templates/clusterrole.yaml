@@ -216,8 +216,7 @@ rules:
   # ---------------------------------------------------------------------
   # Wave 4 — Egress (v0.5.1-egress)
   # ---------------------------------------------------------------------
-  # NetworkPolicy + CiliumNetworkPolicy verbs for per-Agent egress
-  # policies (Agent.spec.egress + Tenant.spec.defaultEgress fallback).
+  # NetworkPolicy + CiliumNetworkPolicy verbs.
   - apiGroups: ['networking.k8s.io']
     resources: ['networkpolicies']
     verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
@@ -227,9 +226,14 @@ rules:
   # ---------------------------------------------------------------------
   # Wave 4 — Quotas (v0.5.2-quotas)
   # ---------------------------------------------------------------------
-  # K8s ResourceQuota per (tenant, namespace) from
-  # Tenant.spec.defaultQuota.compute.
   - apiGroups: ['']
     resources: ['resourcequotas']
     verbs: ['get', 'list', 'watch', 'create', 'patch', 'update', 'delete']
+  # ---------------------------------------------------------------------
+  # Wave 4 — Versioning (v0.5.3-versioning)
+  # ---------------------------------------------------------------------
+  # ValidatingWebhookConfiguration for Agent immutability.
+  - apiGroups: ['admissionregistration.k8s.io']
+    resources: ['validatingwebhookconfigurations']
+    verbs: ['get', 'list', 'watch', 'create', 'update', 'patch']
   # ---------------------------------------------------------------------

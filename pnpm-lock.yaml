@@ -239,6 +239,9 @@ importers:
       '@kagent/triggers':
         specifier: workspace:*
         version: link:../triggers
+      '@kagent/versioning-controller':
+        specifier: workspace:*
+        version: link:../versioning-controller
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
@@ -291,6 +294,8 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+
+  packages/versioning-controller: {}
 
   packages/workbench-api:
     dependencies:

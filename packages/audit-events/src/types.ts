@@ -89,7 +89,11 @@ export type AuditEventType =
   | 'quota.gateway_inflight_exceeded'
   | 'quota.storage_exceeded'
   | 'quota.compute_warning'
-  | 'quota.resource_quota_applied';
+  | 'quota.resource_quota_applied'
+  /* v0.5.3-versioning — Wave 4 / Versioning sub-team. */
+  | 'agent.published'
+  | 'agent.mutation_refused'
+  | 'agent.deprecated_used';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -565,6 +569,27 @@ export interface EgressPolicyViolationData {
 }
 
 /**
+ * `agent.published` — Wave 4 / Versioning sub-team.
+ */
+export interface AgentPublishedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentVersion: string;
+  readonly agentUid: string | undefined;
+}
+
+/**
+ * `agent.mutation_refused` — Wave 4 / Versioning sub-team.
+ */
+export interface AgentMutationRefusedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentVersion: string;
+  readonly reason: string;
+  readonly message: string;
+}
+
+/**
  * v0.5.2-quotas — `quota.gateway_inflight_exceeded`.
  */
 export interface QuotaGatewayInflightExceededData {
@@ -606,6 +631,19 @@ export interface QuotaResourceQuotaAppliedData {
   readonly resourceQuotaName: string;
   readonly hard: { readonly [k: string]: string };
   readonly action: 'created' | 'updated' | 'unchanged' | 'deleted';
+}
+
+/**
+ * `agent.deprecated_used` — Wave 4 / Versioning sub-team.
+ */
+export interface AgentDeprecatedUsedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentVersion: string;
+  readonly taskUid: string | undefined;
+  readonly taskName: string;
+  readonly taskNamespace: string;
+  readonly removedAt: string | undefined;
 }
 
 /**
@@ -678,7 +716,11 @@ export type AuditEventData =
   | {
       readonly type: 'quota.resource_quota_applied';
       readonly data: QuotaResourceQuotaAppliedData;
-    };
+    }
+  /* v0.5.3-versioning — Wave 4 / Versioning sub-team. */
+  | { readonly type: 'agent.published'; readonly data: AgentPublishedData }
+  | { readonly type: 'agent.mutation_refused'; readonly data: AgentMutationRefusedData }
+  | { readonly type: 'agent.deprecated_used'; readonly data: AgentDeprecatedUsedData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and
