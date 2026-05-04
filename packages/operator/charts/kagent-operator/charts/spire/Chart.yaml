@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Wave 3 / Identity (v0.4.3-identity) — kagent SPIRE sub-chart.
+#
+# Provisions a minimal SPIFFE/SPIRE deployment under the kagent
+# operator's umbrella so workloads in the kagent namespace can
+# attest via the SPIRE Workload-API and receive per-pod SVIDs.
+#
+# Default OFF — enable via `identity.enabled=true` on the parent chart.
+# When disabled, this sub-chart renders ZERO resources (every template
+# is gated on `.Values.global.identity.enabled` per the parent's
+# values handoff).
+#
+# Wave 3 v0.4.3 ships a single-node, in-memory SPIRE Server
+# StatefulSet (`replicas=1`) + a SPIRE Agent DaemonSet that mounts the
+# Workload-API UDS at `hostPath: /run/kagent-spire/sockets`. This
+# is sufficient for homelab K3s (which is single-node by definition);
+# multi-node Wave 4 brings hardened HA + persistent SQL backend per
+# the SPIRE Helm chart upstream.
+#
+# Upstream reference: https://artifacthub.io/packages/helm/spiffe/spire-server
+# We do NOT depend on the upstream chart in v0.4.3 — kagent's needs are
+# narrow enough (single trust domain, K8s SA + workload-attestor only)
+# that a small in-tree templates set is more legible than a values-only
+# wrapper around an external sub-chart. Wave 4 KeyRotation will
+# evaluate the swap.
+apiVersion: v2
+name: spire
+description: |
+  SPIFFE/SPIRE substrate for kagent — Server StatefulSet + Agent DaemonSet.
+  Ships per-pod SVID issuance via the Workload-API socket. Default OFF.
+type: application
+version: 0.0.1
+appVersion: '1.9.0'
+home: https://github.com/ctkadvisors/kagent
+sources:
+  - https://github.com/ctkadvisors/kagent
+  - https://spiffe.io/
+maintainers:
+  - name: Chris Knuteson
+    email: chris@ctkadvisors.net
+keywords:
+  - spire
+  - spiffe
+  - identity
+  - mtls
+  - kagent

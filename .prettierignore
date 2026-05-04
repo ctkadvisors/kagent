@@ -22,6 +22,10 @@ LICENSE
 # remain prettier-managed; only templates/ is exempt.
 packages/operator/charts/*/templates/
 packages/operator/charts/*/templates/**
+# Wave 3 v0.4.3-identity — embedded SPIRE sub-chart templates also use
+# Helm templating; same prettier-incompat as the parent's templates/.
+packages/operator/charts/*/charts/*/templates/
+packages/operator/charts/*/charts/*/templates/**
 packages/llm-gateway/charts/*/templates/
 packages/llm-gateway/charts/*/templates/**
 
@@ -29,3 +33,4 @@ packages/llm-gateway/charts/*/templates/**
 # dependency update`, not by hand. Don't reformat the locked digests.
 packages/llm-gateway/charts/*/charts/
 packages/llm-gateway/charts/*/Chart.lock
+packages/operator/charts/*/Chart.lock

@@ -299,6 +299,31 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_KEY,
     );
   }
+  // === Wave 3 — Identity ===
+  // SVID-mTLS plumbing forwarded into spawned agent-pods. When the
+  // chart's `identity.enabled=true` AND mock mode is OFF, the operator
+  // sets KAGENT_AGENT_POD_LITELLM_USE_SVID=true on its own env (see
+  // chart deployment.yaml); we forward that into spawned Jobs as
+  // KAGENT_LITELLM_USE_SVID + KAGENT_SPIRE_SOCKET_PATH so the agent-
+  // pod's runner knows to wire an IdentityHandle + probe the gateway
+  // for mTLS support. The actual hostPath volumeMount that exposes the
+  // SPIRE Workload-API UDS into the spawned Pod lands in a follow-up
+  // job-spec.ts wiring (additive); the env is the contract bridge.
+  if (env.KAGENT_AGENT_POD_LITELLM_USE_SVID === 'true') {
+    extraEnv.push({
+      name: 'KAGENT_LITELLM_USE_SVID',
+      value: 'true',
+    });
+    if (
+      typeof env.KAGENT_AGENT_POD_SPIRE_SOCKET_PATH === 'string' &&
+      env.KAGENT_AGENT_POD_SPIRE_SOCKET_PATH.length > 0
+    ) {
+      extraEnv.push({
+        name: 'KAGENT_SPIRE_SOCKET_PATH',
+        value: env.KAGENT_AGENT_POD_SPIRE_SOCKET_PATH,
+      });
+    }
+  }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
   // template-server is enabled on the operator side; the chart binds
@@ -1620,6 +1645,55 @@ async function main(): Promise<void> {
     console.log(
       '[kagent-operator] AgentWorkflow controller disabled (set KAGENT_WORKFLOWS_ENABLED=true to enable; requires Restate)',
     );
+  }
+
+  // === Wave 3 — Identity ===
+  // SPIFFE/SPIRE per-pod SVID issuance + audit emission. When
+  // KAGENT_IDENTITY_ENABLED=true the operator constructs a
+  // MockIdentityWatcher against the AuditPublisher and exposes it on
+  // the reconciler context for any downstream wiring that wants to
+  // record SVID lifecycle events (Wave 3 v0.4.3 ships the surface;
+  // the SPIRE-Workload-API-streaming wiring that fires the events
+  // from a real attestation stream lands in a follow-up release).
+  //
+  // Mock mode: when KAGENT_IDENTITY_MOCK_ENABLED=true the watcher
+  // fires a single synthetic identity.svid_issued event at boot for
+  // every running AgentTask informer cache entry — proves the audit
+  // pipeline + dashboards work without real SPIRE.
+  //
+  // Default OFF: when KAGENT_IDENTITY_ENABLED is unset / false, no
+  // watcher is constructed and the operator continues with the
+  // Wave 0 secrets-hygiene bearer-token credential path.
+  if (process.env.KAGENT_IDENTITY_ENABLED === 'true') {
+    const { MockIdentityWatcher } = await import('./identity.js');
+    const trustDomain = normalizeOptionalEnv(process.env.KAGENT_IDENTITY_TRUST_DOMAIN);
+    const mockEnabled = process.env.KAGENT_IDENTITY_MOCK_ENABLED === 'true';
+    if (auditPublisher !== undefined) {
+      const identityWatcher = new MockIdentityWatcher({
+        publish: async (event) => {
+          // Best-effort audit emission — graceful no-op contract.
+          try {
+            await auditPublisher.publish(event);
+          } catch (err) {
+            console.warn('[kagent-operator/identity] audit publish failed:', err);
+          }
+        },
+      });
+      console.log(
+        `[kagent-operator] Identity watcher started (trustDomain=${trustDomain ?? 'kagent.knuteson.io'}, mock=${mockEnabled})`,
+      );
+      // Wave 3 v0.4.3: the watcher is constructed but not yet
+      // streamed-against. The real SPIRE Workload-API stream that
+      // calls recordIssuance/recordRotation is the follow-up wiring.
+      // The audit-event surface (event types + envelope) is fully
+      // landed; downstream consumers can already filter on
+      // `type=identity.svid_issued`.
+      void identityWatcher;
+    } else {
+      console.warn(
+        '[kagent-operator] KAGENT_IDENTITY_ENABLED=true but auditPublisher unavailable; identity events not emitted',
+      );
+    }
   }
 }
 

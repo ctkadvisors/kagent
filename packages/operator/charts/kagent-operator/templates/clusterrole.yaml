@@ -173,3 +173,21 @@ rules:
   - apiGroups: ['']
     resources: ['secrets']
     verbs: ['get', 'create', 'patch', 'delete']
+  # ---------------------------------------------------------------------
+  # Wave 3 — Identity (v0.4.3-identity)
+  # ---------------------------------------------------------------------
+  # SPIFFE/SPIRE per-pod SVID issuance. The operator-side identity
+  # watcher (packages/operator/src/identity.ts MockIdentityWatcher)
+  # consumes events the SPIRE Workload-API streams; the SPIRE Server
+  # + Agent ship in the embedded `charts/spire/` sub-chart with
+  # their OWN ClusterRoles (k8s_psat attestor + tokenreviews + pods/
+  # nodes reads). The parent operator does NOT need additional verbs
+  # in v0.4.3 — its identity machinery operates entirely on the
+  # mounted SPIRE-CA-bundle PEM (read via the operator's existing
+  # /tmp filesystem) + the audit pipeline (already covered by
+  # `events: [create,patch]` above). When the Wave 3 follow-up wires
+  # a kagent-side RegistrationEntry controller, the verbs that
+  # controller needs land under THIS section header (likely
+  # `spire.spiffe.io/registrationentries` once SPIRE Server's CRDs
+  # are provisioned).
+  # ---------------------------------------------------------------------

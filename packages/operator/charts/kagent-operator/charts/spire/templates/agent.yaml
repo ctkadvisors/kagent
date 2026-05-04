@@ -1,0 +1,156 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+SPIRE Agent DaemonSet. One Agent per node, mounting hostPath
+`/run/kagent-spire/sockets` so workloads on that node can connect to
+the Workload-API UDS without per-pod sidecars.
+
+The Agent attests to the Server via K8s_PSAT (Projected SA Token);
+each Agent then issues SVIDs to any pod whose registration entry
+matches its workload-attestor selectors (k8s sa, pod label, namespace).
+
+Default OFF — gated on `global.identity.enabled`. Mock mode renders
+zero workloads.
+*/}}
+
+{{- if and (eq (include "kagent-spire.enabled" .) "true") (not (eq (include "kagent-spire.mockMode" .) "true")) }}
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kagent-spire.agentName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kagent-spire.agentName" . }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+rules:
+  # The K8s workload-attestor reads pods + node objects to map a
+  # connecting socket peer back to a registration entry.
+  - apiGroups: ['']
+    resources: ['pods', 'nodes', 'nodes/proxy']
+    verbs: ['get', 'list', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kagent-spire.agentName" . }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kagent-spire.agentName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-spire.agentName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kagent-spire.agentName" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire/data"
+      log_level = "{{ .Values.agent.logLevel }}"
+      server_address = "{{ include "kagent-spire.serverName" . }}.{{ .Release.Namespace }}.svc.cluster.local"
+      server_port = "{{ .Values.server.servicePort }}"
+      socket_path = "{{ .Values.agent.hostSocketDir }}/agent.sock"
+      trust_bundle_path = "/run/spire/bundle/bundle.crt"
+      trust_domain = "{{ include "kagent-spire.trustDomain" . }}"
+    }
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "kagent-cluster"
+        }
+      }
+      KeyManager "memory" {
+        plugin_data {}
+      }
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          skip_kubelet_verification = true
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "kagent-spire.agentName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-spire.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      {{- include "kagent-spire.labels" . | nindent 6 }}
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-spire.labels" . | nindent 8 }}
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: {{ include "kagent-spire.agentName" . }}
+      hostPID: true
+      hostNetwork: false
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: spire-agent
+          image: '{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}'
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          args:
+            - '-config'
+            - '/run/spire/config/agent.conf'
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: bundle
+              mountPath: /run/spire/bundle
+              readOnly: true
+            - name: agent-socket
+              mountPath: {{ .Values.agent.hostSocketDir }}
+            - name: token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kagent-spire.agentName" . }}-config
+        - name: bundle
+          # Wave 3 v0.4.3 — the Server's k8sbundle Notifier writes the
+          # trust bundle into a ConfigMap named `spire-bundle` in this
+          # namespace; Wave 4 will tighten with cert-manager rotation.
+          configMap:
+            name: spire-bundle
+            optional: true
+        - name: agent-socket
+          hostPath:
+            path: {{ .Values.agent.hostSocketDir }}
+            type: DirectoryOrCreate
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: spire-agent
+                  audience: spire-server
+                  expirationSeconds: 7200
+
+{{- end }}
