@@ -22,6 +22,34 @@ const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
 const DEFAULT_BACKOFF_LIMIT = 0; // Don't retry — operator owns retry policy.
 const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 3600; // GC completed Pods after 1h.
 
+/**
+ * Single env-var entry on a spawned Job. Either an inline plaintext
+ * value or a `valueFrom.secretKeyRef` pointing at an existing Secret in
+ * the AgentTask's namespace.
+ *
+ * The two shapes are mutually exclusive at the type level — pick one.
+ * `buildJobSpec` forwards each entry verbatim into the rendered Job's
+ * env array (no shape coercion). The secret-ref shape is the v0.1.8
+ * secret-hygiene contract: any name matching `/KEY|SECRET/i` MUST be
+ * supplied via `valueFrom.secretKeyRef` so the plaintext never lives in
+ * the operator's memory or in the Job's etcd object. See
+ * `docs/WAVES.md` §2.1 + the unit test
+ * `buildJobSpec > emits ZERO inline value: entries for ...` which fails
+ * the build on any inline `value:` for a sensitive name.
+ */
+export type EnvVarSpec =
+  | { readonly name: string; readonly value: string; readonly valueFrom?: never }
+  | {
+      readonly name: string;
+      readonly value?: never;
+      readonly valueFrom: {
+        readonly secretKeyRef: {
+          readonly name: string;
+          readonly key: string;
+        };
+      };
+    };
+
 export interface BuildJobSpecOptions {
   /** Container image for the agent pod. Defaults to the v0.0.1 placeholder. */
   readonly image?: string;
@@ -64,8 +92,19 @@ export interface BuildJobSpecOptions {
    * plumb agent-pod runtime config (e.g. KAGENT_LITELLM_BASE_URL,
    * KAGENT_NATS_URL, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) from its
    * own env into the spawned pod without per-Agent overrides.
+   *
+   * v0.1.8 — secret-hygiene: each entry is EITHER an inline
+   * `{ name, value }` (plaintext, fine for non-sensitive config) OR a
+   * `{ name, valueFrom: { secretKeyRef: { name, key } } }` (preferred
+   * for any name matching `/KEY|SECRET/i`). The secretRef shape is
+   * forwarded verbatim into the spawned-Job's `env[i].valueFrom`, so
+   * the plaintext never lives in the operator's memory or in the
+   * Job's etcd object — `kubectl describe pod` and `/proc/<pid>/environ`
+   * surface the resolved value only at runtime, never in the rendered
+   * Job spec. See `EnvVarSpec` above + the unit test that locks the
+   * shape.
    */
-  readonly extraEnv?: readonly { readonly name: string; readonly value: string }[];
+  readonly extraEnv?: readonly EnvVarSpec[];
   /**
    * Artifact PVC plumbing — Phase 5 / P3. When set, the operator mounts
    * the named PVC at `mountPath` in the agent container and injects
@@ -187,7 +226,22 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     );
   }
 
-  const env: { name: string; value: string }[] = [
+  // Each container env entry is one of:
+  //   - inline plaintext: { name, value }
+  //   - secret-ref:       { name, valueFrom: { secretKeyRef: { name, key } } }
+  // The two shapes are deliberately mixed here so the secret-ref entries
+  // forwarded by the operator's main.ts (per the v0.1.8 secret-hygiene
+  // contract — see EnvVarSpec) pass through to the rendered Job spec
+  // verbatim, never coerced back into a plaintext value:.
+  type RenderedEnv =
+    | { readonly name: string; readonly value: string }
+    | {
+        readonly name: string;
+        readonly valueFrom: {
+          readonly secretKeyRef: { readonly name: string; readonly key: string };
+        };
+      };
+  const env: RenderedEnv[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
     { name: 'KAGENT_TASK_NAMESPACE', value: namespace },
@@ -195,7 +249,26 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
     { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
     ...artifactEnv,
-    ...(opts.extraEnv ?? []).map((e) => ({ name: e.name, value: e.value })),
+    ...(opts.extraEnv ?? []).map((e): RenderedEnv => {
+      // Discriminate by presence of valueFrom. The EnvVarSpec union
+      // makes the two arms mutually exclusive; we forward the
+      // secretKeyRef object verbatim — no copy / no coerce — so a
+      // future addition to the K8s `valueFrom` schema (configMapKeyRef,
+      // fieldRef) is a one-line union extension above and a one-line
+      // arm extension here.
+      if ('valueFrom' in e && e.valueFrom !== undefined) {
+        return {
+          name: e.name,
+          valueFrom: {
+            secretKeyRef: {
+              name: e.valueFrom.secretKeyRef.name,
+              key: e.valueFrom.secretKeyRef.key,
+            },
+          },
+        };
+      }
+      return { name: e.name, value: e.value };
+    }),
   ];
 
   // Volume + volumeMount for the artifact PVC. Volume lives at the
