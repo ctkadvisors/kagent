@@ -37,6 +37,11 @@ export type {
   TaskCompletedData,
   TaskFailedData,
   TaskSpawnedData,
+  WorkflowCompletedData,
+  WorkflowEventSubscriptionPendingData,
+  WorkflowFailedData,
+  WorkflowStartedData,
+  WorkflowStepCompletedData,
 } from './types.js';
 
 export {
@@ -51,6 +56,11 @@ export {
   TASK_COMPLETED,
   TASK_FAILED,
   TASK_SPAWNED,
+  WORKFLOW_COMPLETED,
+  WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
+  WORKFLOW_FAILED,
+  WORKFLOW_STARTED,
+  WORKFLOW_STEP_COMPLETED,
 } from './event-types.js';
 
 export { makeEvent } from './make-event.js';

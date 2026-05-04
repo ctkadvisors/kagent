@@ -372,8 +372,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 10 event-type strings (matches SUBSTRATE-V1.md §4.3)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(10);
+  it('exports exactly 15 event-type strings (10 from §4.3 + 5 from v0.3.2-workflows)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(15);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -388,6 +388,12 @@ describe('event-types catalog', () => {
       'secret.accessed',
       'quota.breached',
       'contract.violated',
+      // v0.3.2-workflows — Wave 2 / Workflows sub-team additions.
+      'workflow.started',
+      'workflow.step.completed',
+      'workflow.completed',
+      'workflow.failed',
+      'workflow.event_subscription_pending',
     ]);
   });
 });
