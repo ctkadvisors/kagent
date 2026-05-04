@@ -166,3 +166,191 @@ describe('buildUsageResponse', () => {
     expect(r.rows).toHaveLength(1);
   });
 });
+
+/* =====================================================================
+ * v0.1.12-keys-rest — POST/GET/DELETE /admin/keys handlers.
+ * ===================================================================== */
+
+describe('parseCreateApiKeyBody', () => {
+  it('accepts a minimal body (label only)', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(parseCreateApiKeyBody({ label: 'cli' })).toEqual({ label: 'cli' });
+  });
+
+  it('preserves modelAllowlist + expiresAt when supplied', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(
+      parseCreateApiKeyBody({
+        label: 'researcher',
+        modelAllowlist: ['gpt-4o', 'claude-3.5'],
+        expiresAt: '2030-01-01T00:00:00Z',
+      }),
+    ).toEqual({
+      label: 'researcher',
+      modelAllowlist: ['gpt-4o', 'claude-3.5'],
+      expiresAt: '2030-01-01T00:00:00Z',
+    });
+  });
+
+  it('rejects a missing label', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(() => parseCreateApiKeyBody({})).toThrowError(/label/);
+  });
+
+  it('rejects an empty-string label', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(() => parseCreateApiKeyBody({ label: '' })).toThrowError(/label/);
+  });
+
+  it('rejects a non-string label', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(() => parseCreateApiKeyBody({ label: 42 })).toThrowError(/label/);
+  });
+
+  it('rejects modelAllowlist if not an array of strings', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(() => parseCreateApiKeyBody({ label: 'a', modelAllowlist: 'not-array' })).toThrowError(
+      /modelAllowlist/,
+    );
+    expect(() => parseCreateApiKeyBody({ label: 'a', modelAllowlist: [1, 2] })).toThrowError(
+      /modelAllowlist/,
+    );
+  });
+
+  it('rejects expiresAt that is not a string', async () => {
+    const { parseCreateApiKeyBody } = await import('./admin-routes.js');
+    expect(() => parseCreateApiKeyBody({ label: 'a', expiresAt: 1234 })).toThrowError(/expiresAt/);
+  });
+});
+
+describe('handleCreateApiKey', () => {
+  it('mints sk-<random>, hashes it, persists via insertAndReturn, and returns plaintext + id + hash', async () => {
+    const { handleCreateApiKey } = await import('./admin-routes.js');
+    const { hashApiKey } = await import('./auth.js');
+    const calls: { input: unknown }[] = [];
+    const repo = {
+      insertAndReturn: async (input: unknown) => {
+        calls.push({ input });
+        return Promise.resolve({ id: '17' });
+      },
+    };
+    const out = await handleCreateApiKey(
+      { label: 'cli', modelAllowlist: ['gpt-4o'], expiresAt: '2030-01-01T00:00:00Z' },
+
+      repo,
+    );
+    expect(out.id).toBe('17');
+    expect(out.label).toBe('cli');
+    expect(out.modelAllowlist).toEqual(['gpt-4o']);
+    expect(out.expiresAt).toBe('2030-01-01T00:00:00Z');
+    expect(out.key).toMatch(/^sk-[A-Za-z0-9_-]+$/);
+    expect(out.key.length).toBeGreaterThan(20);
+    // Hash matches sha256(plaintext) — proof we persisted the right hash.
+    expect(out.hash).toBe(hashApiKey(out.key));
+    // Repo got the SAME hash we returned, plus a derived prefix that
+    // matches the first chars of the plaintext.
+    const persisted = calls[0]?.input as Record<string, unknown>;
+    expect(persisted.keyHash).toBe(out.hash);
+    expect(typeof persisted.keyPrefix).toBe('string');
+    expect(out.key.startsWith(persisted.keyPrefix as string)).toBe(true);
+    expect(persisted.name).toBe('cli');
+  });
+
+  it('two consecutive calls with the same body produce different plaintext + hashes', async () => {
+    const { handleCreateApiKey } = await import('./admin-routes.js');
+    const repo = {
+      insertAndReturn: async () => Promise.resolve({ id: '1' }),
+    };
+
+    const a = await handleCreateApiKey({ label: 'x' }, repo);
+
+    const b = await handleCreateApiKey({ label: 'x' }, repo);
+    expect(a.key).not.toBe(b.key);
+    expect(a.hash).not.toBe(b.hash);
+  });
+
+  it('omits expiresAt + modelAllowlist when not supplied (clean response)', async () => {
+    const { handleCreateApiKey } = await import('./admin-routes.js');
+    const repo = { insertAndReturn: async () => Promise.resolve({ id: '5' }) };
+
+    const out = await handleCreateApiKey({ label: 'cli' }, repo);
+    expect(out.expiresAt).toBeUndefined();
+    expect(out.modelAllowlist).toBeUndefined();
+  });
+});
+
+describe('handleListApiKeys', () => {
+  it('returns the repo rows verbatim wrapped in {rows}', async () => {
+    const { handleListApiKeys } = await import('./admin-routes.js');
+    const repo = {
+      list: async () =>
+        Promise.resolve([
+          {
+            id: '1',
+            label: 'cli',
+            hashPrefix: 'sk-abc12',
+            status: 'active' as const,
+            modelAllowlist: ['gpt-4o'],
+            expiresAt: null,
+            revokedAt: null,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        ]),
+    };
+
+    const r = await handleListApiKeys(repo);
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]?.label).toBe('cli');
+    // Belt + suspenders — ensure no plaintext / hash leak
+    expect(JSON.stringify(r)).not.toMatch(/sk-[A-Za-z0-9_-]{8,}/);
+  });
+});
+
+describe('handleRevokeApiKey', () => {
+  it('returns {revoked: true} when repo.revoke matches a row', async () => {
+    const { handleRevokeApiKey } = await import('./admin-routes.js');
+    const captured: string[] = [];
+    const repo = {
+      revoke: async (id: string) => {
+        captured.push(id);
+        return Promise.resolve({ revoked: true });
+      },
+    };
+
+    const r = await handleRevokeApiKey('42', repo);
+    expect(r.revoked).toBe(true);
+    expect(captured).toEqual(['42']);
+  });
+
+  it('returns {revoked: false} for an unknown id (handler surfaces 404)', async () => {
+    const { handleRevokeApiKey } = await import('./admin-routes.js');
+    const repo = { revoke: async () => Promise.resolve({ revoked: false }) };
+
+    const r = await handleRevokeApiKey('nope', repo);
+    expect(r.revoked).toBe(false);
+  });
+});
+
+describe('parseRevokeIdFromUrl', () => {
+  it('extracts the id from /admin/keys/:id', async () => {
+    const { parseRevokeIdFromUrl } = await import('./admin-routes.js');
+    expect(parseRevokeIdFromUrl('/admin/keys/42')).toBe('42');
+    expect(parseRevokeIdFromUrl('/admin/keys/abc-def')).toBe('abc-def');
+  });
+
+  it('returns undefined for the bare /admin/keys path', async () => {
+    const { parseRevokeIdFromUrl } = await import('./admin-routes.js');
+    expect(parseRevokeIdFromUrl('/admin/keys')).toBeUndefined();
+    expect(parseRevokeIdFromUrl('/admin/keys/')).toBeUndefined();
+  });
+
+  it('returns undefined when the id contains a path separator', async () => {
+    const { parseRevokeIdFromUrl } = await import('./admin-routes.js');
+    expect(parseRevokeIdFromUrl('/admin/keys/42/extra')).toBeUndefined();
+  });
+
+  it('strips trailing query strings', async () => {
+    const { parseRevokeIdFromUrl } = await import('./admin-routes.js');
+    expect(parseRevokeIdFromUrl('/admin/keys/42?ignored=true')).toBe('42');
+  });
+});

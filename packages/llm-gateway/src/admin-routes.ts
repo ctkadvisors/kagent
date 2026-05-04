@@ -13,12 +13,14 @@
  * for v1 single-tenant, but the right reflex).
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
 import type { AimdController } from './aimd.js';
+import { hashApiKey } from './auth.js';
 import type { InFlightCounter } from './inflight-counter.js';
 import type { ModelIndex } from './model-index.js';
+import type { ApiKeyAdminRow, ApiKeyRepo, RevokeResult } from './db/api-keys.js';
 import type { UsageRepo, UsageQueryFilter } from './db/usage.js';
 
 export interface AdminAuthResult {
@@ -137,4 +139,162 @@ export async function buildUsageResponse(
   const filter = parseUsageQuery(url);
   const rows = await usage.query(filter);
   return { rows: [...rows] };
+}
+
+/* =====================================================================
+ * v0.1.12-keys-rest — POST/GET/DELETE /admin/keys handlers.
+ *
+ * The plaintext key shape is `sk-<base64url>` so it sorts visually
+ * with the existing `sk-...` convention. Random body is 32 bytes →
+ * ~43 base64url chars, which gives 256 bits of entropy. The first 8
+ * chars (incl. the `sk-` prefix) are stored as `key_prefix` for
+ * admin-list display + log correlation. The plaintext is returned
+ * exactly once on POST; subsequent reads only ever see the prefix.
+ * ===================================================================== */
+
+export interface CreateApiKeyBody {
+  readonly label: string;
+  readonly modelAllowlist?: readonly string[];
+  /** ISO 8601 timestamp; absent = no expiration. */
+  readonly expiresAt?: string;
+}
+
+export interface CreatedApiKey {
+  readonly id: string;
+  readonly label: string;
+  /** Plaintext API key. Returned exactly once; never persisted. */
+  readonly key: string;
+  /** SHA-256 hex digest of `key`. Persisted; OK to surface for audit. */
+  readonly hash: string;
+  /** First 8 chars of `key` (including `sk-` prefix). */
+  readonly hashPrefix: string;
+  readonly modelAllowlist?: readonly string[];
+  readonly expiresAt?: string;
+}
+
+const KEY_PREFIX_LEN = 8;
+
+/**
+ * Validate + normalize the JSON body for POST /admin/keys. Throws on
+ * malformed input — the server.ts layer turns the throw into 400.
+ *
+ * Pure function — exported for tests.
+ */
+export function parseCreateApiKeyBody(raw: unknown): CreateApiKeyBody {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('body must be a JSON object');
+  }
+  const obj = raw as Record<string, unknown>;
+  const label = obj.label;
+  if (typeof label !== 'string' || label.length === 0) {
+    throw new Error('label is required (non-empty string)');
+  }
+  const out: { -readonly [K in keyof CreateApiKeyBody]: CreateApiKeyBody[K] } = { label };
+  if (obj.modelAllowlist !== undefined && obj.modelAllowlist !== null) {
+    if (!Array.isArray(obj.modelAllowlist)) {
+      throw new Error('modelAllowlist must be an array of strings');
+    }
+    for (const v of obj.modelAllowlist) {
+      if (typeof v !== 'string') {
+        throw new Error('modelAllowlist must be an array of strings');
+      }
+    }
+    out.modelAllowlist = [...(obj.modelAllowlist as string[])];
+  }
+  if (obj.expiresAt !== undefined && obj.expiresAt !== null) {
+    if (typeof obj.expiresAt !== 'string') {
+      throw new Error('expiresAt must be an ISO 8601 string');
+    }
+    out.expiresAt = obj.expiresAt;
+  }
+  return out;
+}
+
+/**
+ * Mint a fresh `sk-<base64url>` API key. Exported for tests so they can
+ * assert shape without indirecting through the full handler.
+ */
+export function mintRawApiKey(): string {
+  const bytes = randomBytes(32);
+  // base64url, no padding — 43 chars for 32 bytes.
+  const body = bytes.toString('base64url');
+  return `sk-${body}`;
+}
+
+/**
+ * POST /admin/keys handler — pure dependency-injected version. Mints a
+ * fresh plaintext key, hashes it, persists via the repo, returns the
+ * plaintext exactly once + the assigned id + hash for client storage
+ * (e.g. workbench secret reveal flow).
+ *
+ * The handler intentionally does NOT validate `expiresAt` past the
+ * type check — the DB column is TIMESTAMPTZ and Postgres rejects
+ * malformed timestamps, which surfaces as a 500 the caller can debug.
+ * Belt-and-suspenders parsing duplication lives at the API layer.
+ */
+export async function handleCreateApiKey(
+  body: CreateApiKeyBody,
+  repo: Pick<ApiKeyRepo, 'insertAndReturn'>,
+): Promise<CreatedApiKey> {
+  const key = mintRawApiKey();
+  const hash = hashApiKey(key);
+  const hashPrefix = key.slice(0, KEY_PREFIX_LEN);
+  const inserted = await repo.insertAndReturn({
+    keyHash: hash,
+    keyPrefix: hashPrefix,
+    name: body.label,
+    ...(body.expiresAt !== undefined && { expiresAt: body.expiresAt }),
+    ...(body.modelAllowlist !== undefined && { modelAllowlist: body.modelAllowlist }),
+  });
+  return {
+    id: inserted.id,
+    label: body.label,
+    key,
+    hash,
+    hashPrefix,
+    ...(body.modelAllowlist !== undefined && { modelAllowlist: body.modelAllowlist }),
+    ...(body.expiresAt !== undefined && { expiresAt: body.expiresAt }),
+  };
+}
+
+/**
+ * GET /admin/keys handler — return every API key in admin-projection
+ * shape. The repo's `list()` SELECT structurally excludes plaintext
+ * + key_hash, so this passes through with no further sanitization.
+ */
+export async function handleListApiKeys(
+  repo: Pick<ApiKeyRepo, 'list'>,
+): Promise<{ readonly rows: readonly ApiKeyAdminRow[] }> {
+  const rows = await repo.list();
+  return { rows };
+}
+
+/**
+ * DELETE /admin/keys/:id handler — soft-delete a key by id.
+ * Returns the {revoked} flag verbatim from the repo; the server
+ * layer turns `revoked: false` into a 404.
+ */
+export async function handleRevokeApiKey(
+  id: string,
+  repo: Pick<ApiKeyRepo, 'revoke'>,
+): Promise<RevokeResult> {
+  return repo.revoke(id);
+}
+
+/**
+ * Extract the `:id` segment from `/admin/keys/:id`. Returns
+ * `undefined` for shapes that aren't an exact one-segment match —
+ * the bare collection path, a missing id, a multi-segment path. The
+ * server layer interprets undefined as "not the revoke route" and
+ * routes to the list handler instead (or 404).
+ */
+export function parseRevokeIdFromUrl(url: string): string | undefined {
+  // Strip query string + leading slash so `/admin/keys/42?x=y` and
+  // `/admin/keys/42` both resolve to the same id.
+  const noQuery = url.split('?', 1)[0] ?? url;
+  if (!noQuery.startsWith('/admin/keys/')) return undefined;
+  const tail = noQuery.slice('/admin/keys/'.length);
+  if (tail.length === 0) return undefined;
+  if (tail.includes('/')) return undefined;
+  return tail;
 }
