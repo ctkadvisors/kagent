@@ -26,6 +26,8 @@ export type {
   AuditEvent,
   AuditEventData,
   AuditEventType,
+  CacheHitData,
+  CacheMissData,
   CapabilityMintedData,
   CapabilityUsedData,
   ChildSpawnedData,
@@ -49,6 +51,8 @@ export type {
 
 export {
   ALL_EVENT_TYPES,
+  CACHE_HIT,
+  CACHE_MISS,
   CAPABILITY_MINTED,
   CAPABILITY_USED,
   CHILD_SPAWNED,

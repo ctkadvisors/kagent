@@ -65,7 +65,10 @@ export type AuditEventType =
   | 'workflow.step.completed'
   | 'workflow.completed'
   | 'workflow.failed'
-  | 'workflow.event_subscription_pending';
+  | 'workflow.event_subscription_pending'
+  /* v0.4.2-cache — Wave 3 / Cache sub-team. */
+  | 'cache.hit'
+  | 'cache.miss';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -361,6 +364,43 @@ export interface WorkflowEventSubscriptionPendingData {
 }
 
 /**
+ * v0.4.2-cache — Wave 3 / Cache sub-team. Per-Agent persistent cache
+ * lookup outcome. One emission per declared `Agent.spec.caches[]` slot
+ * at AgentTask admission time. The `key` field is the sha256 hex
+ * string the substrate derived from the slot's `key` template;
+ * downstream telemetry can group by `key` to find cache-effectiveness
+ * cohorts (same image-digest + same input artifacts → same key →
+ * should hit on repeat invocations).
+ */
+export interface CacheHitData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  /** Per-Agent stable cache slot id (`Agent.spec.caches[].name`). */
+  readonly slotName: string;
+  /** sha256-hex of the rendered key template. */
+  readonly key: string;
+  /** Container path the cache was restored to (`Agent.spec.caches[].mountPath`). */
+  readonly mountPath: string;
+}
+
+/**
+ * v0.4.2-cache — same shape as `CacheHitData` (operator emits one or
+ * the other per slot, never both). Cache miss is NEVER an error;
+ * cold fall-back is the contract.
+ */
+export interface CacheMissData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly slotName: string;
+  readonly key: string;
+  readonly mountPath: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -391,7 +431,10 @@ export type AuditEventData =
   | {
       readonly type: 'workflow.event_subscription_pending';
       readonly data: WorkflowEventSubscriptionPendingData;
-    };
+    }
+  /* v0.4.2-cache — Wave 3 / Cache sub-team. */
+  | { readonly type: 'cache.hit'; readonly data: CacheHitData }
+  | { readonly type: 'cache.miss'; readonly data: CacheMissData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and
