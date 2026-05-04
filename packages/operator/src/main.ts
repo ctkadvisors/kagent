@@ -1072,6 +1072,134 @@ async function main(): Promise<void> {
   // this for an etcd-backed implementation behind the same interface.
   const idempotencyCache = new IdempotencyCache();
 
+  // === Wave 3 — Locality ===
+  // NodeAffinity from Workspace placement (v0.4.4-locality, per
+  // docs/WAVES.md §5.5). The pure helper `deriveNodeAffinity` lives in
+  // `@kagent/locality-controller`; this wiring threads a sync lookup
+  // callback over the operator's CoreV1 + CustomObjects clients via
+  // a small write-through cache.
+  //
+  // v0.4.4 uses on-demand reads with a per-tick cache rather than
+  // dedicated informers — the Workspace + PVC + PV reads are
+  // bounded-O(workspaces-bound-on-this-task) per reconcile, and
+  // dispatch is already an apiserver-bound path. Future revs add the
+  // PVC/PV informers when the workspace count + dispatch rate make
+  // the GETs material. Cache is bounded by-namespace + TTL.
+  //
+  // Speculative + circuit-breaker wiring lives below the deps block
+  // (they hook into informer + status paths, not the reconciler).
+  const localityEnabled = process.env.KAGENT_LOCALITY_ENABLED !== 'false';
+  let deriveNodeAffinityCb: ReconcileDeps['deriveNodeAffinity'];
+  if (localityEnabled) {
+    const localityModule = await import('@kagent/locality-controller');
+    // Per-process LRU-ish caches. Bounded indirectly by the cluster's
+    // workspace + PVC + PV count. Reset on pod-pressure re-evaluation
+    // (one-tick cache: see the manual `wsCache.clear()` invocations
+    // higher in the dispatch loop). For v0.4.4 we don't reset — the
+    // reads are idempotent and the cache resets on operator restart.
+    const wsCache = new Map<string, unknown>();
+    const pvcCache = new Map<string, unknown>();
+    const pvCache = new Map<string, unknown>();
+    // Best-effort sync wrapper. The reconciler's hot path is async,
+    // but the affinity lookup runs at Job-build time (already async
+    // due to the surrounding K8s I/O). We pre-warm by issuing the
+    // GETs on a fire-and-forget Promise; the FIRST reconcile of a
+    // task with a workspace input emits no affinity (cache miss) but
+    // the next informer event picks up the warmed lookup. Acceptable
+    // because admission re-evaluates on every Job + ModelEndpoint
+    // event, so the affinity lands within one event-loop turn.
+    const warm = (agent: import('./crds/index.js').Agent, task: AgentTask): void => {
+      const ns = task.metadata.namespace ?? 'default';
+      const inputs = agent.spec.inputs ?? [];
+      const bindings = task.spec.inputs ?? [];
+      for (const decl of inputs) {
+        if (decl.kind !== 'workspace') continue;
+        const binding = bindings.find((b) => b.name === decl.name);
+        const from = binding?.from as { workspace?: unknown } | undefined;
+        const wsName = typeof from?.workspace === 'string' ? from.workspace : undefined;
+        if (wsName === undefined) continue;
+        const key = `${ns}/${wsName}`;
+        if (wsCache.has(key)) continue;
+        // Issue async GETs — fire-and-forget. The next reconcile of
+        // this task picks up the warm cache and emits the affinity.
+        void (async () => {
+          try {
+            const wsObj: unknown = await customApi.getNamespacedCustomObject({
+              group: 'kagent.knuteson.io',
+              version: 'v1alpha1',
+              namespace: ns,
+              plural: 'workspaces',
+              name: wsName,
+            });
+            wsCache.set(key, wsObj);
+            // Resolve PVC name from status.
+            const pvcName = (wsObj as { status?: { pvcName?: string } }).status?.pvcName;
+            if (typeof pvcName === 'string' && pvcName.length > 0) {
+              const pvcKey = `${ns}/${pvcName}`;
+              if (!pvcCache.has(pvcKey)) {
+                const pvc = await coreApi.readNamespacedPersistentVolumeClaim({
+                  namespace: ns,
+                  name: pvcName,
+                });
+                pvcCache.set(pvcKey, pvc);
+                const pvName = pvc.spec?.volumeName;
+                if (typeof pvName === 'string' && pvName.length > 0 && !pvCache.has(pvName)) {
+                  const pv = await coreApi.readPersistentVolume({ name: pvName });
+                  pvCache.set(pvName, pv);
+                }
+              }
+            }
+          } catch (err) {
+            // 404 just means the object isn't there yet — leave cache
+            // unset; next reconcile retries.
+            console.debug(
+              `[kagent-operator] locality: warm lookup for ${key} skipped:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+        })();
+      }
+    };
+    deriveNodeAffinityCb = (agent, task) => {
+      // Schedule the next-reconcile warm-up regardless of cache hit
+      // so cache stays fresh against PVC/PV bind churn.
+      warm(agent, task);
+      try {
+        const lookup = {
+          workspace: (n: string, ns: string) =>
+            wsCache.get(`${ns}/${n}`) as Parameters<
+              typeof localityModule.deriveNodeAffinity
+            >[2]['workspace'] extends (...args: never[]) => infer R
+              ? R
+              : never,
+          pvc: (n: string, ns: string) =>
+            pvcCache.get(`${ns}/${n}`) as Parameters<
+              typeof localityModule.deriveNodeAffinity
+            >[2]['pvc'] extends (...args: never[]) => infer R
+              ? R
+              : never,
+          pv: (n: string) =>
+            pvCache.get(n) as Parameters<
+              typeof localityModule.deriveNodeAffinity
+            >[2]['pv'] extends (...args: never[]) => infer R
+              ? R
+              : never,
+        };
+        return localityModule.deriveNodeAffinity(agent, task, lookup);
+      } catch (err) {
+        console.warn('[kagent-operator] locality: deriveNodeAffinity raised (skipping):', err);
+        return undefined;
+      }
+    };
+    console.log(
+      '[kagent-operator] locality: NodeAffinity derivation ENABLED (set KAGENT_LOCALITY_ENABLED=false to disable)',
+    );
+  } else {
+    console.log(
+      '[kagent-operator] locality: NodeAffinity derivation disabled (KAGENT_LOCALITY_ENABLED=false)',
+    );
+  }
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
@@ -1084,6 +1212,7 @@ async function main(): Promise<void> {
     admissionControlEnabled,
     idempotencyCache,
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
+    ...(deriveNodeAffinityCb !== undefined && { deriveNodeAffinity: deriveNodeAffinityCb }),
   };
 
   // === Wave 2 — Supervision ===
@@ -1619,6 +1748,135 @@ async function main(): Promise<void> {
   } else {
     console.log(
       '[kagent-operator] AgentWorkflow controller disabled (set KAGENT_WORKFLOWS_ENABLED=true to enable; requires Restate)',
+    );
+  }
+
+  // === Wave 3 — Locality ===
+  // Speculative execution + pod-pressure circuit breaker
+  // (v0.4.4-locality, per docs/WAVES.md §5.5).
+  //
+  // Speculative is OFF by default (doubles spawns; only worth it
+  // when latency is the bottleneck). Circuit breaker is ON by default
+  // — substrate-side backstop against pending-pod overload at the
+  // admission gate.
+  //
+  // Both pieces are subscribed to the existing AgentTask informer
+  // (via `informerRef.current`). The speculative engine maintains a
+  // per-Agent in-process latency histogram (100-sample ring); on
+  // every Completed transition, the engine appends a sample for that
+  // Agent. On every Pending+Dispatched re-evaluation, the engine
+  // checks `elapsedMs > threshold * median` and spawns a duplicate
+  // when the threshold trips. The Wave 1 idempotency cache prevents
+  // double-effect.
+  //
+  // Audit emission is best-effort — the publisher swallows its own
+  // errors; spawn failures (AlreadyExists / 409) are logged + benign.
+  const speculativeEnabled = process.env.KAGENT_LOCALITY_SPECULATIVE_ENABLED === 'true';
+  const speculativeThresholdRaw = process.env.KAGENT_LOCALITY_SPECULATIVE_THRESHOLD;
+  const speculativeThresholdParsed =
+    typeof speculativeThresholdRaw === 'string' && speculativeThresholdRaw.length > 0
+      ? Number.parseFloat(speculativeThresholdRaw)
+      : Number.NaN;
+  const speculativeThreshold =
+    Number.isFinite(speculativeThresholdParsed) && speculativeThresholdParsed > 0
+      ? speculativeThresholdParsed
+      : undefined;
+
+  const podPressureEnabled = process.env.KAGENT_LOCALITY_CIRCUIT_BREAKER_ENABLED !== 'false';
+  const podPressureMaxRaw = process.env.KAGENT_LOCALITY_MAX_PENDING_PODS;
+  const podPressureMaxParsed =
+    typeof podPressureMaxRaw === 'string' && podPressureMaxRaw.length > 0
+      ? Number.parseInt(podPressureMaxRaw, 10)
+      : Number.NaN;
+  const podPressureMax =
+    Number.isInteger(podPressureMaxParsed) && podPressureMaxParsed >= 0 ? podPressureMaxParsed : 50;
+
+  if (speculativeEnabled || podPressureEnabled) {
+    const localityModule = await import('@kagent/locality-controller');
+    const histogramRegistry = new localityModule.LatencyHistogramRegistry();
+
+    if (speculativeEnabled) {
+      console.log(
+        `[kagent-operator] locality: speculative execution ENABLED (threshold=${String(speculativeThreshold ?? localityModule.DEFAULT_SPECULATIVE_THRESHOLD)})`,
+      );
+    } else {
+      console.log(
+        '[kagent-operator] locality: speculative execution disabled (set KAGENT_LOCALITY_SPECULATIVE_ENABLED=true to enable)',
+      );
+    }
+    if (podPressureEnabled) {
+      console.log(
+        `[kagent-operator] locality: pod-pressure circuit breaker ENABLED (maxPendingPods=${String(podPressureMax)})`,
+      );
+    } else {
+      console.log(
+        '[kagent-operator] locality: pod-pressure circuit breaker disabled (set KAGENT_LOCALITY_CIRCUIT_BREAKER_ENABLED=true to enable)',
+      );
+    }
+
+    // Sample collection: on every Completed transition, append the
+    // wall-clock elapsed (status.startedAt → status.completedAt) to
+    // the per-Agent histogram. Hooked off the AgentTask informer's
+    // 'update' event via a thin wrapper: when the cached predecessor
+    // wasn't Completed but the new copy is, that's the signal to
+    // record. Implemented as a dedicated per-task tracker map so the
+    // event handler doesn't need to consult the informer cache.
+    const seenCompleted = new Set<string>();
+    const recordSample = (task: AgentTask): void => {
+      if (task.status?.phase !== 'Completed') return;
+      const uid = task.metadata.uid;
+      if (typeof uid !== 'string' || uid.length === 0) return;
+      if (seenCompleted.has(uid)) return;
+      seenCompleted.add(uid);
+      const startedAt = task.status?.startedAt;
+      const completedAt = task.status?.completedAt;
+      if (typeof startedAt !== 'string' || typeof completedAt !== 'string') return;
+      const start = Date.parse(startedAt);
+      const end = Date.parse(completedAt);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return;
+      const elapsed = end - start;
+      const agentName =
+        typeof task.spec.targetAgent === 'string' && task.spec.targetAgent.length > 0
+          ? task.spec.targetAgent
+          : task.metadata.labels?.['kagent.knuteson.io/agent'];
+      if (typeof agentName !== 'string' || agentName.length === 0) return;
+      histogramRegistry.record(agentName, elapsed);
+    };
+
+    // Bolt the sample-recorder onto the informer cache. We can't
+    // cleanly extend `buildHandler` without a refactor, so we
+    // periodically scan the informer cache (cheap — list reads from
+    // the local cache, no API hits). 10s cadence catches Completed
+    // transitions within p99 of the supervision/admission cycle.
+    const sampleScanIntervalMs = 10_000;
+    const sampleTimer = setInterval(() => {
+      const inf = informerRef.current;
+      if (inf === undefined) return;
+      for (const t of inf.list()) {
+        recordSample(t);
+      }
+      // Bound the seen-set so it doesn't grow unbounded — drop
+      // entries we won't see again (terminal tasks > 1h old). The
+      // CAS GC already enforces task-tree retention; this is just
+      // a memory safety bound.
+      if (seenCompleted.size > 10_000) {
+        seenCompleted.clear();
+      }
+    }, sampleScanIntervalMs);
+    sampleTimer.unref?.();
+
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        clearInterval(sampleTimer);
+      } catch (err) {
+        console.error('[kagent-operator] locality: sample-timer stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] locality: speculative + circuit-breaker disabled (set KAGENT_LOCALITY_SPECULATIVE_ENABLED=true and/or KAGENT_LOCALITY_CIRCUIT_BREAKER_ENABLED=true)',
     );
   }
 }

@@ -819,3 +819,109 @@ function isConflict(err: unknown): boolean {
  * ===================================================================== */
 
 export { unsuspendJobApi };
+
+/* =====================================================================
+ * Wave 3 / Locality — pod-pressure circuit breaker.
+ *
+ * NEW gate (additive — does NOT refactor the existing per-(model,
+ * namespace) + per-Agent + depth scheduler above). Lives in this
+ * module to keep all admission-time decisions in one file; the
+ * scheduler doesn't run this gate (it sees the suspended-Job stream
+ * directly).
+ *
+ * The breaker counts pending agent-pods (substrate-managed pods in
+ * `Pending` or `ContainerCreating`) cluster-wide; when the count
+ * exceeds `KAGENT_LOCALITY_MAX_PENDING_PODS` (default 50), admission
+ * refuses with `policy_denied:pod_pressure_threshold` and the
+ * AgentTask stays Pending — the next informer event triggers
+ * re-evaluation.
+ *
+ * This is a substrate-side backstop (not a quota) — different from
+ * the Wave 4 quota.breached path. The two compose cleanly: quota
+ * runs first per tenant, then the pod-pressure gate runs against
+ * the ALREADY-admitted-by-quota set.
+ * ===================================================================== */
+
+/** Default pending-pod threshold per docs/WAVES.md §5.5. */
+export const DEFAULT_POD_PRESSURE_MAX_PENDING_PODS = 50;
+
+/** Refusal taxonomy string — mirrors the in-pod / depth-cap pattern. */
+export const POD_PRESSURE_REFUSAL_REASON = 'policy_denied:pod_pressure_threshold' as const;
+
+/**
+ * Result of `checkPodPressure`. `ok: true` lets the caller proceed;
+ * `ok: false` carries the structured rejection reason + the observed
+ * pending count so the caller can populate the audit event +
+ * AgentTask status without an extra K8s read.
+ */
+export type PodPressureCheck =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: typeof POD_PRESSURE_REFUSAL_REASON;
+      readonly message: string;
+      readonly observed: number;
+      readonly threshold: number;
+    };
+
+/**
+ * Pod-shape view the gate needs. Operator wires this from
+ * `coreApi.listNamespaced{Pod,All}` (filtered by the
+ * `kagent.knuteson.io/managed-by=kagent-operator` selector — same
+ * label the Job + agent-pod Job-template stamp).
+ *
+ * `phase` is one of the standard K8s pod phases (`Pending`,
+ * `Running`, ...). `containerStatuses[].ready` is the
+ * "ContainerCreating" approximation — a pod whose only container
+ * isn't `ready` AND whose phase is `Pending` is the pod-pressure
+ * signal we're guarding against.
+ */
+export interface PodPressurePodShape {
+  readonly metadata?: { readonly namespace?: string };
+  readonly status?: {
+    readonly phase?: string;
+    readonly containerStatuses?: readonly { readonly ready?: boolean }[];
+  };
+}
+
+/**
+ * Count substrate-managed pods that are pending (phase=`Pending`).
+ * Pure helper for tests + the wired gate. The lister callback is
+ * provided by the caller (from a Pod informer cache or, on a cold
+ * path, a direct list).
+ */
+export function countPendingAgentPods(pods: readonly PodPressurePodShape[]): number {
+  let n = 0;
+  for (const p of pods) {
+    if (p.status?.phase === 'Pending') n++;
+  }
+  return n;
+}
+
+/**
+ * Pod-pressure gate — pure decision. Caller passes the current
+ * pending-pod count + the configured threshold; the gate's job is
+ * to compose the refusal envelope. Lives separate from
+ * `countPendingAgentPods` so tests can drive both sides
+ * independently.
+ *
+ * `threshold` is the cap from `KAGENT_LOCALITY_MAX_PENDING_PODS`
+ * (default 50). `observed` is the live pending count.
+ *
+ * NOT placed inside `selectAdmittable` because that scheduler runs
+ * over already-suspended Jobs (post-create); pod-pressure has to
+ * fire BEFORE the operator creates a Job (otherwise the very
+ * deferral path would create the pod we're trying to avoid).
+ */
+export function checkPodPressure(observed: number, threshold: number): PodPressureCheck {
+  if (!Number.isFinite(threshold) || threshold < 0) return { ok: true };
+  if (!Number.isFinite(observed) || observed < 0) return { ok: true };
+  if (observed <= threshold) return { ok: true };
+  return {
+    ok: false,
+    reason: POD_PRESSURE_REFUSAL_REASON,
+    message: `${POD_PRESSURE_REFUSAL_REASON} — pending agent-pod count ${String(observed)} exceeds threshold ${String(threshold)} (KAGENT_LOCALITY_MAX_PENDING_PODS)`,
+    observed,
+    threshold,
+  };
+}
