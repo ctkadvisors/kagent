@@ -7,12 +7,12 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json'],
-      include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts'],
+      include: ['src/**/*.ts', 'scripts/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'scripts/**/*.test.ts'],
       thresholds: {
         lines: 0,
         functions: 0,
