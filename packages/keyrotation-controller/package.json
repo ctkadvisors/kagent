@@ -1,0 +1,30 @@
+{
+  "name": "@kagent/keyrotation-controller",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wave 4 / KeyRotation sub-team — SVID rotation interval policy, capability bundle TTL policy, gateway-token rotation API integration, and zero-downtime rotation chaos test. Pure helpers consumed by the operator reconciler.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kagent/audit-events": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
