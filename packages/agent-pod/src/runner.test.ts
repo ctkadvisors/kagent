@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PodConfig } from './env.js';
 import {
+  buildLlmClient,
   collectArtifactsFromTraces,
   composeSignals,
   pickUserMessage,
@@ -89,6 +90,66 @@ function recordingLlm(captured: ChatRequest[]): LLMClient {
     },
   };
 }
+
+describe('buildLlmClient — X-Kagent attribution headers (v0.1.7)', () => {
+  /**
+   * Capture the headers a single chat() call sends to the upstream so we
+   * can assert the agent-pod stamps `X-Kagent-Task-UID` + `X-Kagent-Agent`
+   * for every LLM call. The gateway already parses these (see
+   * llm-gateway/src/headers.ts) and joins usage rows back to the
+   * originating AgentTask + Agent — wiring them on the client side is
+   * what makes that join non-null in production.
+   */
+  function capturingFetch(): {
+    fetchImpl: typeof globalThis.fetch;
+    capturedHeaders: () => Record<string, string> | undefined;
+  } {
+    let captured: Record<string, string> | undefined;
+    const fetchImpl: typeof globalThis.fetch = (_url, init) => {
+      const h = (init?.headers ?? {}) as Record<string, string>;
+      captured = { ...h };
+      const body = JSON.stringify({
+        id: 'cmpl-1',
+        object: 'chat.completion',
+        created: 0,
+        model: 'm',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    };
+    return { fetchImpl, capturedHeaders: () => captured };
+  }
+
+  it('stamps X-Kagent-Task-UID + X-Kagent-Agent on outbound /chat/completions calls', async () => {
+    const cap = capturingFetch();
+    const client = buildLlmClient(baseConfig, cap.fetchImpl);
+    await client.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    const h = cap.capturedHeaders();
+    expect(h).toBeDefined();
+    expect(h!['X-Kagent-Task-UID']).toBe('task-uid-1');
+    expect(h!['X-Kagent-Agent']).toBe('researcher');
+  });
+
+  it('preserves Authorization when litellmApiKey is set', async () => {
+    const cap = capturingFetch();
+    const cfg: PodConfig = { ...baseConfig, litellmApiKey: 'sk-secret-1' };
+    const client = buildLlmClient(cfg, cap.fetchImpl);
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const h = cap.capturedHeaders();
+    expect(h!['Authorization']).toBe('Bearer sk-secret-1');
+    expect(h!['X-Kagent-Task-UID']).toBe('task-uid-1');
+    expect(h!['X-Kagent-Agent']).toBe('researcher');
+  });
+});
 
 describe('runAgentTask — Agent.spec.llmParams passthrough (v0.1.4)', () => {
   it('threads agentSpec.llmParams into the LLM ChatRequest', async () => {

@@ -135,13 +135,7 @@ export interface RunDeps {
  * message to surface F1/F2/F3 + synthesis_low_yield flags.
  */
 export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promise<RunResult> {
-  const llm =
-    deps.llm ??
-    new OpenAICompatibleLLMClient({
-      baseUrl: config.litellmBaseUrl,
-      model: config.agentSpec.model,
-      ...(config.litellmApiKey !== undefined && { apiKey: config.litellmApiKey }),
-    });
+  const llm = deps.llm ?? buildLlmClient(config);
 
   // v0.1.6 — resolve the system prompt. Order:
   //   1. If systemPromptRef set AND a fetcher is wired → try Langfuse.
@@ -238,6 +232,36 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(result.error !== undefined && { error: { message: result.error.message } }),
     ...(artifacts.length > 0 && { artifacts }),
   };
+}
+
+/**
+ * Construct the OpenAI-compatible LLM client the agent-pod uses to talk
+ * to the kagent LLM gateway. Stamps the v0.1.7 attribution headers
+ * `X-Kagent-Task-UID` (= AgentTask UID, i.e. `KAGENT_TASK_ID`) and
+ * `X-Kagent-Agent` (= `KAGENT_AGENT_NAME`) on every outbound request so
+ * the gateway's usage_records rows join back to the originating task +
+ * agent. The gateway already parses these headers
+ * (packages/llm-gateway/src/headers.ts); without them every usage row
+ * lands with task_uid=null and per-task throughput becomes invisible.
+ *
+ * Exported so tests can pass a fake `fetch` and assert the wire-level
+ * headers without booting the full executor. Production callers go
+ * through `runAgentTask`.
+ */
+export function buildLlmClient(
+  config: PodConfig,
+  fetchImpl?: typeof globalThis.fetch,
+): OpenAICompatibleLLMClient {
+  return new OpenAICompatibleLLMClient({
+    baseUrl: config.litellmBaseUrl,
+    model: config.agentSpec.model,
+    ...(config.litellmApiKey !== undefined && { apiKey: config.litellmApiKey }),
+    defaultHeaders: {
+      'X-Kagent-Task-UID': config.taskId,
+      'X-Kagent-Agent': config.agentName,
+    },
+    ...(fetchImpl !== undefined && { fetch: fetchImpl }),
+  });
 }
 
 /**
