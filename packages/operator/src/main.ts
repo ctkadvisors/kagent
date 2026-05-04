@@ -58,6 +58,7 @@ import {
 } from './reconcile.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
+import { buildTriggersBootstrap, type TriggersBootstrapHandle } from './triggers-bootstrap.js';
 import type { AgentTaskHandler, AgentTaskInformerWithCache } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
 
@@ -1077,6 +1078,41 @@ async function main(): Promise<void> {
     );
   }
   console.log('[kagent-operator] informers started');
+
+  // Wave 0 / sub-team Entry — KagentSchedule controller + HMAC webhook
+  // receiver (see docs/WAVES.md §2.6). Default-OFF: when
+  // KAGENT_TRIGGERS_ENABLED is anything other than `true` the schedule
+  // informer + webhook port stay unbound, preserving today's surface.
+  // The chart's `triggers.enabled=true` value flips both the env on
+  // this deployment AND the Service/Ingress that fronts the webhook.
+  //
+  // Per-trigger HMAC secrets live in a single Secret named by env
+  // (`KAGENT_TRIGGER_SECRETS_NAME`, default `kagent-trigger-secrets`)
+  // in the operator's release namespace. The receiver's resolver reads
+  // process.env keys prefixed `KAGENT_TRIGGER_SECRET_<id>` so the
+  // chart's Deployment template can mount the Secret as envFrom or
+  // explicit env (single source of truth for the trust boundary).
+  if (process.env.KAGENT_TRIGGERS_ENABLED === 'true') {
+    const triggers: TriggersBootstrapHandle = buildTriggersBootstrap({
+      kc,
+      customApi,
+      ...(watchNamespace !== undefined && { watchNamespace }),
+      resolveTriggerSecret: (id) => process.env[`KAGENT_TRIGGER_SECRET_${id.toUpperCase()}`],
+    });
+    await triggers.start();
+    console.log('[kagent-operator] triggers (KagentSchedule + webhook) wired');
+    const previousTriggersHook = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        await triggers.stop();
+      } catch (err) {
+        console.error('[kagent-operator] triggers stop failed:', err);
+      }
+      if (previousTriggersHook !== undefined) await previousTriggersHook();
+    };
+  } else {
+    console.log('[kagent-operator] triggers disabled (set KAGENT_TRIGGERS_ENABLED=true to enable)');
+  }
 
   // WS-M — boot the template-server when enabled. Default-OFF; the
   // chart's `agentPod.templates.enabled=true` flips

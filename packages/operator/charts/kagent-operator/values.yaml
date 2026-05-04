@@ -337,6 +337,54 @@ audit:
   # deliberately does NOT.
   image: 'natsio/nats-box:0.14.5'
 
+# Wave 0 sub-team Entry — KagentSchedule controller + HMAC-signed
+# webhook receiver. Default OFF (matches the WS-M / WS-K posture).
+# When enabled:
+#   - operator opens an informer on KagentSchedule CRDs and ticks once
+#     per minute on a UTC wall clock; matched schedules mint AgentTasks
+#   - the webhook receiver binds on `webhook.port` (default 8088); the
+#     webhook-service.yaml Service exposes it ClusterIP
+#   - optional Ingress (off by default) routes off-cluster callers to
+#     POST /webhook/<trigger-id>
+#
+# Per-trigger HMAC secrets live in the chart-managed
+# `<release>-trigger-secrets` Secret with one key per trigger id; the
+# operator deployment mounts those keys as env (`KAGENT_TRIGGER_SECRET_<ID>`)
+# so a leaked URL slug without the matching secret returns 401.
+#
+# Both routes use a Wave 0 placeholder capability (annotation
+# `kagent.knuteson.io/placeholder-cap: wave0-shared-all-rights` on
+# minted AgentTasks) until Wave 2 ships per-trigger caps.
+triggers:
+  enabled: false
+  webhook:
+    # TCP port the operator binds the receiver on. The Service forwards
+    # to the same `webhook` named port on the operator container.
+    port: 8088
+    # Optional Ingress — off by default. Flip on AND set host + tls when
+    # off-cluster callers (GitHub, Pingdom, ...) need to reach the
+    # receiver. The HMAC signature is the trust boundary — there is no
+    # source-IP allowlist or TLS client-cert validation.
+    ingress:
+      enabled: false
+      host: ''
+      className: ''
+      annotations: {}
+      tls: []
+  # Map of HMAC secrets, keyed by trigger id. The chart materializes a
+  # Secret named `<release>-trigger-secrets` whose data keys are the
+  # uppercased trigger ids (e.g. `DAILY-RESEARCH` → key `DAILY_RESEARCH`)
+  # and whose env-mounted form on the operator deployment is
+  # `KAGENT_TRIGGER_SECRET_DAILY_RESEARCH=<secret>`. Set values via Helm
+  # secrets / sops / ExternalSecrets — committing plaintext here is a
+  # security antipattern.
+  #
+  # Example:
+  #   secrets:
+  #     daily-research: 'shared-with-github-action'
+  #     ops-pingdom: 'shared-with-pingdom'
+  secrets: {}
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

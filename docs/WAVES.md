@@ -128,6 +128,7 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 ### 2.6 Sub-team: Entry
 
 **Releases:** `v0.1.16-entry-points`
+**Status:** SHIPPED — `v0.1.16-entry-points` tagged with `@kagent/triggers` package + `KagentSchedule` CRD + HMAC webhook receiver wired into operator main.ts; Helm chart adds webhook Service + optional Ingress + per-trigger Secret; default-OFF posture matches WS-M/WS-K. Wave 2 caps replace the placeholder annotation.
 **Owns:** new package `@kagent/triggers`, `KagentSchedule` CRD, webhook receiver in operator
 **Reads:** `packages/operator/src/admission.ts`
 

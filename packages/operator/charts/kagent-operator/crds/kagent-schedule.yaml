@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# KagentSchedule (Wave 0 entry-point) — declarative cron trigger that
+# materializes a fresh AgentTask per matching minute. The operator's
+# schedule controller (in `@kagent/triggers`) parses `spec.schedule`,
+# ticks once a minute on a UTC wall clock, and creates the templated
+# AgentTask body labeled with the trigger name.
+#
+# Scope is namespaced — schedules live alongside the agents/tasks they
+# fire so RBAC and tenancy follow the namespace boundary.
+#
+# See packages/operator/src/crds/kagent-schedule.ts for the TS mirror.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: kagentschedules.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: KagentSchedule
+    listKind: KagentScheduleList
+    plural: kagentschedules
+    singular: kagentschedule
+    shortNames:
+      - ksched
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - schedule
+                - taskTemplate
+              properties:
+                schedule:
+                  type: string
+                  minLength: 1
+                  description: |
+                    5-field cron expression evaluated in UTC. Wildcards,
+                    comma-lists, ranges, and step values are supported;
+                    cron macros (@daily, @hourly), seconds, and the
+                    ?/L/W/# extensions are NOT supported.
+                suspend:
+                  type: boolean
+                  default: false
+                  description: |
+                    Pause the schedule without deleting the CR. The
+                    controller skips suspended schedules even when the
+                    cron matches the current minute.
+                taskTemplate:
+                  type: object
+                  required:
+                    - payload
+                  oneOf:
+                    - required: [targetAgent]
+                    - required: [targetCapability]
+                  properties:
+                    targetAgent:
+                      type: string
+                      description: metadata.name of an Agent CRD in this namespace.
+                    targetCapability:
+                      type: string
+                      description: Capability tag resolved against the live Agent registry.
+                    payload:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    timeoutSeconds:
+                      type: integer
+                      minimum: 1
+                      maximum: 86400
+                    runConfig:
+                      type: object
+                      properties:
+                        tokenLimit:
+                          type: integer
+                          minimum: 1
+                        costLimitUsd:
+                          type: number
+                          minimum: 0
+                        maxIterations:
+                          type: integer
+                          minimum: 1
+                          maximum: 100
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                    originalUserMessage:
+                      type: string
+                    parentDistillation:
+                      type: string
+                    expectedTools:
+                      type: array
+                      items:
+                        type: string
+                  description: |
+                    AgentTask body materialized per tick. The same
+                    `targetAgent` / `targetCapability` mutual-exclusion
+                    rule applies as on AgentTask itself.
+            status:
+              type: object
+              properties:
+                lastTickAt:
+                  type: string
+                  format: date-time
+                nextTickAt:
+                  type: string
+                  format: date-time
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type: { type: string }
+                      status: { type: string, enum: ['True', 'False', 'Unknown'] }
+                      reason: { type: string }
+                      message: { type: string }
+                      lastTransitionTime: { type: string, format: date-time }
+      additionalPrinterColumns:
+        - name: Schedule
+          type: string
+          jsonPath: .spec.schedule
+        - name: Suspended
+          type: boolean
+          jsonPath: .spec.suspend
+        - name: LastTick
+          type: date
+          jsonPath: .status.lastTickAt
+        - name: NextTick
+          type: date
+          jsonPath: .status.nextTickAt
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

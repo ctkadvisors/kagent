@@ -146,6 +146,9 @@ importers:
       '@kagent/audit-events':
         specifier: workspace:*
         version: link:../audit-events
+      '@kagent/triggers':
+        specifier: workspace:*
+        version: link:../triggers
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
@@ -177,6 +180,12 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: 1.40.0
         version: 1.40.0
+
+  packages/triggers:
+    dependencies:
+      '@kubernetes/client-node':
+        specifier: 1.4.0
+        version: 1.4.0
 
   packages/workbench-api:
     dependencies:

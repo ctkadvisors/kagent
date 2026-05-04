@@ -87,8 +87,9 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-          {{- if .Values.agentPod.templates.enabled }}
+          {{- if or .Values.agentPod.templates.enabled .Values.triggers.enabled }}
           ports:
+            {{- if .Values.agentPod.templates.enabled }}
             # WS-M template-server. Exposes
             # POST /v1alpha1/templates/{name}:instantiate to in-cluster
             # callers (chiefly agent-pods). ClusterIP-only Service in
@@ -96,6 +97,16 @@ spec:
             - name: templates
               containerPort: {{ .Values.agentPod.templates.serverPort }}
               protocol: TCP
+            {{- end }}
+            {{- if .Values.triggers.enabled }}
+            # Wave 0 sub-team Entry — HMAC-signed webhook receiver.
+            # Exposes POST /webhook/<trigger-id> to in-cluster callers
+            # (and via the optional Ingress in webhook-ingress.yaml,
+            # off-cluster callers). webhook-service.yaml fronts this.
+            - name: webhook
+              containerPort: {{ .Values.triggers.webhook.port }}
+              protocol: TCP
+            {{- end }}
           {{- end }}
           env:
             - name: LOG_LEVEL
@@ -313,6 +324,30 @@ spec:
             - name: KAGENT_AUDIT_NATS_URL
               value: {{ .Values.audit.natsUrl | quote }}
             {{- end }}
+            # Wave 0 sub-team Entry — KagentSchedule controller +
+            # HMAC-signed webhook receiver. The flag toggles both
+            # routes; `triggers.webhook.port` controls the webhook
+            # listener (default 8088 — matches the deployment port
+            # block above). Default OFF — install where the value is
+            # not deliberately set exposes neither schedule informer
+            # nor webhook port.
+            - name: KAGENT_TRIGGERS_ENABLED
+              value: {{ .Values.triggers.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.triggers.enabled }}
+            - name: KAGENT_TRIGGERS_WEBHOOK_ENABLED
+              value: "true"
+            - name: KAGENT_TRIGGERS_WEBHOOK_PORT
+              value: {{ .Values.triggers.webhook.port | quote }}
+            {{- end }}
+          {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
+          # Per-trigger HMAC secrets sourced from the chart-managed
+          # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).
+          # The key naming convention `KAGENT_TRIGGER_SECRET_<UPPER_ID>`
+          # is read by triggers-bootstrap.ts's resolveTriggerSecret.
+          envFrom:
+            - secretRef:
+                name: {{ include "kagent-operator.fullname" . }}-trigger-secrets
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # Operator's livenessProbe wired in Phase 3 once a /healthz

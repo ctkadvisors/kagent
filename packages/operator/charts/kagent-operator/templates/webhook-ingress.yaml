@@ -1,0 +1,48 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Wave 0 sub-team Entry — optional Ingress exposing the webhook receiver
+to off-cluster callers (GitHub, Pingdom, etc).
+
+DEFAULT OFF. The trust boundary is the per-trigger HMAC; nothing in
+the operator validates source IPs or TLS client certs. Cluster
+operators who need an Ingress flip `triggers.webhook.ingress.enabled`
+and configure host + tls + className per their cluster's controller.
+
+Path is rooted at `/webhook` so a single Ingress can host the receiver
+alongside other operator-served paths if a future revision adds them.
+*/}}
+{{- if and .Values.triggers.enabled .Values.triggers.webhook.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: triggers-webhook
+  {{- with .Values.triggers.webhook.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.triggers.webhook.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.triggers.webhook.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.triggers.webhook.ingress.host | quote }}
+      http:
+        paths:
+          - path: /webhook
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "kagent-operator.fullname" . }}-webhook
+                port:
+                  number: {{ .Values.triggers.webhook.port }}
+{{- end }}
