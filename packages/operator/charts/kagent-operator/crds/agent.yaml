@@ -151,6 +151,101 @@ spec:
                     ModelEndpoint is the only gate when this is unset.
                     Counted by direct in-flight Jobs only; queued /
                     suspended Jobs do not count against the cap.
+                # ---- v0.2.0-typed-io — Wave 1 / I/O sub-team.
+                # Typed dataflow contract per docs/SUBSTRATE-V1.md §3.1.
+                # Workspace + CAS sub-teams branch from the kind enum.
+                inputs:
+                  type: array
+                  description: |
+                    Inputs this Agent consumes. AgentTask.spec.inputs[]
+                    binds each entry. Required-by-default; opt out with
+                    `optional: true`.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - kind
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                      kind:
+                        type: string
+                        enum:
+                          - workspace
+                          - artifact
+                          - scalar
+                        description: |
+                          workspace = RWX PVC (Workspace sub-team,
+                          v0.2.1); artifact = content-addressed bytes
+                          (CAS sub-team, v0.2.2); scalar = inline
+                          literal forwarded to the agent loop.
+                      mediaType:
+                        type: string
+                      mountPath:
+                        type: string
+                        description: |
+                          Container path to mount the input at.
+                          REQUIRED for kind: workspace | artifact;
+                          ignored for kind: scalar. Admission rejects
+                          a non-scalar input that lacks mountPath
+                          (default-deny — substrate never picks a
+                          path on the agent's behalf).
+                      mode:
+                        type: string
+                        enum:
+                          - ro
+                          - rw
+                        default: ro
+                      optional:
+                        type: boolean
+                      required:
+                        type: boolean
+                        default: true
+                outputs:
+                  type: array
+                  description: |
+                    Outputs this Agent produces. Reconciler refuses a
+                    Completed status patch when any required entry is
+                    absent from AgentTask.status.outputs[].
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - kind
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                      kind:
+                        type: string
+                        enum:
+                          - artifact
+                          - scalar
+                      mediaType:
+                        type: string
+                      required:
+                        type: boolean
+                        default: true
+                      retention:
+                        type: string
+                        description: |
+                          Duration string (e.g. 7d, 24h). Parsed by
+                          the CAS sub-team in v0.2.2; v0.2.0 only
+                          threads the field through the schema for
+                          forward-compatibility.
+                workspaceClaims:
+                  type: array
+                  description: |
+                    Reserved field; the Workspace sub-team locks the
+                    shape in v0.2.1-workspaces. Threaded here so the
+                    schema accepts the field without a CRD-bump
+                    dependency on Workspace.
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
       additionalPrinterColumns:
         - name: Model
           type: string

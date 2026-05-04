@@ -112,6 +112,78 @@ spec:
                   items:
                     type: string
                   description: 'Tool category names the operator expects to fire (feeds the F2 detector).'
+                # ---- v0.2.0-typed-io — Wave 1 / I/O sub-team.
+                # Typed input bindings + idempotency. Admission validates
+                # this against the target Agent's spec.inputs[] before
+                # admission. See docs/SUBSTRATE-V1.md §3.2.
+                inputs:
+                  type: array
+                  description: |
+                    Bindings that resolve Agent.spec.inputs[]. Each
+                    entry's `name` must match an Agent input name;
+                    `from` carries exactly one of:
+                      { workspace: <name> }
+                      { taskUid: <uid>, output: <name> }
+                      { scalar: <opaque value> }
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - from
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                      from:
+                        type: object
+                        oneOf:
+                          - required: [workspace]
+                          - required: [taskUid, output]
+                          - required: [scalar]
+                        properties:
+                          workspace:
+                            type: string
+                            description: |
+                              Name of a Workspace CR in the same
+                              namespace (Workspace sub-team,
+                              v0.2.1-workspaces).
+                          taskUid:
+                            type: string
+                            description: |
+                              UID of an upstream AgentTask. Resolved
+                              with `output` to an entry in that
+                              task's status.outputs[].
+                          output:
+                            type: string
+                            description: |
+                              Name of an output on the upstream task
+                              (matches Agent.spec.outputs[].name on
+                              that task's target Agent).
+                          scalar:
+                            x-kubernetes-preserve-unknown-fields: true
+                            description: |
+                              Inline literal value, forwarded to the
+                              agent loop in-band. Substrate-opaque.
+                idempotencyKey:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: |
+                    Stripe / Temporal-pattern dedupe key. Operator's
+                    admission cache dedupes by (namespace, agent,
+                    idempotencyKey, inputHash) within a 24h TTL:
+                      hit + same input hash      → mark Completed with
+                                                   the prior task's
+                                                   outputs (replay);
+                                                   emit task.deduped.
+                      hit + different input hash → mark Failed with
+                                                   reason=
+                                                   IdempotencyConflict.
+                      miss                       → store + admit
+                                                   normally.
+                    v0.2.0 cache is operator-local in-memory only;
+                    distributed dedupe via etcd is a follow-up release.
             status:
               type: object
               properties:
@@ -175,6 +247,32 @@ spec:
                         type: string
                         format: date-time
                     x-kubernetes-preserve-unknown-fields: true
+                # ---- v0.2.0-typed-io — Wave 1 / I/O sub-team.
+                # Substrate output references; populated by the
+                # agent-pod's terminal status patch. The reconciler
+                # validates that each Agent.spec.outputs[].required
+                # entry is present here before admitting Completed.
+                outputs:
+                  type: array
+                  description: |
+                    Output references keyed by Agent.spec.outputs[].name.
+                    `ref` shape varies by output kind: artifact → CAS
+                    URI (cas://sha256:<hex>/<name> in v0.2.2; v0.2.0
+                    emits pvc://kagent-artifacts/<task-uid>/<name>);
+                    scalar → string-encoded literal.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - ref
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                      ref:
+                        type: string
+                        minLength: 1
                 # ---- Workstream 5 / Phase 5: parent/child task-graph projection.
                 # Populated by the operator's parent re-reconcile (next slice).
                 # Schema is additive — no required keys at status level so

@@ -233,7 +233,17 @@ const expectations: readonly CRDExpectation[] = [
     kind: 'Agent',
     plural: 'agents',
     specRequired: ['model'],
-    specProperties: ['model', 'systemPrompt', 'tools', 'capabilities', 'sandboxProfile'],
+    specProperties: [
+      'model',
+      'systemPrompt',
+      'tools',
+      'capabilities',
+      'sandboxProfile',
+      // v0.2.0-typed-io — Wave 1 / I/O sub-team.
+      'inputs',
+      'outputs',
+      'workspaceClaims',
+    ],
   },
   {
     file: 'agenttask.yaml',
@@ -253,6 +263,9 @@ const expectations: readonly CRDExpectation[] = [
       'originalUserMessage',
       'parentDistillation',
       'expectedTools',
+      // v0.2.0-typed-io — Wave 1 / I/O sub-team.
+      'inputs',
+      'idempotencyKey',
     ],
     statusProperties: [
       'phase',
@@ -263,6 +276,8 @@ const expectations: readonly CRDExpectation[] = [
       'podName',
       'structuralVerdict',
       'artifacts',
+      // v0.2.0-typed-io — typed output refs.
+      'outputs',
       'children',
       'aggregatePhase',
       'successCount',
