@@ -408,6 +408,108 @@ describe('isWorkspaceTtlExpired', () => {
   });
 });
 
+describe('reconcileWorkspace — additional coverage', () => {
+  it('treats clone-Job AlreadyExists as success (idempotent)', async () => {
+    const ws = baseWorkspace({
+      spec: {
+        pvc: { storage: '5Gi' },
+        source: { git: { url: 'https://git/foo.git' } },
+      },
+    });
+    const conflict = Object.assign(new Error('exists'), { code: 409 });
+    const { deps, mocks } = makeDeps({
+      createJob: vi.fn().mockRejectedValueOnce(conflict),
+    });
+    const action = await reconcileWorkspace({ ws }, deps);
+    // No throw; we proceed past the try/catch and patch status.
+    expect(mocks.createJob).toHaveBeenCalled();
+    expect(action.kind).toBe('pvc-created');
+  });
+
+  it('marks Failed when clone-Job create returns non-409', async () => {
+    const ws = baseWorkspace({
+      spec: {
+        pvc: { storage: '5Gi' },
+        source: { git: { url: 'https://git/foo.git' } },
+      },
+    });
+    const fail = Object.assign(new Error('quota exceeded'), { code: 403 });
+    const { deps, mocks } = makeDeps({
+      createJob: vi.fn().mockRejectedValueOnce(fail),
+    });
+    const action = await reconcileWorkspace({ ws }, deps);
+    expect(action).toEqual({ kind: 'status-patched', phase: 'Failed' });
+    expect(mocks.patchStatus).toHaveBeenCalled();
+    const lastPatch = mocks.patchStatus.mock.calls.at(-1)?.[0] as {
+      body: { status: { phase: string } };
+    };
+    expect(lastPatch.body.status.phase).toBe('Failed');
+  });
+
+  it('skips the phase=Releasing patch when already Releasing (idempotent on relist)', async () => {
+    const wsBase = baseWorkspace({
+      metadata: {
+        name: 'corpus',
+        uid: 'ws-uid-12345',
+        finalizers: [WORKSPACE_FINALIZER],
+        deletionTimestamp: new Date(),
+      },
+      status: { phase: 'Releasing' },
+    });
+    const { deps, mocks } = makeDeps();
+    await reconcileWorkspace({ ws: wsBase }, deps);
+    // patchStatus is only called when transitioning into Releasing;
+    // here we're already Releasing so the path is "delete PVC + strip
+    // finalizer".
+    expect(mocks.patchStatus).not.toHaveBeenCalled();
+    expect(mocks.deletePvc).toHaveBeenCalled();
+  });
+
+  it('emits Ready phase when PVC is bound and there is no source', async () => {
+    const ws = baseWorkspace();
+    const { deps, mocks } = makeDeps();
+    const lookupPvc = (): import('@kubernetes/client-node').V1PersistentVolumeClaim => ({
+      metadata: { name: 'corpus' },
+      status: { phase: 'Bound' },
+    });
+    await reconcileWorkspace({ ws, lookupPvc }, deps);
+    const patch = mocks.patchStatus.mock.calls.at(-1)?.[0] as {
+      body: { status: { phase: string; ready: boolean } };
+    };
+    expect(patch.body.status.phase).toBe('Ready');
+    expect(patch.body.status.ready).toBe(true);
+  });
+
+  it('uses cloneImage option when provided', async () => {
+    const ws = baseWorkspace({
+      spec: {
+        pvc: { storage: '5Gi' },
+        source: { git: { url: 'https://git/foo.git' } },
+      },
+    });
+    const { deps, mocks } = makeDeps({
+      options: { cloneImage: 'custom/git:99' },
+    });
+    await reconcileWorkspace({ ws }, deps);
+    const job = mocks.createJob.mock.calls[0][0] as {
+      body: import('@kubernetes/client-node').V1Job;
+    };
+    expect(job.body.spec?.template.spec?.containers?.[0]?.image).toBe('custom/git:99');
+  });
+
+  it('threads defaultStorageClassName from options into PVC builds', async () => {
+    const ws = baseWorkspace();
+    const { deps, mocks } = makeDeps({
+      options: { defaultStorageClassName: 'kagent-rwx' },
+    });
+    await reconcileWorkspace({ ws }, deps);
+    const pvcBody = mocks.createPvc.mock.calls[0][0] as {
+      body: import('@kubernetes/client-node').V1PersistentVolumeClaim;
+    };
+    expect(pvcBody.body.spec?.storageClassName).toBe('kagent-rwx');
+  });
+});
+
 describe('mergeCondition', () => {
   it('appends when no matching condition exists', () => {
     const out = mergeCondition([], {
