@@ -164,6 +164,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/supervision':
+        specifier: workspace:*
+        version: link:../supervision
       '@kagent/triggers':
         specifier: workspace:*
         version: link:../triggers

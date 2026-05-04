@@ -33,10 +33,14 @@ export const CAPABILITY_USED = 'capability.used' as const;
 export const SECRET_ACCESSED = 'secret.accessed' as const;
 export const QUOTA_BREACHED = 'quota.breached' as const;
 export const CONTRACT_VIOLATED = 'contract.violated' as const;
+/* v0.3.1-supervision — Wave 2 / Supervision sub-team. */
+export const SUPERVISION_APPLIED = 'supervision.applied' as const;
+export const SUPERVISION_RESTART_LIMIT_EXCEEDED = 'supervision.restart_limit_exceeded' as const;
+export const INFRA_FAULT_OBSERVED = 'infra.fault.observed' as const;
 
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(10)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(13)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -50,4 +54,7 @@ export const ALL_EVENT_TYPES = Object.freeze([
   SECRET_ACCESSED,
   QUOTA_BREACHED,
   CONTRACT_VIOLATED,
+  SUPERVISION_APPLIED,
+  SUPERVISION_RESTART_LIMIT_EXCEEDED,
+  INFRA_FAULT_OBSERVED,
 ] as const);
