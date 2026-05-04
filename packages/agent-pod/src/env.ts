@@ -132,6 +132,15 @@ export interface PodConfig {
    * `parseContentMode` to keep the env contract in one place.
    */
   readonly traceContentMode: 'none' | 'preview' | 'full';
+  /**
+   * v0.1.9 — task depth in the spawn tree. Operator stamps this on the
+   * Job env from the AgentTask's `kagent.knuteson.io/task-depth` label
+   * (default 0 / root). The agent-pod surfaces it on PodConfig so the
+   * `spawn_child_task` depth-cap guardrail and the `get_my_context`
+   * introspection tool read one source of truth. Defensive: malformed
+   * values (negative / non-integer) parse to 0 — fail-closed.
+   */
+  readonly taskDepth: number;
 }
 
 const DEFAULT_LITELLM_BASE_URL = 'http://litellm.kagent-system.svc.cluster.local:4000/v1';
@@ -159,6 +168,7 @@ export function parseEnv(env: Readonly<Record<string, string | undefined>>): Pod
   const litellmBaseUrl = env.KAGENT_LITELLM_BASE_URL ?? DEFAULT_LITELLM_BASE_URL;
   const logLevel = env.LOG_LEVEL === 'debug' ? 'debug' : 'info';
   const traceContentMode = parseTraceContentMode(env.KAGENT_TRACE_CONTENT_MODE);
+  const taskDepth = parseTaskDepth(env.KAGENT_TASK_DEPTH);
 
   const config: PodConfig = {
     taskId,
@@ -173,8 +183,23 @@ export function parseEnv(env: Readonly<Record<string, string | undefined>>): Pod
     }),
     logLevel,
     traceContentMode,
+    taskDepth,
   };
   return config;
+}
+
+/**
+ * Parse `KAGENT_TASK_DEPTH` from a string into a non-negative integer,
+ * defaulting to 0 on absent / empty / malformed input. Mirror of the
+ * operator-side `parseTaskDepthLabel` (job-spec.ts) — they both must
+ * fail-closed so a hostile / corrupted value cannot make the in-pod
+ * spawn-cap math go negative or NaN. Exported for the unit-test suite.
+ */
+export function parseTaskDepth(raw: string | undefined): number {
+  if (typeof raw !== 'string' || raw.length === 0) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
+  return n;
 }
 
 /**
