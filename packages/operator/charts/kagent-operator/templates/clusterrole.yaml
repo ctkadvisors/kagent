@@ -214,3 +214,15 @@ rules:
     resources: ['namespaces']
     verbs: ['get', 'list', 'watch']
   # ---------------------------------------------------------------------
+  # Wave 4 — Quotas (v0.5.2-quotas)
+  # ---------------------------------------------------------------------
+  # The Quotas controller materializes a K8s ResourceQuota per
+  # (tenant, namespace) from `Tenant.spec.defaultQuota.compute`. Verbs:
+  #   - get/list/watch  — observe live ResourceQuotas (admission +
+  #                        idempotent reconciler diff)
+  #   - create/patch/update — apply the ResourceQuota CR
+  #   - delete          — clean up when a tenant's quota is dropped
+  - apiGroups: ['']
+    resources: ['resourcequotas']
+    verbs: ['get', 'list', 'watch', 'create', 'patch', 'update', 'delete']
+  # ---------------------------------------------------------------------
