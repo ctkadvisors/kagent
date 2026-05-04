@@ -81,7 +81,12 @@ export type AuditEventType =
   | 'tenant.updated'
   | 'tenant.deleted'
   | 'tenant.admission_violation'
-  | 'tenant.migration';
+  | 'tenant.migration'
+  /* v0.5.2-quotas — Wave 4 / Quotas sub-team. */
+  | 'quota.gateway_inflight_exceeded'
+  | 'quota.storage_exceeded'
+  | 'quota.compute_warning'
+  | 'quota.resource_quota_applied';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -529,6 +534,64 @@ export interface TenantMigrationData {
 }
 
 /**
+ * v0.5.2-quotas — `quota.gateway_inflight_exceeded`. Emitted by the
+ * operator's `task-admission.ts` when the per-tenant in-flight
+ * gateway counter would exceed the tenant's
+ * `defaultQuota.gateway.inFlightCap`. The AgentTask is marked Failed
+ * with the same `policy_denied:tenant_gateway_inflight_exceeded`
+ * reason so per-trace observability rolls up.
+ */
+export interface QuotaGatewayInflightExceededData {
+  readonly tenant: string;
+  readonly observed: number;
+  readonly cap: number;
+  readonly taskUid: string | undefined;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string | undefined;
+}
+
+/**
+ * v0.5.2-quotas — `quota.storage_exceeded`. Emitted by the periodic
+ * CAS walker when a tenant's on-disk CAS bytes cross
+ * `defaultQuota.storage.casBytes`. One emission per (tenant,
+ * walker-lifecycle) — re-fires only after the tenant drops below cap
+ * and back over.
+ */
+export interface QuotaStorageExceededData {
+  readonly tenant: string;
+  readonly bytesUsed: number;
+  readonly bytesCap: number;
+}
+
+/**
+ * v0.5.2-quotas — `quota.compute_warning`. Emitted at 80% of a cap
+ * (compute or storage) per tenant. Substrate-level pre-warning
+ * before the K8s apiserver / admission gates start refusing.
+ */
+export interface QuotaComputeWarningData {
+  readonly tenant: string;
+  readonly resource: string;
+  readonly observed: number;
+  readonly limit: number;
+  readonly thresholdRatio: number;
+}
+
+/**
+ * v0.5.2-quotas — `quota.resource_quota_applied`. Operator's
+ * reconciler created or updated a `V1ResourceQuota` for a (tenant,
+ * namespace) pair. Substrate-attributable trail of which tenant's
+ * compute caps materialized when.
+ */
+export interface QuotaResourceQuotaAppliedData {
+  readonly tenant: string;
+  readonly namespace: string;
+  readonly resourceQuotaName: string;
+  readonly hard: { readonly [k: string]: string };
+  readonly action: 'created' | 'updated' | 'unchanged' | 'deleted';
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -584,7 +647,18 @@ export type AuditEventData =
   | { readonly type: 'tenant.updated'; readonly data: TenantLifecycleData }
   | { readonly type: 'tenant.deleted'; readonly data: TenantLifecycleData }
   | { readonly type: 'tenant.admission_violation'; readonly data: TenantAdmissionViolationData }
-  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData };
+  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData }
+  /* v0.5.2-quotas — Wave 4 / Quotas sub-team. */
+  | {
+      readonly type: 'quota.gateway_inflight_exceeded';
+      readonly data: QuotaGatewayInflightExceededData;
+    }
+  | { readonly type: 'quota.storage_exceeded'; readonly data: QuotaStorageExceededData }
+  | { readonly type: 'quota.compute_warning'; readonly data: QuotaComputeWarningData }
+  | {
+      readonly type: 'quota.resource_quota_applied';
+      readonly data: QuotaResourceQuotaAppliedData;
+    };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

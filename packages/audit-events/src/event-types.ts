@@ -98,19 +98,40 @@ export const TENANT_DELETED = 'tenant.deleted' as const;
 export const TENANT_ADMISSION_VIOLATION = 'tenant.admission_violation' as const;
 export const TENANT_MIGRATION = 'tenant.migration' as const;
 
+/* v0.5.2-quotas — Wave 4 / Quotas sub-team. Per-tenant compute /
+ * gateway / storage cap audit events. Catalog grows from 30 → 34.
+ *
+ *   - `quota.gateway_inflight_exceeded` — admission refused an
+ *      AgentTask because the per-tenant in-flight gateway counter
+ *      hit the cap (`tenant.spec.defaultQuota.gateway.inFlightCap`).
+ *      Fires from `task-admission.ts:checkTenantGatewayInFlight`.
+ *
+ *   - `quota.storage_exceeded` — periodic CAS walker observed a
+ *      tenant exceeding `tenant.spec.defaultQuota.storage.casBytes`.
+ *      One emission per (tenant, walker-lifecycle) — re-fires only
+ *      after the tenant drops below cap and back over.
+ *
+ *   - `quota.compute_warning` — warning at 80% of a compute /
+ *      storage cap (per-tenant). Composes with the K8s ResourceQuota
+ *      surface — operators see warnings before the K8s apiserver
+ *      starts refusing pod admissions.
+ *
+ *   - `quota.resource_quota_applied` — operator's reconciler applied
+ *      (created / updated) a `V1ResourceQuota` for a (tenant,
+ *      namespace) pair. Substrate-attributable trail of which
+ *      tenant's compute caps materialized when. */
+export const QUOTA_GATEWAY_INFLIGHT_EXCEEDED = 'quota.gateway_inflight_exceeded' as const;
+export const QUOTA_STORAGE_EXCEEDED = 'quota.storage_exceeded' as const;
+export const QUOTA_COMPUTE_WARNING = 'quota.compute_warning' as const;
+export const QUOTA_RESOURCE_QUOTA_APPLIED = 'quota.resource_quota_applied' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(30)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(34)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  *
- * v0.5.0-tenancy added 5 events but `tenant.updated` is folded into
- * the `tenant.created`/`tenant.deleted` lifecycle pair on the wire
- * (a tenant_updated emission is a tenant_created event with the
- * latest spec) — the catalog count mentioned in WAVES.md §6.1 reads
- * "25 → 29" because the `updated` literal exists for callsite
- * grep-ability but is type-aliased to the `tenant.updated` data
- * shape's discriminated union. The `ALL_EVENT_TYPES` array carries
- * all 5 literals.
+ * v0.5.2-quotas grows the catalog from 30 → 34 with the four
+ * `quota.*` events.
  */
 export const ALL_EVENT_TYPES = Object.freeze([
   TASK_ADMITTED,
@@ -143,4 +164,8 @@ export const ALL_EVENT_TYPES = Object.freeze([
   TENANT_DELETED,
   TENANT_ADMISSION_VIOLATION,
   TENANT_MIGRATION,
+  QUOTA_GATEWAY_INFLIGHT_EXCEEDED,
+  QUOTA_STORAGE_EXCEEDED,
+  QUOTA_COMPUTE_WARNING,
+  QUOTA_RESOURCE_QUOTA_APPLIED,
 ] as const);
