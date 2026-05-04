@@ -43,3 +43,11 @@ export type {
   InlineDecision,
   ParsedArtifactUri,
 } from './artifact-ref.js';
+
+export { isKagentSchedule } from './kagent-schedule.js';
+export type {
+  KagentSchedule,
+  KagentScheduleSpec,
+  KagentScheduleStatus,
+  KagentScheduleTaskTemplate,
+} from './kagent-schedule.js';

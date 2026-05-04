@@ -277,6 +277,14 @@ const expectations: readonly CRDExpectation[] = [
     specRequired: ['capability'],
     specProperties: ['capability', 'agentSelector'],
   },
+  {
+    file: 'kagent-schedule.yaml',
+    kind: 'KagentSchedule',
+    plural: 'kagentschedules',
+    specRequired: ['schedule', 'taskTemplate'],
+    specProperties: ['schedule', 'suspend', 'taskTemplate'],
+    statusProperties: ['lastTickAt', 'nextTickAt', 'conditions'],
+  },
 ];
 
 const errors: string[] = [];
