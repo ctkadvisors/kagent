@@ -14,6 +14,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
+    "conformance:live": "tsx src/conformance-cli.ts",
     "start": "node --import tsx/esm src/main.ts",
     "build": "tsc -p .",
     "clean": "rm -rf dist .tsbuildinfo"
