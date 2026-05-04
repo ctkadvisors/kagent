@@ -308,7 +308,7 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 All five sub-teams are mostly independent. Some share NATS JetStream as backbone; coordination is on subject namespacing.
 
-### 5.1 Sub-team: Events
+### 5.1 Sub-team: Events ✓ SHIPPED v0.4.0-events
 
 **Releases:** `v0.4.0-events`
 **Owns:** new `packages/events`, NATS JetStream stream provisioning, `Agent.spec.publishes/subscribes` schema
@@ -321,6 +321,8 @@ All five sub-teams are mostly independent. Some share NATS JetStream as backbone
 5. Trigger integration: an event subscription can mint an AgentTask via the Wave 0 Entry plumbing
 
 **Validation:** agent A publishes; agent B subscribes; B's AgentTask is minted on each event; cap denies cross-tenant subscribe.
+
+**Status:** SHIPPED — `@kagent/events` package (CloudEvents v1.0 envelope, `validateTopic` lowercase reverse-DNS dialect, `EventValidator` registry, `EventPublisher` with cap-claim glob gate, `EventDispatcher` with idempotent `applySubscriptions` + per-(agent, topic) durable pull-consumer); `Agent.spec.publishes[] / subscribes[]` extension; `validateEventTopicsAgainstClaims` admission validator; `definePublishEvent` agent-pod tool with cap-claim gate + 64KiB payload cap + `policy_denied:` taxonomy; operator-side `events-bootstrap.ts` (idempotent stream provision; pull-consumer factory; `buildEventTriggerAgentTaskCreator` rendering `AgentTask.spec.inputs[<inputBinding>] = { scalar: event.data }`); Helm `events:` values block + `KAGENT_EVENTS_*` env wiring. Tests: `@kagent/events` 53; `@kagent/operator` +5; `@kagent/agent-pod` +8. Subject namespace `kagent.events.*` locked.
 
 ### 5.2 Sub-team: Blackboard ✅ DONE (v0.4.1-blackboard)
 

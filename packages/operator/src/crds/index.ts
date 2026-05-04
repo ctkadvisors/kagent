@@ -38,6 +38,10 @@ export type {
   OutputRef,
   /* v0.3.1-supervision — Wave 2 / Supervision sub-team */
   SupervisionStrategy,
+  /* v0.4.0-events — Wave 3 / Events sub-team */
+  EventPublishDecl,
+  EventSubscribeDecl,
+  EventSubscribeTrigger,
 } from './types.js';
 
 export {
@@ -63,8 +67,10 @@ export {
   inputIsRequired,
   inputsMissingMountPath,
   outputIsRequired,
+  publishTopicsOfAgent,
   requiredInputNames,
   requiredOutputNames,
+  subscribeTopicsOfAgent,
 } from './agent.js';
 export {
   fromKindOrNull,

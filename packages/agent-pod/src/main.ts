@@ -44,6 +44,7 @@ import type { ToolProvider } from '@kagent/agent-loop';
 import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 
 import { defineBlackboardTools, defineGetMyContext } from './builtin-tools.js';
+import { definePublishEvent } from './builtin-tools-publish.js';
 import { defineSpawnChildTask } from './builtin-tools-spawn.js';
 import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
 import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
@@ -352,6 +353,67 @@ async function main(): Promise<void> {
     }
   }
 
+  // === Wave 3 — Events ===
+  // `publish_event` built-in tool. Wired only when the operator
+  // threaded `KAGENT_EVENTS_NATS_URL` AND the Agent declares at
+  // least one `publishes[]` entry. The cap-claim gate (publishClaims)
+  // is sourced from the Agent spec's `capabilityClaims.publish` —
+  // mirrors the design where the Wave 2 cap-issuer wiring is the
+  // long-term path but the Agent spec carries the shadow until
+  // every pod has a verified bundle mounted.
+  let eventsTools: ToolProvider | undefined;
+  const eventsNatsUrl = process.env.KAGENT_EVENTS_NATS_URL;
+  const declaredPublishes = config.agentSpec.publishes ?? [];
+  if (
+    typeof eventsNatsUrl === 'string' &&
+    eventsNatsUrl.length > 0 &&
+    declaredPublishes.length > 0
+  ) {
+    const eventsModule = await import('@kagent/events');
+    const declared = new Set<string>(declaredPublishes.map((p) => p.topic));
+    const claims = config.agentSpec.capabilityClaims as
+      | { readonly publish?: readonly string[] }
+      | undefined;
+    const publishClaims = claims?.publish;
+    const publisher = new eventsModule.EventPublisher({
+      source: `kagent.knuteson.io/agent-pod/${config.agentName}/${config.taskId}`,
+      ...(publishClaims !== undefined && { publishClaims }),
+    });
+    await publisher.connect(eventsNatsUrl).catch((err: unknown) => {
+      console.warn(
+        `[kagent-agent-pod] publish_event NATS connect failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+    // Cap bundle: in this release the Wave 2 issuer-controller wiring
+    // is still landing; we synthesize a minimal bundle from the
+    // shadow-claim shape on the Agent spec so publish_event has the
+    // gate it needs. The spawn-tool already follows the same pattern
+    // (its `parentCapability` arg is optional pending issuer wiring).
+    const fallbackBundle =
+      publishClaims !== undefined
+        ? {
+            iss: 'kagent.knuteson.io/operator',
+            sub: `task-uid:${config.taskId}`,
+            aud: ['kagent-substrate'],
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            jti: `pod-${config.taskId.slice(0, 8)}`,
+            claims: { publish: publishClaims },
+          }
+        : undefined;
+    const publishDef = definePublishEvent({
+      publisher,
+      capabilityBundle: fallbackBundle,
+      declaredPublishes: declared,
+    });
+    eventsTools = new InProcessToolProvider({
+      id: 'kagent-events',
+      tools: [publishDef],
+    });
+    console.log(
+      `[kagent-agent-pod] publish_event tool ENABLED (topics=[${Array.from(declared).join(', ')}])`,
+    );
+  }
+
   // v0.1.6 — Langfuse-managed prompt fetcher. Wired only when the
   // operator threaded KAGENT_LANGFUSE_HOST + creds (chart values
   // langfuse.{enabled,host,publicKeySecret,secretKeySecret}). Agents
@@ -371,6 +433,7 @@ async function main(): Promise<void> {
       signal: shutdownController.signal,
       ...(substrateTools !== undefined && { spawnTools: substrateTools }),
       ...(blackboardTools !== undefined && { blackboardTools }),
+      ...(eventsTools !== undefined && { eventsTools }),
       ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
     });
   } catch (err) {

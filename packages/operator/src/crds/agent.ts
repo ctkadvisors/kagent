@@ -98,3 +98,33 @@ export function inputsMissingMountPath(agent: Agent | AgentSpec): readonly strin
   }
   return out;
 }
+
+/* =====================================================================
+ * v0.4.0-events — Wave 3 / Events sub-team helpers.
+ * ===================================================================== */
+
+/**
+ * Set of topics this Agent is declared to publish on. Used by
+ * `definePublishEvent` (defense-in-depth on the in-pod publish tool —
+ * the Agent's GitOps spec, not just the cap claim, must include
+ * the topic).
+ *
+ * Returns an empty set when the Agent declares no `publishes[]`
+ * (back-compat with pre-Wave-3 Agents).
+ */
+export function publishTopicsOfAgent(agent: Agent | AgentSpec): ReadonlySet<string> {
+  const spec = 'spec' in agent ? agent.spec : agent;
+  const publishes = spec.publishes ?? [];
+  return new Set(publishes.map((p) => p.topic));
+}
+
+/**
+ * Set of topics this Agent is declared to subscribe to. Used by the
+ * operator's `EventDispatcher` wiring to enumerate subscriptions
+ * across the Agent informer cache.
+ */
+export function subscribeTopicsOfAgent(agent: Agent | AgentSpec): ReadonlySet<string> {
+  const spec = 'spec' in agent ? agent.spec : agent;
+  const subscribes = spec.subscribes ?? [];
+  return new Set(subscribes.map((s) => s.topic));
+}

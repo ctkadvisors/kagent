@@ -12,6 +12,7 @@ import {
   deriveIdempotencyKey,
   hashTaskInputs,
   validateAgentTaskInputs,
+  validateEventTopicsAgainstClaims,
   validateRequiredOutputsPresent,
 } from './task-admission.js';
 
@@ -415,5 +416,78 @@ describe('validateCapabilityBounds (v0.3.0)', () => {
     // parent.spawn=['summarizer-*'] — the legacy field passes.
     const r = validateCapabilityBounds(agent, parentBundle);
     expect(r.ok).toBe(true);
+  });
+});
+
+/* =====================================================================
+ * v0.4.0-events — Wave 3 / Events sub-team admission validator.
+ * ===================================================================== */
+
+describe('validateEventTopicsAgainstClaims (v0.4.0)', () => {
+  it('passes for an Agent with neither publishes nor subscribes', () => {
+    const r = validateEventTopicsAgainstClaims(baseAgent);
+    expect(r.ok).toBe(true);
+  });
+
+  it('passes when every topic ⊆ its respective claim', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: {
+        ...baseAgent.spec,
+        publishes: [{ topic: 'research.findings' }],
+        subscribes: [{ topic: 'research.priorities' }],
+        capabilityClaims: { publish: ['research.*'], subscribe: ['research.*'] },
+      },
+    };
+    const r = validateEventTopicsAgainstClaims(agent);
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects when a publish topic is outside the publish claim list', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: {
+        ...baseAgent.spec,
+        publishes: [{ topic: 'audit.task.completed' }],
+        capabilityClaims: { publish: ['research.*'] },
+      },
+    };
+    const r = validateEventTopicsAgainstClaims(agent);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('InvalidEventTopics');
+      expect(r.violations).toHaveLength(1);
+      expect(r.violations[0]?.category).toBe('publish');
+      expect(r.violations[0]?.topic).toBe('audit.task.completed');
+    }
+  });
+
+  it('rejects when a subscribe topic is malformed', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: {
+        ...baseAgent.spec,
+        subscribes: [{ topic: 'Research.findings' }],
+        capabilityClaims: { subscribe: ['*'] },
+      },
+    };
+    const r = validateEventTopicsAgainstClaims(agent);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.violations[0]?.reason).toBe('invalid_topic');
+    }
+  });
+
+  it('rejects when capabilityClaims has no publish/subscribe (fail-closed)', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: {
+        ...baseAgent.spec,
+        publishes: [{ topic: 'research.findings' }],
+        capabilityClaims: {},
+      },
+    };
+    const r = validateEventTopicsAgainstClaims(agent);
+    expect(r.ok).toBe(false);
   });
 });

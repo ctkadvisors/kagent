@@ -228,7 +228,7 @@ Five mostly-independent components ship in parallel.
 
 | Tag | Scope | Sub-team | Effort |
 |---|---|---|---|
-| `v0.4.0-events` | Typed pub/sub on NATS JetStream; `Agent.spec.publishes/subscribes`; capability-gated topic ACLs | Events | 1 week |
+| `v0.4.0-events` ✅ SHIPPED | Typed CloudEvents v1.0 envelope + `EventPublisher` (cap-gated, validator-aware) + `EventDispatcher` (per-subscription pull-consumers, defense-in-depth cap re-check); `Agent.spec.publishes/subscribes[]` + admission validates topic ⊆ `capabilityClaims.publish`/`.subscribe`; in-pod `publish_event` built-in tool with `policy_denied:` taxonomy mirroring spawn-tool; operator-side stream provisioning + event-trigger AgentTask minting (with optional `trigger.inputBinding` to Wave 1 typed-input pipeline) | Events | 1 week |
 | `v0.4.1-blackboard` | Task-tree-scoped typed KV (NATS JetStream KV backend); `read_blackboard`/`write_blackboard` built-ins | Blackboard | 1 week |
 | `v0.4.2-cache` ✓ | Best-effort cache primitive keyed by `(input_hash, image_digest, model_name)`; restore-on-boot, save-on-success | Cache | SHIPPED |
 | `v0.4.3-identity` | SPIFFE workload identity; mTLS for agent-pod ↔ gateway; per-Agent SVID replaces shared bearer tokens | Identity | 1.5 weeks |

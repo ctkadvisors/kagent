@@ -844,6 +844,51 @@ blackboard:
   # Per-bucket total byte cap.
   maxBucketBytes: 67108864 # 64 MiB
 
+# ---------------------------------------------------------------------
+# Wave 3 — Events
+# ---------------------------------------------------------------------
+# Typed pub/sub on `kagent.events.*` JetStream stream per
+# docs/SUBSTRATE-V1.md §3.7 + docs/WAVES.md §5.1. Off by default.
+# When enabled the operator:
+#
+#   1. Connects to NATS at `events.natsUrl` (default: same as audit).
+#   2. Provisions the `kagent-events` stream idempotently
+#      (subjects=`kagent.events.>`, retention `events.retention.maxAgeMs`).
+#   3. Watches `Agent.spec.subscribes[]` and provisions a durable
+#      pull-consumer per (Agent, topic). On event delivery, mints an
+#      AgentTask with `inputs[trigger.inputBinding] = { scalar:
+#      <event.data> }` (or as `spec.payload` when the trigger declares
+#      no input binding).
+#
+# Threaded env (deployment.yaml):
+#   KAGENT_EVENTS_ENABLED=true|false
+#   KAGENT_EVENTS_NATS_URL=<nats url>
+#   KAGENT_EVENTS_RETENTION_MAX_AGE_MS=<ms>
+#   KAGENT_EVENTS_STREAM_REPLICAS=<int>
+#
+# The agent-pod's `publish_event` built-in tool wires automatically
+# when KAGENT_EVENTS_NATS_URL is set on the spawned Job AND the
+# Agent declares at least one `publishes[]` topic.
+events:
+  enabled: false
+  # NATS URL for events. Defaults to the same single-replica
+  # in-cluster NATS the audit stream uses; override when events lives
+  # on a separate cluster.
+  natsUrl: 'nats://nats.kagent-system.svc.cluster.local:4222'
+  retention:
+    # Stream max age (ms). Events are coordination data, not durable
+    # application state — short retention forces application-layer
+    # projection to do its job. 24h default mirrors the brief.
+    maxAgeMs: 86400000
+  # Single-node JetStream baseline (matches audit-stream defaults).
+  # Bump to 3 once NATS clustering is in place.
+  streamReplicas: 1
+  # How often the operator re-applies the subscription set against
+  # the dispatcher. Re-apply is idempotent (it diffs against active
+  # consumers); the periodic tick is a backstop against any missed
+  # informer events. 30s is fast enough for human-time GitOps loops.
+  reapplyIntervalMs: 30000
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

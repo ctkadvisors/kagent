@@ -510,6 +510,37 @@ spec:
             # KAGENT_BLACKBOARD_BUCKET stamping in job-spec.ts.
             - name: KAGENT_BLACKBOARD_ENABLED
               value: {{ .Values.blackboard.enabled | ternary "true" "false" | quote }}
+            # ---------------------------------------------------------------
+            # Wave 3 — Events
+            # ---------------------------------------------------------------
+            # Typed pub/sub on `kagent.events.*` JetStream stream per
+            # docs/SUBSTRATE-V1.md §3.7 + docs/WAVES.md §5.1. When
+            # enabled, the operator opens a NATS connection,
+            # provisions the `kagent-events` stream idempotently,
+            # and registers a durable pull-consumer per
+            # `Agent.spec.subscribes[]` entry. On event delivery,
+            # mints an AgentTask (with the event payload bound to
+            # `inputs[trigger.inputBinding]` when declared, or
+            # forwarded as `spec.payload` otherwise).
+            #
+            # Cap-claim subset checks gate every consumer registration
+            # — defense-in-depth on top of admission's gate. The
+            # `publish_event` agent-pod tool reads
+            # KAGENT_EVENTS_NATS_URL via the per-Job env (forwarded
+            # by the operator into spawned Jobs when events are
+            # enabled).
+            - name: KAGENT_EVENTS_ENABLED
+              value: {{ .Values.events.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.events.enabled }}
+            - name: KAGENT_EVENTS_NATS_URL
+              value: {{ .Values.events.natsUrl | quote }}
+            - name: KAGENT_EVENTS_RETENTION_MAX_AGE_MS
+              value: {{ .Values.events.retention.maxAgeMs | quote }}
+            - name: KAGENT_EVENTS_STREAM_REPLICAS
+              value: {{ .Values.events.streamReplicas | quote }}
+            - name: KAGENT_EVENTS_REAPPLY_INTERVAL_MS
+              value: {{ .Values.events.reapplyIntervalMs | quote }}
+            {{- end }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).
