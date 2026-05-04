@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 30 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(30);
+  it('exports exactly 32 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy + 2 v0.5.1-egress)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(32);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -456,6 +456,9 @@ describe('event-types catalog', () => {
       'tenant.deleted',
       'tenant.admission_violation',
       'tenant.migration',
+      // v0.5.1-egress — Wave 4 / Egress sub-team additions.
+      'egress.policy_applied',
+      'egress.policy_violation',
     ]);
   });
 });
@@ -558,5 +561,51 @@ describe('tenant audit events (v0.5.0-tenancy)', () => {
     expect(event.data.fromTenant).toBe('acme');
     expect(event.data.toTenant).toBe('globex');
     expect(event.data.dryRun).toBe(false);
+  });
+});
+
+describe('egress audit events (v0.5.1-egress)', () => {
+  it('builds an egress.policy_applied envelope with the materialization metadata', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'Agent/acme-prod/researcher',
+      type: 'egress.policy_applied',
+      data: {
+        agentName: 'researcher',
+        agentNamespace: 'acme-prod',
+        agentUid: 'uid-r',
+        tenant: 'acme',
+        mode: 'cilium',
+        source: 'agent',
+        policyName: 'kagent-egress-researcher',
+        cidrCount: 2,
+        domainCount: 3,
+        portCount: 1,
+      },
+    });
+    expect(event.type).toBe('egress.policy_applied');
+    expect(event.data.mode).toBe('cilium');
+    expect(event.data.source).toBe('agent');
+    expect(event.data.policyName).toBe('kagent-egress-researcher');
+    expect(event.data.domainCount).toBe(3);
+  });
+
+  it('builds an egress.policy_violation envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'Agent/acme-prod/researcher',
+      type: 'egress.policy_violation',
+      data: {
+        agentName: 'researcher',
+        agentNamespace: 'acme-prod',
+        tenant: 'acme',
+        attemptedTarget: 'evil.example.com',
+        reason: 'policy_denied:egress_domain_not_allowlisted',
+        message: 'attempted egress to evil.example.com not in tenant.defaultEgress.allow',
+      },
+    });
+    expect(event.type).toBe('egress.policy_violation');
+    expect(event.data.attemptedTarget).toBe('evil.example.com');
+    expect(event.data.reason).toBe('policy_denied:egress_domain_not_allowlisted');
   });
 });

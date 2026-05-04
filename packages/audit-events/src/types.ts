@@ -81,7 +81,10 @@ export type AuditEventType =
   | 'tenant.updated'
   | 'tenant.deleted'
   | 'tenant.admission_violation'
-  | 'tenant.migration';
+  | 'tenant.migration'
+  /* v0.5.1-egress — Wave 4 / Egress sub-team. */
+  | 'egress.policy_applied'
+  | 'egress.policy_violation';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -529,6 +532,52 @@ export interface TenantMigrationData {
 }
 
 /**
+ * `egress.policy_applied` — Wave 4 / Egress sub-team. Emitted by the
+ * operator's egress-controller after each successful per-Agent
+ * NetworkPolicy / CiliumNetworkPolicy create-or-update. One emission
+ * per Agent reconcile cycle.
+ *
+ *   - `mode`        — `networkpolicy | cilium` — which kind was applied.
+ *   - `source`      — where the allowlist came from:
+ *                      `agent` (Agent.spec.egress was set),
+ *                      `tenant` (fell back to Tenant.spec.defaultEgress),
+ *                      `default-deny` (substrate default — DNS + NATS +
+ *                      gateway only).
+ *   - `cidrCount` / `domainCount` / `portCount` — sizes of the
+ *     declared allowlist axes (zero for `default-deny`).
+ */
+export interface EgressPolicyAppliedData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly agentUid: string | undefined;
+  readonly tenant: string | undefined;
+  readonly mode: 'networkpolicy' | 'cilium';
+  readonly source: 'agent' | 'tenant' | 'default-deny';
+  readonly policyName: string;
+  readonly cidrCount: number;
+  readonly domainCount: number;
+  readonly portCount: number;
+}
+
+/**
+ * `egress.policy_violation` — Wave 4 / Egress sub-team. Best-effort
+ * substrate-decision record. Cilium logs are the canonical actual-deny
+ * surface; this event is emitted by the operator only when its own
+ * code paths refuse a substrate operation on egress grounds (e.g. a
+ * resolved tenant + Agent allowlist contradicts each other in a way
+ * the substrate can flag — reserved for future use). v0.5.1 ships the
+ * shape; the wiring lights it up additively in subsequent commits.
+ */
+export interface EgressPolicyViolationData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly tenant: string | undefined;
+  readonly attemptedTarget: string;
+  readonly reason: string;
+  readonly message: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -584,7 +633,10 @@ export type AuditEventData =
   | { readonly type: 'tenant.updated'; readonly data: TenantLifecycleData }
   | { readonly type: 'tenant.deleted'; readonly data: TenantLifecycleData }
   | { readonly type: 'tenant.admission_violation'; readonly data: TenantAdmissionViolationData }
-  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData };
+  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData }
+  /* v0.5.1-egress — Wave 4 / Egress sub-team. */
+  | { readonly type: 'egress.policy_applied'; readonly data: EgressPolicyAppliedData }
+  | { readonly type: 'egress.policy_violation'; readonly data: EgressPolicyViolationData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

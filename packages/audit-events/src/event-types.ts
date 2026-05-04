@@ -98,19 +98,23 @@ export const TENANT_DELETED = 'tenant.deleted' as const;
 export const TENANT_ADMISSION_VIOLATION = 'tenant.admission_violation' as const;
 export const TENANT_MIGRATION = 'tenant.migration' as const;
 
+/* v0.5.1-egress — Wave 4 / Egress sub-team. Per-Agent NetworkPolicy /
+ * CiliumNetworkPolicy materialization decisions emitted by the
+ * egress-controller. Catalog grows from 30 → 32. `egress.policy_applied`
+ * fires once per Agent reconcile (the policy was created or replaced);
+ * `egress.policy_violation` is best-effort — Cilium logs surface the
+ * actual deny, the substrate records its own decision events for the
+ * audit warehouse. See docs/WAVES.md §6.2. */
+export const EGRESS_POLICY_APPLIED = 'egress.policy_applied' as const;
+export const EGRESS_POLICY_VIOLATION = 'egress.policy_violation' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(30)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(32)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  *
- * v0.5.0-tenancy added 5 events but `tenant.updated` is folded into
- * the `tenant.created`/`tenant.deleted` lifecycle pair on the wire
- * (a tenant_updated emission is a tenant_created event with the
- * latest spec) — the catalog count mentioned in WAVES.md §6.1 reads
- * "25 → 29" because the `updated` literal exists for callsite
- * grep-ability but is type-aliased to the `tenant.updated` data
- * shape's discriminated union. The `ALL_EVENT_TYPES` array carries
- * all 5 literals.
+ * v0.5.1-egress added 2 events (`egress.policy_applied` +
+ * `egress.policy_violation`) — catalog grows from 30 → 32.
  */
 export const ALL_EVENT_TYPES = Object.freeze([
   TASK_ADMITTED,
@@ -143,4 +147,6 @@ export const ALL_EVENT_TYPES = Object.freeze([
   TENANT_DELETED,
   TENANT_ADMISSION_VIOLATION,
   TENANT_MIGRATION,
+  EGRESS_POLICY_APPLIED,
+  EGRESS_POLICY_VIOLATION,
 ] as const);
