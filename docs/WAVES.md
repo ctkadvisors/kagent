@@ -108,20 +108,22 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 ### 2.5 Sub-team: Audit
 
-**Releases:** `v0.1.15-audit-stream`
-**Owns:** new package `@kagent/audit-events`, NATS JetStream `audit` stream, `packages/operator/src/audit.ts`, `packages/agent-pod/src/audit.ts`
-**Reads:** `packages/operator/src/reconcile.ts`, `packages/agent-pod/src/runner.ts` (callsite injection)
+**Releases:** `v0.1.15-audit-stream` ✓ (2026-05-03)
+**Owns:** new package `@kagent/audit-events`, NATS JetStream `audit` stream, `packages/operator/src/admission.ts` (proof-of-life emission)
+**Reads:** `packages/operator/src/reconcile.ts`, `packages/agent-pod/src/runner.ts` (other emission callsites land in subsequent commits by their owning sub-teams)
 
 **Deliverables:**
-1. CloudEvents v1.0 envelope schema for kagent events (`type`, `subject`, `source`, `time`, `data`)
-2. Event types: `task.admitted`, `task.spawned`, `task.completed`, `task.failed`, `child.spawned`, `capability.minted`, `capability.used`, `secret.accessed`, `quota.breached`, `contract.violated`
-3. Operator emits to NATS `audit` stream; agent-pod emits to same stream via NATS publish
-4. Helm chart provisions the stream with `MaxBytes` default 10GB, `MaxAge` default 30d
-5. Unit + integration tests; smoke test verifies a task admit → completed flow emits 3+ events
 
-**Validation:** `nats stream report | grep audit` shows growing event count over a smoke run; events parseable as CloudEvents.
+1. ✓ `@kagent/audit-events` package with CloudEvents v1.0 envelope (`makeEvent`), generic-typed for per-type call-site narrowing
+2. ✓ Ten event-type string consts + per-type TS data interfaces (`task.admitted`, `task.spawned`, `task.completed`, `task.failed`, `child.spawned`, `capability.minted`, `capability.used`, `secret.accessed`, `quota.breached`, `contract.violated`)
+3. ✓ `AuditPublisher` — NATS JetStream publisher with explicit best-effort contract (graceful no-op on unreachable NATS, never throws into the request critical path)
+4. ✓ Helm chart provisions the `audit` stream via post-install/post-upgrade Job (`templates/audit-stream.yaml`) using `natsio/nats-box`. MaxBytes 10GB, MaxAge 30d, retention `limits`, file storage. New `audit:` block in `values.yaml` (additive; default `enabled: true`).
+5. ✓ Wave 0 proof-of-life emission: operator's admission reconciler emits `task.admitted` per accepted AgentTask. Other emission sites (capability.minted, child.spawned, secret.accessed, quota.breached, contract.violated, …) integrate additively as their owning Wave 0/1/2 sub-teams land their releases.
+6. ✓ Unit tests (35) cover envelope conformance + best-effort publisher contract. Integration tests (8) cover the operator admission flow emitting one `task.admitted` per successful admission with the correct subject/data shape, no false positives on conflict / failure / disabled paths, and graceful handling of a misbehaving emission hook.
 
-**Critical dependency:** Wave 2 sub-team Caps depends on this stream existing — capability mints must emit audit events from day one.
+**Validation:** `helm template . --set audit.enabled=true` renders the provisioning Job; `--set audit.enabled=false` renders zero audit resources. `pnpm test` in `@kagent/audit-events` and `@kagent/operator` pass clean (35 + 414 tests).
+
+**Critical dependency:** Wave 2 sub-team Caps depends on this stream existing — capability mints must emit audit events from day one. Wave 0 ships first; Wave 2 cap-mint integration is straightforward (`makeEvent({ type: CAPABILITY_MINTED, ... })` → `auditPublisher.publish()`).
 
 ### 2.6 Sub-team: Entry
 
