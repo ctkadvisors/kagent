@@ -33,6 +33,7 @@
     "@kagent/capability-types": "workspace:*",
     "@kagent/events": "workspace:*",
     "@kagent/locality-controller": "workspace:*",
+    "@kagent/quota-controller": "workspace:*",
     "@kagent/supervision": "workspace:*",
     "@kagent/triggers": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
