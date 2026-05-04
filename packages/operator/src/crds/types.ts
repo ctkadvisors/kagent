@@ -25,6 +25,35 @@ export const API_VERSION = 'v1alpha1';
 export const API_GROUP_VERSION = `${API_GROUP}/${API_VERSION}` as const;
 
 /* =====================================================================
+ * v0.5.3-versioning — Wave 4 / Versioning sub-team annotation keys.
+ *
+ * Per docs/WAVES.md §6.4 + §6.6. The Versioning sub-team's immutability
+ * webhook reads these annotations on `Agent.metadata.annotations`:
+ *
+ *   - `kagent.knuteson.io/published`  — once an Agent CR is admitted,
+ *     the only sanctioned mutation is flipping this annotation from
+ *     `false` → `true` exactly once. Any other `spec.*` mutation is
+ *     refused by the immutability webhook with `agent.mutation_refused`.
+ *
+ *   - `kagent.knuteson.io/deprecated` — when set to `'true'`, the
+ *     Agent still serves in-flight tasks but NEW tasks emit an
+ *     `agent.deprecated_used` audit event (warning, not refusal).
+ *
+ *   - `kagent.knuteson.io/removed-at` — RFC 3339 timestamp. Past this
+ *     date the deprecation sweeper (1h tick) refuses NEW tasks for
+ *     this (name, version) pair with `policy_denied:agent_removed`.
+ *     In-flight tasks pinned to the removed version continue.
+ *
+ * Default Agent.spec.version when absent at admission time: `'0.0.0'`.
+ * The substrate does NOT parse semver; comparison is lexical (the
+ * Agent author keeps versions semver-shaped for human readability).
+ */
+export const PUBLISHED_ANNOTATION = 'kagent.knuteson.io/published' as const;
+export const DEPRECATED_ANNOTATION = 'kagent.knuteson.io/deprecated' as const;
+export const REMOVED_AT_ANNOTATION = 'kagent.knuteson.io/removed-at' as const;
+export const DEFAULT_AGENT_VERSION = '0.0.0' as const;
+
+/* =====================================================================
  * Agent — declarative spec for a workload that can be invoked.
  * ===================================================================== */
 
@@ -36,6 +65,23 @@ export interface AgentSpec {
    * `aws-bedrock/au.anthropic.claude-sonnet-4-6`).
    */
   readonly model: string;
+
+  /* ---- v0.5.3-versioning — Wave 4 / Versioning sub-team.
+   * See docs/WAVES.md §6.4 + §6.6. Each (metadata.name, spec.version)
+   * pair is a distinct Agent identity. New AgentTasks (no
+   * `status.agentVersion` on admission) are pinned to the LATEST
+   * version of the named Agent; in-flight tasks pinned to OLDER
+   * versions continue against those (immutable, read-only) Agent CRs.
+   *
+   * Comparison is LEXICAL — the substrate never parses semver. Agent
+   * authors are expected to use semver-shaped strings (`0.1.0`,
+   * `1.2.3`) so lexical compare matches semver intuition.
+   *
+   * When the Agent CR is admitted without an explicit version (legacy
+   * v0.1 Agents), admission stamps `version: '0.0.0'` so the index
+   * always has a comparable value.
+   */
+  readonly version?: string;
 
   /** Optional system prompt baked into every run of this agent. */
   readonly systemPrompt?: string;
@@ -845,6 +891,23 @@ export interface AgentTaskStatus {
    * for never-restarted tasks).
    */
   readonly restartCount?: number;
+
+  /**
+   * v0.5.3-versioning — Wave 4 / Versioning sub-team.
+   *
+   * The `Agent.spec.version` resolved at AgentTask admission time.
+   * IMMUTABLE on the AgentTask after admission — the operator's Job
+   * builder uses (`metadata.name + spec.version === task.status.agentVersion`)
+   * to fetch the EXACT Agent CR even when newer versions of the same
+   * Agent name have since been published. In-flight tasks survive an
+   * Agent.spec.version bump because the immutability webhook keeps
+   * the prior CR read-only.
+   *
+   * When admission resolved an Agent without an explicit version
+   * (legacy v0.1 Agent), this field is stamped to `'0.0.0'` (the
+   * default-on-admission baseline). See docs/WAVES.md §6.4.
+   */
+  readonly agentVersion?: string;
 }
 
 export interface AgentTask {

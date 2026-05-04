@@ -248,6 +248,8 @@ const expectations: readonly CRDExpectation[] = [
       // v0.3.1-supervision — Wave 2 / Supervision sub-team.
       'supervisionStrategy',
       'maxRestarts',
+      // v0.5.3-versioning — Wave 4 / Versioning sub-team.
+      'version',
     ],
   },
   {
@@ -290,6 +292,8 @@ const expectations: readonly CRDExpectation[] = [
       'inFlightCount',
       // v0.3.1-supervision — Wave 2 / Supervision sub-team.
       'restartCount',
+      // v0.5.3-versioning — Wave 4 / Versioning sub-team.
+      'agentVersion',
     ],
   },
   {

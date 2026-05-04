@@ -36,6 +36,18 @@ spec:
                   type: string
                   minLength: 1
                   description: 'LiteLLM model id WITH provider prefix (e.g. workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct).'
+                version:
+                  type: string
+                  description: |
+                    v0.5.3-versioning — Wave 4 / Versioning sub-team.
+                    Each (metadata.name, spec.version) pair is a
+                    distinct Agent identity. NEW AgentTasks pin to the
+                    LATEST version at admission; in-flight tasks
+                    pinned to OLDER versions continue against their
+                    immutable older Agent CR. Comparison is LEXICAL —
+                    use semver-shaped strings or zero-pad for numeric
+                    intuition. Defaults to '0.0.0' at admission when
+                    absent (legacy v0.1 Agents).
                 systemPrompt:
                   type: string
                 tools:
