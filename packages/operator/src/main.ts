@@ -13,6 +13,7 @@
  */
 
 import {
+  AppsV1Api,
   CoreV1Api,
   type CoreV1Event,
   type Informer,
@@ -1389,6 +1390,82 @@ async function main(): Promise<void> {
     }
   } else {
     console.log('[kagent-operator] CAS GC disabled (set KAGENT_CAS_ENABLED=true to enable)');
+  }
+
+  // === Wave 2 — Workflows ===
+  // AgentWorkflow controller (per docs/SUBSTRATE-V1.md §3.3 +
+  // docs/WAVES.md §4.3). Default-OFF until cluster operators have
+  // deployed Restate. The chart's `workflows.enabled=true` flips
+  // KAGENT_WORKFLOWS_ENABLED on this deployment.
+  //
+  // When enabled, the operator runs the AgentWorkflow controller's
+  // informer triplet (AgentWorkflow + label-selected Deployment +
+  // label-selected Service). Per AgentWorkflow CR the controller:
+  //   1. Mints a workflow-cap via mintCapabilityForWorkflow
+  //   2. Upserts a Secret holding the JWT
+  //   3. Deploys the workflow runtime image (1:1 Deployment) with
+  //      the Secret-volume mounted at /var/kagent/cap/cap.jwt
+  //   4. Exposes a ClusterIP Service for Restate's dispatcher
+  //   5. POSTs the Service URL to Restate's admin /deployments
+  //   6. For each spec.triggers[]:
+  //        - schedule → materialize sibling KagentSchedule CR
+  //        - webhook → record path in conditions
+  //        - event   → persist pending subscription (Wave 3 STUB)
+  //   7. Patches status.phase + capabilityRef + lastTickAt
+  //
+  // Restate is NOT installed by this chart in v0.3.2 — operators
+  // install it independently and point KAGENT_WORKFLOWS_RESTATE_ADDRESS
+  // at the resulting Service. The controller surfaces a clear
+  // RestateRegistered: False condition when the admin POST fails;
+  // re-tries on every reconcile event.
+  if (process.env.KAGENT_WORKFLOWS_ENABLED === 'true') {
+    const restateAddress =
+      normalizeOptionalEnv(process.env.KAGENT_WORKFLOWS_RESTATE_ADDRESS) ??
+      'http://restate.kagent-system.svc.cluster.local:8080';
+    const restateAdminAddress = normalizeOptionalEnv(
+      process.env.KAGENT_WORKFLOWS_RESTATE_ADMIN_ADDRESS,
+    );
+    const { buildAgentWorkflowController } = await import('./agent-workflow-controller.js');
+    const appsApi = kc.makeApiClient(AppsV1Api);
+    // CapCa wiring is the cross-team handoff with the Caps sub-team —
+    // the issuer + CA are tested + ready (per WAVES.md §4.1
+    // deliverable 3 SHIPPED logic), but the reconciler-side wiring
+    // that actually loads CapCa from the chart-mounted Secret is the
+    // glue follow-up release. v0.3.2 leaves capCa undefined; the
+    // controller surfaces a CapMintFailed status condition until the
+    // issuer-controller wiring lands. Not a substrate-correctness
+    // blocker — workflows still deploy, register with Restate, and
+    // accept triggers; spawn-narrowing on their AgentTasks comes
+    // online when the CA is wired.
+    const wfController = buildAgentWorkflowController({
+      kc,
+      customApi,
+      coreApi,
+      appsApi,
+      capCa: undefined,
+      ...(watchNamespace !== undefined && { watchNamespace }),
+      options: {
+        defaultRestateAddress: restateAddress,
+        ...(restateAdminAddress !== undefined && { restateAdminAddress }),
+      },
+    });
+    await wfController.start();
+    console.log(
+      `[kagent-operator] AgentWorkflow controller started (namespace=${watchNamespace ?? 'all'}, restate=${restateAddress})`,
+    );
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        await wfController.stop();
+      } catch (err) {
+        console.error('[kagent-operator] AgentWorkflow controller stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] AgentWorkflow controller disabled (set KAGENT_WORKFLOWS_ENABLED=true to enable; requires Restate)',
+    );
   }
 }
 
