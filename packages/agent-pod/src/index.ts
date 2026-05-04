@@ -52,3 +52,7 @@ export {
   INLINE_DEFAULT_MAX_BYTES,
 } from './artifacts.js';
 export type { ArtifactWriterEnv, WriteArtifactResult } from './artifacts.js';
+
+/* v0.2.2-cas — content-addressed-storage backend abstraction. */
+export { casShardPath, hashBytes, PvcCasBackend, S3CasBackend } from './cas-backend.js';
+export type { CasBackend, CasWriteResult, S3CasBackendOptions } from './cas-backend.js';
