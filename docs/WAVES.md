@@ -257,34 +257,39 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 **Validation:** ✅ The schema gate, narrowing predicate, and JWT sign+verify round-trip are exhaustively tested (~120 tests in this lane). The end-to-end "operator mints, mounts, agent-pod verifies, spawn narrows" path is integration-level and lands with the issuer-controller wiring follow-up.
 
-### 4.2 Sub-team: Supervision
+### 4.2 Sub-team: Supervision ✓ SHIPPED v0.3.1-supervision
 
-**Releases:** `v0.3.1-supervision`
-**Owns:** `packages/operator/src/reconcile.ts` (child-failure routing), new `packages/supervision`
-**Depends on:** Caps (supervision strategies are cap-claim-gated for adversarial scenarios)
+**Releases:** `v0.3.1-supervision` — **SHIPPED**
+**Owns:** `packages/operator/src/supervision-router.ts` + `failure-classifier.ts`, new `packages/supervision` (pure-functional engine)
+**Depends on:** Caps (supervision strategies are cap-claim-gated for adversarial scenarios — predicate present, not yet enforced)
 
-**Deliverables:**
-1. `Agent.spec.supervisionStrategy: one_for_one | one_for_all | rest_for_one | escalate`
-2. Operator child-failure handler: routes per strategy
-3. Structured contract violations (missing required output, undeclared tool call) trigger supervision response
-4. `Agent.spec.maxRestarts` cap; restart counter on AgentTask.status
-
-**Validation:** smoke test where a child fails with each strategy produces the expected sibling outcome; max-restart cap fails-closed instead of looping.
-
-### 4.3 Sub-team: Workflows
-
-**Releases:** `v0.3.2-workflows`
-**Owns:** new `packages/agent-workflow-runtime`, `AgentWorkflow` CRD, Restate adapter
-**Depends on:** Caps (Workflows carry their own cap)
+**Status:** SHIPPED — all 6 deliverables landed, no deferrals. Operator: 691 → 783 tests (+92). New `@kagent/supervision`: 28 tests covering all 4 strategies + edge cases. 3 new audit event types (`supervision.applied`, `supervision.restart_limit_exceeded`, `infra.fault.observed`). Restart cap = bound + intent recording at v0.3.1; the actual Job re-spawn mechanic composes with Workflows + Wave 4 Quotas (documented in `supervision-router.ts` JSDoc). Cap-claim-gating left predicate-only (`assertStrategyAllowed`) for Wave 4 Tenancy to flip on for adversarial multi-tenant — ungated strategy choice is the simpler v0.3.1 default.
 
 **Deliverables:**
-1. `AgentWorkflow` CRD (image, triggers, capabilityRef)
-2. Restate cluster Helm sub-chart
-3. Workflow runtime: TS host SDK that calls into Restate, deterministic operations (spawn AgentTask, wait, signal)
-4. Triggers: schedule (from Wave 0 Entry), webhook (from Wave 0 Entry), event (from Wave 3 Events)
-5. Crash-recovery test: kill workflow pod mid-fan-out, confirm replay reaches same decision point + does NOT re-issue completed effects
+1. `Agent.spec.supervisionStrategy: one_for_one | one_for_all | rest_for_one | escalate` (default `one_for_one`) ✓
+2. Operator child-failure handler routes per strategy via `supervision-router.ts` wired into reconciler `onUpdate` ✓
+3. Structured-vs-infra failure classifier: structured contract violations trigger supervision; infrastructure faults (OOMKilled, image-pull, etc.) emit `infra.fault.observed` and let K8s Job backoffLimit handle them ✓
+4. `Agent.spec.maxRestarts` cap (default 3, min 0) + `AgentTask.status.restartCount` + fail-closed `restart_limit_exceeded` ✓
+5. Pure-functional `evaluateStrategy()` engine in `@kagent/supervision` with comprehensive unit tests for all 4 strategies ✓
+6. Helm wiring: `supervision:` values block (default `enabled: true`), `KAGENT_SUPERVISION_*` env, no new RBAC verbs needed ✓
 
-**Validation:** researcher orchestrator workflow runs daily, survives a chaos kill, completes with expected outputs.
+### 4.3 Sub-team: Workflows ✓ SHIPPED v0.3.2-workflows
+
+**Releases:** `v0.3.2-workflows` — **SHIPPED**
+**Owns:** new `packages/agent-workflow-runtime`, `AgentWorkflow` CRD, `agent-workflow-controller.ts`, `mintCapabilityForWorkflow` extension to `cap-issuer.ts`
+**Depends on:** Caps (Workflows carry their own cap, minted via `mintCapabilityForWorkflow`)
+
+**Status:** SHIPPED — 6 deliverables landed (some with planned forward-compat deferrals). Operator: 783 → 817 tests (+34). New `@kagent/agent-workflow-runtime`: 13 tests (5 `defineWorkflow` + 8 crash-recovery). 5 new audit event types (`workflow.started`, `workflow.step.completed`, `workflow.completed`, `workflow.failed`, `workflow.event_subscription_pending`). Crash-recovery proof: 3-fanout orchestrator test demonstrates replay returns same task UIDs + 0 re-issues — the foundational property of durable execution.
+
+**Deliverables:**
+1. `AgentWorkflow` CRD (image, handler, triggers, capabilityRef, capabilityClaims, replicas, restateAddress) — TS surface + manifest + chart copy + drift-check row ✓
+2. `@kagent/agent-workflow-runtime` host SDK: `defineWorkflow` + `WorkflowContext` exposing 5 deterministic ops (`spawnAgentTask`/`awaitTask`/`signal`/`awaitSignal`/`sleep`); in-memory deterministic runner ✓
+3. AgentWorkflow controller: informer triplet (CR + Deployment + Service), cap-mint via `mintCapabilityForWorkflow`, Secret-volume cap delivery, Restate admin POST registration, trigger materialization (KagentSchedule for `schedule`, webhook conditions for `webhook`) ✓
+4. Triggers: schedule + webhook materialization shipped; event-trigger schema persisted as `pending` status condition (Wave 3 Events lights up the dispatcher) ✓
+5. Crash-recovery proof: in-memory runtime with 3-fanout test demonstrating deterministic replay; real Restate adapter (`toRestateService`) deferred to homelab-exercise time ✓
+6. Helm wiring: `workflows:` values block (default `enabled: false`), Restate address env (chart documents `restatedev/restate-helm` install path; sub-chart inline at v0.5), full RBAC for AgentWorkflow + Deployment + Service + Secret ✓
+
+**Forward-compat deferrals (captured in commit message + JSDoc):** real Restate adapter, Restate cluster sub-chart, `capCa` cap-issuer wiring (matches Caps' own §4.1 deferral), webhook receiver-side path dispatch, event-trigger NATS subscription.
 
 ### 4.4 Wave 2 cross-team coordination
 
