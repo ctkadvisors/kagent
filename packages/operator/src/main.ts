@@ -34,6 +34,7 @@ import {
   TASK_ADMITTED,
   makeEvent,
 } from '@kagent/audit-events';
+import { buildEventDispatcher, type EventDispatcher, type EventSubscription } from '@kagent/events';
 import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import {
@@ -76,6 +77,14 @@ import {
 import { IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
+import {
+  buildEventTriggerAgentTaskCreator,
+  buildNatsPullConsumerFactory,
+  provisionEventsStream,
+  type JetStreamClientLike,
+  type JetStreamManagerLike,
+  type StreamApiLike,
+} from './events-bootstrap.js';
 import { buildTriggersBootstrap, type TriggersBootstrapHandle } from './triggers-bootstrap.js';
 import type { AgentTaskHandler, AgentTaskInformerWithCache } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
@@ -298,6 +307,22 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_NAME,
       env.KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY_SECRET_KEY,
     );
+  }
+  // === Wave 3 — Events ===
+  // Forward `KAGENT_EVENTS_NATS_URL` into spawned agent-pod Jobs so
+  // the in-pod `publish_event` tool has a NATS endpoint to emit on.
+  // The agent-pod side gates registration on this env's presence
+  // AND the Agent declaring `publishes[]`; absent here means
+  // `publish_event` simply isn't registered (loop sees no such
+  // tool). Best-effort plumbing — events sub-system stays opt-in
+  // via `events.enabled=true` on the chart.
+  if (env.KAGENT_EVENTS_ENABLED === 'true') {
+    if (typeof env.KAGENT_EVENTS_NATS_URL === 'string' && env.KAGENT_EVENTS_NATS_URL.length > 0) {
+      extraEnv.push({
+        name: 'KAGENT_EVENTS_NATS_URL',
+        value: env.KAGENT_EVENTS_NATS_URL,
+      });
+    }
   }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
@@ -1619,6 +1644,217 @@ async function main(): Promise<void> {
   } else {
     console.log(
       '[kagent-operator] AgentWorkflow controller disabled (set KAGENT_WORKFLOWS_ENABLED=true to enable; requires Restate)',
+    );
+  }
+
+  // === Wave 3 — Events ===
+  // Typed pub/sub on `kagent.events.*` JetStream stream per
+  // docs/SUBSTRATE-V1.md §3.7 + docs/WAVES.md §5.1. Off by default;
+  // chart `events.enabled=true` flips KAGENT_EVENTS_ENABLED on this
+  // deployment. When enabled the operator:
+  //
+  //   1. Connects to NATS (KAGENT_EVENTS_NATS_URL — typically the
+  //      same URL as audit), provisions the `kagent-events` stream
+  //      idempotently (subjects=`kagent.events.>`, max_age tuneable
+  //      via `events.retention.maxAgeMs`).
+  //   2. Walks the cluster's `Agent` informer; for each Agent's
+  //      `subscribes[]` entry, builds an `EventSubscription` and
+  //      calls `dispatcher.applySubscriptions()`.
+  //   3. The dispatcher creates a durable pull-consumer per
+  //      subscription; on event delivery, the
+  //      `buildEventTriggerAgentTaskCreator` callback mints an
+  //      AgentTask (with the event payload bound to
+  //      `inputs[<inputBinding>]` when declared, or as
+  //      `spec.payload` otherwise).
+  //
+  // The dispatcher is best-effort on infra (NATS unreachable →
+  // operator boots fine, dispatcher retries via consumer.consume).
+  // Cap-claim subset checks gate every subscription registration —
+  // an Agent whose `subscribes[].topic` isn't in
+  // `capabilityClaims.subscribe` is silently dropped (defense-in-
+  // depth on top of admission's gate; admission rejects the Agent CR
+  // before this even runs).
+  if (process.env.KAGENT_EVENTS_ENABLED === 'true') {
+    const eventsNatsUrl =
+      normalizeOptionalEnv(process.env.KAGENT_EVENTS_NATS_URL) ??
+      normalizeOptionalEnv(process.env.KAGENT_NATS_URL) ??
+      'nats://nats.kagent-system.svc.cluster.local:4222';
+    const maxAgeRaw = process.env.KAGENT_EVENTS_RETENTION_MAX_AGE_MS;
+    const maxAgeMs =
+      typeof maxAgeRaw === 'string' && maxAgeRaw.length > 0
+        ? Number.parseInt(maxAgeRaw, 10)
+        : 24 * 60 * 60 * 1000;
+    const replicasRaw = process.env.KAGENT_EVENTS_STREAM_REPLICAS;
+    const replicas =
+      typeof replicasRaw === 'string' && replicasRaw.length > 0
+        ? Number.parseInt(replicasRaw, 10)
+        : 1;
+    const reapplyMsRaw = process.env.KAGENT_EVENTS_REAPPLY_INTERVAL_MS;
+    const reapplyIntervalMs =
+      typeof reapplyMsRaw === 'string' && reapplyMsRaw.length > 0
+        ? Number.parseInt(reapplyMsRaw, 10)
+        : 30_000;
+
+    const natsConn = await connect({ servers: eventsNatsUrl }).catch((err: unknown) => {
+      console.warn('[kagent-events] NATS connect failed (events disabled):', err);
+      return undefined;
+    });
+    if (natsConn !== undefined) {
+      // nats.js's JetStream surface — both async/sync depending on
+      // call. Cast through `unknown` once so the tsc strictness on
+      // `NatsConnection` doesn't fight the JetStream extension API.
+      const natsConnAny = natsConn as unknown as {
+        jetstream: () => JetStreamClientLike;
+        jetstreamManager: () => Promise<
+          JetStreamManagerLike & {
+            readonly streams: StreamApiLike;
+            readonly consumers?: {
+              add(stream: string, opts: Record<string, unknown>): Promise<unknown>;
+            };
+          }
+        >;
+      };
+      const jsm = await natsConnAny.jetstreamManager();
+      const js = natsConnAny.jetstream();
+      // Provision the stream (idempotent + best-effort).
+      await provisionEventsStream({
+        jsm,
+        config: {
+          name: 'kagent-events',
+          subjects: ['kagent.events.>'],
+          maxAgeNs: maxAgeMs * 1_000_000,
+          replicas,
+        },
+        logger: {
+          info: (m) => {
+            console.log(m);
+          },
+          warn: (m) => {
+            console.warn(m);
+          },
+        },
+      });
+
+      const factory = buildNatsPullConsumerFactory({
+        jsm: {
+          ...jsm,
+          ...(jsm.consumers !== undefined && {
+            addConsumer: (stream: string, opts: Record<string, unknown>) =>
+              jsm.consumers!.add(stream, opts),
+          }),
+        },
+        js,
+        streamName: 'kagent-events',
+      });
+      const createAgentTask = buildEventTriggerAgentTaskCreator({ customApi });
+      const dispatcher: EventDispatcher = buildEventDispatcher({
+        buildConsumer: factory,
+        createAgentTask,
+      });
+
+      // Agent informer dedicated to the events dispatcher. We rebuild
+      // subscriptions from the informer cache on every add/update/delete
+      // event (idempotent in `applySubscriptions`) plus a periodic
+      // re-apply tick to recover from any missed informer events.
+      const eventsAgentListFn = async (): Promise<KubernetesListObject<Agent>> => {
+        /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+        const res =
+          watchNamespace !== undefined
+            ? await customApi.listNamespacedCustomObject({
+                group: API_GROUP,
+                version: API_VERSION,
+                namespace: watchNamespace,
+                plural: 'agents',
+              })
+            : await customApi.listClusterCustomObject({
+                group: API_GROUP,
+                version: API_VERSION,
+                plural: 'agents',
+              });
+        /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+        return res as KubernetesListObject<Agent>;
+      };
+      const eventsAgentWatchPath =
+        watchNamespace !== undefined
+          ? `/apis/${API_GROUP}/${API_VERSION}/namespaces/${encodeURIComponent(watchNamespace)}/agents`
+          : `/apis/${API_GROUP}/${API_VERSION}/agents`;
+      const eventsAgentInformer: Informer<Agent> & ObjectCache<Agent> = makeInformer<Agent>(
+        kc,
+        eventsAgentWatchPath,
+        eventsAgentListFn,
+      );
+      const collectSubscriptions = (): readonly EventSubscription[] => {
+        const subs: EventSubscription[] = [];
+        const items = eventsAgentInformer.list();
+        for (const agent of items) {
+          if (!isAgent(agent)) continue;
+          const ns = agent.metadata.namespace ?? 'default';
+          const name = agent.metadata.name;
+          if (typeof name !== 'string' || name.length === 0) continue;
+          const subscribes = agent.spec.subscribes ?? [];
+          const subscribeClaims = agent.spec.capabilityClaims?.subscribe;
+          for (const s of subscribes) {
+            const sub: EventSubscription = {
+              agentNamespace: ns,
+              agentName: name,
+              topic: s.topic,
+              subscribeClaims,
+              ...(s.trigger?.inputBinding !== undefined && {
+                inputBinding: { inputName: s.trigger.inputBinding },
+              }),
+            };
+            subs.push(sub);
+          }
+        }
+        return subs;
+      };
+      const reapply = (): void => {
+        void dispatcher.applySubscriptions(collectSubscriptions()).catch((err: unknown) => {
+          console.warn('[kagent-events] applySubscriptions failed:', err);
+        });
+      };
+      eventsAgentInformer.on('add', reapply);
+      eventsAgentInformer.on('update', reapply);
+      eventsAgentInformer.on('delete', reapply);
+      eventsAgentInformer.on('error', (err) => {
+        console.error('[kagent-events] Agent informer error:', err);
+        setTimeout(() => {
+          void eventsAgentInformer.start();
+        }, 5000);
+      });
+      await eventsAgentInformer.start();
+      reapply();
+      const reapplyTimer = setInterval(reapply, reapplyIntervalMs);
+      reapplyTimer.unref();
+
+      console.log(
+        `[kagent-events] dispatcher ENABLED — stream=kagent-events url=${eventsNatsUrl} reapply=${String(reapplyIntervalMs)}ms`,
+      );
+
+      const previous = onShutdownExtra;
+      onShutdownExtra = async (): Promise<void> => {
+        clearInterval(reapplyTimer);
+        try {
+          await dispatcher.stop();
+        } catch (err) {
+          console.warn('[kagent-events] dispatcher stop failed:', err);
+        }
+        try {
+          await eventsAgentInformer.stop();
+        } catch (err) {
+          console.warn('[kagent-events] Agent informer stop failed:', err);
+        }
+        try {
+          await natsConn.close();
+        } catch (err) {
+          console.warn('[kagent-events] NATS close failed:', err);
+        }
+        if (previous !== undefined) await previous();
+      };
+    }
+  } else {
+    console.log(
+      '[kagent-operator] events disabled (set KAGENT_EVENTS_ENABLED=true to enable Wave 3 pub/sub)',
     );
   }
 }
