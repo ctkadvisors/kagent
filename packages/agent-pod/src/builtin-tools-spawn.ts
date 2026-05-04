@@ -39,6 +39,8 @@ import type { ContentBlock } from '@kagent/agent-loop';
 import { defineInProcessTool, InProcessToolProvider } from '@kagent/in-process-tool-provider';
 import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 
+import { globMatchAny } from '@kagent/capability-types';
+
 import type { AgentSpecEnv } from './env.js';
 import { FROM_TEMPLATE_LABEL } from './k8s-task-creator.js';
 import type { ChildTaskInput, K8sTaskCreator, ParentIdentity } from './k8s-task-creator.js';
@@ -113,6 +115,38 @@ export interface SpawnToolDeps {
    * `KAGENT_AGENT_POD_MAX_DEPTH` env into here at boot.
    */
   readonly maxDepth?: number;
+  /**
+   * v0.3.0-capabilities — Wave 2 Caps sub-team.
+   *
+   * Parent's already-verified capability bundle (loaded by
+   * `cap-consumer.loadCapabilityFromEnv`). When set, the spawn tool
+   * validates the requested child's `agentName` is admitted by
+   * `parentCapability.claims.spawn` BEFORE creating the AgentTask.
+   *
+   * Refuses with `policy_denied:capability_violation` when the
+   * spawn target is outside the cap. Mirrors the operator's
+   * admission gate (defense in depth — the operator MUST also
+   * validate, but failing fast in-pod gives the LLM a structured
+   * error instead of an opaque "child went into Failed".
+   *
+   * When unset (no cap mounted, legacy pod), the legacy
+   * `allowedChildAgents` / `allowedChildTemplates` guards apply
+   * unchanged.
+   */
+  readonly parentCapability?: import('@kagent/capability-types').CapabilityBundle;
+  /**
+   * v0.3.0-capabilities — Wave 2 Caps sub-team.
+   *
+   * Optional audit emit hook fired once on each successful spawn
+   * with the matched cap claim ("spawn"). Production wires this to
+   * an AuditPublisher emitting `capability.used` events; tests
+   * inject a spy.
+   */
+  readonly emitCapUsed?: (event: {
+    readonly category: 'spawn';
+    readonly target: string;
+    readonly capabilityId: string;
+  }) => void;
 }
 
 interface SpawnArgs {
@@ -209,18 +243,55 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
         );
       }
 
+      // Guardrail 1.5 — v0.3.0-capabilities cap-narrowing.
+      // When a parent capability bundle is mounted, the substrate's
+      // composition rule (child cap ⊆ parent cap) requires the
+      // requested child Agent be admitted by `cap.claims.spawn`. The
+      // legacy `allowedChildAgents` / `allowedChildTemplates` checks
+      // run AFTER (and are skipped on Agents that declared
+      // `capabilityClaims` per the deprecation shim — the operator's
+      // job-spec builder no longer threads those legacy fields when
+      // capabilityClaims is set).
+      //
+      // Refusal taxonomy: `policy_denied:capability_violation` —
+      // mirrors the operator's admission gate so per-trace
+      // observability rolls up across in-pod + admission failures.
+      const parentCap = deps.parentCapability;
+      if (parentCap !== undefined) {
+        const spawnPatterns = parentCap.claims.spawn ?? [];
+        if (!globMatchAny(spawnPatterns, args.agentName)) {
+          // Try the template:* prefix encoding from `cap-issuer`'s
+          // legacy fallback — admission may have stamped templated
+          // names with that prefix.
+          const target = await deps.k8s.getAgentByName(deps.parent.namespace, args.agentName);
+          const fromTemplate =
+            target !== undefined ? target.labels[FROM_TEMPLATE_LABEL] : undefined;
+          const templatePattern =
+            typeof fromTemplate === 'string' ? `template:${fromTemplate}` : undefined;
+          if (templatePattern === undefined || !globMatchAny(spawnPatterns, templatePattern)) {
+            throw new Error(
+              `policy_denied:capability_violation — agentName "${args.agentName}" is not admitted by cap.claims.spawn=[${spawnPatterns.join(', ')}] (cap jti=${parentCap.jti})`,
+            );
+          }
+        }
+      }
+
       // Guardrail 2 — both allowlists empty/unset = fail-closed.
-      if (allow.size === 0 && allowTemplates.size === 0) {
+      // Skipped when capability bundle is mounted (capability claims
+      // are the substrate's authority surface in v0.3.0; the legacy
+      // allowedChildAgents fields are deprecated).
+      if (parentCap === undefined && allow.size === 0 && allowTemplates.size === 0) {
         throw new Error(
           `policy_denied: agent "${deps.parentAgentName}" has no allowedChildAgents (set Agent.spec.allowedChildAgents or Agent.spec.allowedChildTemplates in GitOps to permit children)`,
         );
       }
 
-      // Guardrail 3 — name must match either list. Try the cheap
-      // exact-match path first (no K8s API call); fall back to the
-      // template-label lookup only when the name isn't directly listed
-      // and templates are configured.
-      if (!allow.has(args.agentName)) {
+      // Guardrail 3 — name must match either legacy list. SKIPPED
+      // when the parent has a capability bundle (v0.3.0-capabilities
+      // makes the cap claims the authority surface; the legacy
+      // allowedChildAgents/allowedChildTemplates fields are
+      // deprecated for one release per WAVES.md §4.1 deliverable 6).
+      if (parentCap === undefined && !allow.has(args.agentName)) {
         let admittedByTemplate = false;
         if (allowTemplates.size > 0) {
           const target = await deps.k8s.getAgentByName(deps.parent.namespace, args.agentName);
@@ -306,6 +377,20 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
         ...(runConfig !== undefined && { runConfig }),
         ...(args.payload !== undefined && { payload: args.payload }),
       });
+
+      // v0.3.0-capabilities — emit `capability.used` for the spawn
+      // claim. Best-effort: a thrown emitter never fails the spawn.
+      if (parentCap !== undefined && deps.emitCapUsed !== undefined) {
+        try {
+          deps.emitCapUsed({
+            category: 'spawn',
+            target: args.agentName,
+            capabilityId: parentCap.jti,
+          });
+        } catch (err) {
+          console.warn('[kagent-agent-pod] spawn: emitCapUsed hook raised:', err);
+        }
+      }
 
       return jsonContent({
         name: created.name,

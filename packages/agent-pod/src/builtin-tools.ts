@@ -920,6 +920,19 @@ export interface GetMyContextDeps {
    * wires the same instance into both tools so they share an answer.
    */
   readonly remainingBudgetSeconds?: () => number | undefined;
+  /**
+   * v0.3.0-capabilities — Wave 2 Caps sub-team.
+   *
+   * Optional decoded `CapabilityBundle` (from
+   * `@kagent/cap-consumer.loadCapabilityFromEnv`). When present,
+   * `get_my_context` surfaces the relevant claims so the agent loop
+   * can introspect "what authority do I have?" without re-parsing
+   * the JWT itself.
+   *
+   * The full claims object is exposed (NOT the JWT) — the agent loop
+   * never needs the raw token, and exposing it would be a footgun.
+   */
+  readonly capabilityBundle?: import('@kagent/capability-types').CapabilityBundle;
 }
 
 /**
@@ -963,6 +976,16 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
         parentUid?: string;
         depth: number;
         budget: { tokensRemaining?: number; secondsRemaining?: number };
+        capability?: {
+          jti: string;
+          expiresAt: number;
+          tools?: readonly string[];
+          spawn?: readonly string[];
+          read?: readonly string[];
+          write?: readonly string[];
+          egress?: readonly string[];
+          tenant?: string;
+        };
       } = {
         taskUid: podConfig.taskId,
         taskName: podConfig.taskName,
@@ -973,6 +996,21 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       };
       if (typeof parentUid === 'string' && parentUid.length > 0) {
         ctx.parentUid = parentUid;
+      }
+      // v0.3.0-capabilities — surface the relevant cap claims.
+      const bundle = deps.capabilityBundle;
+      if (bundle !== undefined) {
+        const cap: NonNullable<typeof ctx.capability> = {
+          jti: bundle.jti,
+          expiresAt: bundle.exp,
+          ...(bundle.claims.tools !== undefined && { tools: bundle.claims.tools }),
+          ...(bundle.claims.spawn !== undefined && { spawn: bundle.claims.spawn }),
+          ...(bundle.claims.read !== undefined && { read: bundle.claims.read }),
+          ...(bundle.claims.write !== undefined && { write: bundle.claims.write }),
+          ...(bundle.claims.egress !== undefined && { egress: bundle.claims.egress }),
+          ...(bundle.claims.tenant !== undefined && { tenant: bundle.claims.tenant }),
+        };
+        ctx.capability = cap;
       }
       return jsonContent(ctx);
     },

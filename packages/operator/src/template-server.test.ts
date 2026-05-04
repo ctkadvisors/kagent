@@ -259,3 +259,55 @@ describe('template-server', () => {
     expect((result.body as InstantiatePostError).code).toBe('bad_request');
   });
 });
+
+describe('template-server JWKS endpoint (v0.3.0-capabilities)', () => {
+  it('GET /.well-known/jwks.json returns the configured keys', async () => {
+    const fakeKeys = [{ kty: 'EC', kid: 'test-1', alg: 'ES256', use: 'sig' }];
+    const handler = buildInstantiateHandler({
+      customApi: makeFakeCustomApi({ templates: new Map() }),
+      resolveNamespace: () => 'kagent-system',
+      jwksProvider: () => ({ keys: fakeKeys }),
+    });
+    const { req, res, out } = makeFakeReqRes({
+      method: 'GET',
+      url: '/.well-known/jwks.json',
+    });
+    await handler(req, res);
+    await new Promise((r) => setImmediate(r));
+    expect(out.status).toBe(200);
+    expect(out.headers['cache-control']).toContain('max-age');
+    const body = JSON.parse(out.body ?? '{}') as { keys: unknown[] };
+    expect(body.keys).toEqual(fakeKeys);
+  });
+
+  it('GET /.well-known/jwks.json returns 404 when JWKS provider absent', async () => {
+    const handler = buildInstantiateHandler({
+      customApi: makeFakeCustomApi({ templates: new Map() }),
+      resolveNamespace: () => 'kagent-system',
+    });
+    const { req, res, out } = makeFakeReqRes({
+      method: 'GET',
+      url: '/.well-known/jwks.json',
+    });
+    await handler(req, res);
+    await new Promise((r) => setImmediate(r));
+    expect(out.status).toBe(404);
+    const body = JSON.parse(out.body ?? '{}') as { code?: string };
+    expect(body.code).toBe('jwks_disabled');
+  });
+
+  it('rejects non-GET on JWKS path with 405', async () => {
+    const handler = buildInstantiateHandler({
+      customApi: makeFakeCustomApi({ templates: new Map() }),
+      resolveNamespace: () => 'kagent-system',
+      jwksProvider: () => ({ keys: [] }),
+    });
+    const { req, res, out } = makeFakeReqRes({
+      method: 'POST',
+      url: '/.well-known/jwks.json',
+    });
+    await handler(req, res);
+    await new Promise((r) => setImmediate(r));
+    expect(out.status).toBe(405);
+  });
+});

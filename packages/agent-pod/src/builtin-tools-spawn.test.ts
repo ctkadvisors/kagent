@@ -737,3 +737,106 @@ describe('defaultGenerateChildName', () => {
     expect(name.length).toBeLessThanOrEqual(253);
   });
 });
+
+describe('spawn_child_task — capability narrowing (v0.3.0)', () => {
+  const baseBundle = {
+    iss: 'kagent.knuteson.io/operator',
+    sub: 'task-uid:parent',
+    aud: ['kagent-substrate'] as const,
+    exp: 9_999_999_999,
+    jti: 'cap-parent-1',
+    claims: { spawn: ['summarizer-*', 'validator'] },
+  };
+
+  it('admits a spawn target that matches cap.claims.spawn (glob)', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [] }), // legacy empty
+      k8s,
+      parentCapability: baseBundle,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer-1',
+      originalUserMessage: 'do it',
+    });
+    // No throw; the create went through.
+    expect(k8s.creates.length).toBe(1);
+    expect(k8s.creates[0]?.targetAgent).toBe('summarizer-1');
+    // Result is a JSON-encoded object with name/ns/uid; assert it
+    // does NOT contain a policy_denied error.
+    const text = resultText(result);
+    expect(text).not.toContain('policy_denied');
+  });
+
+  it('refuses with policy_denied:capability_violation when target not in cap', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: ['evil'] }),
+      k8s,
+      parentCapability: baseBundle,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'evil',
+      originalUserMessage: 'rogue',
+    });
+    expect(resultText(result)).toContain('policy_denied:capability_violation');
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('emits capability.used hook on successful spawn', async () => {
+    const k8s = makeFakeK8s();
+    const events: Array<{
+      readonly category: string;
+      readonly target: string;
+      readonly capabilityId: string;
+    }> = [];
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [] }),
+      k8s,
+      parentCapability: baseBundle,
+      emitCapUsed: (e) => events.push(e),
+    });
+    await callSpawn(provider, {
+      agentName: 'validator',
+      originalUserMessage: 'go',
+    });
+    expect(events.length).toBe(1);
+    expect(events[0]?.category).toBe('spawn');
+    expect(events[0]?.target).toBe('validator');
+    expect(events[0]?.capabilityId).toBe('cap-parent-1');
+  });
+
+  it('admits via template:* prefix encoding when target Agent has from-template label', async () => {
+    const k8s = makeFakeK8s({
+      agents: {
+        'summarizer-abc123': {
+          'kagent.knuteson.io/from-template': 'summarizer',
+        },
+      },
+    });
+    const bundle = {
+      ...baseBundle,
+      claims: { spawn: ['template:summarizer'] },
+    };
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [] }),
+      k8s,
+      parentCapability: bundle,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer-abc123',
+      originalUserMessage: 'go',
+    });
+    expect(k8s.creates.length).toBe(1);
+    expect(k8s.creates[0]?.targetAgent).toBe('summarizer-abc123');
+    expect(resultText(result)).not.toContain('policy_denied');
+  });
+});
