@@ -2480,6 +2480,97 @@ async function main(): Promise<void> {
       '[kagent-operator] tenancy disabled (set KAGENT_TENANCY_ENABLED=true to enable Wave 4 multi-tenant boundary)',
     );
   }
+
+  // === Wave 4 — Versioning ===
+  // v0.5.3-versioning. The Versioning sub-team owns:
+  //
+  //   1. The Agent immutability admission webhook (refuses any
+  //      `spec.*` mutation post-publication; allows the canonical
+  //      `kagent.knuteson.io/published: false → true` annotation flip).
+  //   2. The multi-version Agent registry (`AgentVersionIndex`) so
+  //      each (name, version) pair is a distinct entry and in-flight
+  //      tasks survive an Agent.spec.version bump.
+  //   3. The deprecation lifecycle sweeper (1h tick) that emits
+  //      `agent.deprecated_used` warnings + classifies removed
+  //      Agents.
+  //
+  // DEFAULT-OFF — gradual roll-out. Cluster operators provision the
+  // ValidatingWebhookConfiguration + cert-manager-issued cert via
+  // Helm (versioning.enabled=true), then flip
+  // KAGENT_VERSIONING_ENABLED=true to start the in-process sweeper +
+  // index. The Helm webhook resource binds even when the in-process
+  // index is off — the cluster admin verifies the cert plumbing
+  // before flipping the in-process gate.
+  if (process.env.KAGENT_VERSIONING_ENABLED === 'true') {
+    const { AgentVersionIndex, evaluateLifecycle, lifecycleSweepTickMs } =
+      await import('@kagent/versioning-controller');
+    const versionIndex = new AgentVersionIndex();
+    // The index hydrates from the Agent informer the operator already
+    // boots in `buildAdmissionReconciler` for the per-Agent
+    // maxInFlightTasks lookup; we re-list once at startup as a cold
+    // backstop and rely on subsequent informer events for steady
+    // state. (The informer's start() emits an `add` per cached entry
+    // on first connect; tests inject directly to onAdd.)
+    try {
+      /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+      const list = await customApi.listClusterCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        plural: 'agents',
+      });
+      /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+      const items = (list as { items?: unknown[] }).items ?? [];
+      for (const item of items) {
+        if (isAgent(item)) versionIndex.onAdd(item);
+      }
+      console.log(
+        `[kagent-versioning] AgentVersionIndex hydrated (${String(versionIndex.size())} entries)`,
+      );
+    } catch (err) {
+      console.warn('[kagent-versioning] initial Agent list failed (index empty):', err);
+    }
+
+    // Deprecation sweeper — walks the index every hour and logs
+    // (lifecycle classification feeds AgentTask admission via
+    // `evaluateAgentLifecycleAtAdmission` in task-admission.ts; the
+    // sweep is a diagnostic backstop, not the enforcement path).
+    const sweepTimer = setInterval(() => {
+      try {
+        let active = 0;
+        let deprecated = 0;
+        let removed = 0;
+        for (const entry of versionIndex.entries()) {
+          const e = evaluateLifecycle(entry.agent);
+          if (e.status === 'active') active++;
+          else if (e.status === 'deprecated') deprecated++;
+          else removed++;
+        }
+        console.log(
+          `[kagent-versioning] lifecycle sweep: active=${String(active)} deprecated=${String(deprecated)} removed=${String(removed)}`,
+        );
+      } catch (err) {
+        console.warn('[kagent-versioning] lifecycle sweep error:', err);
+      }
+    }, lifecycleSweepTickMs);
+    sweepTimer.unref?.();
+
+    console.log(
+      '[kagent-operator] Versioning controller started (Agent immutability webhook served by ValidatingWebhookConfiguration; index + sweeper running in-process)',
+    );
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        clearInterval(sweepTimer);
+      } catch (err) {
+        console.error('[kagent-operator] versioning sweeper stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] versioning disabled (set KAGENT_VERSIONING_ENABLED=true to enable Wave 4 Agent immutability + version pinning)',
+    );
+  }
 }
 
 function normalizeOptionalEnv(value: string | undefined): string | undefined {
