@@ -1,0 +1,145 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Wave 0 sub-team Audit (v0.1.15-audit-stream) — provisions the
+NATS JetStream `audit` stream that every substrate decision (admission,
+capability mint, secret access, spawn, completion, contract violation,
+quota breach) publishes to per docs/SUBSTRATE-V1.md §4.3.
+
+The stream is shared cluster-wide:
+  - Subjects: `audit.>` (every event lands at `audit.<eventType>`)
+  - Storage:  file-backed, single replica (matches the v0.1
+              single-node JetStream sized in
+              packages/operator/charts/values-references/nats-jetstream.yaml)
+  - MaxBytes: 10GB (configurable via `audit.maxBytes`); cap on disk
+              footprint so a noisy emission storm can't fill the PVC.
+  - MaxAge:   30d (configurable via `audit.maxAge`); SOC2-shaped
+              retention default. Audit warehouses (Loki/Splunk/Elastic)
+              are expected to scrape from this stream and persist
+              long-term independently.
+  - Retention: limits — drop oldest when MaxBytes/MaxAge hits. Other
+              modes (interest, work-queue) don't fit append-only
+              audit semantics.
+
+Idempotent provisioning via post-install + post-upgrade Helm hook.
+The hook runs a small Job that calls `nats stream add --update` (which
+creates the stream when absent and reconciles config when present).
+The Job uses `natsio/nats-box` because it bundles the `nats` CLI; the
+operator's runtime image deliberately does NOT.
+
+Disabled when `audit.enabled = false` (default true). When disabled
+the operator's `AuditPublisher` still no-ops gracefully (per the
+best-effort contract in @kagent/audit-events) so existing installs
+without NATS don't error.
+*/}}
+{{- if .Values.audit.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-audit-stream
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audit-stream
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  # Bound the Job at 5 minutes — `nats stream add` should complete in
+  # seconds. Anything longer is a NATS connectivity issue we want to
+  # surface as a clear failure rather than indefinite retry.
+  activeDeadlineSeconds: 300
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: audit-stream
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # WS-A baseline — provisioning Job inherits the same security
+      # context as the operator. nats-box only needs to talk NATS.
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: provision-audit-stream
+          image: {{ .Values.audit.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: NATS_URL
+              value: {{ .Values.audit.natsUrl | quote }}
+          # `nats stream add --config -` reads stream JSON config from
+          # stdin; the heredoc captures the full StreamConfig per
+          # https://docs.nats.io/nats-concepts/jetstream/streams.
+          # `nats stream update` is run after to reconcile any drift on
+          # repeat installs (an `add` against an existing stream errors).
+          command: ['/bin/sh', '-c']
+          args:
+            - |
+              set -eu
+              SUBJECT_PREFIX={{ .Values.audit.subjectPrefix | default "audit" | quote }}
+              SUBJECT_GLOB="${SUBJECT_PREFIX}.>"
+              echo "[audit-stream] ensuring JetStream stream 'audit' on $NATS_URL ($SUBJECT_GLOB)"
+              # Try create-or-update. The CLI exits 0 if the stream
+              # exists with matching config; on drift it patches.
+              # `--no-allow-rollup` keeps message-rollup off (every
+              # audit event must persist).
+              if nats stream info audit --server "$NATS_URL" >/dev/null 2>&1; then
+                echo "[audit-stream] stream exists — reconciling config"
+                nats stream update audit \
+                  --server "$NATS_URL" \
+                  --subjects "$SUBJECT_GLOB" \
+                  --max-bytes {{ .Values.audit.maxBytes | quote }} \
+                  --max-age {{ .Values.audit.maxAge | quote }} \
+                  --retention limits \
+                  --discard old \
+                  --storage file \
+                  --replicas {{ .Values.audit.replicas | int }} \
+                  --max-msg-size=-1 \
+                  --max-msgs=-1 \
+                  --max-msgs-per-subject=-1 \
+                  --max-consumers=-1 \
+                  --dupe-window 2m \
+                  --no-allow-rollup \
+                  --no-deny-delete \
+                  --no-deny-purge \
+                  --defaults
+              else
+                echo "[audit-stream] stream missing — creating"
+                nats stream add audit \
+                  --server "$NATS_URL" \
+                  --subjects "$SUBJECT_GLOB" \
+                  --max-bytes {{ .Values.audit.maxBytes | quote }} \
+                  --max-age {{ .Values.audit.maxAge | quote }} \
+                  --retention limits \
+                  --discard old \
+                  --storage file \
+                  --replicas {{ .Values.audit.replicas | int }} \
+                  --max-msg-size=-1 \
+                  --max-msgs=-1 \
+                  --max-msgs-per-subject=-1 \
+                  --max-consumers=-1 \
+                  --dupe-window 2m \
+                  --no-allow-rollup \
+                  --no-deny-delete \
+                  --no-deny-purge \
+                  --defaults
+              fi
+              echo "[audit-stream] OK"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+{{- end }}
