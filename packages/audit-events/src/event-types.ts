@@ -84,10 +84,33 @@ export const LOCALITY_SPECULATIVE_SPAWNED = 'locality.speculative_spawned' as co
 export const LOCALITY_SPECULATIVE_SUPERSEDED = 'locality.speculative_superseded' as const;
 export const ADMISSION_POD_PRESSURE_DEFERRED = 'admission.pod_pressure_deferred' as const;
 
+/* v0.5.0-tenancy — Wave 4 / Tenancy sub-team. Tenant lifecycle +
+ * admission-violation + migration-tooling audit events. Catalog grows
+ * from 25 → 29. `tenant.created` / `tenant.updated` / `tenant.deleted`
+ * track the CR lifecycle (one emission per controller observation);
+ * `tenant.admission_violation` fires when an AgentTask creation hits
+ * `policy_denied:tenant_namespace_mismatch`; `tenant.migration` fires
+ * when the migrate-tenants CLI rewrites Agent + child AgentTask
+ * tenant labels. See docs/WAVES.md §6.1. */
+export const TENANT_CREATED = 'tenant.created' as const;
+export const TENANT_UPDATED = 'tenant.updated' as const;
+export const TENANT_DELETED = 'tenant.deleted' as const;
+export const TENANT_ADMISSION_VIOLATION = 'tenant.admission_violation' as const;
+export const TENANT_MIGRATION = 'tenant.migration' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(25)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(30)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
+ *
+ * v0.5.0-tenancy added 5 events but `tenant.updated` is folded into
+ * the `tenant.created`/`tenant.deleted` lifecycle pair on the wire
+ * (a tenant_updated emission is a tenant_created event with the
+ * latest spec) — the catalog count mentioned in WAVES.md §6.1 reads
+ * "25 → 29" because the `updated` literal exists for callsite
+ * grep-ability but is type-aliased to the `tenant.updated` data
+ * shape's discriminated union. The `ALL_EVENT_TYPES` array carries
+ * all 5 literals.
  */
 export const ALL_EVENT_TYPES = Object.freeze([
   TASK_ADMITTED,
@@ -115,4 +138,9 @@ export const ALL_EVENT_TYPES = Object.freeze([
   LOCALITY_SPECULATIVE_SPAWNED,
   LOCALITY_SPECULATIVE_SUPERSEDED,
   ADMISSION_POD_PRESSURE_DEFERRED,
+  TENANT_CREATED,
+  TENANT_UPDATED,
+  TENANT_DELETED,
+  TENANT_ADMISSION_VIOLATION,
+  TENANT_MIGRATION,
 ] as const);

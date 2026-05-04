@@ -1,0 +1,191 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Tenant — multi-tenant boundary primitive (Wave 4 / Tenancy sub-team,
+# v0.5.0). Cluster-scoped (cross-namespace authority surface). See
+# packages/operator/src/crds/tenant.ts for the TS surface and
+# docs/SUBSTRATE-V1.md §3.6 + docs/WAVES.md §6.1 for the primitive's
+# role in the substrate.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenants.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Cluster
+  names:
+    kind: Tenant
+    listKind: TenantList
+    plural: tenants
+    singular: tenant
+    shortNames:
+      - kt
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - name
+                - namespaceAllowlist
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Canonical tenant id. MUST equal metadata.name; the
+                    operator's admission validator rejects mismatches.
+                namespaceAllowlist:
+                  type: array
+                  description: |
+                    K8s namespaces this tenant may own Agents/Tasks in.
+                    Two tenants MUST NOT overlap on a namespace; the
+                    controller surfaces overlap as phase=Failed with
+                    a NamespaceOverlap condition.
+                  items:
+                    type: string
+                    minLength: 1
+                capabilityRoot:
+                  type: object
+                  description: |
+                    Per-tenant capability-bundle issuer override. When
+                    unset, the operator's default issuer string applies.
+                  properties:
+                    issuer:
+                      type: string
+                      minLength: 1
+                      description: |
+                        Override the JWT iss claim for caps minted under
+                        this tenant.
+                auditSubject:
+                  type: string
+                  description: |
+                    Audit subject prefix override. Defaults to
+                    "tenant/<metadata.name>" when unset.
+                defaultQuota:
+                  type: object
+                  description: |
+                    Default per-tenant quota. Wave 4 Quotas sub-team
+                    consumes; v0.5.0 carries the shape so Quotas can
+                    flip on without a CRD bump.
+                  properties:
+                    cpu:
+                      type: string
+                      description: 'K8s ResourceQuota CPU spec, e.g. `4` or `500m`.'
+                    memory:
+                      type: string
+                      description: 'K8s ResourceQuota memory spec, e.g. `8Gi`.'
+                    maxInFlightTasks:
+                      type: integer
+                      minimum: 0
+                      description: 'Per-tenant gateway in-flight cap.'
+                    maxArtifactBytes:
+                      type: string
+                      description: 'Per-tenant artifact-storage cap, e.g. `100Gi`.'
+                defaultEgress:
+                  type: object
+                  description: |
+                    Default per-tenant egress allowlist. Wave 4 Egress
+                    sub-team consumes; v0.5.0 carries the shape.
+                  properties:
+                    allow:
+                      type: array
+                      description: |
+                        Glob list of hostnames the tenant's Agents may
+                        reach by default (e.g. `api.github.com`,
+                        `*.googleapis.com`).
+                      items:
+                        type: string
+                        minLength: 1
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Ready
+                    - Failed
+                  description: |
+                    Lifecycle phase. Pending until at least one
+                    allowlisted namespace resolves; Ready when at least
+                    one does; Failed on namespace overlap or other
+                    validation errors.
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                conditions:
+                  type: array
+                  description: |
+                    Append-only condition log. Known types:
+                    NamespaceAllowlistResolved, NamespaceOverlap,
+                    Ready, Failed.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
+                namespaceCount:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    How many of the allowlisted namespaces actually
+                    exist in the cluster. Drives the
+                    NamespaceAllowlistResolved condition.
+                agentCount:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Count of Agents labeled with this tenant
+                    (kagent.knuteson.io/tenant=<name>).
+                activeTaskCount:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Count of non-terminal AgentTasks labeled with this
+                    tenant.
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Namespaces
+          type: integer
+          jsonPath: .status.namespaceCount
+        - name: Agents
+          type: integer
+          jsonPath: .status.agentCount
+        - name: ActiveTasks
+          type: integer
+          jsonPath: .status.activeTaskCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

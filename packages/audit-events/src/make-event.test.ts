@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 25 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(25);
+  it('exports exactly 30 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(30);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -450,6 +450,113 @@ describe('event-types catalog', () => {
       'locality.speculative_spawned',
       'locality.speculative_superseded',
       'admission.pod_pressure_deferred',
+      // v0.5.0-tenancy — Wave 4 / Tenancy sub-team additions.
+      'tenant.created',
+      'tenant.updated',
+      'tenant.deleted',
+      'tenant.admission_violation',
+      'tenant.migration',
     ]);
+  });
+});
+
+describe('tenant audit events (v0.5.0-tenancy)', () => {
+  it('builds a tenant.created envelope with the lifecycle data shape', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'tenant/acme',
+      type: 'tenant.created',
+      data: {
+        tenant: 'acme',
+        namespaceAllowlist: ['acme-prod', 'acme-staging'],
+        namespaceCount: 2,
+        agentCount: 0,
+        activeTaskCount: 0,
+        tenantUid: 'uid-acme',
+        phase: 'Ready',
+      },
+    });
+    expect(event.type).toBe('tenant.created');
+    expect(event.data.tenant).toBe('acme');
+    expect(event.data.namespaceCount).toBe(2);
+    expect(event.data.phase).toBe('Ready');
+  });
+
+  it('builds a tenant.updated envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'tenant/acme',
+      type: 'tenant.updated',
+      data: {
+        tenant: 'acme',
+        namespaceAllowlist: ['acme-prod', 'acme-staging', 'acme-dev'],
+        namespaceCount: 3,
+        agentCount: 5,
+        activeTaskCount: 2,
+        tenantUid: 'uid-acme',
+        phase: 'Ready',
+      },
+    });
+    expect(event.type).toBe('tenant.updated');
+    expect(event.data.namespaceAllowlist).toHaveLength(3);
+  });
+
+  it('builds a tenant.deleted envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'tenant/acme',
+      type: 'tenant.deleted',
+      data: {
+        tenant: 'acme',
+        namespaceAllowlist: ['acme-prod'],
+        namespaceCount: 1,
+        agentCount: 0,
+        activeTaskCount: 0,
+        tenantUid: 'uid-acme',
+        phase: 'Failed',
+      },
+    });
+    expect(event.type).toBe('tenant.deleted');
+  });
+
+  it('builds a tenant.admission_violation envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'AgentTask/acme-prod/foo-task',
+      type: 'tenant.admission_violation',
+      data: {
+        tenant: 'acme',
+        taskUid: 'task-uid-1',
+        taskNamespace: 'globex-prod',
+        taskName: 'foo-task',
+        agentName: 'researcher',
+        reason: 'policy_denied:tenant_namespace_mismatch',
+        message:
+          'AgentTask in namespace globex-prod is not in tenant acme allowlist (acme-prod, acme-staging)',
+      },
+    });
+    expect(event.type).toBe('tenant.admission_violation');
+    expect(event.data.reason).toBe('policy_denied:tenant_namespace_mismatch');
+  });
+
+  it('builds a tenant.migration envelope', () => {
+    const event = makeEvent({
+      source: 'cli/migrate-tenants',
+      subject: 'Agent/acme-prod/researcher',
+      type: 'tenant.migration',
+      data: {
+        agentName: 'researcher',
+        agentNamespace: 'acme-prod',
+        fromTenant: 'acme',
+        toTenant: 'globex',
+        agentTaskCount: 3,
+        dryRun: false,
+        actor: 'cli/migrate-tenants',
+      },
+    });
+    expect(event.type).toBe('tenant.migration');
+    expect(event.data.fromTenant).toBe('acme');
+    expect(event.data.toTenant).toBe('globex');
+    expect(event.data.dryRun).toBe(false);
   });
 });

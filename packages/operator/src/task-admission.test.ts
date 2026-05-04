@@ -491,3 +491,173 @@ describe('validateEventTopicsAgainstClaims (v0.4.0)', () => {
     expect(r.ok).toBe(false);
   });
 });
+
+/* =====================================================================
+ * v0.5.0-tenancy — Wave 4 / Tenancy admission validator + resolver.
+ * ===================================================================== */
+
+import {
+  TENANT_NAMESPACE_REFUSAL_REASON,
+  resolveTenantForTask,
+  tenantLabelPatch,
+  validateTenantNamespace,
+  type TenantLookupFn,
+} from './task-admission.js';
+import { TENANT_LABEL, type Tenant } from './crds/index.js';
+
+function makeTenant(name: string, namespaces: string[]): Tenant {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'Tenant',
+    metadata: { name, uid: `uid-${name}` },
+    spec: { name, namespaceAllowlist: namespaces },
+  };
+}
+
+function makeLookup(...tenants: Tenant[]): TenantLookupFn {
+  const m = new Map<string, Tenant>();
+  for (const t of tenants) m.set(t.spec.name, t);
+  return (name) => m.get(name);
+}
+
+describe('resolveTenantForTask (v0.5.0-tenancy)', () => {
+  const acme = makeTenant('acme', ['acme-prod', 'acme-staging']);
+  const globex = makeTenant('globex', ['globex-prod']);
+  const fallback = makeTenant('default-tenant', ['default']);
+
+  it('resolves tenant from AgentTask label first', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, labels: { [TENANT_LABEL]: 'acme' } },
+    };
+    const agent: Agent = { ...baseAgent };
+    const t = resolveTenantForTask(task, agent, undefined, makeLookup(acme, globex));
+    expect(t?.spec.name).toBe('acme');
+  });
+
+  it('falls back to Agent label when AgentTask has none', () => {
+    const task: AgentTask = { ...baseTask };
+    const agent: Agent = {
+      ...baseAgent,
+      metadata: { ...baseAgent.metadata, labels: { [TENANT_LABEL]: 'globex' } },
+    };
+    const t = resolveTenantForTask(task, agent, undefined, makeLookup(acme, globex));
+    expect(t?.spec.name).toBe('globex');
+  });
+
+  it('falls back to cluster default when neither task nor agent labeled', () => {
+    const t = resolveTenantForTask(
+      baseTask,
+      baseAgent,
+      'default-tenant',
+      makeLookup(acme, fallback),
+    );
+    expect(t?.spec.name).toBe('default-tenant');
+  });
+
+  it('returns undefined when nothing resolves', () => {
+    const t = resolveTenantForTask(baseTask, baseAgent, undefined, makeLookup(acme));
+    expect(t).toBeUndefined();
+  });
+
+  it('AgentTask label wins over Agent label (precedence)', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, labels: { [TENANT_LABEL]: 'acme' } },
+    };
+    const agent: Agent = {
+      ...baseAgent,
+      metadata: { ...baseAgent.metadata, labels: { [TENANT_LABEL]: 'globex' } },
+    };
+    const t = resolveTenantForTask(
+      task,
+      agent,
+      'default-tenant',
+      makeLookup(acme, globex, fallback),
+    );
+    expect(t?.spec.name).toBe('acme');
+  });
+
+  it('skips an unknown tenant label and falls through', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, labels: { [TENANT_LABEL]: 'mystery' } },
+    };
+    const agent: Agent = {
+      ...baseAgent,
+      metadata: { ...baseAgent.metadata, labels: { [TENANT_LABEL]: 'globex' } },
+    };
+    const t = resolveTenantForTask(task, agent, undefined, makeLookup(globex));
+    // mystery doesn't exist; falls through to globex on Agent label.
+    expect(t?.spec.name).toBe('globex');
+  });
+});
+
+describe('validateTenantNamespace (v0.5.0-tenancy)', () => {
+  const acme = makeTenant('acme', ['acme-prod', 'acme-staging']);
+
+  it('admits when tenant allowlist contains the task namespace', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, namespace: 'acme-prod' },
+    };
+    const r = validateTenantNamespace(task, acme);
+    expect(r.ok).toBe(true);
+  });
+
+  it('refuses with TenantNamespaceMismatch when not allowlisted', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, namespace: 'globex-prod' },
+    };
+    const r = validateTenantNamespace(task, acme);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('TenantNamespaceMismatch');
+      expect(r.message).toContain(TENANT_NAMESPACE_REFUSAL_REASON);
+      expect(r.message).toContain('acme-prod, acme-staging');
+      expect(r.tenantName).toBe('acme');
+      expect(r.namespace).toBe('globex-prod');
+    }
+  });
+
+  it('admits when tenant resolved is undefined AND tenancyEnforced=false (fail-open default)', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, namespace: 'arbitrary-ns' },
+    };
+    const r = validateTenantNamespace(task, undefined);
+    expect(r.ok).toBe(true);
+  });
+
+  it('refuses when tenant resolved is undefined AND tenancyEnforced=true', () => {
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, namespace: 'arbitrary-ns' },
+    };
+    const r = validateTenantNamespace(task, undefined, true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('TenantNamespaceMismatch');
+      expect(r.message).toContain('no tenant resolved');
+    }
+  });
+
+  it('uses default namespace when task has none', () => {
+    const tenant = makeTenant('acme', ['default']);
+    const task: AgentTask = {
+      ...baseTask,
+      metadata: { ...baseTask.metadata, namespace: undefined },
+    };
+    const r = validateTenantNamespace(task, tenant);
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe('tenantLabelPatch', () => {
+  it('builds a labels patch with the tenant label key', () => {
+    expect(tenantLabelPatch('acme')).toEqual({
+      labels: { [TENANT_LABEL]: 'acme' },
+    });
+  });
+});

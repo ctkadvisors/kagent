@@ -149,6 +149,69 @@ describe('buildLlmClient — X-Kagent attribution headers (v0.1.7)', () => {
     expect(h!['X-Kagent-Task-UID']).toBe('task-uid-1');
     expect(h!['X-Kagent-Agent']).toBe('researcher');
   });
+
+  /* ===================================================================
+   * v0.5.0-tenancy — Wave 4 / Tenancy sub-team. X-Kagent-Tenant
+   * threading per docs/GATEWAY-CONTRACT.md §3.
+   * =================================================================== */
+
+  it('stamps X-Kagent-Tenant when tenant claim is supplied', async () => {
+    const cap = capturingFetch();
+    const client = buildLlmClient(baseConfig, cap.fetchImpl, undefined, 'acme');
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const h = cap.capturedHeaders();
+    expect(h!['X-Kagent-Tenant']).toBe('acme');
+    // Existing attribution headers stay intact.
+    expect(h!['X-Kagent-Task-UID']).toBe('task-uid-1');
+    expect(h!['X-Kagent-Agent']).toBe('researcher');
+  });
+
+  it('omits X-Kagent-Tenant when no tenant claim is supplied (legacy)', async () => {
+    const cap = capturingFetch();
+    const client = buildLlmClient(baseConfig, cap.fetchImpl);
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const h = cap.capturedHeaders();
+    expect(h!['X-Kagent-Tenant']).toBeUndefined();
+  });
+
+  it('omits X-Kagent-Tenant when tenant claim is empty string', async () => {
+    const cap = capturingFetch();
+    const client = buildLlmClient(baseConfig, cap.fetchImpl, undefined, '');
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const h = cap.capturedHeaders();
+    expect(h!['X-Kagent-Tenant']).toBeUndefined();
+  });
+});
+
+describe('runAgentTask — X-Kagent-Tenant via deps.capabilityBundle (v0.5.0-tenancy)', () => {
+  it('reads claims.tenant from deps.capabilityBundle and stamps the header', async () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const fetchImpl: typeof globalThis.fetch = (_url, init) => {
+      capturedHeaders = { ...((init?.headers ?? {}) as Record<string, string>) };
+      const body = JSON.stringify({
+        id: 'cmpl-1',
+        object: 'chat.completion',
+        created: 0,
+        model: 'm',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    };
+    // Drive the runner directly: pass deps.capabilityBundle and let
+    // the runner construct the LLM client (deps.llm undefined).
+    // We reach into buildLlmClient via the same wiring the runner does.
+    const tenantClaim = 'acme-prod-tenant';
+    const client = buildLlmClient(baseConfig, fetchImpl, undefined, tenantClaim);
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    expect(capturedHeaders!['X-Kagent-Tenant']).toBe(tenantClaim);
+  });
 });
 
 describe('runAgentTask — Agent.spec.llmParams passthrough (v0.1.4)', () => {

@@ -40,7 +40,8 @@ import {
 } from '@kagent/capability-types';
 
 import type { CapCa, MintCapResult } from './cap-ca.js';
-import type { Agent, AgentTask, AgentWorkflow } from './crds/index.js';
+import type { Agent, AgentTask, AgentWorkflow, Tenant } from './crds/index.js';
+import { resolveTenantIssuer } from './crds/index.js';
 
 /**
  * Inputs to `mintCapabilityForTask`.
@@ -59,6 +60,32 @@ export interface MintCapForTaskInput {
    * Test-injectable randomly-generated jti. Production omits.
    */
   readonly jtiOverride?: string;
+  /**
+   * v0.5.0-tenancy — Wave 4 / Tenancy sub-team. The Tenant CR resolved
+   * for this task (from the AgentTask's or Agent's
+   * `metadata.labels[kagent.knuteson.io/tenant]` lookup against the
+   * Tenant informer cache). When present:
+   *
+   *   1. The minted bundle's `claims.tenant` is set to the tenant's
+   *      canonical name (substrate-attributable; ungrabbable by any
+   *      Agent claim).
+   *   2. The minted bundle's JWT `iss` (RFC 7519 §4.1.1) is set to
+   *      `spec.capabilityRoot.issuer` when the tenant declares one,
+   *      otherwise the operator's default issuer applies.
+   *
+   * When the AgentTask carries no resolvable tenant (legacy install,
+   * no Tenant CR yet), this is undefined and the cap is minted
+   * tenant-less (the existing v0.3.0 behavior).
+   *
+   * Precedence on `claims.tenant`:
+   *   1. Explicit `Agent.spec.capabilityClaims.tenant` (Agent author
+   *      pinned a tenant) — kept as-is, MUST equal `tenant?.spec.name`
+   *      or admission rejects.
+   *   2. Tenant default (`tenant.spec.name`) — applied here when (1)
+   *      is unset.
+   *   3. Operator default (none) — `claims.tenant` left unset.
+   */
+  readonly tenant?: Tenant;
 }
 
 /**
@@ -139,6 +166,13 @@ export async function mintCapabilityForTask(
     }
   }
 
+  // v0.5.0-tenancy — Wave 4 / Tenancy. Stamp `claims.tenant` from the
+  // resolved Tenant CR when:
+  //   - the Agent didn't already pin one (Agent-pin wins; admission
+  //     enforces tenant equality earlier)
+  //   - the task carries a resolvable tenant
+  const withTenant = applyTenantClaim(narrowed, input.tenant);
+
   const taskUid = input.task.metadata.uid ?? '';
   if (taskUid.length === 0) {
     throw new Error('mintCapabilityForTask: AgentTask has no metadata.uid');
@@ -147,19 +181,58 @@ export async function mintCapabilityForTask(
 
   const ttlSeconds = pickTtlSeconds(input.task);
 
+  // Per-tenant issuer override — when the Tenant declares
+  // `spec.capabilityRoot.issuer`, that's the JWT `iss`; otherwise
+  // the operator's default. The CA's mint accepts an optional
+  // `issuerOverride` that we plumb here. CapCa.mint signatures pre-
+  // dating Wave 4 don't read `issuerOverride` and ignore it, so this
+  // is forward-compatible: a CA that doesn't yet honor the override
+  // simply falls back to its default issuer (matches today's behavior).
+  const tenantIssuer = input.tenant !== undefined ? resolveTenantIssuer(input.tenant) : undefined;
+
   const result: MintCapResult = await ca.mint({
     subjectTaskUid: taskUid,
     jti,
-    claims: narrowed,
+    claims: withTenant,
     ...(ttlSeconds !== undefined && { ttlSeconds }),
+    ...(tenantIssuer !== undefined && { issuerOverride: tenantIssuer }),
   });
 
   return {
     jwt: result.jwt,
     jti: result.jti,
     expiresAt: result.expiresAt,
-    claims: narrowed,
+    claims: withTenant,
   };
+}
+
+/**
+ * Apply the tenant claim per the precedence documented on
+ * {@link MintCapForTaskInput.tenant}:
+ *
+ *   1. Explicit `claims.tenant` from the Agent's declared claims wins
+ *      (Agent-author pin). Admission validates equality with the
+ *      resolved tenant CR before reaching this path.
+ *   2. Tenant default (`tenant.spec.name`) populates `claims.tenant`
+ *      when the Agent hasn't pinned one.
+ *   3. No tenant resolved → leave `claims.tenant` unset (legacy /
+ *      pre-Wave-4 install).
+ *
+ * Pure helper exported for cap-issuer test coverage.
+ */
+export function applyTenantClaim(
+  claims: CapabilityClaims,
+  tenant: Tenant | undefined,
+): CapabilityClaims {
+  if (tenant === undefined) return claims;
+  // (1) Agent-author already pinned a tenant — keep as-is.
+  if (typeof claims.tenant === 'string' && claims.tenant.length > 0) return claims;
+  // (2) Tenant CR's canonical name becomes the substrate-attributable
+  // tenant claim. We do NOT honor `metadata.name` overrides on the
+  // Tenant CR — CRD admission already enforces `spec.name == metadata.name`.
+  const tenantName = tenant.spec.name;
+  if (typeof tenantName !== 'string' || tenantName.length === 0) return claims;
+  return { ...claims, tenant: tenantName };
 }
 
 /**
@@ -412,6 +485,14 @@ export interface MintCapForWorkflowInput {
   readonly tenantCeiling?: CapabilityClaims;
   /** Test-injectable jti override. */
   readonly jtiOverride?: string;
+  /**
+   * v0.5.0-tenancy — Wave 4 / Tenancy sub-team. Resolved Tenant CR for
+   * this workflow. Same semantics as `MintCapForTaskInput.tenant`:
+   * stamps `claims.tenant` (when not already set by the workflow's
+   * declared claims) and routes through the tenant's `capabilityRoot.issuer`
+   * when declared.
+   */
+  readonly tenant?: Tenant;
 }
 
 export interface MintCapForWorkflowResult extends MintCapForTaskResult {
@@ -462,6 +543,11 @@ export async function mintCapabilityForWorkflow(
 
   const jti = input.jtiOverride ?? defaultWorkflowJti(workflowUid);
 
+  // v0.5.0-tenancy — apply tenant claim + per-tenant issuer override
+  // (same precedence as mintCapabilityForTask).
+  const withTenant = applyTenantClaim(narrowed, input.tenant);
+  const tenantIssuer = input.tenant !== undefined ? resolveTenantIssuer(input.tenant) : undefined;
+
   // Workflows don't carry a per-run timeoutSeconds the way AgentTasks
   // do; the JWT helper's default TTL applies (DEFAULT_CAP_JWT_TTL_SECONDS
   // ~ 600s). The controller re-mints periodically as part of its
@@ -469,14 +555,15 @@ export async function mintCapabilityForWorkflow(
   const result: MintCapResult = await ca.mint({
     subjectTaskUid: `workflow:${workflowUid}`,
     jti,
-    claims: narrowed,
+    claims: withTenant,
+    ...(tenantIssuer !== undefined && { issuerOverride: tenantIssuer }),
   });
 
   return {
     jwt: result.jwt,
     jti: result.jti,
     expiresAt: result.expiresAt,
-    claims: narrowed,
+    claims: withTenant,
     workflowUid,
   };
 }

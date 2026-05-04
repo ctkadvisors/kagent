@@ -144,6 +144,17 @@ export interface RunDeps {
    * without touching `node:fs`.
    */
   readonly identityHandle?: IdentityHandle | null;
+  /**
+   * v0.5.0-tenancy — Wave 4 / Tenancy sub-team. Optional verified
+   * capability bundle. When present, the runner reads `claims.tenant`
+   * and stamps `X-Kagent-Tenant` on every outbound LLM gateway call
+   * per docs/GATEWAY-CONTRACT.md §3. When absent (legacy / pre-Wave-4
+   * deploy without the JWT mount), the header is omitted.
+   *
+   * Decoupled type — the runner only needs the `claims.tenant` field;
+   * the full `CapabilityBundle` shape lives in `@kagent/capability-types`.
+   */
+  readonly capabilityBundle?: { readonly claims?: { readonly tenant?: string } };
 }
 
 /**
@@ -163,7 +174,13 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // handle is null and the client takes the bearer-token path
   // unchanged (Wave 0 secrets-hygiene contract).
   const identityHandle = deps.identityHandle ?? resolveIdentityHandle(config);
-  const llm = deps.llm ?? buildLlmClient(config, undefined, identityHandle ?? undefined);
+  // v0.5.0-tenancy — extract `claims.tenant` from the verified cap
+  // bundle (loaded by main.ts via `loadCapabilityOptional`). Absent
+  // cap = absent header (legacy / pre-Wave-4 install).
+  const tenantClaim = deps.capabilityBundle?.claims?.tenant;
+  const llm =
+    deps.llm ??
+    buildLlmClient(config, undefined, identityHandle ?? undefined, tenantClaim ?? undefined);
 
   // v0.1.6 — resolve the system prompt. Order:
   //   1. If systemPromptRef set AND a fetcher is wired → try Langfuse.
@@ -291,6 +308,17 @@ export function buildLlmClient(
   config: PodConfig,
   fetchImpl?: typeof globalThis.fetch,
   identityHandle?: IdentityHandle,
+  /**
+   * v0.5.0-tenancy — Wave 4 / Tenancy sub-team. Optional resolved
+   * tenant id (from the agent-pod's mounted cap-bundle's
+   * `claims.tenant`). When set, the client stamps `X-Kagent-Tenant`
+   * onto every outbound request per docs/GATEWAY-CONTRACT.md §3.
+   * When absent (legacy AgentTask without tenant assignment, or
+   * pre-Wave-4 install), the header is omitted entirely (per the
+   * sub-team brief: "When `claims.tenant` is absent, omit the header
+   * — don't send empty").
+   */
+  tenant?: string,
 ): OpenAICompatibleLLMClient {
   // Defensive read — fixture/test PodConfigs from before v0.4.3 don't
   // carry an `identity` block. Treat missing-field as identity-off so
@@ -300,6 +328,12 @@ export function buildLlmClient(
     'X-Kagent-Task-UID': config.taskId,
     'X-Kagent-Agent': config.agentName,
   };
+  // v0.5.0-tenancy — gateway contract §3 attribution for per-tenant
+  // routing/quota. Mirror the existing X-Kagent-Task-UID + X-Kagent-Agent
+  // pattern; only stamp when the tenant is non-empty.
+  if (typeof tenant === 'string' && tenant.length > 0) {
+    headers['X-Kagent-Tenant'] = tenant;
+  }
   if (identity.useSvidForLlm && identityHandle?.spiffeId !== undefined) {
     headers['X-Kagent-SPIFFE-ID'] = identityHandle.spiffeId;
   }

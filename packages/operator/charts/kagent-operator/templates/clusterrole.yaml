@@ -191,3 +191,26 @@ rules:
   # `spire.spiffe.io/registrationentries` once SPIRE Server's CRDs
   # are provisioned).
   # ---------------------------------------------------------------------
+  # Wave 4 — Tenancy (v0.5.0-tenancy)
+  # ---------------------------------------------------------------------
+  # The Tenant controller needs:
+  #   - read + watch Tenant CRs (cluster-scoped informer)
+  #   - patch Tenant.status (status subresource)
+  #   - patch Agent + AgentTask metadata.labels (the operator stamps
+  #     `kagent.knuteson.io/tenant=<name>` at admission time AND the
+  #     migrate-tenants CLI rewrites the label on tenant move). Patch
+  #     verbs already exist via the Wave 1+ blocks above; this section
+  #     adds only the Tenant CRD verbs that are net-new.
+  #   - read namespaces (cluster-scoped) to populate
+  #     status.namespaceCount; watch optional but cheap given the
+  #     namespace count typical for a homelab/single-tenant SaaS install.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['tenants']
+    verbs: ['get', 'list', 'watch', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['tenants/status']
+    verbs: ['get', 'patch', 'update']
+  - apiGroups: ['']
+    resources: ['namespaces']
+    verbs: ['get', 'list', 'watch']
+  # ---------------------------------------------------------------------

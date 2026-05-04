@@ -167,14 +167,14 @@ function extractPropertyKeys(text: string, schemaSection: string): string[] {
             }
             // Indent unwound (less than 14 spaces of content) → done.
             const indent = kln.match(/^( *)\S/);
-            if (indent && indent[1].length <= 12) break;
+            if (indent !== null && (indent[1] ?? '').length <= 12) break;
             k++;
           }
           break;
         }
         // Bail if we leave the section block.
         const indent = inner ? inner.match(/^( *)\S/) : null;
-        if (indent && indent[1].length <= 12) break;
+        if (indent !== null && (indent[1] ?? '').length <= 12) break;
         j++;
       }
       break;
@@ -205,13 +205,13 @@ function extractRequiredList(text: string, schemaSection: string): string[] {
             continue;
           }
           const indent = kln.match(/^( *)\S/);
-          if (indent && indent[1].length <= 14) break;
+          if (indent !== null && (indent[1] ?? '').length <= 14) break;
           k++;
         }
         return out;
       }
       const indent = ln.match(/^( *)\S/);
-      if (indent && indent[1].length <= 12) break;
+      if (indent !== null && (indent[1] ?? '').length <= 12) break;
     }
   }
   return out;
@@ -350,6 +350,30 @@ const expectations: readonly CRDExpectation[] = [
       'conditions',
       'capabilityRef',
       'eventSubscriptions',
+    ],
+  },
+  // v0.5.0-tenancy — Wave 4 / Tenancy sub-team. See
+  // docs/SUBSTRATE-V1.md §3.6 + docs/WAVES.md §6.1.
+  {
+    file: 'tenants.yaml',
+    kind: 'Tenant',
+    plural: 'tenants',
+    specRequired: ['name', 'namespaceAllowlist'],
+    specProperties: [
+      'name',
+      'namespaceAllowlist',
+      'capabilityRoot',
+      'auditSubject',
+      'defaultQuota',
+      'defaultEgress',
+    ],
+    statusProperties: [
+      'phase',
+      'observedGeneration',
+      'conditions',
+      'namespaceCount',
+      'agentCount',
+      'activeTaskCount',
     ],
   },
 ];

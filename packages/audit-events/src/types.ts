@@ -75,7 +75,13 @@ export type AuditEventType =
   /* v0.4.4-locality — Wave 3 / Locality sub-team. */
   | 'locality.speculative_spawned'
   | 'locality.speculative_superseded'
-  | 'admission.pod_pressure_deferred';
+  | 'admission.pod_pressure_deferred'
+  /* v0.5.0-tenancy — Wave 4 / Tenancy sub-team. */
+  | 'tenant.created'
+  | 'tenant.updated'
+  | 'tenant.deleted'
+  | 'tenant.admission_violation'
+  | 'tenant.migration';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -467,6 +473,62 @@ export interface AdmissionPodPressureDeferredData {
 }
 
 /**
+ * `tenant.created` / `tenant.updated` / `tenant.deleted` — Wave 4 /
+ * Tenancy sub-team. The operator's tenant-controller emits one event
+ * per Tenant CR transition (add / update / delete). Lifecycle events
+ * carry the resolved tenant identity + the operator-observed counts
+ * (namespaceCount, agentCount, activeTaskCount) so audit warehouses
+ * can plot tenant-scope growth without re-reading the CR.
+ */
+export interface TenantLifecycleData {
+  readonly tenant: string;
+  readonly namespaceAllowlist: readonly string[];
+  readonly namespaceCount: number;
+  readonly agentCount: number;
+  readonly activeTaskCount: number;
+  /** Tenant CR's `metadata.uid` — stable across rename. */
+  readonly tenantUid: string | undefined;
+  /** Operator-observed phase at emission time. */
+  readonly phase: 'Pending' | 'Ready' | 'Failed';
+}
+
+/**
+ * `tenant.admission_violation` — emitted when an AgentTask creation
+ * fails the per-tenant namespace check (`policy_denied:tenant_namespace_mismatch`).
+ * Carries the offending task + tenant + namespace so audit pipelines
+ * can correlate the refusal back to the source workload.
+ */
+export interface TenantAdmissionViolationData {
+  readonly tenant: string | undefined;
+  readonly taskUid: string | undefined;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string | undefined;
+  /** Always `policy_denied:tenant_namespace_mismatch` for v0.5.0. */
+  readonly reason: string;
+  readonly message: string;
+}
+
+/**
+ * `tenant.migration` — emitted by the migrate-tenants CLI when an
+ * Agent + its in-flight AgentTasks have their tenant labels rewritten
+ * from one tenant to another. Records the actor (CLI) for audit
+ * forensics + the from/to tenant pair.
+ */
+export interface TenantMigrationData {
+  readonly agentName: string;
+  readonly agentNamespace: string;
+  readonly fromTenant: string;
+  readonly toTenant: string;
+  /** Number of in-flight AgentTasks the migration touched. */
+  readonly agentTaskCount: number;
+  /** Whether the run was a dry-run (no patches applied). */
+  readonly dryRun: boolean;
+  /** Actor identity — defaults to `cli/migrate-tenants` for the bundled CLI. */
+  readonly actor: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -516,7 +578,13 @@ export type AuditEventData =
   | {
       readonly type: 'admission.pod_pressure_deferred';
       readonly data: AdmissionPodPressureDeferredData;
-    };
+    }
+  /* v0.5.0-tenancy — Wave 4 / Tenancy sub-team. */
+  | { readonly type: 'tenant.created'; readonly data: TenantLifecycleData }
+  | { readonly type: 'tenant.updated'; readonly data: TenantLifecycleData }
+  | { readonly type: 'tenant.deleted'; readonly data: TenantLifecycleData }
+  | { readonly type: 'tenant.admission_violation'; readonly data: TenantAdmissionViolationData }
+  | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and
