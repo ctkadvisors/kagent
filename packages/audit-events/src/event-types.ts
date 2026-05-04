@@ -99,22 +99,21 @@ export const TENANT_ADMISSION_VIOLATION = 'tenant.admission_violation' as const;
 export const TENANT_MIGRATION = 'tenant.migration' as const;
 
 /* v0.5.1-egress — Wave 4 / Egress sub-team. Per-Agent NetworkPolicy /
- * CiliumNetworkPolicy materialization decisions emitted by the
- * egress-controller. Catalog grows from 30 → 32. `egress.policy_applied`
- * fires once per Agent reconcile (the policy was created or replaced);
- * `egress.policy_violation` is best-effort — Cilium logs surface the
- * actual deny, the substrate records its own decision events for the
- * audit warehouse. See docs/WAVES.md §6.2. */
+ * CiliumNetworkPolicy materialization decisions. */
 export const EGRESS_POLICY_APPLIED = 'egress.policy_applied' as const;
 export const EGRESS_POLICY_VIOLATION = 'egress.policy_violation' as const;
 
+/* v0.5.2-quotas — Wave 4 / Quotas sub-team. Per-tenant compute /
+ * gateway / storage cap audit events. */
+export const QUOTA_GATEWAY_INFLIGHT_EXCEEDED = 'quota.gateway_inflight_exceeded' as const;
+export const QUOTA_STORAGE_EXCEEDED = 'quota.storage_exceeded' as const;
+export const QUOTA_COMPUTE_WARNING = 'quota.compute_warning' as const;
+export const QUOTA_RESOURCE_QUOTA_APPLIED = 'quota.resource_quota_applied' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(32)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(36)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
- *
- * v0.5.1-egress added 2 events (`egress.policy_applied` +
- * `egress.policy_violation`) — catalog grows from 30 → 32.
  */
 export const ALL_EVENT_TYPES = Object.freeze([
   TASK_ADMITTED,
@@ -149,4 +148,8 @@ export const ALL_EVENT_TYPES = Object.freeze([
   TENANT_MIGRATION,
   EGRESS_POLICY_APPLIED,
   EGRESS_POLICY_VIOLATION,
+  QUOTA_GATEWAY_INFLIGHT_EXCEEDED,
+  QUOTA_STORAGE_EXCEEDED,
+  QUOTA_COMPUTE_WARNING,
+  QUOTA_RESOURCE_QUOTA_APPLIED,
 ] as const);

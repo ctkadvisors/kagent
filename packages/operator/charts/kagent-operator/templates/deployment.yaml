@@ -560,15 +560,21 @@ spec:
             # ---------------------------------------------------------------
             # Wave 4 — Egress (v0.5.1-egress)
             # ---------------------------------------------------------------
-            # When `egress.enabled=true`, the operator runs the egress
-            # controller's Agent informer and materializes a per-Agent
-            # NetworkPolicy / CiliumNetworkPolicy. Default-OFF posture
-            # — substrate operators flip on after verifying their CNI
-            # enforces NetworkPolicies (K3s default flannel does NOT).
             - name: KAGENT_EGRESS_ENABLED
               value: {{ .Values.egress.enabled | ternary "true" "false" | quote }}
             - name: KAGENT_EGRESS_MODE
               value: {{ .Values.egress.mode | default "auto" | quote }}
+            # ---------------------------------------------------------------
+            # Wave 4 — Quotas (v0.5.2-quotas)
+            # ---------------------------------------------------------------
+            - name: KAGENT_QUOTAS_ENABLED
+              value: {{ .Values.quotas.enabled | ternary "true" "false" | quote }}
+            - name: KAGENT_QUOTAS_DEFAULT_GATEWAY_INFLIGHT_CAP
+              value: {{ .Values.quotas.defaultGatewayInFlightCap | quote }}
+            - name: KAGENT_QUOTAS_DEFAULT_CAS_BYTES_GIB
+              value: {{ .Values.quotas.defaultCasBytesGiB | quote }}
+            - name: KAGENT_QUOTAS_CAS_WALK_INTERVAL_MINUTES
+              value: {{ .Values.quotas.casWalkIntervalMinutes | quote }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed
           # `<release>-trigger-secrets` Secret (see webhook-secret.yaml).

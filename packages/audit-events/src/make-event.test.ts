@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 32 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy + 2 v0.5.1-egress)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(32);
+  it('exports exactly 36 event-type strings (Wave 0-4 sum incl. egress + quotas)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(36);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -459,6 +459,11 @@ describe('event-types catalog', () => {
       // v0.5.1-egress — Wave 4 / Egress sub-team additions.
       'egress.policy_applied',
       'egress.policy_violation',
+      // v0.5.2-quotas — Wave 4 / Quotas sub-team additions.
+      'quota.gateway_inflight_exceeded',
+      'quota.storage_exceeded',
+      'quota.compute_warning',
+      'quota.resource_quota_applied',
     ]);
   });
 });
@@ -607,5 +612,80 @@ describe('egress audit events (v0.5.1-egress)', () => {
     expect(event.type).toBe('egress.policy_violation');
     expect(event.data.attemptedTarget).toBe('evil.example.com');
     expect(event.data.reason).toBe('policy_denied:egress_domain_not_allowlisted');
+  });
+});
+
+describe('quota audit events (v0.5.2-quotas)', () => {
+  it('builds a quota.gateway_inflight_exceeded envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'AgentTask/acme-prod/researcher-1',
+      type: 'quota.gateway_inflight_exceeded',
+      data: {
+        tenant: 'acme',
+        observed: 100,
+        cap: 100,
+        taskUid: 'uid-1',
+        taskNamespace: 'acme-prod',
+        taskName: 'researcher-1',
+        agentName: 'researcher',
+      },
+    });
+    expect(event.type).toBe('quota.gateway_inflight_exceeded');
+    expect(event.data.tenant).toBe('acme');
+    expect(event.data.observed).toBe(100);
+    expect(event.data.cap).toBe(100);
+  });
+
+  it('builds a quota.storage_exceeded envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'tenant/acme',
+      type: 'quota.storage_exceeded',
+      data: {
+        tenant: 'acme',
+        bytesUsed: 11_000_000_000,
+        bytesCap: 10_000_000_000,
+      },
+    });
+    expect(event.type).toBe('quota.storage_exceeded');
+    expect(event.data.tenant).toBe('acme');
+    expect(event.data.bytesUsed).toBe(11_000_000_000);
+  });
+
+  it('builds a quota.compute_warning envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'tenant/acme',
+      type: 'quota.compute_warning',
+      data: {
+        tenant: 'acme',
+        resource: 'storage.casBytes',
+        observed: 8_000_000_000,
+        limit: 10_000_000_000,
+        thresholdRatio: 0.8,
+      },
+    });
+    expect(event.type).toBe('quota.compute_warning');
+    expect(event.data.thresholdRatio).toBe(0.8);
+    expect(event.data.resource).toBe('storage.casBytes');
+  });
+
+  it('builds a quota.resource_quota_applied envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'ResourceQuota/acme-prod/kagent-tenant-acme',
+      type: 'quota.resource_quota_applied',
+      data: {
+        tenant: 'acme',
+        namespace: 'acme-prod',
+        resourceQuotaName: 'kagent-tenant-acme',
+        hard: { 'requests.cpu': '10', 'requests.memory': '20Gi' },
+        action: 'created',
+      },
+    });
+    expect(event.type).toBe('quota.resource_quota_applied');
+    expect(event.data.action).toBe('created');
+    expect(event.data.hard['requests.cpu']).toBe('10');
   });
 });

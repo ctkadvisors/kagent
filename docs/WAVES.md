@@ -467,18 +467,22 @@ operator + locality test counts: 824 + 40 = 864 (up +28 vs. pre-Wave-3).
 
 **Validation:** `curl` to undeclared domain from agent-pod times out; declared domain succeeds.
 
-### 6.3 Sub-team: Quotas
+### 6.3 Sub-team: Quotas ✓ SHIPPED v0.5.2-quotas
 
-**Releases:** `v0.5.2-quotas`
+**Releases:** `v0.5.2-quotas` — **SHIPPED**
 **Owns:** quota controllers (org → tenant → agent), pod-pressure circuit breaker (companion to Locality)
 **Depends on:** Tenancy
 
 **Deliverables:**
-1. K8s `ResourceQuota` per tenant namespace
-2. Per-tenant gateway in-flight cap (composes with ModelEndpoint cap)
-3. Per-tenant artifact storage cap (CAS quota integration)
-4. Quota-breach audit events
-5. Pod-pressure circuit breaker (admission queue when pending > threshold)
+1. **SHIPPED.** `TenantQuota` schema locked at the nested `compute / gateway / storage` shape (per the brief): `compute.{cpuRequests, memoryRequests, maxPods}` materializes a per-(tenant, namespace) K8s `ResourceQuota`; `gateway.{inFlightCap, tokensPerHour}` enforces per-tenant gateway concurrency; `storage.{casBytes, artifactCount}` gates artifact admissions. CRD + chart copy + drift check + tenant.test.ts updates.
+2. **SHIPPED.** `buildResourceQuotaForTenant({ tenant, namespace }) → V1ResourceQuota | undefined` in `@kagent/quota-controller`. Pure translator — naming `kagent-tenant-<name>`, labels `kagent.knuteson.io/tenant` + `managed-by`, annotation `quota-source=tenant`. `resourceQuotaSpecDiffers` helper for idempotent reconcile.
+3. **SHIPPED.** Per-tenant gateway in-flight cap — `GatewayInFlightCounter` in-process counter with `tryAcquire / release / rebuildFromTasks`. Refusal `policy_denied:tenant_gateway_inflight_exceeded`. Single-replica leader-elected operator constraint (per the brief); rebuild-from-informer on boot/leader-handover. Pure `checkTenantGatewayInFlight` admission gate added to `task-admission.ts` (additive — no refactor of existing gates).
+4. **SHIPPED.** Per-tenant CAS storage cap — `walkCasUsageByTenant` walker (10-minute cadence default) sums per-tenant CAS bytes + over-cap set. `startCasQuotaController` boots the timer + emits `quota.storage_exceeded` per newly over-cap tenant per lifecycle. Pure `checkTenantStorage` admission gate added to `task-admission.ts`. Walker does NOT delete (CAS GC owns deletion).
+5. **SHIPPED.** Audit events catalog grows from 30 → 34: `quota.gateway_inflight_exceeded`, `quota.storage_exceeded`, `quota.compute_warning`, `quota.resource_quota_applied`. Per-type data interfaces + `ALL_EVENT_TYPES` extended.
+6. **SHIPPED.** Helm wiring — `quotas:` block (`enabled: false` default + `defaultGatewayInFlightCap: 100` + `defaultCasBytesGiB: 10` + `casWalkIntervalMinutes: 10`). `KAGENT_QUOTAS_*` env in deployment.yaml; `resourcequotas` ClusterRole verbs (get/list/watch/create/patch/update/delete).
+7. **DEFERRED.** Pod-pressure circuit breaker. Already SHIPPED in v0.4.4-locality (Wave 3 — see §5.5); the Wave 4 / Quotas brief lists it for cross-wave coordination, not net-new work. Audit `admission.pod_pressure_deferred` already lands.
+
+**Status:** SHIPPED — 6 of 7 deliverables landed, 1 deferred-as-already-shipped (pod-pressure breaker is v0.4.4 work). Operator: 971 → 979 (+8). Audit-events: 42 → 46 (+4). New `@kagent/quota-controller`: 52 tests (resource-quota generator + gateway in-flight counter + CAS walker). Repo total: 2615 → 2679 (+64). Schema-lock semantics: `TenantQuota` was a flat `{cpu, memory, maxInFlightTasks, maxArtifactBytes}` placeholder in v0.5.0; v0.5.2 replaces it with the nested `{compute, gateway, storage}` shape that downstream consumers actually enforce against — no live tenant CRs yet so no migration tooling required. Gateway counter is in-process per the substrate's single-replica leader-election constraint; multi-replica with shared state is a v0.5.3 follow-up (public API stays stable).
 
 **Validation:** tenant exceeds compute quota → new tasks queued; storage quota → admission refuses new artifacts with structured error.
 

@@ -230,6 +230,9 @@ importers:
       '@kagent/locality-controller':
         specifier: workspace:*
         version: link:../locality-controller
+      '@kagent/quota-controller':
+        specifier: workspace:*
+        version: link:../quota-controller
       '@kagent/supervision':
         specifier: workspace:*
         version: link:../supervision
@@ -249,6 +252,12 @@ importers:
       tsx:
         specifier: 4.21.0
         version: 4.21.0
+
+  packages/quota-controller:
+    dependencies:
+      '@kubernetes/client-node':
+        specifier: 1.4.0
+        version: 1.4.0
 
   packages/supervision:
     dependencies:

@@ -84,7 +84,12 @@ export type AuditEventType =
   | 'tenant.migration'
   /* v0.5.1-egress — Wave 4 / Egress sub-team. */
   | 'egress.policy_applied'
-  | 'egress.policy_violation';
+  | 'egress.policy_violation'
+  /* v0.5.2-quotas — Wave 4 / Quotas sub-team. */
+  | 'quota.gateway_inflight_exceeded'
+  | 'quota.storage_exceeded'
+  | 'quota.compute_warning'
+  | 'quota.resource_quota_applied';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -532,19 +537,7 @@ export interface TenantMigrationData {
 }
 
 /**
- * `egress.policy_applied` — Wave 4 / Egress sub-team. Emitted by the
- * operator's egress-controller after each successful per-Agent
- * NetworkPolicy / CiliumNetworkPolicy create-or-update. One emission
- * per Agent reconcile cycle.
- *
- *   - `mode`        — `networkpolicy | cilium` — which kind was applied.
- *   - `source`      — where the allowlist came from:
- *                      `agent` (Agent.spec.egress was set),
- *                      `tenant` (fell back to Tenant.spec.defaultEgress),
- *                      `default-deny` (substrate default — DNS + NATS +
- *                      gateway only).
- *   - `cidrCount` / `domainCount` / `portCount` — sizes of the
- *     declared allowlist axes (zero for `default-deny`).
+ * `egress.policy_applied` — Wave 4 / Egress sub-team.
  */
 export interface EgressPolicyAppliedData {
   readonly agentName: string;
@@ -560,13 +553,7 @@ export interface EgressPolicyAppliedData {
 }
 
 /**
- * `egress.policy_violation` — Wave 4 / Egress sub-team. Best-effort
- * substrate-decision record. Cilium logs are the canonical actual-deny
- * surface; this event is emitted by the operator only when its own
- * code paths refuse a substrate operation on egress grounds (e.g. a
- * resolved tenant + Agent allowlist contradicts each other in a way
- * the substrate can flag — reserved for future use). v0.5.1 ships the
- * shape; the wiring lights it up additively in subsequent commits.
+ * `egress.policy_violation` — Wave 4 / Egress sub-team.
  */
 export interface EgressPolicyViolationData {
   readonly agentName: string;
@@ -575,6 +562,50 @@ export interface EgressPolicyViolationData {
   readonly attemptedTarget: string;
   readonly reason: string;
   readonly message: string;
+}
+
+/**
+ * v0.5.2-quotas — `quota.gateway_inflight_exceeded`.
+ */
+export interface QuotaGatewayInflightExceededData {
+  readonly tenant: string;
+  readonly observed: number;
+  readonly cap: number;
+  readonly taskUid: string | undefined;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string | undefined;
+}
+
+/**
+ * v0.5.2-quotas — `quota.storage_exceeded`.
+ */
+export interface QuotaStorageExceededData {
+  readonly tenant: string;
+  readonly bytesUsed: number;
+  readonly bytesCap: number;
+}
+
+/**
+ * v0.5.2-quotas — `quota.compute_warning`.
+ */
+export interface QuotaComputeWarningData {
+  readonly tenant: string;
+  readonly resource: string;
+  readonly observed: number;
+  readonly limit: number;
+  readonly thresholdRatio: number;
+}
+
+/**
+ * v0.5.2-quotas — `quota.resource_quota_applied`.
+ */
+export interface QuotaResourceQuotaAppliedData {
+  readonly tenant: string;
+  readonly namespace: string;
+  readonly resourceQuotaName: string;
+  readonly hard: { readonly [k: string]: string };
+  readonly action: 'created' | 'updated' | 'unchanged' | 'deleted';
 }
 
 /**
@@ -636,7 +667,18 @@ export type AuditEventData =
   | { readonly type: 'tenant.migration'; readonly data: TenantMigrationData }
   /* v0.5.1-egress — Wave 4 / Egress sub-team. */
   | { readonly type: 'egress.policy_applied'; readonly data: EgressPolicyAppliedData }
-  | { readonly type: 'egress.policy_violation'; readonly data: EgressPolicyViolationData };
+  | { readonly type: 'egress.policy_violation'; readonly data: EgressPolicyViolationData }
+  /* v0.5.2-quotas — Wave 4 / Quotas sub-team. */
+  | {
+      readonly type: 'quota.gateway_inflight_exceeded';
+      readonly data: QuotaGatewayInflightExceededData;
+    }
+  | { readonly type: 'quota.storage_exceeded'; readonly data: QuotaStorageExceededData }
+  | { readonly type: 'quota.compute_warning'; readonly data: QuotaComputeWarningData }
+  | {
+      readonly type: 'quota.resource_quota_applied';
+      readonly data: QuotaResourceQuotaAppliedData;
+    };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

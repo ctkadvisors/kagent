@@ -216,24 +216,20 @@ rules:
   # ---------------------------------------------------------------------
   # Wave 4 — Egress (v0.5.1-egress)
   # ---------------------------------------------------------------------
-  # The egress controller materializes a per-Agent NetworkPolicy (or
-  # CiliumNetworkPolicy when Cilium is detected) from
-  # `Agent.spec.egress` + `Tenant.spec.defaultEgress` fallback. The
-  # controller needs:
-  #   - networkpolicies (k8s networking.k8s.io/v1):
-  #     create/get/list/watch/update/patch/delete (1:1 per Agent;
-  #     ownerRef'd back to the Agent so cascading delete reaps, but
-  #     explicit delete is faster + observable).
-  #   - ciliumnetworkpolicies (cilium.io/v2):
-  #     create/get/list/watch/update/patch/delete (rendered when
-  #     Cilium is detected; gated by the controller's auto-mode).
-  #   - configmaps (kube-system/cilium-config): get is required for
-  #     Cilium detection; the existing `configmaps: [get,list,watch]`
-  #     verb above already covers this.
+  # NetworkPolicy + CiliumNetworkPolicy verbs for per-Agent egress
+  # policies (Agent.spec.egress + Tenant.spec.defaultEgress fallback).
   - apiGroups: ['networking.k8s.io']
     resources: ['networkpolicies']
     verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
   - apiGroups: ['cilium.io']
     resources: ['ciliumnetworkpolicies']
     verbs: ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete']
+  # ---------------------------------------------------------------------
+  # Wave 4 — Quotas (v0.5.2-quotas)
+  # ---------------------------------------------------------------------
+  # K8s ResourceQuota per (tenant, namespace) from
+  # Tenant.spec.defaultQuota.compute.
+  - apiGroups: ['']
+    resources: ['resourcequotas']
+    verbs: ['get', 'list', 'watch', 'create', 'patch', 'update', 'delete']
   # ---------------------------------------------------------------------

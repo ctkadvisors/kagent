@@ -990,6 +990,48 @@ egress:
   dnsPolicy:
     enabled: true
 
+# ---------------------------------------------------------------------
+# Wave 4 — Quotas (v0.5.2-quotas)
+# ---------------------------------------------------------------------
+# Per-tenant compute / gateway / storage cap enforcement
+# (per docs/SUBSTRATE-V1.md §4.2 + docs/WAVES.md §6.3). When
+# `enabled: true`, the operator:
+#
+#   1. Materializes a K8s ResourceQuota per (tenant, namespace) from
+#      `Tenant.spec.defaultQuota.compute` (cpuRequests / memoryRequests
+#      / maxPods).
+#   2. Maintains an in-process per-tenant gateway in-flight counter;
+#      AgentTask admission refuses with
+#      `policy_denied:tenant_gateway_inflight_exceeded` when the
+#      tenant's `defaultQuota.gateway.inFlightCap` is exceeded.
+#   3. Runs a periodic CAS walker (`casWalkIntervalMinutes`, default
+#      10 minutes) summing per-tenant CAS bytes; admission refuses
+#      new tasks for tenants over `defaultQuota.storage.casBytes`
+#      with `policy_denied:tenant_storage_exceeded`.
+#
+# DEFAULT-OFF — gradual roll-out; existing single-tenant installs
+# continue working unchanged. Tenancy must also be enabled (cap
+# lookups read off the Tenant CR's `defaultQuota`).
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_QUOTAS_ENABLED=true|false
+#   KAGENT_QUOTAS_DEFAULT_GATEWAY_INFLIGHT_CAP=<int>
+#   KAGENT_QUOTAS_DEFAULT_CAS_BYTES_GIB=<int>
+#   KAGENT_QUOTAS_CAS_WALK_INTERVAL_MINUTES=<int>
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 4 — Quotas" block.
+# CRD: re-uses `Tenant.spec.defaultQuota` (no new CRD).
+quotas:
+  enabled: false
+  # Default per-tenant gateway in-flight cap. Used when a Tenant CR
+  # declares no `defaultQuota.gateway.inFlightCap` override.
+  defaultGatewayInFlightCap: 100
+  # Default per-tenant CAS storage cap (GiB). Used when a Tenant CR
+  # declares no `defaultQuota.storage.casBytes` override.
+  defaultCasBytesGiB: 10
+  # CAS walker cadence. Lower bound 1 minute (defense against typo'd 0).
+  casWalkIntervalMinutes: 10
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

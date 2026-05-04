@@ -74,23 +74,60 @@ spec:
                 defaultQuota:
                   type: object
                   description: |
-                    Default per-tenant quota. Wave 4 Quotas sub-team
-                    consumes; v0.5.0 carries the shape so Quotas can
-                    flip on without a CRD bump.
+                    Default per-tenant compute / gateway / storage
+                    quota. Wave 4 Quotas sub-team (v0.5.2) translates
+                    `compute.*` to a per-tenant-namespace K8s
+                    ResourceQuota CR; `gateway.inFlightCap` enforces
+                    via in-process counter; `storage.casBytes`
+                    enforces via periodic CAS walker.
                   properties:
-                    cpu:
-                      type: string
-                      description: 'K8s ResourceQuota CPU spec, e.g. `4` or `500m`.'
-                    memory:
-                      type: string
-                      description: 'K8s ResourceQuota memory spec, e.g. `8Gi`.'
-                    maxInFlightTasks:
-                      type: integer
-                      minimum: 0
-                      description: 'Per-tenant gateway in-flight cap.'
-                    maxArtifactBytes:
-                      type: string
-                      description: 'Per-tenant artifact-storage cap, e.g. `100Gi`.'
+                    compute:
+                      type: object
+                      description: |
+                        Compute caps materialized as a K8s
+                        ResourceQuota per (tenant, namespace).
+                      properties:
+                        cpuRequests:
+                          type: string
+                          description: 'K8s quantity, e.g. `10` or `10000m`. Maps to ResourceQuota requests.cpu.'
+                        memoryRequests:
+                          type: string
+                          description: 'K8s quantity, e.g. `20Gi`. Maps to ResourceQuota requests.memory.'
+                        maxPods:
+                          type: integer
+                          minimum: 0
+                          description: 'Pod count cap per tenant namespace. Maps to ResourceQuota count/pods.'
+                    gateway:
+                      type: object
+                      description: |
+                        Gateway-call caps. `inFlightCap` enforced via
+                        operator's in-process per-tenant counter at
+                        AgentTask admission; `tokensPerHour` carried
+                        as the next-rev hook.
+                      properties:
+                        inFlightCap:
+                          type: integer
+                          minimum: 0
+                          description: 'Concurrent in-flight gateway requests cap (per tenant).'
+                        tokensPerHour:
+                          type: integer
+                          minimum: 0
+                          description: 'Per-tenant token budget (tokens/hour). v0.5.2 carries the shape; accumulator lands in v0.5.3.'
+                    storage:
+                      type: object
+                      description: |
+                        Storage caps. `casBytes` is the hard cap
+                        (refuses new artifact admissions);
+                        `artifactCount` is loose (warning only).
+                      properties:
+                        casBytes:
+                          type: integer
+                          minimum: 0
+                          description: 'CAS PVC consumption cap (bytes).'
+                        artifactCount:
+                          type: integer
+                          minimum: 0
+                          description: 'Artifact count cap (loose; warning only — casBytes is authoritative).'
                 defaultEgress:
                   type: object
                   description: |

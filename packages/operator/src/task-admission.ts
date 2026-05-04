@@ -631,3 +631,118 @@ export function validateEventTopicsAgainstClaims(agent: Agent | AgentSpec): Even
     violations,
   };
 }
+
+/* =====================================================================
+ * v0.5.2-quotas — Wave 4 / Quotas admission gates.
+ *
+ * Two new gates land here, additive to the Wave 0 / 1 / 2 / 3 gates
+ * already in this file. Both pure decision-style helpers: take the
+ * incoming AgentTask + the operator's quota controller's runtime
+ * state (in-flight counter / over-cap set), return `ok: true | false`
+ * with the structured refusal envelope on miss. Operator's
+ * reconciler invokes these BEFORE creating the Job (so a denied task
+ * never materializes as a pod).
+ *
+ * Keeping the gate predicates here mirrors the locality
+ * `checkPodPressure` placement: gates that admission-time AgentTask
+ * processing reads cluster in `task-admission.ts` /
+ * `admission.ts`. The actual state lives in `@kagent/quota-controller`.
+ *
+ * Per docs/WAVES.md §6.3 deliverables 2 + 4.
+ * ===================================================================== */
+
+import {
+  checkGatewayInFlight as quotaCheckGatewayInFlight,
+  checkTenantStorage as quotaCheckTenantStorage,
+  type GatewayAcquireResult,
+  type StorageCheck,
+} from '@kagent/quota-controller';
+
+// Re-export the refusal-reason literals so the operator's reconciler +
+// audit emitters import them from a single substrate-canonical
+// location (alongside the matching admission gates).
+export { GATEWAY_INFLIGHT_REFUSAL_REASON, STORAGE_REFUSAL_REASON } from '@kagent/quota-controller';
+
+/**
+ * Per-tenant gateway in-flight admission gate. Pure decision helper:
+ * caller (operator's reconciler) holds the live
+ * `GatewayInFlightCounter` and threads `observed` + `cap` from
+ * `controller.observed(tenant)` + the resolved tenant's
+ * `defaultQuota.gateway.inFlightCap` (or chart fallback).
+ *
+ * No tenant resolved → trivially OK (back-compat with Wave 4 / Tenancy
+ * fail-open posture). Cap undefined → trivially OK (no cap declared).
+ *
+ * Refusal `reason: 'TenantGatewayInFlightExceeded'` lands as a status
+ * condition + a `quota.gateway_inflight_exceeded` audit event; the
+ * AgentTask is marked Failed with
+ * `policy_denied:tenant_gateway_inflight_exceeded`.
+ */
+export type TenantGatewayInFlightCheck =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: 'TenantGatewayInFlightExceeded';
+      readonly message: string;
+      readonly tenant: string;
+      readonly observed: number;
+      readonly cap: number;
+    };
+
+export function checkTenantGatewayInFlight(
+  tenant: string | undefined,
+  observed: number,
+  cap: number | undefined,
+): TenantGatewayInFlightCheck {
+  if (typeof tenant !== 'string' || tenant.length === 0) return { ok: true };
+  const result: GatewayAcquireResult = quotaCheckGatewayInFlight(tenant, observed, cap);
+  if (result.ok) return { ok: true };
+  return {
+    ok: false,
+    reason: 'TenantGatewayInFlightExceeded',
+    message: result.message,
+    tenant: result.tenant,
+    observed: result.observed,
+    cap: result.cap,
+  };
+}
+
+/**
+ * Per-tenant CAS storage admission gate. Pure decision helper.
+ * Caller holds the live over-cap set from
+ * `startCasQuotaController(...).overCap()` and asks this helper at
+ * AgentTask admission. Any task whose tenant is in the over-cap set
+ * is refused with
+ * `policy_denied:tenant_storage_exceeded` — applies to ALL new tasks
+ * for that tenant (not just artifact-emitting ones), since the
+ * substrate can't statically tell what a task will produce.
+ *
+ * No tenant resolved → trivially OK (Wave 4 / Tenancy fail-open).
+ *
+ * Refusal `reason: 'TenantStorageExceeded'` lands as a status
+ * condition + the `quota.storage_exceeded` audit emission already
+ * fired by the walker; the AgentTask is marked Failed with
+ * `policy_denied:tenant_storage_exceeded`.
+ */
+export type TenantStorageCheck =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: 'TenantStorageExceeded';
+      readonly message: string;
+      readonly tenant: string;
+    };
+
+export function checkTenantStorage(
+  tenant: string | undefined,
+  overCap: ReadonlySet<string>,
+): TenantStorageCheck {
+  const result: StorageCheck = quotaCheckTenantStorage(tenant, overCap);
+  if (result.ok) return { ok: true };
+  return {
+    ok: false,
+    reason: 'TenantStorageExceeded',
+    message: result.message,
+    tenant: result.tenant,
+  };
+}
