@@ -511,6 +511,104 @@ describe('spawn_child_task — allowedChildTemplates (v0.1.3)', () => {
   });
 });
 
+describe('spawn_child_task — traceparent stamping (v0.1.11)', () => {
+  it('stamps runConfig.traceparent on the child spec when getTraceparent returns a value', async () => {
+    const k8s = makeFakeK8s();
+    const tp = '00-0123456789abcdef0123456789abcdef-fedcba9876543210-01';
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      getTraceparent: () => tp,
+      generateChildName: () => 'parent-task-001-c-tp',
+    });
+    await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+    });
+    expect(k8s.creates).toHaveLength(1);
+    expect(k8s.creates[0]?.runConfig?.traceparent).toBe(tp);
+  });
+
+  it('omits traceparent when getTraceparent is unset (back-compat)', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      generateChildName: () => 'parent-task-001-c-notp',
+    });
+    await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+    });
+    expect(k8s.creates[0]?.runConfig?.traceparent).toBeUndefined();
+  });
+
+  it('omits traceparent when getTraceparent returns undefined (OTel disabled)', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      getTraceparent: () => undefined,
+      generateChildName: () => 'parent-task-001-c-otelOff',
+    });
+    await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+    });
+    expect(k8s.creates[0]?.runConfig?.traceparent).toBeUndefined();
+  });
+
+  it('preserves the parent traceparent alongside other runConfig fields (timeout)', async () => {
+    const k8s = makeFakeK8s();
+    const tp = '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      remainingBudgetSeconds: () => 600,
+      getTraceparent: () => tp,
+      generateChildName: () => 'parent-task-001-c-mix',
+    });
+    await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+      runConfig: { timeoutSeconds: 60 },
+    });
+    expect(k8s.creates[0]?.runConfig).toEqual({
+      timeoutSeconds: 60,
+      traceparent: tp,
+    });
+  });
+
+  it('still applies budget clamping when traceparent is also set (independent fields)', async () => {
+    const k8s = makeFakeK8s();
+    const tp = '00-cccccccccccccccccccccccccccccccc-dddddddddddddddd-01';
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      remainingBudgetSeconds: () => 30,
+      getTraceparent: () => tp,
+      generateChildName: () => 'parent-task-001-c-mix-clamp',
+    });
+    await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+      runConfig: { timeoutSeconds: 600 },
+    });
+    expect(k8s.creates[0]?.runConfig?.timeoutSeconds).toBe(30); // clamped
+    expect(k8s.creates[0]?.runConfig?.traceparent).toBe(tp);
+  });
+});
+
 describe('defaultGenerateChildName', () => {
   it('produces names matching <parent>-c-<6char> within K8s label cap', () => {
     const name = defaultGenerateChildName('orchestrator-task-001');

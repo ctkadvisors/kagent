@@ -61,3 +61,67 @@ describe('buildCancelledResult (WS-G — pre-runner / mid-cancel synthesis)', ()
     expect(result.error?.message).toBe('cancelled: SIGINT received');
   });
 });
+
+/* =====================================================================
+ * v0.1.11 — W3C Trace Context propagation seam.
+ *
+ * Two pure helpers exported from main.ts:
+ *   - buildSpawnTraceparentGetter(taskId): returns a () => string
+ *     callback the spawn tool plumbs into SpawnToolDeps. Always
+ *     produces a deterministic v00 traceparent for the parent's
+ *     own runId so the child can re-derive the same trace tree.
+ *   - parseInheritedParentSpanContext(env): reads OTEL_TRACEPARENT
+ *     out of process.env and returns a {traceId, spanId} suitable
+ *     for OtelTraceSinkOptions.parentSpanContext, or undefined when
+ *     the env is absent / malformed.
+ * ===================================================================== */
+
+describe('buildSpawnTraceparentGetter (v0.1.11)', () => {
+  it('returns a callback that produces a W3C v00 traceparent for the parent task', async () => {
+    const { buildSpawnTraceparentGetter } = await import('./main.js');
+    const get = buildSpawnTraceparentGetter('task-uid-parent-1');
+    const tp = get();
+    expect(tp).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  });
+
+  it('is deterministic — same taskId → same traceparent on every call', async () => {
+    const { buildSpawnTraceparentGetter } = await import('./main.js');
+    const get = buildSpawnTraceparentGetter('task-uid-stable');
+    expect(get()).toBe(get());
+  });
+
+  it('different taskIds produce different traceparents (no trivial collision)', async () => {
+    const { buildSpawnTraceparentGetter } = await import('./main.js');
+    expect(buildSpawnTraceparentGetter('a')()).not.toBe(buildSpawnTraceparentGetter('b')());
+  });
+});
+
+describe('parseInheritedParentSpanContext (v0.1.11)', () => {
+  it('returns undefined when OTEL_TRACEPARENT is absent', async () => {
+    const { parseInheritedParentSpanContext } = await import('./main.js');
+    expect(parseInheritedParentSpanContext({})).toBeUndefined();
+  });
+
+  it('returns undefined when OTEL_TRACEPARENT is empty', async () => {
+    const { parseInheritedParentSpanContext } = await import('./main.js');
+    expect(parseInheritedParentSpanContext({ OTEL_TRACEPARENT: '' })).toBeUndefined();
+  });
+
+  it('returns undefined when OTEL_TRACEPARENT is malformed (logs + degrades)', async () => {
+    const { parseInheritedParentSpanContext } = await import('./main.js');
+    expect(
+      parseInheritedParentSpanContext({ OTEL_TRACEPARENT: 'not-a-traceparent' }),
+    ).toBeUndefined();
+  });
+
+  it('returns the parent context when OTEL_TRACEPARENT is well-formed', async () => {
+    const { parseInheritedParentSpanContext } = await import('./main.js');
+    const ctx = parseInheritedParentSpanContext({
+      OTEL_TRACEPARENT: '00-0123456789abcdef0123456789abcdef-fedcba9876543210-01',
+    });
+    expect(ctx).toEqual({
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: 'fedcba9876543210',
+    });
+  });
+});

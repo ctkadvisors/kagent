@@ -541,4 +541,37 @@ describe('buildJobSpec', () => {
     );
     expect(offenders).toEqual([]);
   });
+
+  /* =====================================================================
+   * v0.1.11 — OTEL_TRACEPARENT env threading from runConfig.traceparent
+   * ===================================================================== */
+
+  it('omits OTEL_TRACEPARENT env when runConfig.traceparent is unset', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const names = env.map((e) => e.name);
+    expect(names).not.toContain('OTEL_TRACEPARENT');
+  });
+
+  it('threads runConfig.traceparent into OTEL_TRACEPARENT env on the agent container', () => {
+    const tp = '00-0123456789abcdef0123456789abcdef-fedcba9876543210-01';
+    const t: AgentTask = {
+      ...sampleTask,
+      spec: { ...sampleTask.spec, runConfig: { traceparent: tp } },
+    };
+    const job = buildJobSpec(sampleAgent, t);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('OTEL_TRACEPARENT')).toBe(tp);
+  });
+
+  it('omits OTEL_TRACEPARENT env when runConfig is set but traceparent is not', () => {
+    const t: AgentTask = {
+      ...sampleTask,
+      spec: { ...sampleTask.spec, runConfig: { timeoutSeconds: 30 } },
+    };
+    const job = buildJobSpec(sampleAgent, t);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    expect(env.find((e) => e.name === 'OTEL_TRACEPARENT')).toBeUndefined();
+  });
 });

@@ -92,6 +92,80 @@ export function traceIdFromRunId(runId: string): string {
 }
 
 /**
+ * v0.1.11 — derive a deterministic 16-char lowercase-hex OTel span ID
+ * for the *root* `agent.run` span of a given `runId`. Companion to
+ * `traceIdFromRunId`: the trace ID consumes the first 16 bytes of
+ * `sha256(runId)`; the root-span ID consumes the SECOND 16 bytes
+ * (truncated to 8 bytes / 16 hex chars). Disjoint byte ranges so an
+ * observer can never confuse one for the other.
+ *
+ * Determinism is the goal: when the parent agent-pod's
+ * `spawn_child_task` issues a child AgentTask, it stamps a
+ * `traceparent` derived via `buildTraceparentFromRunId(parentRunId)`
+ * onto the child spec. The child's agent-pod parses that traceparent
+ * and seeds its OtelTraceSink root span context with it. Because both
+ * sides arrive at the same span ID via the same hash, the child's
+ * `agent.run` span genuinely lands as a child of the parent's
+ * `agent.run` span in Langfuse / Tempo / Jaeger — no coordination
+ * channel required.
+ */
+export function spanIdFromRunId(runId: string): string {
+  // Bytes 16..24 of sha256(runId) → 16 hex chars.
+  return createHash('sha256').update(runId).digest('hex').slice(32, 48);
+}
+
+/**
+ * v0.1.11 — build the W3C v00 traceparent header value for a given
+ * substrate `runId`. Format:
+ *
+ *     00-<32 hex traceId>-<16 hex spanId>-01
+ *
+ * Sampled flag (`01`) is hard-pinned: the substrate either traces or
+ * doesn't (governed by `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` presence);
+ * partial sampling is out of scope for v0.1. When the substrate isn't
+ * tracing, the parent agent-pod simply doesn't stamp `runConfig.traceparent`
+ * on the child spec — there's no "header for an unsampled run" case.
+ */
+export function buildTraceparentFromRunId(runId: string): string {
+  return `00-${traceIdFromRunId(runId)}-${spanIdFromRunId(runId)}-01`;
+}
+
+export interface ParsedTraceparent {
+  readonly version: '00';
+  readonly traceId: string;
+  readonly spanId: string;
+  readonly traceFlags: number;
+}
+
+/**
+ * v0.1.11 — parse a W3C v00 traceparent string into its constituent
+ * fields. Returns `undefined` for any malformed input (wrong shape,
+ * non-hex chars, all-zero IDs which W3C reserves as invalid). The
+ * agent-pod's main.ts uses this to validate `OTEL_TRACEPARENT` env
+ * before feeding the parsed context into OtelTraceSink — a malformed
+ * env value lands at "ignore + log" rather than "fail boot" so a
+ * mis-stamped traceparent can't gate a child task from running.
+ */
+export function parseTraceparent(value: string): ParsedTraceparent | undefined {
+  if (typeof value !== 'string') return undefined;
+  // 2 + 1 + 32 + 1 + 16 + 1 + 2 = 55 chars exactly for v00.
+  const m = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/.exec(value);
+  if (m === null) return undefined;
+  if (m[1] !== '00') return undefined;
+  const traceId = m[2] ?? '';
+  const spanId = m[3] ?? '';
+  // W3C: all-zero IDs are reserved as invalid.
+  if (/^0+$/.test(traceId)) return undefined;
+  if (/^0+$/.test(spanId)) return undefined;
+  return {
+    version: '00',
+    traceId,
+    spanId,
+    traceFlags: parseInt(m[4] ?? '00', 16),
+  };
+}
+
+/**
  * Build the canonical Langfuse 4.x trace URL for a given runId.
  *
  * Langfuse 4.x routes by trace ID under
@@ -130,6 +204,24 @@ export interface OtelTraceSinkOptions {
    * into `'full'` explicitly via env when you want them.
    */
   readonly contentMode?: ContentMode;
+  /**
+   * v0.1.11 — W3C Trace Context parent. When set, the sink starts each
+   * `agent.run` root span as a CHILD of this remote SpanContext rather
+   * than seeding from the runId-derived deterministic ID. Threaded in
+   * by the agent-pod's main.ts when `OTEL_TRACEPARENT` env is present
+   * (which the operator's job-spec builder threads from
+   * `AgentTask.spec.runConfig.traceparent` — a value the parent
+   * agent-pod's `spawn_child_task` stamped). Effect: the child task's
+   * trace tree becomes a child of the parent's trace, not a sibling
+   * with its own root.
+   *
+   * When undefined, behavior is the pre-v0.1.11 deterministic-from-runId
+   * path — root tasks remain root-of-their-own-trace.
+   */
+  readonly parentSpanContext?: {
+    readonly traceId: string;
+    readonly spanId: string;
+  };
 }
 
 /**
@@ -160,11 +252,20 @@ export class OtelTraceSink implements TraceSink {
    * robust regardless of which SDK build the host happens to load.
    */
   private readonly derivedTraceIds = new Map<string, string>();
+  /**
+   * v0.1.11 — W3C Trace Context parent supplied at construction time.
+   * Captured here (instead of read off options each emit) so the call
+   * path stays cheap.
+   */
+  private readonly parentSpanContext:
+    | { readonly traceId: string; readonly spanId: string }
+    | undefined;
 
   constructor(options: OtelTraceSinkOptions) {
     this.tracer = options.tracer;
     this.runContext = options.runContext;
     this.contentMode = options.contentMode ?? DEFAULT_CONTENT_MODE;
+    this.parentSpanContext = options.parentSpanContext;
   }
 
   /**
@@ -173,11 +274,18 @@ export class OtelTraceSink implements TraceSink {
    * a runId go through this method so they always get the same id the
    * span tree was emitted under, regardless of whether the SDK
    * honored the remote-parent context we passed to `startSpan()`.
+   *
+   * v0.1.11 — when a `parentSpanContext` was supplied at construction,
+   * the sink threads the parent's trace ID into `agent.run` so the
+   * child run lands inside the parent's trace tree. This method
+   * therefore returns the PARENT trace ID (not the runId-derived one)
+   * whenever a parent is wired — that's the correct id for "View trace"
+   * deep links to resolve to the unified parent+child tree in Langfuse.
    */
   traceIdFor(runId: string): string {
     const cached = this.derivedTraceIds.get(runId);
     if (cached !== undefined) return cached;
-    const id = traceIdFromRunId(runId);
+    const id = this.parentSpanContext?.traceId ?? traceIdFromRunId(runId);
     this.derivedTraceIds.set(runId, id);
     return id;
   }
@@ -253,19 +361,26 @@ export class OtelTraceSink implements TraceSink {
   private ensureRootSpan(runId: string): Span {
     let root = this.rootSpans.get(runId);
     if (root === undefined) {
-      // Derive (and cache) a deterministic trace ID so the same runId
-      // ALWAYS resolves to the same trace in Langfuse / Tempo / Jaeger,
-      // regardless of which sink instance / pod / process emitted it.
-      // We construct a "remote" parent SpanContext with the derived
-      // trace ID and a fresh random 16-char-hex span ID, then start the
-      // root span under that context so the SDK adopts the trace ID.
+      // v0.1.11 — branch on whether a W3C parent was supplied:
+      //   - Parent supplied → seed the remote parent SpanContext with
+      //     the parent's traceId + spanId. The child's `agent.run`
+      //     starts as a real child of the parent's span; the child's
+      //     subsequent llm/tool spans inherit transitively.
+      //   - No parent → original deterministic-from-runId behavior.
       //
-      // Some OTel SDK builds reject non-recording remote parents and
-      // mint a fresh trace ID anyway; the `traceIdFor()` cache below is
-      // the source of truth for provider-link construction in that
-      // case (Plan B per the WS-D brief).
-      const traceId = this.traceIdFor(runId);
-      const spanId = randomBytes(8).toString('hex');
+      // Either way we still go through `traceIdFor()` so the cache
+      // stays the single source of truth for provider-link construction.
+      let traceId: string;
+      let spanId: string;
+      if (this.parentSpanContext !== undefined) {
+        traceId = this.parentSpanContext.traceId;
+        spanId = this.parentSpanContext.spanId;
+        // Seed the cache so traceIdFor() returns the parent's id.
+        this.derivedTraceIds.set(runId, traceId);
+      } else {
+        traceId = this.traceIdFor(runId);
+        spanId = randomBytes(8).toString('hex');
+      }
       const parentCtx = trace.setSpanContext(context.active(), {
         traceId,
         spanId,

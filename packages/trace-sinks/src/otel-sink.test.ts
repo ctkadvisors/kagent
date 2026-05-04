@@ -623,3 +623,137 @@ describe('OtelTraceSink — KAGENT_TRACE_CONTENT_MODE', () => {
     expect(tool?.attributes['langfuse.observation.level']).toBe('ERROR');
   });
 });
+
+/* =====================================================================
+ * v0.1.11 — W3C Trace Context propagation helpers.
+ *
+ * `spanIdFromRunId` derives a deterministic 16-char-hex root span ID
+ * from a runId, so the parent's spawn_child_task tool can construct a
+ * traceparent header that names the SAME span ID the parent's
+ * OtelTraceSink is using as its agent.run root. `buildTraceparentFromRunId`
+ * and `parseTraceparent` round-trip the W3C v00 traceparent value.
+ * ===================================================================== */
+
+describe('spanIdFromRunId', () => {
+  it('returns a 16-char lowercase-hex string', async () => {
+    const { spanIdFromRunId } = await import('./otel-sink.js');
+    expect(spanIdFromRunId('any-run')).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('is deterministic — same runId always produces the same span ID', async () => {
+    const { spanIdFromRunId } = await import('./otel-sink.js');
+    expect(spanIdFromRunId('r1')).toBe(spanIdFromRunId('r1'));
+  });
+
+  it('different runIds produce different span IDs', async () => {
+    const { spanIdFromRunId } = await import('./otel-sink.js');
+    expect(spanIdFromRunId('r1')).not.toBe(spanIdFromRunId('r2'));
+  });
+
+  it('span ID does NOT collide with the trace ID prefix derived from the same runId', async () => {
+    // Both come from the same SHA-256, but use disjoint byte ranges so
+    // an observer can never mistake one for the other.
+    const { spanIdFromRunId } = await import('./otel-sink.js');
+    const tid = traceIdFromRunId('r1');
+    const sid = spanIdFromRunId('r1');
+    expect(tid.startsWith(sid)).toBe(false);
+  });
+});
+
+describe('buildTraceparentFromRunId', () => {
+  it('returns a W3C v00 traceparent: 00-<traceId>-<spanId>-01', async () => {
+    const { buildTraceparentFromRunId } = await import('./otel-sink.js');
+    const tp = buildTraceparentFromRunId('r1');
+    expect(tp).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  });
+
+  it('is deterministic — same runId always produces the same traceparent', async () => {
+    const { buildTraceparentFromRunId } = await import('./otel-sink.js');
+    expect(buildTraceparentFromRunId('r1')).toBe(buildTraceparentFromRunId('r1'));
+  });
+
+  it('encodes the same traceId returned by traceIdFromRunId', async () => {
+    const { buildTraceparentFromRunId } = await import('./otel-sink.js');
+    const tp = buildTraceparentFromRunId('r1');
+    expect(tp.split('-')[1]).toBe(traceIdFromRunId('r1'));
+  });
+});
+
+describe('parseTraceparent', () => {
+  it('parses a well-formed v00 traceparent into traceId+spanId+flags', async () => {
+    const { parseTraceparent } = await import('./otel-sink.js');
+    const r = parseTraceparent('00-0123456789abcdef0123456789abcdef-fedcba9876543210-01');
+    expect(r).toEqual({
+      version: '00',
+      traceId: '0123456789abcdef0123456789abcdef',
+      spanId: 'fedcba9876543210',
+      traceFlags: 0x01,
+    });
+  });
+
+  it('returns undefined for malformed input', async () => {
+    const { parseTraceparent } = await import('./otel-sink.js');
+    expect(parseTraceparent('')).toBeUndefined();
+    expect(parseTraceparent('not-a-traceparent')).toBeUndefined();
+    expect(parseTraceparent('00-tooshort-x-01')).toBeUndefined();
+    expect(
+      parseTraceparent('00-0123456789abcdef0123456789abcdef-fedcba9876543210'),
+    ).toBeUndefined();
+  });
+
+  it('rejects non-hex characters', async () => {
+    const { parseTraceparent } = await import('./otel-sink.js');
+    expect(
+      parseTraceparent('00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-fedcba9876543210-01'),
+    ).toBeUndefined();
+  });
+
+  it('rejects all-zero traceId or spanId (invalid per W3C)', async () => {
+    const { parseTraceparent } = await import('./otel-sink.js');
+    expect(
+      parseTraceparent('00-00000000000000000000000000000000-fedcba9876543210-01'),
+    ).toBeUndefined();
+    expect(
+      parseTraceparent('00-0123456789abcdef0123456789abcdef-0000000000000000-01'),
+    ).toBeUndefined();
+  });
+
+  it('round-trips with buildTraceparentFromRunId', async () => {
+    const { buildTraceparentFromRunId, parseTraceparent } = await import('./otel-sink.js');
+    const tp = buildTraceparentFromRunId('r1');
+    const parsed = parseTraceparent(tp);
+    expect(parsed?.traceId).toBe(traceIdFromRunId('r1'));
+  });
+});
+
+describe('OtelTraceSink — parentSpanContext seeding (env-supplied W3C parent)', () => {
+  it('starts agent.run with the supplied parentSpanContext when set (v0.1.11)', async () => {
+    const { buildTraceparentFromRunId, parseTraceparent } = await import('./otel-sink.js');
+    const tracer = makeStubTracer();
+    const tp = buildTraceparentFromRunId('parent-task-uid');
+    const parsed = parseTraceparent(tp);
+    expect(parsed).toBeDefined();
+    const sink = new OtelTraceSink({
+      tracer,
+      ...(parsed !== undefined && {
+        parentSpanContext: { traceId: parsed.traceId, spanId: parsed.spanId },
+      }),
+    });
+    sink.emit(llmEntry); // run_id='r1', a CHILD task
+    const root = tracer.recorded.find((s) => s.name === 'agent.run');
+    // Child's agent.run becomes a child of the parent's span — same trace.
+    expect(root?.parentTraceId).toBe(parsed?.traceId);
+    expect(root?.parentSpanId).toBe(parsed?.spanId);
+    // And traceIdFor() reports the parent's trace id, not the child's
+    // own runId-derived id.
+    expect(sink.traceIdFor('r1')).toBe(parsed?.traceId);
+  });
+
+  it('falls back to runId-derived trace ID when parentSpanContext is absent', () => {
+    const tracer = makeStubTracer();
+    const sink = new OtelTraceSink({ tracer });
+    sink.emit(llmEntry);
+    const root = tracer.recorded.find((s) => s.name === 'agent.run');
+    expect(root?.parentTraceId).toBe(traceIdFromRunId('r1'));
+  });
+});

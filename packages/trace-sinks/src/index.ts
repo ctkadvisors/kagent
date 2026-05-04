@@ -33,12 +33,15 @@ export type { JsonlFileSinkOptions } from './jsonl-file-sink.js';
 
 export {
   OtelTraceSink,
+  buildTraceparentFromRunId,
   isOtelEnabled,
   langfuseTraceUrl,
+  parseTraceparent,
   setupOtelExporter,
+  spanIdFromRunId,
   traceIdFromRunId,
 } from './otel-sink.js';
-export type { OtelTraceSinkOptions } from './otel-sink.js';
+export type { OtelTraceSinkOptions, ParsedTraceparent } from './otel-sink.js';
 
 export {
   DEFAULT_CONTENT_MODE,

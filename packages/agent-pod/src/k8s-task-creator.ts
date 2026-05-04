@@ -66,6 +66,19 @@ export interface ChildTaskInput {
   readonly runConfig?: {
     readonly timeoutSeconds?: number;
     readonly maxIterations?: number;
+    /**
+     * v0.1.11 — W3C Trace Context propagation. When set, the operator's
+     * job-spec builder threads this verbatim into the spawned Job's
+     * `OTEL_TRACEPARENT` env so the child agent-pod's main.ts can seed
+     * its OtelTraceSink root span context with the parent's span — the
+     * child's trace tree becomes a child of the parent's, not a sibling.
+     *
+     * Format: literal W3C v00 traceparent header value
+     * (`00-<32hex traceId>-<16hex spanId>-<2hex flags>`). The CRD
+     * admission schema enforces the shape upstream of this code, so the
+     * stamping side can pass the value through verbatim.
+     */
+    readonly traceparent?: string;
   };
   readonly payload?: unknown;
 }
