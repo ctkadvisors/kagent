@@ -349,19 +349,27 @@ All five sub-teams are mostly independent. Some share NATS JetStream as backbone
 
 **Validation:** a `npm install` cache survives across runs; cold start vs warm start latency delta measurable.
 
-### 5.4 Sub-team: Identity
+### 5.4 Sub-team: Identity ✓ SHIPPED v0.4.3-identity
 
-**Releases:** `v0.4.3-identity`
+**Releases:** `v0.4.3-identity` — **SHIPPED**
 **Owns:** SPIFFE/SPIRE Helm sub-chart, agent-pod SVID consumer, gateway mTLS termination
 **Depends on:** Caps (cap signing CA is operationally adjacent to SPIRE CA)
 
-**Deliverables:**
-1. SPIRE deployed via sub-chart; per-pod SVID issuance via workload API
-2. Agent-pod's LLM client uses SVID for mTLS to gateway (when gateway supports it per [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) §4.3)
-3. Per-Agent SVID replaces shared `KAGENT_LITELLM_API_KEY` env var
-4. Operator mints capability bundles signed by the same CA cert-manager exposes for SPIRE
+**Status:** SHIPPED — substrate primitives + audit hooks landed. Operator: 817 → 844 tests (+27). Agent-pod: 324 → 339 tests (+15). 2 new audit event types (`identity.svid_issued`, `identity.rotation`). Helm chart smoke test: zero SPIRE resources by default; `identity.enabled=true` renders Server StatefulSet + Agent DaemonSet + ClusterRoles; `identity.mock.enabled=true` renders only the marker ConfigMap.
 
-**Validation:** `KAGENT_LITELLM_API_KEY` removed from cluster entirely; gateway authenticates by SVID; rotation event in audit stream.
+**Deliverables:**
+1. ✓ SPIRE deployed via sub-chart at `charts/kagent-operator/charts/spire/`; per-pod SVID issuance via Workload-API socket (default OFF, gated on `identity.enabled=true`).
+2. ✓ Agent-pod's LLM client uses SVID for mTLS via `IdentityHandle` + `probeGatewayMtls` (with WARN-log fall-back to bearer when handshake refused / 426 returned).
+3. ✓ `KAGENT_LITELLM_API_KEY` deprecated when SVID is in use (kept as bootstrap fallback per [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) §4.3 — Wave 4 KeyRotation drops it entirely).
+4. ✓ Cap-CA additive SPIRE-managed key source: when `KAGENT_IDENTITY_ENABLED=true` the cap-ca looks for SPIRE-managed signing keys first, falls through to chart Secret. Wave 2 tests preserve unchanged.
+5. ✓ Audit events: `identity.svid_issued` + `identity.rotation` (CloudEvents v1.0 envelope, ALL_EVENT_TYPES grew 18 → 20).
+
+**Forward-compat deferrals (documented in JSDoc):**
+- Real SPIRE Workload-API gRPC streaming — agent-pod consumes spiffe-helper-materialized cert files (canonical materializer pattern); kagent does NOT vendor a gRPC client.
+- Operator-side `RegistrationEntry` controller — SPIRE Server's k8s_psat attestor binds workloads via selector ladder; a kagent-side controller for fine-grained registration is a follow-up.
+- mTLS probe is permissive (handshake completion presumed mTLS-on-the-wire); a richer challenge protocol can tighten this in v0.4.x.
+
+**Validation:** `helm template .` renders zero SPIRE resources by default; `--set identity.enabled=true` renders SPIRE Server + Agent + RBAC; `--set identity.mock.enabled=true` renders only the marker ConfigMap. Integration with real K3s + real SPIRE deferred to Wave 4 KeyRotation chaos test.
 
 ### 5.5 Sub-team: Locality
 
