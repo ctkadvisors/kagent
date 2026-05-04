@@ -214,3 +214,23 @@ rules:
     resources: ['namespaces']
     verbs: ['get', 'list', 'watch']
   # ---------------------------------------------------------------------
+  # Wave 4 — KeyRotation (v0.5.4-keyrotation)
+  # ---------------------------------------------------------------------
+  # Substrate-level rotation policies for SVIDs, capability bundles,
+  # and gateway-tokens. NO new RBAC verbs needed:
+  #
+  #   - SVID rotation reads SPIRE-issued cert metadata from the SPIRE
+  #     workload-API stream (Workload-API socket; non-K8s RBAC).
+  #   - Cap-bundle TTL policy is operator-internal (no K8s read/write
+  #     beyond the existing AgentTask + Agent + Tenant verbs above).
+  #   - Gateway-token rotation calls a remote HTTP endpoint (the
+  #     gateway's `POST /v1/admin/keys/rotate`); the admin token is
+  #     mounted via env from a K8s Secret — `secrets:get` already
+  #     covered by Wave 0 secrets-hygiene.
+  #
+  # All four `keyrotation.*` audit emissions go through the existing
+  # AuditPublisher (NATS JetStream); already covered by the audit
+  # pipeline's RBAC. This block intentionally adds no rules — the
+  # comment exists so future readers know the surface was reviewed +
+  # determined to compose against existing verbs.
+  # ---------------------------------------------------------------------
