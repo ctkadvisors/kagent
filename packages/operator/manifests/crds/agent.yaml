@@ -410,6 +410,59 @@ spec:
                               the Wave 1 typed-input pipeline.
                               When unset, event.data is forwarded
                               as AgentTask.spec.payload.
+                # ---- v0.5.1-egress — Wave 4 / Egress sub-team.
+                # Per-Agent network egress allowlist materialized into
+                # a NetworkPolicy (or CiliumNetworkPolicy when Cilium
+                # is detected). Default-deny when unset; tenant
+                # `defaultEgress` fills in if the Agent is tenant-
+                # scoped. See docs/SUBSTRATE-V1.md §3.1 +
+                # docs/WAVES.md §6.2.
+                egress:
+                  type: object
+                  description: |
+                    Declarative network egress allowlist. The
+                    egress-controller materializes a per-Agent
+                    NetworkPolicy / CiliumNetworkPolicy scoping
+                    outbound traffic to the declared CIDRs / domains
+                    / ports. Default-deny when unset.
+                  properties:
+                    domains:
+                      type: array
+                      description: |
+                        FQDN allowlist. Cilium's `toFQDNs` evaluates
+                        natively; plain NetworkPolicy is best-effort
+                        CIDR-resolved at reconcile time.
+                      items:
+                        type: string
+                        minLength: 1
+                    cidrs:
+                      type: array
+                      description: |
+                        Raw CIDR allowlist. Always supported by
+                        every CNI; the substrate baseline.
+                      items:
+                        type: string
+                        minLength: 1
+                    ports:
+                      type: array
+                      description: |
+                        Protocol+port pairs. Empty / unset = all
+                        ports.
+                      items:
+                        type: object
+                        required:
+                          - protocol
+                          - port
+                        properties:
+                          protocol:
+                            type: string
+                            enum:
+                              - TCP
+                              - UDP
+                          port:
+                            type: integer
+                            minimum: 1
+                            maximum: 65535
       additionalPrinterColumns:
         - name: Model
           type: string

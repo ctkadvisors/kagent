@@ -42,6 +42,9 @@ export type {
   EventPublishDecl,
   EventSubscribeDecl,
   EventSubscribeTrigger,
+  /* v0.5.1-egress — Wave 4 / Egress sub-team */
+  AgentEgress,
+  AgentEgressPort,
 } from './types.js';
 
 export {

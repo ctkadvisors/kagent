@@ -418,6 +418,43 @@ spec:
                           inputBinding:
                             type: string
                             minLength: 1
+                # ---- v0.5.1-egress — Wave 4 / Egress sub-team.
+                egress:
+                  type: object
+                  description: |
+                    Declarative network egress allowlist. The
+                    egress-controller materializes a per-Agent
+                    NetworkPolicy / CiliumNetworkPolicy scoping
+                    outbound traffic to the declared CIDRs / domains
+                    / ports. Default-deny when unset.
+                  properties:
+                    domains:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    cidrs:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    ports:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - protocol
+                          - port
+                        properties:
+                          protocol:
+                            type: string
+                            enum:
+                              - TCP
+                              - UDP
+                          port:
+                            type: integer
+                            minimum: 1
+                            maximum: 65535
       additionalPrinterColumns:
         - name: Model
           type: string

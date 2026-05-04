@@ -296,6 +296,93 @@ export interface AgentSpec {
    * `capabilityClaims.subscribe`.
    */
   readonly subscribes?: readonly EventSubscribeDecl[];
+
+  /* ---- v0.5.1-egress — Wave 4 / Egress sub-team.
+   * Declarative network egress allowlist for Agents in this class.
+   * The operator's egress-controller materializes a per-Agent
+   * NetworkPolicy (or CiliumNetworkPolicy when Cilium is detected)
+   * scoping outbound traffic to the declared CIDRs / domains / ports.
+   *
+   * Default-deny semantics: an Agent that does NOT declare `egress`
+   * gets a deny-all-but-substrate-internal policy (kube-dns + NATS +
+   * the LLM gateway Service). See
+   * `packages/egress-controller/src/policy.ts` JSDoc for the exact
+   * substrate-internal allowlist.
+   *
+   * Tenant fallback: when this field is unset AND the Agent's tenant
+   * declares `Tenant.spec.defaultEgress`, the egress-controller's
+   * `resolveEffectiveEgress` falls back to the tenant default before
+   * the substrate's default-deny baseline. */
+
+  /**
+   * Per-Agent network egress allowlist. When set, the operator's
+   * egress-controller emits a NetworkPolicy / CiliumNetworkPolicy
+   * scoping outbound traffic to the declared CIDRs / domains /
+   * ports. When unset, the Agent receives the substrate's default-
+   * deny posture (DNS + NATS + LLM gateway only) — possibly widened
+   * by the tenant's `defaultEgress`.
+   *
+   * Schema mirror at `packages/operator/manifests/crds/agent.yaml`
+   * under `spec.properties.egress`.
+   */
+  readonly egress?: AgentEgress;
+}
+
+/* =====================================================================
+ * v0.5.1-egress — Wave 4 / Egress sub-team.
+ *
+ * Declarative network egress allowlist for an Agent class. Materializes
+ * into a per-Agent NetworkPolicy or CiliumNetworkPolicy at reconcile
+ * time. Per docs/SUBSTRATE-V1.md §3.1 (`Agent.spec.egress`) +
+ * docs/WAVES.md §6.2.
+ *
+ * Three orthogonal allowlist axes:
+ *
+ *   - `domains` — FQDN allowlist. Cilium's `toFQDNs` selector evaluates
+ *      these natively (DNS-aware); plain NetworkPolicy's `to.ipBlock`
+ *      is best-effort CIDR-resolved at reconcile time (one DNS lookup
+ *      per FQDN; the resulting addresses pinned for the policy's
+ *      lifetime). Domain allowlists strongly favor Cilium.
+ *   - `cidrs`   — raw CIDR allowlist. Always supported by every CNI.
+ *   - `ports`   — protocol+port pairs. When empty, every port on the
+ *      domain/CIDR target is allowed (rarely what you want — the
+ *      egress-controller logs a WARN line on empty `ports[]`).
+ *
+ * The shape is union'd with the tenant's `defaultEgress`: an Agent's
+ * own `egress` wins; absent, the tenant default fills in; absent both,
+ * substrate default-deny applies. See
+ * `packages/egress-controller/src/resolver.ts` for the precedence
+ * pipeline.
+ * ===================================================================== */
+
+export interface AgentEgressPort {
+  /** Transport protocol — `'TCP' | 'UDP'`. K8s NetworkPolicy syntax mirror. */
+  readonly protocol: 'TCP' | 'UDP';
+  /** Port number. 1..65535. */
+  readonly port: number;
+}
+
+export interface AgentEgress {
+  /**
+   * FQDN allowlist (e.g. `'api.github.com'`, `'*.googleapis.com'`).
+   * Honored by Cilium's `toFQDNs` selector natively. For plain
+   * `NetworkPolicy`, the egress-controller resolves each FQDN at
+   * reconcile time (best-effort) and pins the resulting addresses
+   * onto `to.ipBlock` rules. Cilium is strongly recommended for
+   * production domain-allowlist enforcement.
+   */
+  readonly domains?: readonly string[];
+  /**
+   * Raw CIDR allowlist (e.g. `'10.0.0.0/8'`, `'1.2.3.4/32'`). Always
+   * supported regardless of CNI; the substrate baseline.
+   */
+  readonly cidrs?: readonly string[];
+  /**
+   * Protocol+port pairs. Empty / unset = all ports. The
+   * egress-controller logs a WARN when `ports[]` is empty; declare
+   * specific ports unless you really mean any.
+   */
+  readonly ports?: readonly AgentEgressPort[];
 }
 
 /* =====================================================================
