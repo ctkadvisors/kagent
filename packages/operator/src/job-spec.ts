@@ -19,8 +19,37 @@ import type { V1Job, V1PodSecurityContext, V1SecurityContext } from '@kubernetes
 import type { Agent, AgentTask } from './crds/index.js';
 
 const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
-const DEFAULT_BACKOFF_LIMIT = 0; // Don't retry — operator owns retry policy.
-const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 3600; // GC completed Pods after 1h.
+
+/**
+ * Job-controller `backoffLimit`. Pinned at 0 — the operator owns retry
+ * policy + the agent-pod owns idempotency on its single trip through
+ * the LLM loop. Allowing the kubelet to retry would silently re-spawn
+ * a fresh agent-pod with the same task UID after the first failure
+ * and re-issue all of the run's side effects (LLM calls, child spawns,
+ * write_artifact). v0.1.9 — exported (was internal) so tests pin the
+ * constant against accidental bumps.
+ */
+export const DEFAULT_BACKOFF_LIMIT = 0;
+
+/**
+ * Job-controller `ttlSecondsAfterFinished`. v0.1.9 reduced from 3600
+ * → 300: 1h was a debug convenience; 5 minutes lets completed/failed
+ * Jobs (and their Pods) age out fast under bursty workloads. Helm
+ * consumers that want longer post-mortem retention override via
+ * BuildJobSpecOptions plumbing on the operator chart.
+ */
+export const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 300;
+
+/**
+ * AgentTask label whose value carries the task's depth in the spawn
+ * tree. Root tasks have no label (depth = 0). Children get
+ * `<parent-depth + 1>` stamped on by the agent-pod's K8sTaskCreator
+ * at child-create time, and the operator reads it here when building
+ * the Job env so the in-pod runtime can return depth via
+ * `get_my_context()` and gate further spawns at the cluster cap.
+ * v0.1.9 — see docs/SUBSTRATE-V1.md §6 (audit gap "Tree depth unbounded").
+ */
+export const TASK_DEPTH_LABEL = 'kagent.knuteson.io/task-depth';
 
 export interface BuildJobSpecOptions {
   /** Container image for the agent pod. Defaults to the v0.0.1 placeholder. */
@@ -187,6 +216,18 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     );
   }
 
+  // v0.1.9 — task-depth threading. Read this task's depth off its own
+  // `kagent.knuteson.io/task-depth` label, defaulting to 0 when missing
+  // or unparseable. The agent-pod's K8sTaskCreator is the writer that
+  // stamps `<parent-depth + 1>` on each child it creates, so by the
+  // time a Job is built here the AgentTask label already carries the
+  // correct depth. We forward it as KAGENT_TASK_DEPTH so the in-pod
+  // runtime can return it from `get_my_context()` and gate further
+  // `spawn_child_task` calls at the cluster cap. The operator's
+  // admission path uses the same label to enforce the cap before the
+  // Job is un-suspended (see admission.ts).
+  const taskDepth = parseTaskDepthLabel(task.metadata.labels?.[TASK_DEPTH_LABEL]);
+
   const env: { name: string; value: string }[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
@@ -194,6 +235,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
     { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
+    { name: 'KAGENT_TASK_DEPTH', value: String(taskDepth) },
     ...artifactEnv,
     ...(opts.extraEnv ?? []).map((e) => ({ name: e.name, value: e.value })),
   ];
@@ -364,4 +406,18 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     },
     spec: podSpec,
   };
+}
+
+/**
+ * Parse the value of an AgentTask's `kagent.knuteson.io/task-depth`
+ * label into a non-negative integer, defaulting to 0 on any failure.
+ * Defensive: a hostile / malformed label cannot make us stamp a
+ * negative or NaN depth into the agent-pod env (which would break the
+ * admission depth-cap math). Exported for the unit-test suite.
+ */
+export function parseTaskDepthLabel(raw: string | undefined): number {
+  if (typeof raw !== 'string' || raw.length === 0) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
+  return n;
 }
