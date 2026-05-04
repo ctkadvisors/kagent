@@ -95,6 +95,48 @@ export interface TraceLinkSummary {
   readonly url?: string;
 }
 
+export interface TaskPilotEvidence {
+  readonly audit: {
+    readonly labels: Readonly<Record<string, string>>;
+    readonly annotations: Readonly<Record<string, string>>;
+    readonly tenant?: string;
+    readonly createdBy?: string;
+    readonly managedBy?: string;
+    readonly parentTaskUid?: string;
+  };
+  readonly policy: {
+    readonly agentResolved: boolean;
+    readonly tools?: readonly string[];
+    readonly capabilities?: readonly string[];
+    readonly allowedChildAgents?: readonly string[];
+    readonly allowedChildTemplates?: readonly string[];
+    readonly maxConcurrentChildren?: number;
+    readonly maxInFlightTasks?: number;
+  };
+  readonly taskGraph: {
+    readonly childCount?: number;
+    readonly successCount?: number;
+    readonly failureCount?: number;
+    readonly inFlightCount?: number;
+    readonly aggregatePhase?: AggregatePhase;
+    readonly parentTask?: string;
+  };
+  readonly artifacts: {
+    readonly count?: number;
+  };
+  readonly structuralVerdict?: {
+    readonly suspicious: readonly string[];
+  };
+  readonly verification?: {
+    readonly passed: boolean;
+    readonly mode: string;
+    readonly reason?: string;
+    readonly completedAt?: string;
+  };
+  readonly capabilityRef?: string;
+  readonly runConfig?: Readonly<Record<string, unknown>>;
+}
+
 export interface TaskDetail extends TaskSummary {
   readonly originalUserMessage?: string;
   readonly payload?: unknown;
@@ -115,6 +157,7 @@ export interface TaskDetail extends TaskSummary {
    * `@kagent/dto`'s `traceLink()` mapper.
    */
   readonly traceLink?: TraceLinkSummary;
+  readonly pilotEvidence?: TaskPilotEvidence;
 }
 
 export interface CacheChangeEvent {

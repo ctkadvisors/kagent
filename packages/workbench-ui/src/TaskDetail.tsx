@@ -150,6 +150,8 @@ function DetailBody({ detail }: { detail: TaskDetail }): React.JSX.Element {
         ) : null}
       </Section>
 
+      <EvidencePanel detail={detail} />
+
       {detail.containerStatuses.length > 0 ? (
         <Section title="Containers">
           <table className={styles.table}>
@@ -244,6 +246,21 @@ function DetailBody({ detail }: { detail: TaskDetail }): React.JSX.Element {
         </Section>
       ) : null}
 
+      {hasRequestEvidence(detail) ? (
+        <Section title="Request">
+          {detail.originalUserMessage !== undefined ? (
+            <KV k="Original user message" v={detail.originalUserMessage} />
+          ) : null}
+          {detail.expectedTools !== undefined && detail.expectedTools.length > 0 ? (
+            <KV k="Expected tools" v={detail.expectedTools.join(', ')} />
+          ) : null}
+          {detail.parentTask !== undefined ? <KV k="Parent task" v={detail.parentTask} /> : null}
+          {detail.parentDistillation !== undefined ? (
+            <KV k="Parent distillation" v={detail.parentDistillation} />
+          ) : null}
+        </Section>
+      ) : null}
+
       {detail.payload !== undefined ? (
         <Section title="Payload">
           <Pre json={detail.payload} />
@@ -256,6 +273,295 @@ function DetailBody({ detail }: { detail: TaskDetail }): React.JSX.Element {
         </Section>
       ) : null}
     </>
+  );
+}
+
+interface EvidenceRowModel {
+  readonly label: string;
+  readonly state: string;
+  readonly tone: 'ok' | 'warn' | 'bad' | 'neutral';
+  readonly detail: string;
+}
+
+function EvidencePanel({ detail }: { detail: TaskDetail }): React.JSX.Element {
+  const rows = buildEvidenceRows(detail);
+  return (
+    <Section title="RC Evidence">
+      <div className={detailStyles.evidenceGrid}>
+        {rows.map((row) => (
+          <div className={detailStyles.evidenceRow} key={row.label}>
+            <span className={detailStyles.evidenceLabel}>{row.label}</span>
+            <span className={`${detailStyles.evidenceBadge} ${evidenceToneClass(row.tone)}`}>
+              {row.state}
+            </span>
+            <span className={detailStyles.evidenceDetail}>{row.detail}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+function buildEvidenceRows(detail: TaskDetail): readonly EvidenceRowModel[] {
+  const evidence = detail.pilotEvidence;
+  const suspicious = evidence?.structuralVerdict?.suspicious ?? detail.suspicious;
+  const artifactCount = evidence?.artifacts.count ?? detail.artifactCount;
+  const childCount = evidence?.taskGraph.childCount ?? detail.childCount;
+  const aggregatePhase = evidence?.taskGraph.aggregatePhase ?? detail.aggregatePhase;
+  const successCount = evidence?.taskGraph.successCount ?? detail.successCount;
+  const failureCount = evidence?.taskGraph.failureCount ?? detail.failureCount;
+  const inFlightCount = evidence?.taskGraph.inFlightCount ?? detail.inFlightCount;
+  const parentTask = evidence?.taskGraph.parentTask ?? detail.parentTask;
+
+  return [
+    verificationRow(evidence),
+    structuralRow(suspicious),
+    traceRow(detail),
+    artifactRow(artifactCount),
+    taskGraphRow({
+      ...(childCount !== undefined && { childCount }),
+      ...(aggregatePhase !== undefined && { aggregatePhase }),
+      ...(successCount !== undefined && { successCount }),
+      ...(failureCount !== undefined && { failureCount }),
+      ...(inFlightCount !== undefined && { inFlightCount }),
+      ...(parentTask !== undefined && { parentTask }),
+    }),
+    policyRow(evidence),
+    auditRow(evidence),
+  ];
+}
+
+function verificationRow(evidence: TaskDetail['pilotEvidence']): EvidenceRowModel {
+  const verification = evidence?.verification;
+  if (verification === undefined) {
+    return {
+      label: 'Verification',
+      state: 'not set',
+      tone: 'neutral',
+      detail: 'no status.verification result observed',
+    };
+  }
+  return {
+    label: 'Verification',
+    state: verification.passed ? 'passed' : 'failed',
+    tone: verification.passed ? 'ok' : 'bad',
+    detail: joinParts([verification.mode, verification.reason, verification.completedAt]),
+  };
+}
+
+function structuralRow(suspicious: readonly string[] | undefined): EvidenceRowModel {
+  if (suspicious === undefined) {
+    return {
+      label: 'Structural verdict',
+      state: 'pending',
+      tone: 'neutral',
+      detail: 'no detector verdict observed',
+    };
+  }
+  if (suspicious.length === 0) {
+    return {
+      label: 'Structural verdict',
+      state: 'clean',
+      tone: 'ok',
+      detail: 'no suspicious detector tags',
+    };
+  }
+  return {
+    label: 'Structural verdict',
+    state: `${suspicious.length.toString()} flag${suspicious.length === 1 ? '' : 's'}`,
+    tone: 'warn',
+    detail: suspicious.join(', '),
+  };
+}
+
+function traceRow(detail: TaskDetail): EvidenceRowModel {
+  if (detail.traceLink?.url !== undefined) {
+    return {
+      label: 'Trace',
+      state: 'linked',
+      tone: 'ok',
+      detail: `${detail.traceLink.provider}: ${detail.traceLink.runId}`,
+    };
+  }
+  if (detail.traceLink?.runId !== undefined) {
+    return {
+      label: 'Trace',
+      state: 'run id',
+      tone: 'neutral',
+      detail: detail.traceLink.runId,
+    };
+  }
+  return {
+    label: 'Trace',
+    state: 'not linked',
+    tone: 'neutral',
+    detail: 'LANGFUSE_BASE_URL not configured or task UID missing',
+  };
+}
+
+function artifactRow(count: number | undefined): EvidenceRowModel {
+  if (count === undefined) {
+    return {
+      label: 'Artifacts',
+      state: 'pending',
+      tone: 'neutral',
+      detail: 'no status.artifacts projection observed',
+    };
+  }
+  return {
+    label: 'Artifacts',
+    state: count > 0 ? `${count.toString()} ref${count === 1 ? '' : 's'}` : 'none',
+    tone: count > 0 ? 'ok' : 'neutral',
+    detail:
+      count > 0 ? 'metadata references attached to task status' : 'explicit empty artifact set',
+  };
+}
+
+function taskGraphRow(input: {
+  readonly childCount?: number;
+  readonly aggregatePhase?: TaskDetail['aggregatePhase'];
+  readonly successCount?: number;
+  readonly failureCount?: number;
+  readonly inFlightCount?: number;
+  readonly parentTask?: string;
+}): EvidenceRowModel {
+  if (input.childCount === undefined && input.parentTask === undefined) {
+    return {
+      label: 'Task graph',
+      state: 'none',
+      tone: 'neutral',
+      detail: 'no parent or child projection observed',
+    };
+  }
+
+  const parts = [
+    input.parentTask !== undefined ? `parent ${input.parentTask}` : undefined,
+    input.childCount !== undefined ? `${input.childCount.toString()} children` : undefined,
+    input.successCount !== undefined ? `${input.successCount.toString()} completed` : undefined,
+    input.failureCount !== undefined ? `${input.failureCount.toString()} failed` : undefined,
+    input.inFlightCount !== undefined ? `${input.inFlightCount.toString()} in flight` : undefined,
+  ];
+  return {
+    label: 'Task graph',
+    state: input.aggregatePhase ?? 'linked',
+    tone: aggregateTone(input.aggregatePhase),
+    detail: joinParts(parts),
+  };
+}
+
+function policyRow(evidence: TaskDetail['pilotEvidence']): EvidenceRowModel {
+  const policy = evidence?.policy;
+  if (policy === undefined) {
+    return {
+      label: 'Policy',
+      state: 'unresolved',
+      tone: 'neutral',
+      detail: 'target agent not present in cache',
+    };
+  }
+  if (!policy.agentResolved) {
+    return {
+      label: 'Policy',
+      state: 'unresolved',
+      tone: 'neutral',
+      detail: 'target agent not present in cache',
+    };
+  }
+  const parts = [
+    policy.maxConcurrentChildren !== undefined
+      ? `max children ${policy.maxConcurrentChildren.toString()}`
+      : undefined,
+    policy.maxInFlightTasks !== undefined
+      ? `max in-flight ${policy.maxInFlightTasks.toString()}`
+      : undefined,
+    policy.allowedChildAgents !== undefined && policy.allowedChildAgents.length > 0
+      ? `child agents ${policy.allowedChildAgents.join(', ')}`
+      : undefined,
+    policy.allowedChildTemplates !== undefined && policy.allowedChildTemplates.length > 0
+      ? `child templates ${policy.allowedChildTemplates.join(', ')}`
+      : undefined,
+    policy.tools !== undefined && policy.tools.length > 0
+      ? `tools ${policy.tools.join(', ')}`
+      : undefined,
+  ];
+  return {
+    label: 'Policy',
+    state: parts.some((p) => p !== undefined) ? 'declared' : 'not declared',
+    tone: 'neutral',
+    detail: joinParts(parts),
+  };
+}
+
+function auditRow(evidence: TaskDetail['pilotEvidence']): EvidenceRowModel {
+  const audit = evidence?.audit;
+  if (audit === undefined) {
+    return {
+      label: 'Audit stamps',
+      state: 'missing',
+      tone: 'neutral',
+      detail: 'no evidence metadata returned by API',
+    };
+  }
+  const labelCount = Object.keys(audit.labels).length;
+  const annotationCount = Object.keys(audit.annotations).length;
+  const parts = [
+    audit.tenant !== undefined ? `tenant ${audit.tenant}` : undefined,
+    audit.createdBy !== undefined ? `created by ${audit.createdBy}` : undefined,
+    audit.managedBy !== undefined ? `managed by ${audit.managedBy}` : undefined,
+    audit.parentTaskUid !== undefined ? `parent uid ${audit.parentTaskUid}` : undefined,
+    evidence?.capabilityRef !== undefined ? `cap ${evidence.capabilityRef}` : undefined,
+    `${labelCount.toString()} labels`,
+    `${annotationCount.toString()} annotations`,
+  ];
+  return {
+    label: 'Audit stamps',
+    state: labelCount + annotationCount > 0 ? 'present' : 'none',
+    tone: labelCount + annotationCount > 0 ? 'ok' : 'neutral',
+    detail: joinParts(parts),
+  };
+}
+
+function aggregateTone(phase: TaskDetail['aggregatePhase'] | undefined): EvidenceRowModel['tone'] {
+  switch (phase) {
+    case 'AllComplete':
+      return 'ok';
+    case 'AnyFailed':
+      return 'bad';
+    case 'PartiallyComplete':
+    case 'Dispatched':
+    case 'Pending':
+      return 'warn';
+    default:
+      return 'neutral';
+  }
+}
+
+function evidenceToneClass(tone: EvidenceRowModel['tone']): string {
+  switch (tone) {
+    case 'ok':
+      return detailStyles.evidenceOk ?? '';
+    case 'warn':
+      return detailStyles.evidenceWarn ?? '';
+    case 'bad':
+      return detailStyles.evidenceBad ?? '';
+    case 'neutral':
+      return detailStyles.evidenceNeutral ?? '';
+    default:
+      return '';
+  }
+}
+
+function joinParts(parts: ReadonlyArray<string | undefined>): string {
+  const present = parts.filter((part): part is string => part !== undefined && part.length > 0);
+  return present.length > 0 ? present.join(' · ') : '—';
+}
+
+function hasRequestEvidence(detail: TaskDetail): boolean {
+  return (
+    detail.originalUserMessage !== undefined ||
+    (detail.expectedTools !== undefined && detail.expectedTools.length > 0) ||
+    detail.parentTask !== undefined ||
+    detail.parentDistillation !== undefined
   );
 }
 
