@@ -159,23 +159,36 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 ## 3. Wave 1 sub-teams (~4-5 weeks)
 
-### 3.1 Sub-team: I/O (foundational, blocks Workspace + CAS)
+### 3.1 Sub-team: I/O (foundational, blocks Workspace + CAS) ✓ SHIPPED v0.2.0-typed-io
 
-**Releases:** `v0.2.0-typed-io`
-**Owns:** `packages/operator/src/crds/types.ts`, `packages/operator/src/crds/agent.ts`, `packages/operator/src/crds/agent-task.ts`, `packages/operator/src/admission.ts`, `packages/agent-pod/src/env.ts`
+**Releases:** `v0.2.0-typed-io` ✓
+**Owns:** `packages/operator/src/crds/types.ts`, `packages/operator/src/crds/agent.ts`, `packages/operator/src/crds/agent-task.ts`, `packages/operator/src/admission.ts`, `packages/operator/src/task-admission.ts`, `packages/agent-pod/src/env.ts`
 **Reads:** all consumers of `AgentSpec`
 
 **Deliverables:**
-1. `Agent.spec.inputs[]` + `Agent.spec.outputs[]` schema (kind: `workspace | artifact | scalar`; mediaType, mountPath, optional, required)
-2. `AgentTask.spec.inputs[].from: { workspace | taskUid+output | scalar }`
-3. `AgentTask.spec.idempotencyKey: string` (admission dedupe)
-4. Operator admission: validate `AgentTask.spec.inputs` satisfies `Agent.spec.inputs`; refuse if missing required
-5. Operator status controller: refuse `Completed` patch with missing required outputs; force `Failed` with structured cause
-6. Migrate `KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC` from env JSON to mounted ConfigMap at `/var/kagent/config/`
-7. Deprecate `parentDistillation` (still accepted; new path is typed input)
-8. CRD migration tooling for in-place upgrade
+1. ✓ `Agent.spec.inputs[]` + `Agent.spec.outputs[]` schema (kind: `workspace | artifact | scalar`; mediaType, mountPath, optional, required)
+2. ✓ `AgentTask.spec.inputs[].from: { workspace | taskUid+output | scalar }` (oneOf JSON-schema; tagged-union TS surface)
+3. ✓ `AgentTask.spec.idempotencyKey: string` (admission dedupe — operator-local 24h TTL `IdempotencyCache`; Stripe / Temporal pattern)
+4. ✓ Operator admission: validate `AgentTask.spec.inputs` satisfies `Agent.spec.inputs`; refuse with `reason: 'InvalidInputs'` + `contract.violated` audit; tasks marked Failed before Job creation
+5. ✓ Operator reconciler: refuse `Completed` patch with missing required outputs (`enforceCompletionContract` runs onUpdate); force `Failed` with `reason: 'MissingRequiredOutputs'` + `contract.violated` audit
+6. ✓ Migrated `KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC` from env JSON to per-Job ConfigMap mounted at `/var/kagent/config/` (closes ARG_MAX cap + `kubectl describe pod` env leak); ConfigMap owned by AgentTask via ownerReferences (cascading delete); RBAC extended with `configmaps: [get,list,watch,create,delete]`
+7. ✓ Deprecated `parentDistillation` — agent-pod logs deprecation warning when read; migration target: `AgentTask.spec.inputs[].from.taskUid + output: 'distillation'`
+8. ✓ CRD-drift tooling extended (`scripts/check-crd-drift.ts`); chart mirror kept in sync with `manifests/crds/`
 
-**Validation:** existing v0.1 Agent CRs work without changes (deprecation warnings only); a new Agent declaring required `inputs[].from.workspace` blocks AgentTask creation if no Workspace exists; idempotent task submission deduplicates within a 24h window.
+**Validation (achieved):**
+- v0.1 Agent CRs (no inputs/outputs) admit + dispatch unchanged (back-compat verified by tests `back-compat: a v0.1 Agent (no inputs[]) ... dispatches normally`)
+- New Agent declaring required `inputs[].from.workspace` blocks AgentTask creation when no binding present (tested: `rejects a task that doesnt bind a required Agent input`)
+- Idempotent task submission (same `idempotencyKey` + same input hash) dedupes within 24h window (tested: replay marks Completed with cached outputs + emits `task.deduped`)
+- `kubectl get pod <agent-pod> -o yaml` shows `KAGENT_AGENT_MODEL` env only (small string); the JSON spec lives in the ConfigMap mount
+- All 1107+ existing tests still pass (operator: 548, agent-pod: 269; `pnpm typecheck`/`pnpm lint`/`crd:check` pristine)
+
+**Schema decisions locked for Workspace + CAS:**
+- `kind: 'workspace' | 'artifact' | 'scalar'` enum on `InputDecl` — Workspace consumes `workspace`, CAS consumes `artifact`
+- `mountPath` REQUIRED at admission for `kind: workspace | artifact`; default-deny on missing
+- `from.workspace | from.taskUid+output | from.scalar` mutually exclusive (CRD-level `oneOf`; TS-level tagged union)
+- `OutputDecl.retention: string` field threaded through schema for forward-compat with v0.2.2-cas
+- `Agent.spec.workspaceClaims[]` reserved as opaque object array — Workspace sub-team locks shape in v0.2.1
+- `AgentTask.status.outputs[]` shape: `{ name, ref }` where `ref` is a `cas://sha256:<hex>/<name>` URI in v0.2.2 (artifact kind) or string-encoded scalar (scalar kind)
 
 ### 3.2 Sub-team: Workspace
 

@@ -8,7 +8,24 @@
  * job-spec-builder (packages/operator/src/job-spec.ts) injects all
  * KAGENT_* variables; this module turns them into a typed config
  * object the runner consumes.
+ *
+ * v0.2.0-typed-io — `KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC` env JSON
+ * is REPLACED by a per-Job ConfigMap mounted at `/var/kagent/config/`
+ * carrying `agent.spec.json` + `task.spec.json`. parseEnv reads those
+ * files when present and falls back to the env-JSON path for one
+ * release of back-compat (mid-rollout where the operator + agent-pod
+ * images don't ship in lockstep).
+ *
+ * Reasons for the move (Phase 4.x hardening):
+ *   - ARG_MAX cap (Linux env block + etcd 1 MiB per-object limit)
+ *   - `kubectl describe pod` / `/proc/<pid>/environ` env leak
  */
+
+import { readFileSync } from 'node:fs';
+
+const CONFIG_DIR = '/var/kagent/config';
+const CONFIG_AGENT_SPEC_PATH = `${CONFIG_DIR}/agent.spec.json`;
+const CONFIG_TASK_SPEC_PATH = `${CONFIG_DIR}/task.spec.json`;
 
 export interface AgentSpecEnv {
   readonly model: string;
@@ -160,20 +177,39 @@ const DEFAULT_LITELLM_BASE_URL = 'http://litellm.kagent-system.svc.cluster.local
  * Parse the operator-injected env vars into a PodConfig. Throws
  * descriptively on missing required fields so the agent pod fails
  * fast at boot rather than mid-loop.
+ *
+ * v0.2.0-typed-io — agent.spec + task.spec are sourced from the
+ * mounted ConfigMap at `/var/kagent/config/{agent,task}.spec.json`
+ * when present; otherwise we fall back to the v0.1 env-JSON path
+ * (`KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC`) for one release.
+ *
+ * `readFile` is dependency-injected so unit tests can drive both
+ * paths without real filesystem access.
  */
-export function parseEnv(env: Readonly<Record<string, string | undefined>>): PodConfig {
+export function parseEnv(
+  env: Readonly<Record<string, string | undefined>>,
+  readFile: (path: string) => string | undefined = defaultReadFile,
+): PodConfig {
   const taskId = requireEnv(env, 'KAGENT_TASK_ID');
   const taskName = requireEnv(env, 'KAGENT_TASK_NAME');
   const taskNamespace = requireEnv(env, 'KAGENT_TASK_NAMESPACE');
   const agentName = requireEnv(env, 'KAGENT_AGENT_NAME');
-  const agentSpec = parseJson<AgentSpecEnv>(
-    requireEnv(env, 'KAGENT_AGENT_SPEC'),
-    'KAGENT_AGENT_SPEC',
-  );
-  const taskSpec = parseJson<TaskSpecEnv>(requireEnv(env, 'KAGENT_TASK_SPEC'), 'KAGENT_TASK_SPEC');
+
+  const agentSpec = loadAgentSpec(env, readFile);
+  const taskSpec = loadTaskSpec(env, readFile);
 
   if (typeof agentSpec.model !== 'string' || agentSpec.model.length === 0) {
-    throw new Error('KAGENT_AGENT_SPEC.model is required');
+    throw new Error('agent spec.model is required (from /var/kagent/config/agent.spec.json or KAGENT_AGENT_SPEC env)');
+  }
+
+  if (taskSpec.parentDistillation !== undefined) {
+    // v0.2.0-typed-io — `parentDistillation` is deprecated. Migration
+    // target: `AgentTask.spec.inputs[].from.taskUid + output:
+    // 'distillation'`. Field stays accepted for back-compat.
+    console.warn(
+      '[kagent-agent-pod] AgentTask.spec.parentDistillation is deprecated (v0.2.0-typed-io); ' +
+        "migrate to AgentTask.spec.inputs[{ name: 'distillation', from: { taskUid, output } }].",
+    );
   }
 
   const litellmBaseUrl = env.KAGENT_LITELLM_BASE_URL ?? DEFAULT_LITELLM_BASE_URL;
@@ -250,5 +286,57 @@ function parseJson<T>(raw: string, key: string): T {
     throw new Error(
       `failed to parse ${key} as JSON: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+}
+
+/**
+ * v0.2.0-typed-io — read agent.spec from the mounted ConfigMap when
+ * the file exists, falling back to the v0.1 KAGENT_AGENT_SPEC env JSON
+ * for one release of back-compat. Either path must yield a valid
+ * AgentSpecEnv with `model` set; parseEnv enforces that downstream.
+ */
+function loadAgentSpec(
+  env: Readonly<Record<string, string | undefined>>,
+  readFile: (path: string) => string | undefined,
+): AgentSpecEnv {
+  const fileBody = readFile(CONFIG_AGENT_SPEC_PATH);
+  if (fileBody !== undefined) {
+    return parseJson<AgentSpecEnv>(fileBody, CONFIG_AGENT_SPEC_PATH);
+  }
+  // Back-compat env-JSON path.
+  return parseJson<AgentSpecEnv>(
+    requireEnv(env, 'KAGENT_AGENT_SPEC'),
+    'KAGENT_AGENT_SPEC',
+  );
+}
+
+function loadTaskSpec(
+  env: Readonly<Record<string, string | undefined>>,
+  readFile: (path: string) => string | undefined,
+): TaskSpecEnv {
+  const fileBody = readFile(CONFIG_TASK_SPEC_PATH);
+  if (fileBody !== undefined) {
+    return parseJson<TaskSpecEnv>(fileBody, CONFIG_TASK_SPEC_PATH);
+  }
+  return parseJson<TaskSpecEnv>(
+    requireEnv(env, 'KAGENT_TASK_SPEC'),
+    'KAGENT_TASK_SPEC',
+  );
+}
+
+/**
+ * Default `readFile` implementation: returns the file's UTF-8 body
+ * when present, undefined when ENOENT (no file). Any other error
+ * (permission denied, EIO) bubbles up so a misconfigured mount fails
+ * fast at boot instead of silently falling back to env.
+ */
+function defaultReadFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (err) {
+    if (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT') {
+      return undefined;
+    }
+    throw err;
   }
 }

@@ -164,9 +164,61 @@ function makeAgent(name: string, spec: Partial<AgentSpec> & { model: string }): 
  * ===================================================================== */
 
 describe('extractModelFromJob', () => {
-  it('reads model from KAGENT_AGENT_SPEC env JSON', () => {
+  it('reads model from KAGENT_AGENT_SPEC env JSON (v0.1 back-compat path)', () => {
     const job = makeJob({ name: 'j1', agent: 'a', model: 'workers-ai/x', suspended: true });
     expect(extractModelFromJob(job)).toBe('workers-ai/x');
+  });
+
+  it('prefers KAGENT_AGENT_MODEL env (v0.2.0 ConfigMap-projected path)', () => {
+    // v0.2.0-typed-io drops the JSON env in favor of a ConfigMap
+    // mount; admission only needs the model string for capacity
+    // gating, so the operator surfaces it as a tiny dedicated env.
+    const job: V1Job = {
+      apiVersion: 'batch/v1',
+      kind: 'Job',
+      metadata: { name: 'j', namespace: 'default' },
+      spec: {
+        template: {
+          spec: {
+            containers: [
+              {
+                name: 'agent',
+                image: 'x',
+                env: [{ name: 'KAGENT_AGENT_MODEL', value: 'workers-ai/v2' }],
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(extractModelFromJob(job)).toBe('workers-ai/v2');
+  });
+
+  it('KAGENT_AGENT_MODEL wins over a stale KAGENT_AGENT_SPEC during rollout', () => {
+    // During the rollout where some Jobs still carry the legacy env,
+    // the dedicated env ALWAYS wins so admission isn't double-decoding.
+    const job: V1Job = {
+      apiVersion: 'batch/v1',
+      kind: 'Job',
+      metadata: { name: 'j', namespace: 'default' },
+      spec: {
+        template: {
+          spec: {
+            containers: [
+              {
+                name: 'agent',
+                image: 'x',
+                env: [
+                  { name: 'KAGENT_AGENT_MODEL', value: 'new/model' },
+                  { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify({ model: 'old/model' }) },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(extractModelFromJob(job)).toBe('new/model');
   });
 
   it('returns undefined when env is missing', () => {
