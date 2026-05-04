@@ -661,3 +661,63 @@ describe('tenantLabelPatch', () => {
     });
   });
 });
+
+import {
+  checkTenantGatewayInFlight,
+  checkTenantStorage,
+  GATEWAY_INFLIGHT_REFUSAL_REASON,
+  STORAGE_REFUSAL_REASON,
+} from './task-admission.js';
+
+describe('checkTenantGatewayInFlight (v0.5.2-quotas)', () => {
+  it('passes through when tenant is undefined', () => {
+    expect(checkTenantGatewayInFlight(undefined, 0, 100).ok).toBe(true);
+  });
+
+  it('passes through when tenant is empty', () => {
+    expect(checkTenantGatewayInFlight('', 0, 100).ok).toBe(true);
+  });
+
+  it('passes when no cap configured', () => {
+    expect(checkTenantGatewayInFlight('acme', 999, undefined).ok).toBe(true);
+  });
+
+  it('passes when observed < cap', () => {
+    expect(checkTenantGatewayInFlight('acme', 99, 100).ok).toBe(true);
+  });
+
+  it('refuses when observed >= cap with structured envelope', () => {
+    const r = checkTenantGatewayInFlight('acme', 100, 100);
+    expect(r.ok).toBe(false);
+    if (r.ok === false) {
+      expect(r.reason).toBe('TenantGatewayInFlightExceeded');
+      expect(r.tenant).toBe('acme');
+      expect(r.observed).toBe(100);
+      expect(r.cap).toBe(100);
+      expect(r.message).toContain(GATEWAY_INFLIGHT_REFUSAL_REASON);
+      expect(r.message).toContain('acme');
+    }
+  });
+});
+
+describe('checkTenantStorage (v0.5.2-quotas)', () => {
+  it('passes through when tenant is undefined', () => {
+    expect(checkTenantStorage(undefined, new Set(['acme'])).ok).toBe(true);
+  });
+
+  it('passes when tenant is not in over-cap set', () => {
+    expect(checkTenantStorage('acme', new Set()).ok).toBe(true);
+    expect(checkTenantStorage('acme', new Set(['globex'])).ok).toBe(true);
+  });
+
+  it('refuses when tenant is in over-cap set', () => {
+    const r = checkTenantStorage('acme', new Set(['acme']));
+    expect(r.ok).toBe(false);
+    if (r.ok === false) {
+      expect(r.reason).toBe('TenantStorageExceeded');
+      expect(r.tenant).toBe('acme');
+      expect(r.message).toContain(STORAGE_REFUSAL_REASON);
+      expect(r.message).toContain('acme');
+    }
+  });
+});
