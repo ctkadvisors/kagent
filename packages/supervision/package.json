@@ -1,0 +1,30 @@
+{
+  "name": "@kagent/supervision",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wave 2 / Supervision sub-team — Erlang/OTP-style supervision strategies (one_for_one | one_for_all | rest_for_one | escalate) for AgentTask trees. Pure-functional strategy engine consumed by the operator reconciler.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kagent/capability-types": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
