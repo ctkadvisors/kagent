@@ -112,6 +112,35 @@ spec:
                     Stripe / Temporal-pattern dedupe key. Operator's
                     admission cache dedupes by (namespace, agent,
                     idempotencyKey, inputHash) within a 24h TTL.
+                # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
+                verifyContract:
+                  type: object
+                  description: |
+                    Substrate-level post-completion verification gate.
+                    Failure forces Failed with reason=verify_failed.
+                  properties:
+                    scriptRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        version:
+                          type: integer
+                          minimum: 1
+                      required:
+                        - name
+                    llmJudgePromptRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        version:
+                          type: integer
+                          minimum: 1
+                      required:
+                        - name
             status:
               type: object
               properties:
@@ -253,6 +282,33 @@ spec:
                   type: integer
                   minimum: 0
                   description: 'Children that have not reached a terminal phase yet (Pending/Dispatched/absent).'
+                # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
+                capabilityRef:
+                  type: string
+                  description: |
+                    The <jti> of the JWT capability bundle the
+                    operator's capability-issuer minted for this task.
+                verification:
+                  type: object
+                  description: |
+                    Verification result captured by the reconciler when
+                    AgentTask.spec.verifyContract is set.
+                  properties:
+                    passed:
+                      type: boolean
+                    mode:
+                      type: string
+                      enum:
+                        - script
+                        - llmJudge
+                    reason:
+                      type: string
+                    completedAt:
+                      type: string
+                      format: date-time
+                  required:
+                    - passed
+                    - mode
       additionalPrinterColumns:
         - name: Phase
           type: string

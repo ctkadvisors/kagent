@@ -184,6 +184,43 @@ spec:
                                                    normally.
                     v0.2.0 cache is operator-local in-memory only;
                     distributed dedupe via etcd is a follow-up release.
+                # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
+                verifyContract:
+                  type: object
+                  description: |
+                    Substrate-level post-completion verification gate.
+                    When set, the reconciler runs the contract at
+                    terminal-status patch time; failure forces Failed
+                    with reason=verify_failed. Modes:
+                      - scriptRef:        spawn one-shot Job whose
+                                          entrypoint is the script;
+                                          exit 0 admits Completed.
+                      - llmJudgePromptRef: dispatch rendered prompt to
+                                          model gateway; verdict
+                                          field gates Completed.
+                  properties:
+                    scriptRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        version:
+                          type: integer
+                          minimum: 1
+                      required:
+                        - name
+                    llmJudgePromptRef:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                        version:
+                          type: integer
+                          minimum: 1
+                      required:
+                        - name
             status:
               type: object
               properties:
@@ -327,6 +364,35 @@ spec:
                   type: integer
                   minimum: 0
                   description: 'Children that have not reached a terminal phase yet (Pending/Dispatched/absent).'
+                # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
+                capabilityRef:
+                  type: string
+                  description: |
+                    The <jti> of the JWT capability bundle the
+                    operator's capability-issuer minted for this task.
+                    Used for forensics + revocation.
+                verification:
+                  type: object
+                  description: |
+                    Verification result captured by the reconciler when
+                    AgentTask.spec.verifyContract is set. Populated only
+                    after the verifier runs.
+                  properties:
+                    passed:
+                      type: boolean
+                    mode:
+                      type: string
+                      enum:
+                        - script
+                        - llmJudge
+                    reason:
+                      type: string
+                    completedAt:
+                      type: string
+                      format: date-time
+                  required:
+                    - passed
+                    - mode
                 # ---- Workstream E (WS-E) — status authority + monotonic transitions.
                 # `observedGeneration` lets consumers tell whether the
                 # operator has caught up to a new `spec` write (compare

@@ -246,6 +246,62 @@ spec:
                   items:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
+                # The substrate's sealed-authority primitive per
+                # docs/SUBSTRATE-V1.md §3.6.
+                capabilityClaims:
+                  type: object
+                  description: |
+                    Capability claims this Agent is permitted to mint
+                    into a JWT bundle for any of its tasks. Each
+                    claim category is a glob-pattern array (`*` is
+                    the only metacharacter). When set, the legacy
+                    fields (allowedChildAgents, allowedChildTemplates)
+                    are IGNORED with a deprecation warning.
+                  properties:
+                    tools:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    models:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    spawn:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    read:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    write:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    egress:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    tenant:
+                      type: string
+                      minLength: 1
+                    publish:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                    subscribe:
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
       additionalPrinterColumns:
         - name: Model
           type: string

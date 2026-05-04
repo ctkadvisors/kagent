@@ -52,6 +52,12 @@ importers:
       '@kagent/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
+      '@kagent/audit-events':
+        specifier: workspace:*
+        version: link:../audit-events
+      '@kagent/capability-types':
+        specifier: workspace:*
+        version: link:../capability-types
       '@kagent/in-process-tool-provider':
         specifier: workspace:*
         version: link:../in-process-tool-provider
@@ -64,6 +70,9 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
     devDependencies:
       tsx:
         specifier: 4.21.0
@@ -152,12 +161,18 @@ importers:
       '@kagent/audit-events':
         specifier: workspace:*
         version: link:../audit-events
+      '@kagent/capability-types':
+        specifier: workspace:*
+        version: link:../capability-types
       '@kagent/triggers':
         specifier: workspace:*
         version: link:../triggers
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
       nats:
         specifier: 2.29.3
         version: 2.29.3
