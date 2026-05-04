@@ -1,0 +1,231 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Workspace — pre-populated, shared filesystem mounted across multiple
+# AgentTasks in a task tree (Wave 1 / Workspace sub-team, v0.2.1).
+# See packages/operator/src/crds/workspace.ts for the TS surface and
+# docs/SUBSTRATE-V1.md §3.4 for the primitive's role in the substrate.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workspaces.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: Workspace
+    listKind: WorkspaceList
+    plural: workspaces
+    singular: workspace
+    shortNames:
+      - kws
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - pvc
+              properties:
+                source:
+                  type: object
+                  description: |
+                    Source population. v0.2.1 supports `git` only; future
+                    sources (s3 tarball, oci image-layer, http archive)
+                    extend the oneOf below. When `source` is unset, the
+                    Workspace is provisioned empty — controller marks
+                    Ready as soon as the PVC binds.
+                  oneOf:
+                    - required: [git]
+                  properties:
+                    git:
+                      type: object
+                      required:
+                        - url
+                      properties:
+                        url:
+                          type: string
+                          minLength: 1
+                          description: 'HTTPS or SSH URL of the upstream repository.'
+                        ref:
+                          type: string
+                          description: |
+                            Branch / tag / commit SHA to check out. Defaults
+                            to the remote's default branch (typically `main`).
+                        depth:
+                          type: integer
+                          minimum: 1
+                          description: |
+                            Shallow-clone depth. Omit for a full clone; `1`
+                            is the cheapest option for read-only consumers.
+                        authSecretRef:
+                          type: object
+                          required:
+                            - name
+                            - key
+                          properties:
+                            name:
+                              type: string
+                              minLength: 1
+                            key:
+                              type: string
+                              minLength: 1
+                pvc:
+                  type: object
+                  required:
+                    - storage
+                  description: |
+                    PVC sizing + access modes + storage class. Controller
+                    materializes a PersistentVolumeClaim with these fields
+                    verbatim.
+                  properties:
+                    storageClassName:
+                      type: string
+                      description: |
+                        StorageClass to bind. Omit for the cluster default.
+                        Chart's RWX-detection probe asserts the chosen class
+                        supports ReadWriteMany unless workspaces.allowRWO is
+                        set.
+                    storage:
+                      type: string
+                      minLength: 1
+                      description: |
+                        Requested capacity, e.g. `5Gi` or `100Mi`. Same shape
+                        as PersistentVolumeClaim.spec.resources.requests.storage.
+                    accessModes:
+                      type: array
+                      description: |
+                        PVC access modes. Defaults to [ReadWriteMany] when
+                        unset. Multi-pod sharing is the whole point — RWO
+                        defeats the substrate primitive but is allowed for
+                        single-tenant test installs (the chart's probe
+                        warns loudly).
+                      items:
+                        type: string
+                        enum:
+                          - ReadWriteOnce
+                          - ReadWriteMany
+                          - ReadOnlyMany
+                ttl:
+                  type: string
+                  description: |
+                    Time-to-live AFTER the last referencing AgentTask root
+                    completes. Go-style duration string (`24h`, `30m`,
+                    `1h30m`). Default `24h` when unset; `0` disables auto-GC.
+                quota:
+                  type: object
+                  required:
+                    - maxBytes
+                  description: |
+                    Storage cap. Soft ceiling enforced by admission — at
+                    >80% utilization the controller emits a Warning Event;
+                    at >95% admission refuses new bindings on this
+                    Workspace.
+                  properties:
+                    maxBytes:
+                      type: string
+                      minLength: 1
+                      description: 'Hard ceiling on bytes used inside the PVC, e.g. `10Gi`.'
+            status:
+              type: object
+              properties:
+                ready:
+                  type: boolean
+                  description: |
+                    Convenience boolean — true iff phase=Ready. Operator's
+                    job-spec builder gates on this when mounting a
+                    Workspace input on a referencing AgentTask.
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Ready
+                    - Failed
+                    - Releasing
+                  description: |
+                    Lifecycle phase. Pending until PVC binds + source
+                    populates; Ready once both complete; Failed if either
+                    step fails; Releasing once GC starts.
+                bytesUsed:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Bytes the PVC currently holds. Updated periodically by
+                    the controller's quota probe; may lag reality by up to
+                    one probe interval.
+                lastReferencedAt:
+                  type: string
+                  format: date-time
+                  description: |
+                    RFC 3339 timestamp of the most recent AgentTask binding
+                    resolution. TTL clock starts ticking from here once no
+                    live consumers remain.
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                conditions:
+                  type: array
+                  description: |
+                    Append-only condition log. Known types: PVCBound,
+                    SourcePopulated, Ready, Failed, Releasing,
+                    QuotaWarning, QuotaExceeded.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
+                populationJobName:
+                  type: string
+                  description: |
+                    Name of the Job the controller spawned to populate
+                    `source`. Empty when `source` is unset.
+                pvcName:
+                  type: string
+                  description: |
+                    Name of the PVC the controller materialized. Equal to
+                    the Workspace's own name in v0.2.1 (1:1 mapping).
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: boolean
+          jsonPath: .status.ready
+        - name: PVC
+          type: string
+          jsonPath: .status.pvcName
+        - name: Bytes
+          type: integer
+          jsonPath: .status.bytesUsed
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
