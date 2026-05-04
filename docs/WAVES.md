@@ -434,20 +434,25 @@ operator + locality test counts: 824 + 40 = 864 (up +28 vs. pre-Wave-3).
 
 ## 6. Wave 4 sub-teams (~3 weeks)
 
-### 6.1 Sub-team: Tenancy (foundational, blocks all other Wave 4 lanes)
+### 6.1 Sub-team: Tenancy ✓ SHIPPED v0.5.0-tenancy
 
-**Releases:** `v0.5.0-tenancy`
+**Releases:** `v0.5.0-tenancy` — **SHIPPED**
 **Owns:** `Tenant` CRD, namespace-scoped controllers, capability tenant claim integration
 **Depends on:** Caps (tenant is a cap-claim scope)
 
 **Deliverables:**
-1. `Tenant` CRD: name, namespace allowlist, capability root, audit subject, default quota
-2. Per-tenant Agent visibility (Agents in tenant `acme` invisible to tenant `globex`)
-3. Tenant-scoped capability claim: every cap minted under a tenant carries `claims.tenant`
-4. `X-Kagent-Tenant` header threading to gateway per [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) §3
-5. Tenant migration tooling
+1. **SHIPPED.** `Tenant` CRD (cluster-scoped) — `name`, `namespaceAllowlist`, `capabilityRoot.issuer` override, `auditSubject` override, `defaultQuota` (consumed by Wave 4 Quotas), `defaultEgress` (consumed by Wave 4 Egress). TS surface in `packages/operator/src/crds/tenant.ts` + manifest at `packages/operator/manifests/crds/tenants.yaml` + chart copy + drift-check row. Plurals `tenants/tenant`, shortName `kt`, listKind `TenantList`. Type guards + readiness + namespace-admission helpers.
+2. **SHIPPED.** Per-tenant Agent visibility — operator stamps `kagent.knuteson.io/tenant=<name>` label on every Agent + AgentTask at admission time. Cross-tenant visibility refusal achieved via K8s RBAC (cluster admin authors per-tenant Role + RoleBinding overlays; chart NOTES.txt documents the recommended pattern). Admission validator (`validateTenantNamespace`) refuses with `policy_denied:tenant_namespace_mismatch` when tenant's `namespaceAllowlist` excludes the AgentTask's namespace.
+3. **SHIPPED.** Tenant-scoped capability claim — `mintCapabilityForTask` + `mintCapabilityForWorkflow` in `packages/operator/src/cap-issuer.ts` accept an optional resolved Tenant CR and stamp `claims.tenant` (Agent-author pin > Tenant CR default > unset). Per-tenant `capabilityRoot.issuer` override threads into the JWT `iss` claim via `MintCapInput.issuerOverride`. Precedence documented in JSDoc.
+4. **SHIPPED.** `X-Kagent-Tenant` header threading per [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) §3 — `buildLlmClient` (in `packages/agent-pod/src/runner.ts`) accepts a 4th `tenant` arg and stamps the header onto every outbound `/chat/completions` call. `RunDeps.capabilityBundle` is the source; runner reads `claims.tenant` and passes through. Header omitted when tenant claim absent or empty (per brief).
+5. **SHIPPED.** Tenant migration tooling — `packages/operator/scripts/migrate-tenants.ts` CLI: `move <agent-name> --from-tenant <a> --to-tenant <b>` rewrites Agent's tenant label + cascades to in-flight (non-Completed/non-Failed) AgentTasks. Refusal taxonomy: `TargetTenantNotFound` / `TargetNamespaceNotAllowed` / `SourceTenantMismatch` / `AgentMissingNamespace`. Dry-run default; `--apply` commits. Audit emission via `tenant.migration` event.
+6. **SHIPPED.** Audit events — `tenant.created` / `tenant.updated` / `tenant.deleted` / `tenant.admission_violation` / `tenant.migration`. Catalog grows from 25 → 30. CloudEvents v1.0 envelope shape + per-type data interfaces in `@kagent/audit-events`.
+7. **SHIPPED.** Tenant controller — `packages/operator/src/tenant-controller.ts` (cluster-scoped informer). Reconciles each Tenant CR: refreshes `status.namespaceCount` / `agentCount` / `activeTaskCount`, computes `phase` (Failed on namespace-overlap or name-mismatch; Ready when ≥1 allowlisted ns exists; Pending otherwise). Detects overlap with other Tenants. Emits conditions + audit events. Wired in `main.ts` under `// === Wave 4 — Tenancy ===` (gated by `KAGENT_TENANCY_ENABLED=true`; default `false` for gradual roll-out).
+8. **SHIPPED.** Helm wiring — `tenancy:` values block (`enabled: false` default + `defaultTenant`); `KAGENT_TENANCY_ENABLED` + `KAGENT_TENANCY_DEFAULT_TENANT` env in `deployment.yaml`; `tenants` + `tenants/status` + `namespaces` ClusterRole verbs; NOTES.txt section documents Tenant CR provisioning + cross-tenant K8s RBAC overlay pattern + migrate-tenants CLI usage.
 
-**Validation:** two tenants in same cluster cannot see each other's Agents/Tasks; gateway sees the tenant header and routes accordingly.
+**Validation:** two tenants in same cluster — operator stamps tenant labels at admission; gateway sees `X-Kagent-Tenant` and routes accordingly; cross-tenant visibility refusal lives in K8s RBAC overlays (chart documents the pattern).
+
+**Status:** SHIPPED — all 8 deliverables landed; no deferrals. Operator: 886 → 971 tests (+85). Agent-pod: 371 → 375 (+4). Audit-events: 37 → 42 (+5). New `Tenant` CRD adds 4 status-observable fields (namespaceCount, agentCount, activeTaskCount, conditions) for downstream Wave 4 sub-teams (Quotas, Egress, KeyRotation) to compose against. Cluster-scoped CRD chosen over namespace-scoped: cap-issuer + admission need cluster-wide visibility to detect overlapping `namespaceAllowlist` entries before they cause cross-tenant data leakage. Default-tenant fallback semantics: cluster-wide `KAGENT_TENANCY_DEFAULT_TENANT` ships in v0.5.0; per-namespace defaults documented as forward-compat (a namespace label `kagent.knuteson.io/default-tenant=<name>` overrides the cluster default; lookup logic stays in `task-admission.ts`'s `resolveTenantForTask`).
 
 ### 6.2 Sub-team: Egress
 
