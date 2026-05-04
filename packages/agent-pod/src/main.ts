@@ -43,6 +43,7 @@ import type { RunResult } from './runner.js';
 import type { ToolProvider } from '@kagent/agent-loop';
 import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 
+import { defineGetMyContext } from './builtin-tools.js';
 import { defineSpawnChildTask } from './builtin-tools-spawn.js';
 import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
 import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
@@ -198,6 +199,11 @@ async function main(): Promise<void> {
       uid: config.taskId,
       name: config.taskName,
       namespace: config.taskNamespace,
+      // v0.1.9 — thread this task's depth so K8sTaskCreator can stamp
+      // `kagent.knuteson.io/task-depth=<depth + 1>` on each spawned
+      // child. The cap is enforced in the spawn tool itself
+      // (defineSpawnChildTask) BEFORE we get here on a refused call.
+      depth: config.taskDepth,
     };
     // Compute remaining wall-clock budget against the runConfig
     // timeout so child timeouts get clamped to "what the parent could
@@ -211,16 +217,23 @@ async function main(): Promise<void> {
             return Math.max(0, totalSec - elapsedSec);
           })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
         : undefined;
-    // v0.1.11 — when OTel is wired (the OTel-enabled branch above ran),
-    // build a `getTraceparent` callback the spawn tool stamps onto
-    // child task specs. Production constructs this from the parent's
-    // own task UID so the child's OtelTraceSink can re-derive the
-    // exact same root span ID this pod's sink uses for its agent.run
-    // span. When OTel is NOT wired, the callback is omitted — the
-    // spawn tool's "traceparent absent" branch fires.
+    // v0.1.11 — when OTel is wired, build a `getTraceparent` callback
+    // the spawn tool stamps onto child task specs.
     const getTraceparent: (() => string) | undefined = isOtelEnabled(process.env)
       ? buildSpawnTraceparentGetter(config.taskId)
       : undefined;
+    // v0.1.9 — cluster-level depth cap. Operator forwards
+    // `KAGENT_AGENT_POD_MAX_DEPTH` from its own env (Helm value
+    // `agentPod.maxDepth`, default 4) so the in-pod tool refuses
+    // before issuing a K8s create.
+    const maxDepthRaw = process.env.KAGENT_AGENT_POD_MAX_DEPTH;
+    const maxDepthParsed =
+      typeof maxDepthRaw === 'string' && maxDepthRaw.length > 0
+        ? Number.parseInt(maxDepthRaw, 10)
+        : Number.NaN;
+    const maxDepth =
+      Number.isInteger(maxDepthParsed) && maxDepthParsed >= 0 ? maxDepthParsed : undefined;
+
     const spawnDefs = defineSpawnChildTask({
       parent,
       parentAgentName: config.agentName,
@@ -228,6 +241,7 @@ async function main(): Promise<void> {
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
       ...(getTraceparent !== undefined && { getTraceparent }),
+      ...(maxDepth !== undefined && { maxDepth }),
     });
     const waitChildDef = defineWaitForChildTask({
       parent,
@@ -239,7 +253,14 @@ async function main(): Promise<void> {
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
     });
-    const subTools = [spawnDefs, waitChildDef, waitAllDef];
+    // v0.1.9 — get_my_context. Pure introspection, shares the same
+    // remainingBudgetSeconds callback as spawn_child_task so both
+    // tools agree on what's left.
+    const ctxDef = defineGetMyContext({
+      podConfig: config,
+      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+    });
+    const subTools = [spawnDefs, waitChildDef, waitAllDef, ctxDef];
     // WS-M — append the template tool when the operator's
     // template-server URL was injected. Trust boundary: cluster-internal
     // network only (the operator Service is ClusterIP). Tool errors

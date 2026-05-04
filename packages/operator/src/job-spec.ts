@@ -19,8 +19,37 @@ import type { V1Job, V1PodSecurityContext, V1SecurityContext } from '@kubernetes
 import type { Agent, AgentTask } from './crds/index.js';
 
 const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
-const DEFAULT_BACKOFF_LIMIT = 0; // Don't retry — operator owns retry policy.
-const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 3600; // GC completed Pods after 1h.
+
+/**
+ * Job-controller `backoffLimit`. Pinned at 0 — the operator owns retry
+ * policy + the agent-pod owns idempotency on its single trip through
+ * the LLM loop. Allowing the kubelet to retry would silently re-spawn
+ * a fresh agent-pod with the same task UID after the first failure
+ * and re-issue all of the run's side effects (LLM calls, child spawns,
+ * write_artifact). v0.1.9 — exported (was internal) so tests pin the
+ * constant against accidental bumps.
+ */
+export const DEFAULT_BACKOFF_LIMIT = 0;
+
+/**
+ * Job-controller `ttlSecondsAfterFinished`. v0.1.9 reduced from 3600
+ * → 300: 1h was a debug convenience; 5 minutes lets completed/failed
+ * Jobs (and their Pods) age out fast under bursty workloads. Helm
+ * consumers that want longer post-mortem retention override via
+ * BuildJobSpecOptions plumbing on the operator chart.
+ */
+export const DEFAULT_TTL_SECONDS_AFTER_FINISHED = 300;
+
+/**
+ * AgentTask label whose value carries the task's depth in the spawn
+ * tree. Root tasks have no label (depth = 0). Children get
+ * `<parent-depth + 1>` stamped on by the agent-pod's K8sTaskCreator
+ * at child-create time, and the operator reads it here when building
+ * the Job env so the in-pod runtime can return depth via
+ * `get_my_context()` and gate further spawns at the cluster cap.
+ * v0.1.9 — see docs/SUBSTRATE-V1.md §6 (audit gap "Tree depth unbounded").
+ */
+export const TASK_DEPTH_LABEL = 'kagent.knuteson.io/task-depth';
 
 /**
  * Single env-var entry on a spawned Job. Either an inline plaintext
@@ -230,27 +259,28 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   // agent-pod's `spawn_child_task` stamped `runConfig.traceparent`
   // on this AgentTask, surface it as `OTEL_TRACEPARENT` so the
   // spawned agent-pod's main.ts can seed its OtelTraceSink root
-  // span context with the parent's span. The string is the literal
-  // W3C traceparent header value
-  // (`<2hex>-<32hex traceId>-<16hex spanId>-<2hex flags>`) — no
-  // re-encoding. The CRD admission schema enforces the shape, so
-  // this stage trusts the value verbatim. Absence (root tasks, or
-  // any spawned task whose parent didn't have OTel wired) just
-  // omits the env var; the child becomes a fresh root trace, the
-  // pre-v0.1.11 behavior.
+  // span context with the parent's span. The CRD admission schema
+  // enforces the shape, so this stage trusts the value verbatim.
   const traceparentEnv: { name: string; value: string }[] = [];
   const traceparent = task.spec.runConfig?.traceparent;
   if (typeof traceparent === 'string' && traceparent.length > 0) {
     traceparentEnv.push({ name: 'OTEL_TRACEPARENT', value: traceparent });
   }
 
-  // Each container env entry is one of:
+  // v0.1.9 — task-depth threading. Read off the task's own
+  // `kagent.knuteson.io/task-depth` label (default 0). The
+  // K8sTaskCreator stamps `<parent-depth + 1>` on each child; the
+  // operator's admission path uses the same label to enforce the cap
+  // before un-suspending the Job. Forwarded as KAGENT_TASK_DEPTH for
+  // in-pod `get_my_context()` and the spawn-tool cap check.
+  const taskDepth = parseTaskDepthLabel(task.metadata.labels?.[TASK_DEPTH_LABEL]);
+
+  // v0.1.8 — secret-hygiene. Each env entry is one of:
   //   - inline plaintext: { name, value }
   //   - secret-ref:       { name, valueFrom: { secretKeyRef: { name, key } } }
   // The two shapes are deliberately mixed here so the secret-ref entries
-  // forwarded by the operator's main.ts (per the v0.1.8 secret-hygiene
-  // contract — see EnvVarSpec) pass through to the rendered Job spec
-  // verbatim, never coerced back into a plaintext value:.
+  // forwarded by the operator's main.ts pass through to the rendered Job
+  // spec verbatim, never coerced back into a plaintext value:.
   type RenderedEnv =
     | { readonly name: string; readonly value: string }
     | {
@@ -266,6 +296,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
     { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
+    { name: 'KAGENT_TASK_DEPTH', value: String(taskDepth) },
     ...artifactEnv,
     ...traceparentEnv,
     ...(opts.extraEnv ?? []).map((e): RenderedEnv => {
@@ -456,4 +487,18 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     },
     spec: podSpec,
   };
+}
+
+/**
+ * Parse the value of an AgentTask's `kagent.knuteson.io/task-depth`
+ * label into a non-negative integer, defaulting to 0 on any failure.
+ * Defensive: a hostile / malformed label cannot make us stamp a
+ * negative or NaN depth into the agent-pod env (which would break the
+ * admission depth-cap math). Exported for the unit-test suite.
+ */
+export function parseTaskDepthLabel(raw: string | undefined): number {
+  if (typeof raw !== 'string' || raw.length === 0) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
+  return n;
 }

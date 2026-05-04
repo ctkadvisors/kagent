@@ -184,6 +184,28 @@ agentPod:
   spawnChild:
     enabled: false
 
+  # v0.1.9 — cluster-level cap on AgentTask spawn-tree depth. Defends
+  # against a runaway recursion (Agent A → A → A → ...) by refusing to
+  # spawn children that would land deeper than this. Enforced at TWO
+  # places that read the same KAGENT_AGENT_POD_MAX_DEPTH env:
+  #
+  #   1. The in-pod `spawn_child_task` tool refuses with
+  #      `policy_denied:depth_exceeded` BEFORE issuing the K8s create —
+  #      cheap arithmetic, no API round-trip.
+  #   2. The operator's admission reconciler (admission.ts) skips
+  #      un-suspending any Job whose KAGENT_TASK_DEPTH exceeds the cap
+  #      AND marks the underlying AgentTask Failed via the WS-E
+  #      condition-merge pipeline.
+  #
+  # Per-task depth lives on the AgentTask `kagent.knuteson.io/task-depth`
+  # label (root tasks have no label = depth 0). Children inherit
+  # `parent + 1` automatically when spawned via the in-pod tool.
+  #
+  # Default 4: deep enough for orchestrator → fan-out → sub-fanout →
+  # validator pipelines, shallow enough that a buggy agent won't fork
+  # 1000s of pods before the operator notices.
+  maxDepth: 4
+
   # WS-M — AgentTemplate substrate. When enabled:
   #   - the operator boots the template-server on `serverPort`
   #   - the operator-fullname-templates Service exposes it ClusterIP

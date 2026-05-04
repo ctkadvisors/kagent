@@ -232,6 +232,22 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: 'true',
     });
   }
+  // v0.1.9 — cluster-level depth cap for the spawn_child_task tool.
+  // Helm value `agentPod.maxDepth` (default 4) sets
+  // `KAGENT_AGENT_POD_MAX_DEPTH` on the operator deployment; we
+  // forward it verbatim into spawned Jobs so the in-pod
+  // `defineSpawnChildTask` guardrail and the operator-side admission
+  // path read the same source of truth. When unset, the agent-pod's
+  // own DEFAULT_AGENT_POD_MAX_DEPTH (=4) applies.
+  if (
+    typeof env.KAGENT_AGENT_POD_MAX_DEPTH === 'string' &&
+    env.KAGENT_AGENT_POD_MAX_DEPTH.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_AGENT_POD_MAX_DEPTH',
+      value: env.KAGENT_AGENT_POD_MAX_DEPTH,
+    });
+  }
   // v0.1.6 — Langfuse-managed prompt fetcher plumbing. Forwarded into
   // spawned agent-pods only when the operator chart's
   // `langfuse.enabled=true` set the corresponding KAGENT_AGENT_POD_*
@@ -413,6 +429,13 @@ interface BuildAdmissionWiringInput {
    * Optional: omit to disable audit emission entirely.
    */
   readonly emitAudit?: EmitTaskAdmittedFn;
+  /**
+   * v0.1.9 — cluster-level depth cap. When defined, the admission
+   * reconciler refuses to un-suspend any Job whose KAGENT_TASK_DEPTH
+   * exceeds it AND marks the underlying AgentTask Failed. Sourced
+   * from `KAGENT_AGENT_POD_MAX_DEPTH` env in main().
+   */
+  readonly maxDepth?: number;
 }
 
 /**
@@ -533,10 +556,24 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
     },
     unsuspendJob: (namespace, name) => unsuspendJobApi(batchApi, namespace, name),
     // Wave 0 Audit — pass through optional task.admitted emission hook.
-    // When the chart's `audit.enabled=true` is set, main() constructs
-    // an AuditPublisher + a closure that turns the (taskUid,…) tuple
-    // into a CloudEvent and publishes onto `audit.task.admitted`.
     ...(input.emitAudit !== undefined && { emitAudit: input.emitAudit }),
+    // v0.1.9 — depth cap + Failed-marker callback. When the operator
+    // env carries `KAGENT_AGENT_POD_MAX_DEPTH`, admission refuses
+    // depth-violating Jobs AND marks their AgentTasks Failed via the
+    // existing WS-E condition-merge pipeline.
+    ...(input.maxDepth !== undefined && { maxDepth: input.maxDepth }),
+    markTaskFailed: async (ref, reason) => {
+      const action = await markAgentTaskFailedFromExternal(
+        ref,
+        { reason: 'PolicyDenied', message: reason, source: 'job' },
+        { customApi },
+      );
+      if (action.kind === 'marked-failed') {
+        console.log(
+          `[kagent-operator] admission: marked depth-violator ${ref.namespace}/${ref.name} Failed (was ${action.previousPhase})`,
+        );
+      }
+    },
   });
 
   // ---- Subscribe events → re-evaluate ------------------------------
@@ -879,6 +916,23 @@ async function main(): Promise<void> {
   // KAGENT_ADMISSION_CONTROL_ENABLED on this deployment.
   const admissionControlEnabled = process.env.KAGENT_ADMISSION_CONTROL_ENABLED === 'true';
 
+  // v0.1.9 — cluster-level depth cap. Sourced from
+  // `KAGENT_AGENT_POD_MAX_DEPTH` (Helm value `agentPod.maxDepth`,
+  // default 4). When set, admission refuses to un-suspend Jobs whose
+  // KAGENT_TASK_DEPTH exceeds it AND marks the AgentTask Failed.
+  // Defensive: malformed values fall back to undefined (= no cap),
+  // matching the pre-v0.1.9 behavior so a broken Helm value can't
+  // brick admission for the entire cluster.
+  const agentPodMaxDepthRaw = process.env.KAGENT_AGENT_POD_MAX_DEPTH;
+  const agentPodMaxDepthParsed =
+    typeof agentPodMaxDepthRaw === 'string' && agentPodMaxDepthRaw.length > 0
+      ? Number.parseInt(agentPodMaxDepthRaw, 10)
+      : Number.NaN;
+  const agentPodMaxDepth =
+    Number.isInteger(agentPodMaxDepthParsed) && agentPodMaxDepthParsed >= 0
+      ? agentPodMaxDepthParsed
+      : undefined;
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
@@ -1020,6 +1074,7 @@ async function main(): Promise<void> {
         customApi,
         watchNamespace,
         ...(emitTaskAdmitted !== undefined && { emitAudit: emitTaskAdmitted }),
+        ...(agentPodMaxDepth !== undefined && { maxDepth: agentPodMaxDepth }),
       })
     : undefined;
 

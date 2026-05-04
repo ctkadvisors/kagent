@@ -24,6 +24,8 @@ import {
   countInFlightByAgent,
   countInFlightByModel,
   extractModelFromJob,
+  extractTaskDepthFromJob,
+  findDepthViolatingJobs,
   selectAdmittable,
   type AdmissionDeps,
   type AgentLookupFn,
@@ -59,6 +61,8 @@ interface JobOpts {
    * convention closely enough for these tests).
    */
   readonly taskName?: string;
+  /** v0.1.9 — task-tree depth stamped by buildJobSpec. Default 0 (root). */
+  readonly taskDepth?: number;
 }
 
 function makeJob(opts: JobOpts): V1Job {
@@ -67,6 +71,13 @@ function makeJob(opts: JobOpts): V1Job {
   const agentSpec: { model: string } = { model: opts.model };
   const taskUid = opts.taskUid ?? `task-${opts.name}-uid`;
   const taskName = opts.taskName ?? opts.name;
+  const env: Array<{ name: string; value: string }> = [
+    { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agentSpec) },
+    { name: 'KAGENT_AGENT_NAME', value: opts.agent },
+  ];
+  if (opts.taskDepth !== undefined) {
+    env.push({ name: 'KAGENT_TASK_DEPTH', value: String(opts.taskDepth) });
+  }
   return {
     apiVersion: 'batch/v1',
     kind: 'Job',
@@ -106,10 +117,7 @@ function makeJob(opts: JobOpts): V1Job {
             {
               name: 'agent',
               image: 'placeholder',
-              env: [
-                { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agentSpec) },
-                { name: 'KAGENT_AGENT_NAME', value: opts.agent },
-              ],
+              env,
             },
           ],
         },
@@ -576,6 +584,173 @@ describe('selectAdmittable', () => {
     });
     // X cap=1 — only X1 admitted for X. Y has no cap → Y1 admitted too.
     expect(result.map((r) => r.name).sort()).toEqual(['X1', 'Y1']);
+  });
+});
+
+/* =====================================================================
+ * v0.1.9 — depth cap helpers + scheduler integration
+ *
+ * Backstop for the in-pod `policy_denied:depth_exceeded` refusal so a
+ * malicious / buggy agent-pod can't bypass the cluster cap. Two pieces:
+ *
+ *   - `extractTaskDepthFromJob` reads the operator-stamped
+ *     KAGENT_TASK_DEPTH env (set by buildJobSpec from the AgentTask's
+ *     own task-depth label).
+ *   - `findDepthViolatingJobs` returns the suspended Jobs whose
+ *     decoded depth > maxDepth — caller marks the underlying AgentTasks
+ *     Failed.
+ *
+ * Plus: `selectAdmittable` skips depth-violators so they never get
+ * un-suspended even if the Failed-marker hasn't fired yet.
+ * ===================================================================== */
+
+describe('extractTaskDepthFromJob (v0.1.9)', () => {
+  it('returns the integer parsed from KAGENT_TASK_DEPTH', () => {
+    const job = makeJob({
+      name: 'j',
+      agent: 'a',
+      model: 'm',
+      suspended: true,
+      taskDepth: 3,
+    });
+    expect(extractTaskDepthFromJob(job)).toBe(3);
+  });
+
+  it('returns 0 when env var is absent (treats as root)', () => {
+    const job = makeJob({ name: 'j', agent: 'a', model: 'm', suspended: true });
+    expect(extractTaskDepthFromJob(job)).toBe(0);
+  });
+
+  it('returns 0 for malformed values (defensive — fail-closed)', () => {
+    // Build a Job by hand so we can inject a non-numeric depth env.
+    const job: V1Job = {
+      apiVersion: 'batch/v1',
+      kind: 'Job',
+      metadata: { name: 'j', namespace: 'default' },
+      spec: {
+        template: {
+          spec: {
+            containers: [
+              {
+                name: 'agent',
+                image: 'x',
+                env: [{ name: 'KAGENT_TASK_DEPTH', value: 'not-a-number' }],
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(extractTaskDepthFromJob(job)).toBe(0);
+  });
+});
+
+describe('findDepthViolatingJobs (v0.1.9)', () => {
+  it('returns Jobs whose KAGENT_TASK_DEPTH exceeds maxDepth', () => {
+    const ok = makeJob({ name: 'ok', agent: 'a', model: 'm', suspended: true, taskDepth: 4 });
+    const violator = makeJob({
+      name: 'too-deep',
+      agent: 'a',
+      model: 'm',
+      suspended: true,
+      taskDepth: 5,
+    });
+    const out = findDepthViolatingJobs([ok, violator], 4);
+    expect(out.map((j) => j.metadata?.name)).toEqual(['too-deep']);
+  });
+
+  it('returns empty when no Job exceeds maxDepth', () => {
+    const a = makeJob({ name: 'a', agent: 'a', model: 'm', suspended: true, taskDepth: 0 });
+    const b = makeJob({ name: 'b', agent: 'a', model: 'm', suspended: true, taskDepth: 4 });
+    expect(findDepthViolatingJobs([a, b], 4)).toEqual([]);
+  });
+
+  it('treats undefined depth env as 0 (never violates with default cap=4)', () => {
+    const job = makeJob({ name: 'j', agent: 'a', model: 'm', suspended: true });
+    expect(findDepthViolatingJobs([job], 4)).toEqual([]);
+  });
+
+  it('returns empty when maxDepth is undefined (cap not configured)', () => {
+    const violator = makeJob({
+      name: 'too-deep',
+      agent: 'a',
+      model: 'm',
+      suspended: true,
+      taskDepth: 99,
+    });
+    expect(findDepthViolatingJobs([violator], undefined)).toEqual([]);
+  });
+});
+
+describe('selectAdmittable — depth cap (v0.1.9)', () => {
+  it('skips suspended Jobs that exceed maxDepth (never un-suspends)', () => {
+    const tooDeep = makeJob({
+      name: 'over',
+      agent: 'a',
+      model: 'm1',
+      suspended: true,
+      taskDepth: 99,
+      creationTimestamp: '2026-05-03T10:00:00Z',
+    });
+    const ok = makeJob({
+      name: 'ok',
+      agent: 'a',
+      model: 'm1',
+      suspended: true,
+      taskDepth: 1,
+      creationTimestamp: '2026-05-03T10:00:01Z',
+    });
+    const result = selectAdmittable({
+      suspendedJobs: [tooDeep, ok],
+      runningJobs: [],
+      modelEndpoints: new Map([
+        ['m1', makeModelEndpoint({ name: 'me', model: 'm1', seed: 4, max: 4 })],
+      ]),
+      agentMaxInFlight: new Map(),
+      maxDepth: 4,
+    });
+    expect(result.map((r) => r.name)).toEqual(['ok']);
+  });
+
+  it('admits a Job at the depth boundary (depth = maxDepth)', () => {
+    const atBoundary = makeJob({
+      name: 'edge',
+      agent: 'a',
+      model: 'm1',
+      suspended: true,
+      taskDepth: 4,
+    });
+    const result = selectAdmittable({
+      suspendedJobs: [atBoundary],
+      runningJobs: [],
+      modelEndpoints: new Map([
+        ['m1', makeModelEndpoint({ name: 'me', model: 'm1', seed: 1, max: 4 })],
+      ]),
+      agentMaxInFlight: new Map(),
+      maxDepth: 4,
+    });
+    expect(result.map((r) => r.name)).toEqual(['edge']);
+  });
+
+  it('with maxDepth undefined, behaves exactly as the pre-v0.1.9 scheduler', () => {
+    const deep = makeJob({
+      name: 'deep',
+      agent: 'a',
+      model: 'm1',
+      suspended: true,
+      taskDepth: 100,
+    });
+    const result = selectAdmittable({
+      suspendedJobs: [deep],
+      runningJobs: [],
+      modelEndpoints: new Map([
+        ['m1', makeModelEndpoint({ name: 'me', model: 'm1', seed: 1, max: 4 })],
+      ]),
+      agentMaxInFlight: new Map(),
+      // maxDepth deliberately omitted — the cap is opt-in at admission
+      // and admits anything the per-(model, agent) caps allow.
+    });
+    expect(result.map((r) => r.name)).toEqual(['deep']);
   });
 });
 

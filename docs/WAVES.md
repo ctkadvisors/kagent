@@ -64,21 +64,21 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 **Validation:** `kubectl get pod <agent-pod> -o yaml | grep -E 'KEY|SECRET' | grep value:` returns empty across smoke run.
 
-### 2.2 Sub-team: Isolation
+### 2.2 Sub-team: Isolation ✅ DONE (v0.1.9-isolation)
 
-**Releases:** `v0.1.9-isolation`
+**Releases:** `v0.1.9-isolation` — shipped 2026-05-03 on `feat/wave0-isolation`.
 **Owns:** `packages/operator/src/job-spec.ts`, `packages/operator/src/reconcile.ts`, `packages/agent-pod/src/builtin-tools.ts`, `packages/agent-pod/src/env.ts`
 **Reads:** `packages/agent-pod/src/builtin-tools-spawn.ts`
 
-**Deliverables:**
-1. Operator stamps `KAGENT_TASK_DEPTH` env (parent depth + 1; root = 0)
-2. Cluster-level cap (`KAGENT_AGENT_POD_MAX_DEPTH`, default 4) enforced inside `defineSpawnChildTask` AND at admission
-3. Parent → child AgentTask `ownerReferences` set so cascading delete works
-4. `Job.spec.ttlSecondsAfterFinished: 300` default (was 3600); Helm-overridable
-5. Assert `Job.spec.backoffLimit: 0` (no double-spawn on retry)
-6. New built-in tool: `get_my_context()` returning `{taskUid, agentName, parentUid?, depth, capabilityId?, budget: {tokensRemaining, secondsRemaining}}`
+**Deliverables (all shipped):**
+1. ✅ Operator stamps `KAGENT_TASK_DEPTH` env (read from `kagent.knuteson.io/task-depth` AgentTask label; root = 0).
+2. ✅ Cluster-level cap (`KAGENT_AGENT_POD_MAX_DEPTH`, default 4) enforced inside `defineSpawnChildTask` AND at admission (`admission.ts:findDepthViolatingJobs` + `selectAdmittable.maxDepth`); refusal taxonomy `policy_denied:depth_exceeded` shared by both paths.
+3. ✅ Parent → child AgentTask `ownerReferences` set in `K8sTaskCreator.createChildTask` (`controller: false`, `blockOwnerDeletion: true` to mirror `task-graph.ts:buildChildTaskManifest`).
+4. ✅ `Job.spec.ttlSecondsAfterFinished: 300` default (was 3600); Helm-overridable via `BuildJobSpecOptions`.
+5. ✅ `Job.spec.backoffLimit: 0` pinned via `DEFAULT_BACKOFF_LIMIT` (now exported); unit test asserts the constant.
+6. ✅ New built-in tool: `get_my_context()` returning `{taskUid, taskName, taskNamespace, agentName, parentUid?, depth, budget: {tokensRemaining?, secondsRemaining?}}`. Defined as `defineGetMyContext(deps)` in `builtin-tools.ts`; wired into the substrate-tools provider in `main.ts`.
 
-**Validation:** smoke test where root spawns 4 deep → 5th depth refused with `policy_denied:depth_exceeded`; `kubectl delete agenttask <root>` cascades to grandchildren within 30s.
+**Validation:** unit-test smoke covers depth=4 attempting spawn refused with `policy_denied:depth_exceeded`; `K8sTaskCreator.createChildTask` ownerRef test confirms the cascade chain. Pre-existing 231 agent-pod + 406 operator tests still pass; +21 agent-pod, +19 operator new unit tests (252 + 425 totals).
 
 ### 2.3 Sub-team: Gateway
 

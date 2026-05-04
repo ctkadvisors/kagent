@@ -313,6 +313,120 @@ describe('spawn_child_task', () => {
   });
 });
 
+describe('spawn_child_task — depth cap (v0.1.9)', () => {
+  // Cluster-level guardrail: refuse children that would exceed
+  // KAGENT_AGENT_POD_MAX_DEPTH. Mirrored at the operator's admission
+  // path so the cap is enforced even if a malicious / buggy agent-pod
+  // bypasses the in-pod tool. Refusal message must contain the canonical
+  // taxonomy `policy_denied:depth_exceeded` so traces are greppable.
+
+  it('admits a spawn when parent depth + 1 ≤ maxDepth', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: { ...PARENT, depth: 2 },
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      maxDepth: 4,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'depth-3 child',
+    });
+    expect(result.isError).not.toBe(true);
+    expect(k8s.creates.length).toBe(1);
+  });
+
+  it('refuses with policy_denied:depth_exceeded when child depth would exceed maxDepth', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: { ...PARENT, depth: 4 },
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      maxDepth: 4,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'too deep',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied:depth_exceeded');
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('uses DEFAULT_AGENT_POD_MAX_DEPTH (=4) when maxDepth is unset', async () => {
+    // Parent at depth=4 → child would be 5 → refused under default cap=4.
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: { ...PARENT, depth: 4 },
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'no maxDepth specified',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied:depth_exceeded');
+  });
+
+  it('admits at the boundary (parent depth = maxDepth - 1)', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: { ...PARENT, depth: 3 },
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      maxDepth: 4,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'last allowed hop',
+    });
+    expect(result.isError).not.toBe(true);
+    expect(k8s.creates.length).toBe(1);
+  });
+
+  it('treats undefined parent.depth as 0 (root) — child=1 always admits at default cap', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT, // no depth field set
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      maxDepth: 4,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).not.toBe(true);
+  });
+
+  it('runs the depth check BEFORE other guardrails (cheap, no K8s call)', async () => {
+    // Even when allowedChildAgents would block, depth-exceeded should
+    // surface as the refusal reason since it's the cheaper check.
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: { ...PARENT, depth: 10 },
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [] }),
+      k8s,
+      maxDepth: 4,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'evil',
+      originalUserMessage: 'hi',
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('policy_denied:depth_exceeded');
+    // No K8s API calls should have happened — depth check is pure.
+    expect(k8s.listLiveCalls).toBe(0);
+  });
+});
+
 describe('spawn_child_task — allowedChildTemplates (v0.1.3)', () => {
   it('admits a child whose Agent CR carries a from-template label in allowedChildTemplates', async () => {
     const k8s = makeFakeK8s({

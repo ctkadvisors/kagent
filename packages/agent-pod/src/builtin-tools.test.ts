@@ -22,6 +22,7 @@ import {
   assertHostResolvesPublicly,
   assertUrlIsSafe,
   buildBuiltinToolRegistry,
+  defineGetMyContext,
   ENV_ALLOW_DOMAINS,
   EXTRACT_TEXT_MAX_BYTES,
   extractTextFromHtml,
@@ -31,6 +32,7 @@ import {
   parseFeed,
   resolveBuiltinTools,
 } from './builtin-tools.js';
+import type { PodConfig } from './env.js';
 
 /**
  * Stub DNS lookup — returns a hard-coded public IPv4 for any hostname.
@@ -771,5 +773,143 @@ describe('resolveBuiltinTools', () => {
       /unknown built-in tool "shell_exec"/,
     );
     expect(() => resolveBuiltinTools(['nope'])).toThrow(/known built-ins:/);
+  });
+});
+
+/* =====================================================================
+ * v0.1.9 — `get_my_context` substrate introspection tool.
+ *
+ * Lets an agent loop ask "who am I, where am I in the spawn tree, and
+ * what's left in my budget?" without round-tripping the operator. The
+ * tool reads PodConfig + a runner-supplied budget callback; no K8s
+ * traffic, no LLM call. Returns a structured payload the LLM can use
+ * to decide whether spawning more children fits within the remaining
+ * wall-clock / token budget.
+ * ===================================================================== */
+
+function buildPodConfig(over: Partial<PodConfig> = {}): PodConfig {
+  return {
+    taskId: 'task-uid-abc',
+    taskName: 'orchestrator-001',
+    taskNamespace: 'kagent-system',
+    agentName: 'orchestrator',
+    agentSpec: { model: 'workers-ai/x' },
+    taskSpec: { payload: null },
+    litellmBaseUrl: 'http://litellm:4000/v1',
+    logLevel: 'info',
+    traceContentMode: 'preview',
+    taskDepth: 0,
+    ...over,
+  };
+}
+
+async function callGetMyContext(tool: ReturnType<typeof defineGetMyContext>): Promise<ToolResult> {
+  const provider = new InProcessToolProvider({ id: 'kagent-substrate', tools: [tool] });
+  return provider.executeTool(
+    { id: 'gc-1', name: 'get_my_context', args: {} },
+    { abortSignal: new AbortController().signal, runId: 'test-run' },
+  );
+}
+
+function parseContext(result: ToolResult): Record<string, unknown> {
+  if (typeof result.content === 'string') {
+    return JSON.parse(result.content) as Record<string, unknown>;
+  }
+  if (Array.isArray(result.content)) {
+    const block = result.content[0] as { type?: string; text?: string } | undefined;
+    if (block?.type === 'text' && typeof block.text === 'string') {
+      return JSON.parse(block.text) as Record<string, unknown>;
+    }
+  }
+  throw new Error('unexpected ToolResult content shape');
+}
+
+describe('get_my_context (v0.1.9)', () => {
+  it('returns the expected shape with depth=0 root identity', async () => {
+    const tool = defineGetMyContext({ podConfig: buildPodConfig() });
+    const result = await callGetMyContext(tool);
+    expect(result.isError).not.toBe(true);
+    const ctx = parseContext(result);
+    expect(ctx).toMatchObject({
+      taskUid: 'task-uid-abc',
+      taskName: 'orchestrator-001',
+      taskNamespace: 'kagent-system',
+      agentName: 'orchestrator',
+      depth: 0,
+    });
+    // `parentUid` absent on root.
+    expect(ctx.parentUid).toBeUndefined();
+    // budget object always present.
+    expect(typeof ctx.budget).toBe('object');
+  });
+
+  it('threads taskDepth through to context.depth', async () => {
+    const tool = defineGetMyContext({ podConfig: buildPodConfig({ taskDepth: 3 }) });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    expect(ctx.depth).toBe(3);
+  });
+
+  it('exposes parentUid when AgentTask.spec.parentTask is set', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig({
+        taskSpec: { payload: null, parentTask: 'parent-uid-xyz' },
+      }),
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    expect(ctx.parentUid).toBe('parent-uid-xyz');
+  });
+
+  it('reports tokensRemaining when runConfig.tokenLimit is set', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig({
+        taskSpec: { payload: null, runConfig: { tokenLimit: 50_000 } },
+      }),
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBe(50_000);
+  });
+
+  it('omits tokensRemaining when runConfig.tokenLimit is unset', async () => {
+    const tool = defineGetMyContext({ podConfig: buildPodConfig() });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBeUndefined();
+  });
+
+  it('threads secondsRemaining from the optional callback', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig(),
+      remainingBudgetSeconds: () => 42,
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const budget = ctx.budget as Record<string, unknown>;
+    expect(budget.secondsRemaining).toBe(42);
+  });
+
+  it('omits secondsRemaining when the callback returns undefined', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig(),
+      remainingBudgetSeconds: () => undefined,
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const budget = ctx.budget as Record<string, unknown>;
+    expect(budget.secondsRemaining).toBeUndefined();
+  });
+
+  it('declares zero input args (no parameters)', () => {
+    const tool = defineGetMyContext({ podConfig: buildPodConfig() });
+    expect(tool.name).toBe('get_my_context');
+    // empty object schema with no required props.
+    expect(tool.inputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+    });
   });
 });

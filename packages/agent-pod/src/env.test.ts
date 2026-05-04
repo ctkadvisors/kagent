@@ -113,6 +113,34 @@ describe('parseEnv', () => {
     });
   });
 
+  /* =====================================================================
+   * v0.1.9 — KAGENT_TASK_DEPTH parsing. Operator stamps it on every
+   * spawned Job env (default '0' for root tasks). The agent-pod surfaces
+   * it on PodConfig so the spawn tool's depth-cap guardrail and the
+   * `get_my_context` introspection tool can read one source of truth.
+   * Defensive: malformed / negative / non-integer values fall back to 0
+   * — same fail-closed posture as the operator-side parser.
+   * ===================================================================== */
+  describe('KAGENT_TASK_DEPTH', () => {
+    it('defaults taskDepth to 0 when env var is unset', () => {
+      const cfg = parseEnv(baseEnv);
+      expect(cfg.taskDepth).toBe(0);
+    });
+
+    it('parses a non-negative integer string verbatim', () => {
+      const cfg = parseEnv({ ...baseEnv, KAGENT_TASK_DEPTH: '3' });
+      expect(cfg.taskDepth).toBe(3);
+    });
+
+    it('treats empty / negative / non-integer values as 0 (defensive)', () => {
+      expect(parseEnv({ ...baseEnv, KAGENT_TASK_DEPTH: '' }).taskDepth).toBe(0);
+      expect(parseEnv({ ...baseEnv, KAGENT_TASK_DEPTH: '-1' }).taskDepth).toBe(0);
+      expect(parseEnv({ ...baseEnv, KAGENT_TASK_DEPTH: '1.5' }).taskDepth).toBe(0);
+      expect(parseEnv({ ...baseEnv, KAGENT_TASK_DEPTH: 'NaN' }).taskDepth).toBe(0);
+      expect(parseEnv({ ...baseEnv, KAGENT_TASK_DEPTH: 'four' }).taskDepth).toBe(0);
+    });
+  });
+
   describe('KAGENT_TRACE_CONTENT_MODE', () => {
     it('defaults to preview when unset', () => {
       expect(parseEnv(baseEnv).traceContentMode).toBe('preview');

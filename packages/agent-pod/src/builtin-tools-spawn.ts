@@ -49,6 +49,18 @@ export const SPAWN_CHILD_MAX_MESSAGE_BYTES = 32_768;
 /** Default direct-child concurrency cap when `Agent.spec.maxConcurrentChildren` is unset. */
 export const DEFAULT_MAX_CONCURRENT_CHILDREN = 10;
 
+/**
+ * v0.1.9 — cluster-level cap on AgentTask spawn-tree depth. Mirrored at
+ * the operator's admission path; the in-pod tool fails fast here so the
+ * LLM sees a structured `policy_denied:depth_exceeded` long before a
+ * Job is created. Helm-overridable via `agentPod.maxDepth` →
+ * `KAGENT_AGENT_POD_MAX_DEPTH` on the operator deployment, which then
+ * forwards into spawned Jobs as the same env var. main.ts threads the
+ * env into `defineSpawnChildTask`'s `maxDepth` opt; tests pass it
+ * directly.
+ */
+export const DEFAULT_AGENT_POD_MAX_DEPTH = 4;
+
 /** Cap on `agentName` length — K8s RFC1123 label is ≤253. */
 const MAX_AGENT_NAME_BYTES = 253;
 
@@ -93,6 +105,14 @@ export interface SpawnToolDeps {
   readonly getTraceparent?: () => string | undefined;
   /** Test-injectable name generator. Production uses crypto-random suffix. */
   readonly generateChildName?: (parentName: string) => string;
+  /**
+   * v0.1.9 — cluster-level depth cap. When the resulting child depth
+   * (`parent.depth + 1`) would exceed this, the spawn refuses with
+   * `policy_denied:depth_exceeded`. Defaults to
+   * `DEFAULT_AGENT_POD_MAX_DEPTH` (4) when unset. main.ts pipes
+   * `KAGENT_AGENT_POD_MAX_DEPTH` env into here at boot.
+   */
+  readonly maxDepth?: number;
 }
 
 interface SpawnArgs {
@@ -114,6 +134,19 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
   const allow = new Set<string>(deps.parentAgentSpec.allowedChildAgents ?? []);
   const allowTemplates = new Set<string>(deps.parentAgentSpec.allowedChildTemplates ?? []);
   const cap = deps.parentAgentSpec.maxConcurrentChildren ?? DEFAULT_MAX_CONCURRENT_CHILDREN;
+  // v0.1.9 — cluster-level depth cap. Defensive: clamp non-finite /
+  // negative values up to the safe default so a misconfigured
+  // KAGENT_AGENT_POD_MAX_DEPTH env can't disable the cap entirely.
+  const maxDepth =
+    typeof deps.maxDepth === 'number' && Number.isInteger(deps.maxDepth) && deps.maxDepth >= 0
+      ? deps.maxDepth
+      : DEFAULT_AGENT_POD_MAX_DEPTH;
+  const parentDepth =
+    typeof deps.parent.depth === 'number' &&
+    Number.isInteger(deps.parent.depth) &&
+    deps.parent.depth >= 0
+      ? deps.parent.depth
+      : 0;
 
   return defineInProcessTool({
     name: 'spawn_child_task',
@@ -153,6 +186,18 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
     tags: ['substrate', 'task-graph', 'write'],
     handler: async (rawArgs) => {
       const args = parseSpawnArgs(rawArgs);
+
+      // Guardrail 0 — cluster-level depth cap (v0.1.9). The cheapest
+      // check: pure arithmetic, no K8s round-trip. Hoisted to the top
+      // so a runaway recursion bottoms out fast even when other
+      // guardrails would also block. Refusal taxonomy is
+      // `policy_denied:depth_exceeded` — exact string matched by the
+      // operator's admission path so per-trace observability rolls up.
+      if (parentDepth + 1 > maxDepth) {
+        throw new Error(
+          `policy_denied:depth_exceeded — child would land at depth ${String(parentDepth + 1)} (parent depth=${String(parentDepth)}); cluster cap is ${String(maxDepth)} (KAGENT_AGENT_POD_MAX_DEPTH)`,
+        );
+      }
 
       // Guardrail 1 — single-hop self-cycle. Hoisted ABOVE the allow-
       // list check so the error stays specific even when the spec

@@ -10,9 +10,13 @@ import {
   ARTIFACT_VOLUME_NAME,
   buildJobSpec,
   DEFAULT_ARTIFACT_MOUNT_PATH,
+  DEFAULT_BACKOFF_LIMIT,
   DEFAULT_CONTAINER_SECURITY_CONTEXT,
   DEFAULT_POD_SECURITY_CONTEXT,
+  DEFAULT_TTL_SECONDS_AFTER_FINISHED,
   jobNameForTask,
+  parseTaskDepthLabel,
+  TASK_DEPTH_LABEL,
   TMP_VOLUME_NAME,
 } from './job-spec.js';
 
@@ -262,6 +266,92 @@ describe('buildJobSpec', () => {
     const job = buildJobSpec(sampleAgent, sampleTask);
     expect(job.spec?.template?.spec?.restartPolicy).toBe('Never');
     expect(job.spec?.backoffLimit).toBe(0);
+  });
+
+  // v0.1.9 — pin DEFAULT_BACKOFF_LIMIT=0 against accidental bumps. The
+  // Job-controller default is 6, which would silently re-spawn a fresh
+  // agent-pod with the same task UID after any first failure (LLM
+  // hiccup, K8s API timeout) and re-issue every side effect the run
+  // already produced.
+  it('exports DEFAULT_BACKOFF_LIMIT=0 (no retry double-spawn)', () => {
+    expect(DEFAULT_BACKOFF_LIMIT).toBe(0);
+  });
+
+  // v0.1.9 — TTL reduction from 3600s → 300s. Helm-overridable via
+  // BuildJobSpecOptions if a deployment legitimately wants longer
+  // post-mortem retention.
+  it('exports DEFAULT_TTL_SECONDS_AFTER_FINISHED=300 (was 3600)', () => {
+    expect(DEFAULT_TTL_SECONDS_AFTER_FINISHED).toBe(300);
+  });
+
+  it('stamps Job.spec.ttlSecondsAfterFinished=300 by default', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    expect(job.spec?.ttlSecondsAfterFinished).toBe(300);
+  });
+
+  /* =====================================================================
+   * v0.1.9 — task-depth threading. The operator stamps KAGENT_TASK_DEPTH
+   * on every spawned Job env so the agent-pod can return it from
+   * `get_my_context()` and the in-pod spawn tool can refuse children
+   * at the cluster cap. Per-task depth lives in the
+   * `kagent.knuteson.io/task-depth` label, set by the agent-pod's
+   * K8sTaskCreator on child create. Root tasks have no such label →
+   * depth = 0.
+   * ===================================================================== */
+
+  it('exports TASK_DEPTH_LABEL constant for cross-package referencing', () => {
+    expect(TASK_DEPTH_LABEL).toBe('kagent.knuteson.io/task-depth');
+  });
+
+  it('stamps KAGENT_TASK_DEPTH=0 on root tasks (no parent-depth label)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_TASK_DEPTH')).toBe('0');
+  });
+
+  it('reads task depth from kagent.knuteson.io/task-depth label and stamps it verbatim', () => {
+    const child: AgentTask = {
+      ...sampleTask,
+      metadata: {
+        ...sampleTask.metadata,
+        labels: { [TASK_DEPTH_LABEL]: '2' },
+      },
+    };
+    const job = buildJobSpec(sampleAgent, child);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_TASK_DEPTH')).toBe('2');
+  });
+
+  it('parseTaskDepthLabel: returns 0 for undefined / empty / non-numeric / negative', () => {
+    expect(parseTaskDepthLabel(undefined)).toBe(0);
+    expect(parseTaskDepthLabel('')).toBe(0);
+    expect(parseTaskDepthLabel('not-a-number')).toBe(0);
+    expect(parseTaskDepthLabel('-1')).toBe(0);
+    expect(parseTaskDepthLabel('1.5')).toBe(0);
+    expect(parseTaskDepthLabel('NaN')).toBe(0);
+  });
+
+  it('parseTaskDepthLabel: parses non-negative integer strings', () => {
+    expect(parseTaskDepthLabel('0')).toBe(0);
+    expect(parseTaskDepthLabel('1')).toBe(1);
+    expect(parseTaskDepthLabel('4')).toBe(4);
+    expect(parseTaskDepthLabel('99')).toBe(99);
+  });
+
+  it('treats non-numeric task-depth label as 0 (defensive end-to-end)', () => {
+    const garbage: AgentTask = {
+      ...sampleTask,
+      metadata: {
+        ...sampleTask.metadata,
+        labels: { [TASK_DEPTH_LABEL]: 'not-a-number' },
+      },
+    };
+    const job = buildJobSpec(sampleAgent, garbage);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_TASK_DEPTH')).toBe('0');
   });
 
   it('labels the Pod with agent + task + managed-by', () => {
