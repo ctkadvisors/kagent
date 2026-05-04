@@ -407,6 +407,42 @@ triggers:
   #     ops-pingdom: 'shared-with-pingdom'
   secrets: {}
 
+# ---------------------------------------------------------------------
+# Wave 1 — Workspace
+# ---------------------------------------------------------------------
+# Workspace primitive (per docs/SUBSTRATE-V1.md §3.4): pre-populated,
+# shared filesystem mounted across multiple AgentTasks in a task tree.
+# Lifetime is pipeline-run, not per-task. Same checkout, mounted across
+# N agents — no re-clone storm. RWX storage class required (Longhorn /
+# NFS / Ceph).
+#
+# DEFAULT-OFF until cluster operators verify an RWX storage class is
+# available. When `enabled: true`, the operator runs an RWX probe at
+# startup AND boots the Workspace controller (informer triplet:
+# Workspace + label-selected PVC + clone Job). A failed probe logs
+# loudly but DOES NOT crash the operator — Workspace CRs simply stay
+# in `phase: Pending`.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_WORKSPACES_ENABLED=true|false
+#   KAGENT_WORKSPACES_DEFAULT_STORAGE_CLASS=<storageClassName>
+#
+# RBAC: see `templates/clusterrole.yaml` "Wave 1 — Workspace" block.
+# CRD: `crds/workspaces.yaml`.
+workspaces:
+  enabled: false
+  # StorageClass the operator passes to PVCs that don't set their own
+  # `spec.pvc.storageClassName`. Empty = use the cluster default.
+  defaultStorageClassName: ''
+  # Default PVC capacity request when a Workspace doesn't set
+  # `spec.pvc.storage`. (Currently CRD-required, but reserved for
+  # future GitOps-rendered Workspaces from defaults.) `5Gi` is a
+  # conservative starting point — most git-source Workspaces fit.
+  defaultStorage: '5Gi'
+  # Default TTL for auto-GC after the last consumer task tree
+  # completes. Go-style duration; `0` disables GC.
+  defaultTtl: '24h'
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate

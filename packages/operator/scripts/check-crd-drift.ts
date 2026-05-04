@@ -300,6 +300,25 @@ const expectations: readonly CRDExpectation[] = [
     specProperties: ['schedule', 'suspend', 'taskTemplate'],
     statusProperties: ['lastTickAt', 'nextTickAt', 'conditions'],
   },
+  // v0.2.1-workspaces — Wave 1 / Workspace sub-team. See
+  // docs/SUBSTRATE-V1.md §3.4 + docs/WAVES.md §3.2.
+  {
+    file: 'workspaces.yaml',
+    kind: 'Workspace',
+    plural: 'workspaces',
+    specRequired: ['pvc'],
+    specProperties: ['source', 'pvc', 'ttl', 'quota'],
+    statusProperties: [
+      'ready',
+      'phase',
+      'bytesUsed',
+      'lastReferencedAt',
+      'observedGeneration',
+      'conditions',
+      'populationJobName',
+      'pvcName',
+    ],
+  },
 ];
 
 const errors: string[] = [];

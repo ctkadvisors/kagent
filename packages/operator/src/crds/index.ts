@@ -79,3 +79,25 @@ export type {
   KagentScheduleStatus,
   KagentScheduleTaskTemplate,
 } from './kagent-schedule.js';
+
+/* v0.2.1-workspaces — Workspace primitive (Wave 1 / Workspace sub-team).
+ * See docs/SUBSTRATE-V1.md §3.4 + docs/WAVES.md §3.2. */
+export {
+  DEFAULT_WORKSPACE_TTL_MS,
+  isWorkspace,
+  isWorkspaceFailed,
+  isWorkspaceReady,
+  parseDuration,
+  resolveWorkspaceTtlMs,
+} from './workspace.js';
+export type {
+  Workspace,
+  WorkspaceCondition,
+  WorkspaceGitSource,
+  WorkspacePhase,
+  WorkspacePvcSpec,
+  WorkspaceQuota,
+  WorkspaceSource,
+  WorkspaceSpec,
+  WorkspaceStatus,
+} from './workspace.js';

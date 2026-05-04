@@ -1266,6 +1266,81 @@ async function main(): Promise<void> {
       if (previous !== undefined) await previous();
     };
   }
+
+  // === Wave 1 — Workspace controller ===
+  // Default-OFF until cluster operators verify an RWX storage class
+  // is available. The chart's `workspaces.enabled=true` flips
+  // KAGENT_WORKSPACES_ENABLED on this deployment. When enabled:
+  //
+  //   1. Probe the cluster's RWX storage class (default or
+  //      `workspaces.defaultStorageClassName`); log a clear miss
+  //      message when none is found but DO NOT crash — Workspace CRs
+  //      simply stay in `phase: Pending` (their PVCs will never bind).
+  //   2. Boot the Workspace controller's informer triplet
+  //      (Workspace + label-selected PVC + label-selected Job) and
+  //      reconcile every event into the desired state.
+  //
+  // Per docs/SUBSTRATE-V1.md §3.4 + docs/WAVES.md §3.2.
+  if (process.env.KAGENT_WORKSPACES_ENABLED === 'true') {
+    const releaseNamespace = watchNamespace ?? process.env.KAGENT_RELEASE_NAMESPACE ?? 'default';
+    const defaultStorageClass = normalizeOptionalEnv(
+      process.env.KAGENT_WORKSPACES_DEFAULT_STORAGE_CLASS,
+    );
+    // Run the probe in the background so it doesn't block boot. The
+    // controller boots regardless; Workspace CRs whose PVC never binds
+    // surface the failure via their own conditions.
+    void (async () => {
+      const { probeRwxStorageClass } = await import('./workspace-rwx-probe.js');
+      const result = await probeRwxStorageClass(coreApi, {
+        namespace: releaseNamespace,
+        ...(defaultStorageClass !== undefined && { storageClassName: defaultStorageClass }),
+      });
+      if (result.kind === 'rwx-available') {
+        console.log(
+          `[kagent-operator] workspaces: RWX probe PASSED (storageClassName=${result.storageClassName ?? '(cluster default)'})`,
+        );
+      } else if (result.kind === 'rwx-unavailable') {
+        console.warn(
+          `[kagent-operator] workspaces: RWX probe FAILED — ${result.reason}. Workspace CRs will stay in phase=Pending until an RWX storage class is provisioned. See docs/SUBSTRATE-V1.md §3.4.`,
+        );
+      } else {
+        console.error(
+          `[kagent-operator] workspaces: RWX probe ERROR — ${result.message}. Continuing; Workspace CRs may misbehave.`,
+        );
+      }
+    })().catch((err: unknown) => {
+      console.error('[kagent-operator] workspaces: RWX probe raised (continuing):', err);
+    });
+
+    const { buildWorkspaceController } = await import('./workspace-controller.js');
+    const wsController = buildWorkspaceController({
+      kc,
+      customApi,
+      coreApi,
+      batchApi,
+      ...(watchNamespace !== undefined && { watchNamespace }),
+      ...(defaultStorageClass !== undefined && {
+        options: { defaultStorageClassName: defaultStorageClass },
+      }),
+    });
+    await wsController.start();
+    console.log(
+      `[kagent-operator] Workspace controller started (namespace=${watchNamespace ?? 'all'}, defaultStorageClass=${defaultStorageClass ?? '(cluster default)'})`,
+    );
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        await wsController.stop();
+      } catch (err) {
+        console.error('[kagent-operator] Workspace controller stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] Workspace controller disabled (set KAGENT_WORKSPACES_ENABLED=true to enable; requires an RWX storage class)',
+    );
+  }
 }
 
 function normalizeOptionalEnv(value: string | undefined): string | undefined {

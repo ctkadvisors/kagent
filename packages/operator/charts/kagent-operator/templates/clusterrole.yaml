@@ -88,3 +88,30 @@ rules:
   - apiGroups: ['']
     resources: ['configmaps']
     verbs: ['get', 'list', 'watch', 'create', 'delete']
+  # ---------------------------------------------------------------------
+  # Wave 1 — Workspace
+  # ---------------------------------------------------------------------
+  # Workspace controller needs:
+  #   - watch + read Workspace CRs (informer)
+  #   - patch Workspace.status (status subresource) + the parent metadata
+  #     for the finalizer dance + RWX probe
+  #   - PVCs: create / read / list / watch / delete (1:1 with each
+  #     Workspace; ownerRef'd back to the Workspace so cascading delete
+  #     reaps them, but explicit delete is faster + observable)
+  #   - Jobs: create / read / list / watch / delete (the one-shot
+  #     init-container clone Job per Workspace with `source.git`)
+  #
+  # Scoped narrowly to the Workspace primitive's needs. The shared
+  # `agenttasks` / `jobs` verbs above already cover the AgentTask Job
+  # path; the workspace verbs are additive on the same `batch/v1 Jobs`
+  # resource (the controller's clone Jobs share the resource class but
+  # are label-selected by `kagent.knuteson.io/managed-by=kagent-workspace-controller`).
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['workspaces']
+    verbs: ['get', 'list', 'watch', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['workspaces/status']
+    verbs: ['get', 'patch', 'update']
+  - apiGroups: ['']
+    resources: ['persistentvolumeclaims']
+    verbs: ['get', 'list', 'watch', 'create', 'delete']
