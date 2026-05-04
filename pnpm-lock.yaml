@@ -137,6 +137,9 @@ importers:
       '@kagent/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
+      '@kagent/triggers':
+        specifier: workspace:*
+        version: link:../triggers
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
