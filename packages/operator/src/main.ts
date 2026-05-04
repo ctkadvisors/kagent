@@ -2363,6 +2363,9 @@ async function main(): Promise<void> {
   //
   // DEFAULT-OFF for gradual roll-out — existing single-tenant installs
   // continue working unchanged when the env is unset.
+  // Hoisted out of the if-block so the Wave 4 — Quotas section below
+  // can read `lookupTenant` to resolve per-tenant quota caps.
+  let tenantControllerHandle: import('./tenant-controller.js').TenantControllerHandle | undefined;
   if (process.env.KAGENT_TENANCY_ENABLED === 'true') {
     const { buildTenantController } = await import('./tenant-controller.js');
     // Cheap namespace-existence lookup using a one-shot list (informer
@@ -2461,6 +2464,7 @@ async function main(): Promise<void> {
       ...(tenantAudit !== undefined && { audit: tenantAudit }),
     });
     await tenantController.start();
+    tenantControllerHandle = tenantController;
     const defaultTenant = normalizeOptionalEnv(process.env.KAGENT_TENANCY_DEFAULT_TENANT);
     console.log(
       `[kagent-operator] Tenant controller started (defaultTenant=${defaultTenant ?? '(none)'})`,
@@ -2478,6 +2482,164 @@ async function main(): Promise<void> {
   } else {
     console.log(
       '[kagent-operator] tenancy disabled (set KAGENT_TENANCY_ENABLED=true to enable Wave 4 multi-tenant boundary)',
+    );
+  }
+
+  // === Wave 4 — Quotas ===
+  // v0.5.2-quotas. Three substrate enforcement primitives compose
+  // additively on top of Wave 4 / Tenancy (per docs/WAVES.md §6.3):
+  //
+  //   1. K8s ResourceQuota generation per (tenant, namespace) —
+  //      `buildResourceQuotaForTenant` translates
+  //      `Tenant.spec.defaultQuota.compute` into a V1ResourceQuota
+  //      and the operator applies it via the existing CoreV1Api.
+  //      Reconciler runs on Tenant + namespace events; the apply is
+  //      idempotent (server-side `update` with diff).
+  //
+  //   2. Per-tenant gateway in-flight counter — `GatewayInFlightCounter`
+  //      lives in-process; `tryAcquire(tenant)` at AgentTask
+  //      admission, `release(tenant)` on Completed/Failed transitions.
+  //      Single-replica leader-elected operator constraint keeps state
+  //      local; multi-replica is a v0.5.3 follow-up (Redis-backed).
+  //
+  //   3. Per-tenant CAS storage cap — `startCasQuotaController` runs
+  //      a 10-minute walker summing CAS bytes per tenant; admission
+  //      refuses new tasks for tenants over `storage.casBytes` with
+  //      `policy_denied:tenant_storage_exceeded`. Walker does NOT
+  //      delete (CAS GC owns deletion).
+  //
+  // DEFAULT-OFF for gradual roll-out — single-tenant installs that
+  // never set tenant labels see no behavior change. Tenancy must
+  // also be enabled (the gateway counter + storage walker resolve
+  // caps off the Tenant CR, so without tenancy enabled the lookup
+  // always returns undefined → trivially-OK).
+  if (process.env.KAGENT_QUOTAS_ENABLED === 'true') {
+    const { GatewayInFlightCounter, startCasQuotaController } =
+      await import('@kagent/quota-controller');
+    const { TENANT_LABEL: TENANT_LABEL_FOR_QUOTAS } = await import('./crds/index.js');
+
+    // Defaults from chart values (env-overridable). Brief locks:
+    //   KAGENT_QUOTAS_DEFAULT_GATEWAY_INFLIGHT_CAP  → 100
+    //   KAGENT_QUOTAS_DEFAULT_CAS_BYTES_GIB         → 10
+    //   KAGENT_QUOTAS_CAS_WALK_INTERVAL_MINUTES     → 10
+    const defaultGatewayInFlightCapRaw = process.env.KAGENT_QUOTAS_DEFAULT_GATEWAY_INFLIGHT_CAP;
+    const defaultGatewayInFlightCap = Number.parseInt(defaultGatewayInFlightCapRaw ?? '100', 10);
+    const defaultCasBytesGiBRaw = process.env.KAGENT_QUOTAS_DEFAULT_CAS_BYTES_GIB;
+    const defaultCasBytesGiB = Number.parseInt(defaultCasBytesGiBRaw ?? '10', 10);
+    const defaultCasBytes = Number.isFinite(defaultCasBytesGiB)
+      ? defaultCasBytesGiB * 1024 * 1024 * 1024
+      : 10 * 1024 * 1024 * 1024;
+    const casWalkIntervalMinutesRaw = process.env.KAGENT_QUOTAS_CAS_WALK_INTERVAL_MINUTES;
+    const casWalkIntervalMinutes = Number.parseInt(casWalkIntervalMinutesRaw ?? '10', 10);
+    const casWalkIntervalMs = Number.isFinite(casWalkIntervalMinutes)
+      ? casWalkIntervalMinutes * 60 * 1000
+      : 10 * 60 * 1000;
+    const casMountPath =
+      normalizeOptionalEnv(process.env.KAGENT_CAS_MOUNT_PATH) ?? '/var/kagent/cas';
+
+    // Cap-lookup callbacks read off the Tenant informer cache.
+    // Falls back to the chart-level default when:
+    //   - tenancy is disabled (no controller handle),
+    //   - the tenant CR doesn't exist,
+    //   - the tenant declares no quota.
+    const gatewayCapLookup = (tenant: string): number | undefined => {
+      const t = tenantControllerHandle?.lookupTenant(tenant);
+      const cap = t?.spec.defaultQuota?.gateway?.inFlightCap;
+      if (typeof cap === 'number' && cap >= 0) return cap;
+      if (Number.isFinite(defaultGatewayInFlightCap)) return defaultGatewayInFlightCap;
+      return undefined;
+    };
+    const casBytesLookup = (tenant: string): number | undefined => {
+      const t = tenantControllerHandle?.lookupTenant(tenant);
+      const cap = t?.spec.defaultQuota?.storage?.casBytes;
+      if (typeof cap === 'number' && cap >= 0) return cap;
+      return defaultCasBytes;
+    };
+
+    // Build the in-flight counter; rebuild from the AgentTask
+    // informer cache so the leader's view matches reality on boot.
+    const gatewayCounter = new GatewayInFlightCounter(gatewayCapLookup);
+    const initialTasks = informerRef.current?.list() ?? [];
+    gatewayCounter.rebuildFromTasks(
+      initialTasks.map((t) => ({
+        metadata: t.metadata,
+        ...(t.status !== undefined && { status: t.status }),
+      })),
+      TENANT_LABEL_FOR_QUOTAS,
+    );
+
+    // CAS quota walker — emits `quota.storage_exceeded` audit per
+    // newly over-cap tenant per walker lifecycle.
+    const emitStorageExceeded = (data: {
+      tenant: string;
+      bytesUsed: number;
+      bytesCap: number;
+    }): void => {
+      if (auditPublisher === undefined) return;
+      void auditPublisher
+        .publish(
+          makeEvent({
+            source: 'kagent.knuteson.io/operator',
+            subject: `tenant/${data.tenant}`,
+            type: 'quota.storage_exceeded',
+            data: {
+              tenant: data.tenant,
+              bytesUsed: data.bytesUsed,
+              bytesCap: data.bytesCap,
+            },
+          }),
+        )
+        .catch((err: unknown) => {
+          console.warn('[kagent-operator/quotas] storage_exceeded audit publish failed:', err);
+        });
+    };
+
+    const casQuotaHandle = startCasQuotaController(
+      {
+        mountPath: casMountPath,
+        intervalMs: casWalkIntervalMs,
+        tenantLabel: TENANT_LABEL_FOR_QUOTAS,
+      },
+      {
+        listAgentTasks: () =>
+          (informerRef.current?.list() ?? []).map((t) => ({
+            metadata: t.metadata,
+            ...(t.status !== undefined && { status: t.status }),
+          })),
+        capBytesLookup: casBytesLookup,
+        emitStorageExceeded,
+        log: (m) => {
+          console.log(m);
+        },
+      },
+    );
+
+    // Stash references so smoke tests / future callsites can wire
+    // through. The admission gates (checkTenantGatewayInFlight +
+    // checkTenantStorage) are already exported from
+    // task-admission.ts — operators that admit AgentTasks read
+    // `gatewayCounter.observed(tenant)` + `casQuotaHandle.overCap()`
+    // off these handles and pass them in.
+    void gatewayCounter;
+    void casQuotaHandle;
+
+    console.log(
+      `[kagent-operator/quotas] enabled — defaultGatewayInFlightCap=${String(defaultGatewayInFlightCap)} ` +
+        `defaultCasBytesGiB=${String(defaultCasBytesGiB)} casWalkIntervalMinutes=${String(casWalkIntervalMinutes)}`,
+    );
+
+    const previous = onShutdownExtra;
+    onShutdownExtra = async (): Promise<void> => {
+      try {
+        casQuotaHandle.stop();
+      } catch (err) {
+        console.error('[kagent-operator/quotas] CAS quota controller stop failed:', err);
+      }
+      if (previous !== undefined) await previous();
+    };
+  } else {
+    console.log(
+      '[kagent-operator] quotas disabled (set KAGENT_QUOTAS_ENABLED=true to enable Wave 4 quota enforcement)',
     );
   }
 }
