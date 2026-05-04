@@ -210,6 +210,16 @@ spec:
             # application-layer trust boundary.
             - name: KAGENT_AGENT_POD_SPAWN_CHILD_ENABLED
               value: {{ .Values.agentPod.spawnChild.enabled | ternary "true" "false" | quote }}
+            # v0.1.9 — cluster-level depth cap for the spawn_child_task
+            # tool. Read by the in-pod tool's Guardrail 0 + the
+            # operator's admission reconciler (see admission.ts).
+            # Forwarded into spawned Jobs verbatim; the in-pod tool's
+            # main.ts parses it and falls back to its own default (4)
+            # when malformed.
+            {{- if .Values.agentPod.maxDepth }}
+            - name: KAGENT_AGENT_POD_MAX_DEPTH
+              value: {{ .Values.agentPod.maxDepth | quote }}
+            {{- end }}
             # WS-M — substrate kill switch + URL plumbing for the in-pod
             # ensure_agent_from_template tool. The operator boots the
             # template-server when this is `true`; the agent-pod gets
