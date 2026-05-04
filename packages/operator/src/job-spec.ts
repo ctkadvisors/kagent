@@ -19,9 +19,12 @@ import type {
   V1Job,
   V1PodSecurityContext,
   V1SecurityContext,
+  V1Volume,
+  V1VolumeMount,
 } from '@kubernetes/client-node';
 
-import type { Agent, AgentTask } from './crds/index.js';
+import type { Agent, AgentTask, InputDecl } from './crds/index.js';
+import { isFromWorkspace } from './crds/agent-task.js';
 
 const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
 
@@ -656,4 +659,148 @@ export function parseTaskDepthLabel(raw: string | undefined): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
   return n;
+}
+
+/* =====================================================================
+ * v0.2.1-workspaces — Wave 1 / Workspace sub-team.
+ *
+ * `buildWorkspaceMounts` translates an Agent's declared workspace
+ * inputs (`Agent.spec.inputs[]` with `kind: 'workspace'`) plus the
+ * AgentTask's matching `inputs[].from.workspace` bindings into the
+ * volumes + volumeMounts that go onto the spawned Job pod.
+ *
+ * Distinct from `buildArtifactMounts` (CAS sub-team v0.2.2) — that
+ * helper resolves `kind: 'artifact'` inputs against content-addressed
+ * URIs. Both helpers share a job-spec but never share a volume name
+ * (`kws-<sanitized-name>` vs. CAS's own prefix). Coordination per
+ * docs/WAVES.md §3.4: additive, no-conflict.
+ *
+ * Mount-path discipline (per Agent typed-I/O contract): every workspace
+ * input MUST declare `mountPath`. Admission rejects missing mountPath at
+ * Agent admission time, so this helper's contract is "given a valid
+ * Agent spec, never invent a path"; if a binding shows up here without
+ * a mountPath, we skip it silently — the upstream contract violation
+ * surfaces elsewhere.
+ *
+ * Read-only enforcement (`mode: 'ro'`): forwarded as `readOnly: true`
+ * on the volumeMount. The kernel enforces it; the agent-pod has no
+ * way around the bind-mount flag from inside the container.
+ * ===================================================================== */
+
+/**
+ * Volume-name prefix the operator stamps on the Pod spec for every
+ * Workspace volumeMount. Distinct from CAS's prefix to avoid name
+ * collisions when both sub-systems mount inputs onto the same Pod.
+ * K8s volume names: `[a-z0-9]([-a-z0-9]*[a-z0-9])?`, ≤63 chars; the
+ * helper sanitizes the binding name into that grammar.
+ */
+export const WORKSPACE_VOLUME_PREFIX = 'kws-';
+
+/**
+ * Sanitize a binding name into the K8s volume-name grammar. Replaces
+ * any non-`[a-z0-9-]` rune with `-`, lowercases, and truncates to keep
+ * the prefixed name ≤63 chars (K8s DNS-1123 label).
+ *
+ * Defensive: the InputDecl name has already passed the CRD schema
+ * (a-zA-Z0-9-_), but volumes use a stricter grammar — uppercase + `_`
+ * are illegal. A round-trip through this function is idempotent for
+ * names that already match.
+ */
+function sanitizeVolumeName(raw: string): string {
+  // Replace runs of non-conforming chars with '-', lowercase, and drop
+  // leading/trailing hyphens (volume names must start + end with
+  // [a-z0-9]).
+  const lower = raw.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const trimmed = lower.replace(/^-+|-+$/g, '');
+  // Reserve the prefix length when truncating.
+  const max = 63 - WORKSPACE_VOLUME_PREFIX.length;
+  return trimmed.slice(0, max);
+}
+
+/**
+ * Result of `buildWorkspaceMounts` — a flat pair of arrays the caller
+ * splices onto the rendered Pod's `volumes` + container's
+ * `volumeMounts`. Empty arrays are valid output (Agent declares no
+ * workspace inputs, or the AgentTask binds none of them — both legal).
+ *
+ * Returned shapes match `@kubernetes/client-node`'s `V1Volume` /
+ * `V1VolumeMount` so a caller can pass them through verbatim.
+ */
+export interface WorkspaceMountResult {
+  readonly volumes: readonly V1Volume[];
+  readonly volumeMounts: readonly V1VolumeMount[];
+}
+
+export interface BuildWorkspaceMountsInput {
+  /** Agent declaring `inputs[]`. */
+  readonly agent: Agent;
+  /** AgentTask supplying bindings for those inputs. */
+  readonly task: AgentTask;
+  /**
+   * Resolver: given a Workspace name, return the bound PVC's claim
+   * name. The Workspace controller materializes PVCs 1:1 with
+   * Workspaces in v0.2.1 (`status.pvcName` always equals the
+   * Workspace's own metadata.name) — but threading the resolver here
+   * keeps the helper testable without an informer cache and lets v0.3
+   * Workspace controllers diverge from the 1:1 mapping if needed.
+   *
+   * Returns `undefined` when the workspace doesn't exist or hasn't
+   * bound a PVC yet — the helper SKIPS that mount rather than
+   * fabricating one. Admission catches "workspace not Ready" earlier
+   * (validateWorkspaceBindings, follow-up commit); this helper is the
+   * last line of defense.
+   */
+  readonly resolveWorkspacePvcName: (workspaceName: string) => string | undefined;
+}
+
+/**
+ * Build volumes + volumeMounts for the Workspace inputs an AgentTask
+ * binds. Iterates the Agent's declared inputs (only those with
+ * `kind: 'workspace'`), looks up each binding on the task, and emits
+ * one `{ volume, volumeMount }` pair per resolved binding.
+ *
+ * The function is deliberately stateless — caller controls when it
+ * runs. The reconciler invokes it from the Job-build path (after
+ * validating Workspace.status.ready === true on each referenced
+ * Workspace).
+ */
+export function buildWorkspaceMounts(input: BuildWorkspaceMountsInput): WorkspaceMountResult {
+  const { agent, task, resolveWorkspacePvcName } = input;
+  const volumes: V1Volume[] = [];
+  const volumeMounts: V1VolumeMount[] = [];
+
+  const declaredInputs: readonly InputDecl[] = agent.spec.inputs ?? [];
+  const bindings = task.spec.inputs ?? [];
+  if (declaredInputs.length === 0 || bindings.length === 0) {
+    return { volumes, volumeMounts };
+  }
+
+  // Index bindings by name for O(1) lookup as we walk the Agent's decls.
+  const bindingByName = new Map(bindings.map((b) => [b.name, b]));
+
+  for (const decl of declaredInputs) {
+    if (decl.kind !== 'workspace') continue;
+    if (typeof decl.mountPath !== 'string' || decl.mountPath.length === 0) continue;
+    const binding = bindingByName.get(decl.name);
+    if (binding === undefined) continue;
+    if (!isFromWorkspace(binding.from)) continue;
+    const wsName = binding.from.workspace;
+    if (typeof wsName !== 'string' || wsName.length === 0) continue;
+    const claimName = resolveWorkspacePvcName(wsName);
+    if (claimName === undefined || claimName.length === 0) continue;
+
+    const volumeName = `${WORKSPACE_VOLUME_PREFIX}${sanitizeVolumeName(decl.name)}`;
+    const readOnly = decl.mode !== 'rw'; // default 'ro' when unset
+    volumes.push({
+      name: volumeName,
+      persistentVolumeClaim: { claimName, ...(readOnly && { readOnly: true }) },
+    });
+    volumeMounts.push({
+      name: volumeName,
+      mountPath: decl.mountPath,
+      readOnly,
+    });
+  }
+
+  return { volumes, volumeMounts };
 }
