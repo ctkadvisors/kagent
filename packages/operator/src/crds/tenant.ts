@@ -77,21 +77,90 @@ export interface TenantCapabilityRoot {
 }
 
 /**
- * Default per-tenant compute / storage / in-flight quota. Wave 4
- * Quotas sub-team consumes this; v0.5.0 carries the shape so Quotas
- * can flip on without a CRD bump. The fields here are advisory
- * defaults — Wave 4 Quotas will document the exact enforcement
- * semantics.
+ * Compute-quota sub-shape — translated to a per-tenant-namespace K8s
+ * `ResourceQuota` CR by `buildResourceQuotaForTenant` in the
+ * `@kagent/quota-controller` package. K8s resource-quantity strings
+ * pass straight through; `maxPods` becomes the `count/pods` quota
+ * key.
+ */
+export interface TenantComputeQuota {
+  /** K8s quantity, e.g. `'10'` or `'10000m'`. Mapped to ResourceQuota `requests.cpu`. */
+  readonly cpuRequests?: string;
+  /** K8s quantity, e.g. `'20Gi'`. Mapped to ResourceQuota `requests.memory`. */
+  readonly memoryRequests?: string;
+  /** Pod count cap per tenant namespace. Mapped to ResourceQuota `count/pods`. */
+  readonly maxPods?: number;
+}
+
+/**
+ * Gateway-quota sub-shape — enforced by `@kagent/quota-controller`'s
+ * in-process gateway in-flight counter (per-tenant) at AgentTask
+ * admission. `tokensPerHour` is documented as the next-rev hook (v1
+ * carries the shape; the actual hourly-window accumulator is a v0.5.3
+ * follow-up — refusing on `inFlightCap` first lets us prove the
+ * enforcement loop end-to-end without a token-attribution backend).
+ */
+export interface TenantGatewayQuota {
+  /** Concurrent in-flight gateway requests cap (per tenant). */
+  readonly inFlightCap?: number;
+  /**
+   * Per-tenant token budget (tokens/hour). Carried in v0.5.2; the
+   * actual accumulator + refusal lands in a follow-up release once
+   * per-tenant token attribution is wired through the gateway.
+   */
+  readonly tokensPerHour?: number;
+}
+
+/**
+ * Storage-quota sub-shape — enforced by `@kagent/quota-controller`'s
+ * periodic CAS walker. `casBytes` is the hard cap; new artifact
+ * admissions refuse with `policy_denied:tenant_storage_exceeded` once
+ * the walker reports the tenant over budget. `artifactCount` is a
+ * loose count cap — surfaces a `quota.compute_warning` when
+ * approached, but does NOT refuse (artifact volume varies wildly
+ * with payload size; the bytes cap is the substrate's authoritative
+ * boundary).
+ */
+export interface TenantStorageQuota {
+  /** CAS PVC consumption cap (bytes). E.g. `100 * 1024 * 1024 * 1024` = 100 GiB. */
+  readonly casBytes?: number;
+  /**
+   * Artifact count cap (loose). Crossing 80% emits a warning; never
+   * refuses admission — `casBytes` is the hard boundary.
+   */
+  readonly artifactCount?: number;
+}
+
+/**
+ * Default per-tenant compute / gateway / storage quota — the Wave 4
+ * Quotas sub-team's authoritative shape (v0.5.2-quotas).
+ *
+ * Per docs/WAVES.md §6.3:
+ *   - `compute.*`  → `@kagent/quota-controller` materializes a K8s
+ *                    `ResourceQuota` per (tenant, namespace) pair.
+ *   - `gateway.*`  → in-process counter map per tenant; admission
+ *                    refuses new AgentTasks with
+ *                    `policy_denied:tenant_gateway_inflight_exceeded`
+ *                    when `inFlightCap` is exceeded.
+ *   - `storage.*`  → periodic CAS walker (10-minute cadence) sums
+ *                    per-tenant bytes; admission refuses new
+ *                    artifacts with
+ *                    `policy_denied:tenant_storage_exceeded` when
+ *                    over `casBytes`.
+ *
+ * Every field is optional — a tenant with `defaultQuota: {}` (or no
+ * quota at all) gets the chart-level defaults
+ * (`quotas.defaultGatewayInFlightCap`, `quotas.defaultCasBytesGiB`)
+ * if `quotas.enabled=true`, otherwise no enforcement at all (back-
+ * compat with v0.5.0 single-tenant installs).
+ *
+ * Schema is locked at v0.5.2 — additions are SemVer-minor; renames
+ * are SemVer-major + a CRD-bump cycle.
  */
 export interface TenantQuota {
-  /** K8s `ResourceQuota` Lua-style spec (CPU). E.g. `'4'` or `'500m'`. */
-  readonly cpu?: string;
-  /** K8s `ResourceQuota` Lua-style spec (memory). E.g. `'8Gi'`. */
-  readonly memory?: string;
-  /** Per-tenant gateway in-flight cap. */
-  readonly maxInFlightTasks?: number;
-  /** Per-tenant artifact-storage cap (bytes). E.g. `'100Gi'`. */
-  readonly maxArtifactBytes?: string;
+  readonly compute?: TenantComputeQuota;
+  readonly gateway?: TenantGatewayQuota;
+  readonly storage?: TenantStorageQuota;
 }
 
 /**

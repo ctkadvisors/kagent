@@ -151,10 +151,13 @@ export {
 export type {
   Tenant,
   TenantCapabilityRoot,
+  TenantComputeQuota,
   TenantCondition,
   TenantEgress,
+  TenantGatewayQuota,
   TenantPhase,
   TenantQuota,
   TenantSpec,
   TenantStatus,
+  TenantStorageQuota,
 } from './tenant.js';
