@@ -41,7 +41,7 @@ import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 
 import type { AgentSpecEnv } from './env.js';
 import { FROM_TEMPLATE_LABEL } from './k8s-task-creator.js';
-import type { K8sTaskCreator, ParentIdentity } from './k8s-task-creator.js';
+import type { ChildTaskInput, K8sTaskCreator, ParentIdentity } from './k8s-task-creator.js';
 
 /** 32 KB cap on `originalUserMessage` per AGENT-SELF-SERVICE.md §4.4 #5. */
 export const SPAWN_CHILD_MAX_MESSAGE_BYTES = 32_768;
@@ -77,6 +77,20 @@ export interface SpawnToolDeps {
    * the parent has no deadline (rare; smoke-test, dev runs).
    */
   readonly remainingBudgetSeconds?: () => number | undefined;
+  /**
+   * v0.1.11 — return the parent agent-pod's current W3C traceparent
+   * header value (or `undefined` if OTel is not wired). The spawn
+   * handler stamps the returned string onto `runConfig.traceparent` of
+   * the child AgentTask spec, which the operator's job-spec builder
+   * then threads as `OTEL_TRACEPARENT` env on the spawned Job. End
+   * effect: the child's trace tree becomes a child of the parent's
+   * trace, not a sibling.
+   *
+   * Production wires this in `main.ts` from `buildTraceparentFromRunId`
+   * over the parent's task UID; tests can pass a fixed string or
+   * `undefined` to exercise the OTel-disabled branch.
+   */
+  readonly getTraceparent?: () => string | undefined;
   /** Test-injectable name generator. Production uses crypto-random suffix. */
   readonly generateChildName?: (parentName: string) => string;
 }
@@ -208,7 +222,11 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
       }
 
       // Guardrail 6 — clamp child timeout to remaining parent budget.
-      let runConfig = args.runConfig;
+      // The local `runConfig` widens to ChildTaskInput's runConfig
+      // shape (which includes the v0.1.11 `traceparent`) so the W3C
+      // Trace Context stamping below can compose with the args-supplied
+      // timeout cleanly.
+      let runConfig: ChildTaskInput['runConfig'] = args.runConfig;
       const remaining = deps.remainingBudgetSeconds?.();
       if (
         remaining !== undefined &&
@@ -217,6 +235,22 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
         runConfig.timeoutSeconds > remaining
       ) {
         runConfig = { ...runConfig, timeoutSeconds: Math.max(1, Math.floor(remaining)) };
+      }
+
+      // v0.1.11 — W3C Trace Context propagation. Capture the parent
+      // agent-pod's current traceparent header (or undefined when OTel
+      // isn't wired) and stamp it onto the child spec's runConfig.
+      // Operator's job-spec builder picks this up and threads it as
+      // OTEL_TRACEPARENT env so the child's OtelTraceSink seeds its
+      // root span context with the parent's span — child trace tree
+      // becomes a child of the parent's, not a sibling.
+      //
+      // Empty / undefined returns from getTraceparent are silently
+      // treated as "no parent context to propagate" — root tasks (and
+      // any spawn from a non-OTel'd pod) just don't carry the field.
+      const traceparent = deps.getTraceparent?.();
+      if (typeof traceparent === 'string' && traceparent.length > 0) {
+        runConfig = { ...(runConfig ?? {}), traceparent };
       }
 
       const childName = generate(deps.parent.name);
