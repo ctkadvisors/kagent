@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 30 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(30);
+  it('exports exactly 34 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache + 2 v0.4.3-identity + 3 v0.4.4-locality + 5 v0.5.0-tenancy + 4 v0.5.4-keyrotation)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(34);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -456,7 +456,80 @@ describe('event-types catalog', () => {
       'tenant.deleted',
       'tenant.admission_violation',
       'tenant.migration',
+      // v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team additions.
+      'keyrotation.svid_rotated',
+      'keyrotation.cap_minted_with_ttl',
+      'keyrotation.gateway_rotated',
+      'keyrotation.gateway_unsupported',
     ]);
+  });
+});
+
+describe('keyrotation audit events (v0.5.4-keyrotation)', () => {
+  it('builds a keyrotation.svid_rotated envelope with the policy-decision data shape', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'SVID/spiffe://kagent.knuteson.io/ns/default/sa/agent-x/agent/researcher',
+      type: 'keyrotation.svid_rotated',
+      data: {
+        spiffeId: 'spiffe://kagent.knuteson.io/ns/default/sa/agent-x/agent/researcher',
+        intervalSeconds: 86400,
+        ageSeconds: 86420,
+        source: 'mock',
+      },
+    });
+    expect(event.type).toBe('keyrotation.svid_rotated');
+    expect(event.data.intervalSeconds).toBe(86400);
+    expect(event.data.ageSeconds).toBe(86420);
+  });
+
+  it('builds a keyrotation.cap_minted_with_ttl envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'AgentTask/default/researcher-1',
+      type: 'keyrotation.cap_minted_with_ttl',
+      data: {
+        capabilityId: 'cap-uid-abc',
+        taskUid: 'uid-1',
+        taskNamespace: 'default',
+        taskName: 'researcher-1',
+        ttlSeconds: 3600,
+        tier: 'short-running',
+      },
+    });
+    expect(event.type).toBe('keyrotation.cap_minted_with_ttl');
+    expect(event.data.ttlSeconds).toBe(3600);
+    expect(event.data.tier).toBe('short-running');
+  });
+
+  it('builds a keyrotation.gateway_rotated envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'gateway/litellm.kagent-system.svc.cluster.local',
+      type: 'keyrotation.gateway_rotated',
+      data: {
+        gatewayUrl: 'https://litellm.kagent-system.svc.cluster.local',
+        rotationId: 'rot-abc-123',
+        rotatedAt: '2026-05-04T12:00:00.000Z',
+      },
+    });
+    expect(event.type).toBe('keyrotation.gateway_rotated');
+    expect(event.data.rotationId).toBe('rot-abc-123');
+  });
+
+  it('builds a keyrotation.gateway_unsupported envelope', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'gateway/litellm.kagent-system.svc.cluster.local',
+      type: 'keyrotation.gateway_unsupported',
+      data: {
+        gatewayUrl: 'https://litellm.kagent-system.svc.cluster.local',
+        status: 404,
+        observedAt: '2026-05-04T12:00:00.000Z',
+      },
+    });
+    expect(event.type).toBe('keyrotation.gateway_unsupported');
+    expect(event.data.status).toBe(404);
   });
 });
 

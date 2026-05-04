@@ -98,9 +98,41 @@ export const TENANT_DELETED = 'tenant.deleted' as const;
 export const TENANT_ADMISSION_VIOLATION = 'tenant.admission_violation' as const;
 export const TENANT_MIGRATION = 'tenant.migration' as const;
 
+/* v0.5.4-keyrotation — Wave 4 / KeyRotation sub-team. Catalog grows
+ * from 30 → 34. Four event types covering the substrate's three
+ * rotation surfaces (SVID, capability bundle TTL, gateway-token):
+ *
+ *   - `keyrotation.svid_rotated` — SPIRE-observed SVID rotation
+ *     crossed the configured interval threshold (Wave 3 Identity
+ *     watcher fires the underlying `identity.rotation`; THIS event
+ *     records the policy decision that triggered the rotation —
+ *     "configured interval reached"). Distinct from
+ *     `identity.rotation` so audit consumers can split organic SPIRE
+ *     rotations from substrate-policy-driven rotations.
+ *   - `keyrotation.cap_minted_with_ttl` — emitted alongside
+ *     `capability.minted` (additively) every time the cap-issuer's
+ *     TTL policy resolved a non-default TTL for the bundle. Records
+ *     the resolved TTL seconds + the policy-tier the resolver hit
+ *     (short-running-default / long-running-grace / explicit-override)
+ *     for compliance-dashboard slice-and-dice.
+ *   - `keyrotation.gateway_rotated` — successful invocation of the
+ *     gateway's `POST /v1/admin/keys/rotate` endpoint per
+ *     docs/GATEWAY-CONTRACT.md §4 rotation surface. One emission per
+ *     successful rotation cycle; the gateway-rotation client schedules
+ *     these on the configured cadence (default 24h).
+ *   - `keyrotation.gateway_unsupported` — the gateway returned 404
+ *     for `POST /v1/admin/keys/rotate`. The substrate gracefully
+ *     degrades (no-op) and audits the unsupported-gateway condition
+ *     so operators can spot a deployment whose gateway is behind on
+ *     the contract version. */
+export const KEYROTATION_SVID_ROTATED = 'keyrotation.svid_rotated' as const;
+export const KEYROTATION_CAP_MINTED_WITH_TTL = 'keyrotation.cap_minted_with_ttl' as const;
+export const KEYROTATION_GATEWAY_ROTATED = 'keyrotation.gateway_rotated' as const;
+export const KEYROTATION_GATEWAY_UNSUPPORTED = 'keyrotation.gateway_unsupported' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(30)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(34)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  *
  * v0.5.0-tenancy added 5 events but `tenant.updated` is folded into
@@ -111,6 +143,10 @@ export const TENANT_MIGRATION = 'tenant.migration' as const;
  * grep-ability but is type-aliased to the `tenant.updated` data
  * shape's discriminated union. The `ALL_EVENT_TYPES` array carries
  * all 5 literals.
+ *
+ * v0.5.4-keyrotation added 4 events (catalog 30 → 34): SVID rotation
+ * policy trigger, cap-minted-with-resolved-TTL, gateway-rotated, and
+ * gateway-unsupported (the graceful-no-op condition).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
   TASK_ADMITTED,
@@ -143,4 +179,8 @@ export const ALL_EVENT_TYPES = Object.freeze([
   TENANT_DELETED,
   TENANT_ADMISSION_VIOLATION,
   TENANT_MIGRATION,
+  KEYROTATION_SVID_ROTATED,
+  KEYROTATION_CAP_MINTED_WITH_TTL,
+  KEYROTATION_GATEWAY_ROTATED,
+  KEYROTATION_GATEWAY_UNSUPPORTED,
 ] as const);
