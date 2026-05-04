@@ -65,7 +65,10 @@ export type AuditEventType =
   | 'workflow.step.completed'
   | 'workflow.completed'
   | 'workflow.failed'
-  | 'workflow.event_subscription_pending';
+  | 'workflow.event_subscription_pending'
+  /* v0.4.3-identity — Wave 3 / Identity sub-team. */
+  | 'identity.svid_issued'
+  | 'identity.rotation';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -361,6 +364,54 @@ export interface WorkflowEventSubscriptionPendingData {
 }
 
 /**
+ * v0.4.3-identity — `identity.svid_issued`. Emitted by the operator's
+ * Wave 3 / Identity reconciler each time a workload SVID is observed
+ * for an agent-pod (or workflow-runtime pod). The agent-pod itself is
+ * NOT the emitter: SVID delivery is operator-side bookkeeping (the
+ * SPIRE socket lives in the pod, but the operator-side
+ * `identity-watcher` correlates SPIRE entries to AgentTask UIDs and
+ * fires the audit event so the audit warehouse joins SVID lifecycle
+ * to per-task activity).
+ *
+ * `spiffeId` is the canonical SPIFFE ID
+ * (`spiffe://kagent.knuteson.io/ns/<ns>/sa/<sa>/agent/<name>`).
+ * `notBefore` / `notAfter` are RFC 3339 strings. `source` distinguishes
+ * `'spire-agent'` (real SPIRE workload API) from `'mock'` (chart
+ * disabled — synthetic identity for dev clusters).
+ */
+export interface IdentitySvidIssuedData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly spiffeId: string;
+  readonly notBefore: string;
+  readonly notAfter: string;
+  readonly source: 'spire-agent' | 'mock';
+}
+
+/**
+ * v0.4.3-identity — `identity.rotation`. Emitted when the
+ * cert-watcher / spiffe-helper observes a fresh SVID replacing an
+ * older one for the same SPIFFE ID. Used by the audit warehouse to
+ * verify that rotation policy is honoured (no SVID held for longer
+ * than the configured rotation window).
+ *
+ * `previousNotAfter` may be undefined on the first issuance after a
+ * pod boot (no previous to compare against). `gapSeconds` is the wall
+ * delta between previous notAfter and the new notBefore — a healthy
+ * rotation has a small (or zero) negative gap (overlap window).
+ */
+export interface IdentityRotationData {
+  readonly spiffeId: string;
+  readonly newNotBefore: string;
+  readonly newNotAfter: string;
+  readonly previousNotAfter: string | undefined;
+  readonly gapSeconds: number | undefined;
+  readonly source: 'spire-agent' | 'mock';
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -391,7 +442,10 @@ export type AuditEventData =
   | {
       readonly type: 'workflow.event_subscription_pending';
       readonly data: WorkflowEventSubscriptionPendingData;
-    };
+    }
+  /* v0.4.3-identity — Wave 3 / Identity sub-team. */
+  | { readonly type: 'identity.svid_issued'; readonly data: IdentitySvidIssuedData }
+  | { readonly type: 'identity.rotation'; readonly data: IdentityRotationData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and
