@@ -130,20 +130,25 @@ export function findDepthViolatingJobs(
 }
 
 /**
- * Decode the model name from a Job's `KAGENT_AGENT_SPEC` env var.
- * Returns undefined when the env is missing, malformed JSON, or
- * doesn't carry a `model` field.
+ * Decode the model name from a Job's container env. v0.2.0-typed-io
+ * reads `KAGENT_AGENT_MODEL` (a tiny dedicated env var the operator
+ * always emits) first, falling back to JSON-parsing `KAGENT_AGENT_SPEC`
+ * for one release of back-compat with pre-v0.2.0 Jobs that pre-date
+ * the ConfigMap projection.
  *
- * The operator stamps `KAGENT_AGENT_SPEC` as JSON-encoded
- * `Agent.spec` on every spawned Job (see `job-spec.ts:buildJobSpec`).
- * We reuse that single source of truth rather than introducing a
- * second label/annotation that could drift.
+ * Returns undefined when neither env entry yields a non-empty model
+ * string — admission then fail-closes (leaves the Job suspended).
  */
 export function extractModelFromJob(job: V1Job): string | undefined {
   const containers = job.spec?.template?.spec?.containers;
   if (!Array.isArray(containers) || containers.length === 0) return undefined;
   const env = containers[0]?.env;
   if (!Array.isArray(env)) return undefined;
+  // v0.2.0 — preferred direct read, no JSON parse.
+  const modelEnv = env.find((e) => e.name === 'KAGENT_AGENT_MODEL');
+  const directModel = modelEnv?.value;
+  if (typeof directModel === 'string' && directModel.length > 0) return directModel;
+  // Back-compat — parse out of the legacy KAGENT_AGENT_SPEC env JSON.
   const specEnv = env.find((e) => e.name === 'KAGENT_AGENT_SPEC');
   const value = specEnv?.value;
   if (typeof value !== 'string' || value.length === 0) return undefined;

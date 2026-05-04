@@ -8,7 +8,13 @@ import { describe, expect, it } from 'vitest';
 import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
 import {
   ARTIFACT_VOLUME_NAME,
+  buildAgentTaskConfigMap,
   buildJobSpec,
+  CONFIG_AGENT_SPEC_KEY,
+  CONFIG_MOUNT_PATH,
+  CONFIG_TASK_SPEC_KEY,
+  CONFIG_VOLUME_NAME,
+  configMapNameForTask,
   DEFAULT_ARTIFACT_MOUNT_PATH,
   DEFAULT_BACKOFF_LIMIT,
   DEFAULT_CONTAINER_SECURITY_CONTEXT,
@@ -96,7 +102,7 @@ describe('buildJobSpec', () => {
     expect(owner?.blockOwnerDeletion).toBe(true);
   });
 
-  it('sets all KAGENT_* env vars on the container', () => {
+  it('sets the KAGENT_* env vars on the container (v0.2.0 ConfigMap path drops AGENT_SPEC + TASK_SPEC env)', () => {
     const job = buildJobSpec(sampleAgent, sampleTask);
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
     const byName = new Map(env.map((e) => [e.name, e.value]));
@@ -104,12 +110,27 @@ describe('buildJobSpec', () => {
     expect(byName.get('KAGENT_TASK_NAME')).toBe('t1');
     expect(byName.get('KAGENT_TASK_NAMESPACE')).toBe('default');
     expect(byName.get('KAGENT_AGENT_NAME')).toBe('researcher');
+    // v0.2.0-typed-io — model surfaces as a tiny dedicated env var
+    // (admission reads this without a ConfigMap round-trip); the
+    // big JSON blobs move to the per-Job ConfigMap mounted at
+    // /var/kagent/config/.
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe(sampleAgent.spec.model);
+    expect(byName.has('KAGENT_AGENT_SPEC')).toBe(false);
+    expect(byName.has('KAGENT_TASK_SPEC')).toBe(false);
+  });
+
+  it('useConfigMap: false keeps the legacy KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC env (back-compat)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { useConfigMap: false });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
     expect(JSON.parse(byName.get('KAGENT_AGENT_SPEC') ?? '{}')).toMatchObject({
       model: sampleAgent.spec.model,
     });
     expect(JSON.parse(byName.get('KAGENT_TASK_SPEC') ?? '{}')).toMatchObject({
       targetAgent: 'researcher',
     });
+    // Model env still emitted (admission's hot path).
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe(sampleAgent.spec.model);
   });
 
   it('appends extraEnv after the KAGENT_* defaults', () => {
@@ -544,7 +565,9 @@ describe('buildJobSpec', () => {
     });
     const volumes = job.spec?.template?.spec?.volumes ?? [];
     const names = volumes.map((v) => v.name).sort();
-    expect(names).toEqual([ARTIFACT_VOLUME_NAME, TMP_VOLUME_NAME].sort());
+    // v0.2.0-typed-io — `kagent-config` ConfigMap volume joins the
+    // artifact PVC + /tmp emptyDir under the default security ctx.
+    expect(names).toEqual([ARTIFACT_VOLUME_NAME, CONFIG_VOLUME_NAME, TMP_VOLUME_NAME].sort());
   });
 
   /* =====================================================================
@@ -663,5 +686,97 @@ describe('buildJobSpec', () => {
     const job = buildJobSpec(sampleAgent, t);
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
     expect(env.find((e) => e.name === 'OTEL_TRACEPARENT')).toBeUndefined();
+  });
+});
+
+/* =====================================================================
+ * v0.2.0-typed-io — ConfigMap projection
+ * ===================================================================== */
+
+describe('configMapNameForTask', () => {
+  it('derives a kac- prefixed deterministic name from the task uid', () => {
+    expect(configMapNameForTask(sampleTask)).toBe('kac-task-uid-12345');
+  });
+
+  it('truncates uid to fit a 63-char DNS-1123 name', () => {
+    const longUid = 'x'.repeat(80);
+    const t: AgentTask = { ...sampleTask, metadata: { ...sampleTask.metadata, uid: longUid } };
+    const name = configMapNameForTask(t);
+    expect(name.length).toBeLessThanOrEqual(54); // 'kac-' + 50 chars
+    expect(name.startsWith('kac-')).toBe(true);
+  });
+
+  it('throws when uid is missing', () => {
+    const t: AgentTask = { ...sampleTask, metadata: { name: 't' } };
+    expect(() => configMapNameForTask(t)).toThrow(/missing metadata\.uid/);
+  });
+});
+
+describe('buildAgentTaskConfigMap', () => {
+  it('produces a ConfigMap with agent.spec.json + task.spec.json data', () => {
+    const cm = buildAgentTaskConfigMap(sampleAgent, sampleTask);
+    expect(cm.kind).toBe('ConfigMap');
+    expect(cm.metadata?.name).toBe('kac-task-uid-12345');
+    expect(cm.metadata?.namespace).toBe('default');
+    expect(cm.data?.[CONFIG_AGENT_SPEC_KEY]).toBeDefined();
+    expect(cm.data?.[CONFIG_TASK_SPEC_KEY]).toBeDefined();
+    expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
+      model: sampleAgent.spec.model,
+    });
+    expect(JSON.parse(cm.data?.[CONFIG_TASK_SPEC_KEY] ?? '{}')).toMatchObject({
+      targetAgent: 'researcher',
+    });
+  });
+
+  it('stamps managed-by + agent + task labels (parallel to the Job)', () => {
+    const cm = buildAgentTaskConfigMap(sampleAgent, sampleTask);
+    expect(cm.metadata?.labels).toMatchObject({
+      'kagent.knuteson.io/agent': 'researcher',
+      'kagent.knuteson.io/task': 't1',
+      'kagent.knuteson.io/managed-by': 'kagent-operator',
+    });
+  });
+
+  it('owns the ConfigMap by the AgentTask via ownerReferences (cascading delete)', () => {
+    const cm = buildAgentTaskConfigMap(sampleAgent, sampleTask);
+    const owner = cm.metadata?.ownerReferences?.[0];
+    expect(owner?.kind).toBe('AgentTask');
+    expect(owner?.uid).toBe('task-uid-12345');
+    expect(owner?.controller).toBe(true);
+    expect(owner?.blockOwnerDeletion).toBe(true);
+  });
+});
+
+describe('buildJobSpec — ConfigMap mount (v0.2.0 default)', () => {
+  it('mounts /var/kagent/config from the per-Job ConfigMap by default', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    const configVol = volumes.find((v) => v.name === CONFIG_VOLUME_NAME);
+    expect(configVol).toBeDefined();
+    expect(configVol?.configMap?.name).toBe('kac-task-uid-12345');
+    // mode 0o444 — read-only, world-readable. Defense in depth.
+    expect(configVol?.configMap?.defaultMode).toBe(0o444);
+
+    const mounts = job.spec?.template?.spec?.containers?.[0]?.volumeMounts ?? [];
+    const configMount = mounts.find((m) => m.name === CONFIG_VOLUME_NAME);
+    expect(configMount?.mountPath).toBe(CONFIG_MOUNT_PATH);
+    expect(configMount?.readOnly).toBe(true);
+  });
+
+  it('useConfigMap: false drops the ConfigMap volume + mount (back-compat)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { useConfigMap: false });
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    expect(volumes.some((v) => v.name === CONFIG_VOLUME_NAME)).toBe(false);
+    const mounts = job.spec?.template?.spec?.containers?.[0]?.volumeMounts ?? [];
+    expect(mounts.some((m) => m.name === CONFIG_VOLUME_NAME)).toBe(false);
+  });
+
+  it('exposes both agent.spec.json + task.spec.json keys as `items` (default ConfigMap mount)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const volumes = job.spec?.template?.spec?.volumes ?? [];
+    const configVol = volumes.find((v) => v.name === CONFIG_VOLUME_NAME);
+    const items = configVol?.configMap?.items ?? [];
+    const keys = items.map((i) => i.key).sort();
+    expect(keys).toEqual([CONFIG_AGENT_SPEC_KEY, CONFIG_TASK_SPEC_KEY].sort());
   });
 });

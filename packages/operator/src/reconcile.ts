@@ -46,7 +46,13 @@
  * = Failed with error message.
  */
 
-import type { BatchV1Api, CustomObjectsApi, V1Job } from '@kubernetes/client-node';
+import type {
+  BatchV1Api,
+  CoreV1Api,
+  CustomObjectsApi,
+  V1ConfigMap,
+  V1Job,
+} from '@kubernetes/client-node';
 
 import {
   API_GROUP,
@@ -61,7 +67,12 @@ import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
 import type { Dispatcher } from './dispatcher.js';
 import { isDispatchPublished, markJobPublished, readJob, unsuspendJob } from './job-annotator.js';
-import { buildJobSpec, type BuildJobSpecOptions, jobNameForTask } from './job-spec.js';
+import {
+  buildAgentTaskConfigMap,
+  buildJobSpec,
+  type BuildJobSpecOptions,
+  jobNameForTask,
+} from './job-spec.js';
 import { mergePatchOptions } from './k8s.js';
 import { mergeCondition, nextPhase } from './status-transitions.js';
 import {
@@ -83,6 +94,14 @@ export interface ReconcileDeps {
   readonly customApi: CustomObjectsApi;
   readonly batchApi: BatchV1Api;
   readonly dispatcher: Dispatcher;
+  /**
+   * v0.2.0-typed-io — CoreV1 client used to create the per-Job
+   * ConfigMap carrying agent.spec.json + task.spec.json. Optional in
+   * tests; when undefined, the dispatch path falls back to the v0.1
+   * env-JSON transport (sets `useConfigMap: false` on buildJobSpec).
+   * main.ts always wires this in production.
+   */
+  readonly coreApi?: CoreV1Api;
   /**
    * Resolves AgentTask.spec.targetCapability → agent name. Optional;
    * defaults to a stub that always returns null (matches Phase 2
@@ -274,14 +293,35 @@ export async function reconcileAgentTask(
     return dedupeOutcome;
   }
 
+  /* ---- Step 3a — v0.2.0-typed-io ConfigMap creation.
+   *
+   * Carries agent.spec.json + task.spec.json under
+   * /var/kagent/config/. Skip when CoreV1 client is absent (test
+   * harness) — buildJobSpec then renders the v0.1 env-JSON path. */
+  const namespace = task.metadata.namespace ?? 'default';
+  const useConfigMap = deps.coreApi !== undefined;
+  if (deps.coreApi !== undefined) {
+    try {
+      await createConfigMapIdempotent(buildAgentTaskConfigMap(agent, task), deps.coreApi);
+    } catch (err) {
+      const reason =
+        err instanceof Error ? `config-map creation failed: ${err.message}` : String(err);
+      await markFailed(task, reason, deps);
+      return { action: 'failed', reason };
+    }
+  }
+
   // Step 3 — build + create the Job, SUSPENDED. K8s won't schedule
   // the pod until step 6 patches `spec.suspend: false`. The reconcile
   // loop forwards the operator's `jobSpecOptions` (image/env/PVC/etc)
   // and sets `suspend: true` over the top — operators stay free to
   // override the rest, but the suspended-create invariant is owned by
   // reconcile.
-  const job = buildJobSpec(agent, task, { ...deps.jobSpecOptions, suspend: true });
-  const namespace = task.metadata.namespace ?? 'default';
+  const job = buildJobSpec(agent, task, {
+    ...deps.jobSpecOptions,
+    suspend: true,
+    useConfigMap,
+  });
   const jobName = jobNameForTask(task);
   try {
     await createJobIdempotent(job, deps.batchApi);
@@ -474,6 +514,21 @@ async function createJobIdempotent(job: V1Job, batchApi: BatchV1Api): Promise<vo
   const namespace = job.metadata?.namespace ?? 'default';
   try {
     await batchApi.createNamespacedJob({ namespace, body: job });
+  } catch (err) {
+    if (isAlreadyExists(err)) return;
+    throw err;
+  }
+}
+
+/**
+ * v0.2.0-typed-io — create the per-Job ConfigMap carrying
+ * agent.spec.json + task.spec.json. 409 AlreadyExists treated as
+ * success so a re-reconcile doesn't fail.
+ */
+async function createConfigMapIdempotent(cm: V1ConfigMap, coreApi: CoreV1Api): Promise<void> {
+  const namespace = cm.metadata?.namespace ?? 'default';
+  try {
+    await coreApi.createNamespacedConfigMap({ namespace, body: cm });
   } catch (err) {
     if (isAlreadyExists(err)) return;
     throw err;

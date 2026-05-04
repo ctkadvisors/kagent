@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { parseEnv } from './env.js';
 
@@ -89,9 +89,9 @@ describe('parseEnv', () => {
     );
   });
 
-  it('throws when AGENT_SPEC.model is missing or empty', () => {
+  it('throws when agent spec.model is missing or empty', () => {
     expect(() => parseEnv({ ...baseEnv, KAGENT_AGENT_SPEC: JSON.stringify({}) })).toThrow(
-      /AGENT_SPEC.model is required/,
+      /spec\.model is required/,
     );
   });
 
@@ -160,6 +160,88 @@ describe('parseEnv', () => {
       expect(() => parseEnv({ ...baseEnv, KAGENT_TRACE_CONTENT_MODE: 'huh' })).toThrow(
         /not a valid value/,
       );
+    });
+  });
+
+  /* =====================================================================
+   * v0.2.0-typed-io — agent.spec + task.spec mounted via ConfigMap.
+   *
+   * The operator's job-spec-builder mounts a per-Job ConfigMap at
+   * `/var/kagent/config/{agent,task}.spec.json`. parseEnv reads those
+   * files when present and falls back to the v0.1 env-JSON path for
+   * one release of back-compat.
+   * ===================================================================== */
+  describe('v0.2.0 ConfigMap-mounted spec files', () => {
+    function makeReader(files: Record<string, string>): (path: string) => string | undefined {
+      return (path) => files[path];
+    }
+
+    it('reads agent.spec + task.spec from /var/kagent/config when files exist', () => {
+      const reader = makeReader({
+        '/var/kagent/config/agent.spec.json': JSON.stringify({ model: 'workers-ai/cm-path' }),
+        '/var/kagent/config/task.spec.json': JSON.stringify({
+          targetAgent: 'r',
+          payload: { topic: 'cm-path' },
+        }),
+      });
+      // Strip the env-JSON entries so we KNOW the file path was used.
+      const envWithoutJson = { ...baseEnv };
+      delete envWithoutJson.KAGENT_AGENT_SPEC;
+      delete envWithoutJson.KAGENT_TASK_SPEC;
+      const cfg = parseEnv(envWithoutJson, reader);
+      expect(cfg.agentSpec.model).toBe('workers-ai/cm-path');
+      expect(cfg.taskSpec.payload).toEqual({ topic: 'cm-path' });
+    });
+
+    it('ConfigMap path WINS over the env JSON during the back-compat overlap', () => {
+      const reader = makeReader({
+        '/var/kagent/config/agent.spec.json': JSON.stringify({ model: 'cm/wins' }),
+        '/var/kagent/config/task.spec.json': JSON.stringify({
+          targetAgent: 'r',
+          payload: {},
+        }),
+      });
+      // Both env + files present; file should win.
+      const cfg = parseEnv(baseEnv, reader);
+      expect(cfg.agentSpec.model).toBe('cm/wins');
+    });
+
+    it('falls back to env JSON when ConfigMap files are absent (back-compat)', () => {
+      const reader: (path: string) => string | undefined = () => undefined;
+      const cfg = parseEnv(baseEnv, reader);
+      expect(cfg.agentSpec.model).toBe(
+        'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      );
+    });
+
+    it('boot-fails with descriptive error when both file path and env are absent', () => {
+      const reader: (path: string) => string | undefined = () => undefined;
+      const envEmpty = { ...baseEnv };
+      delete envEmpty.KAGENT_AGENT_SPEC;
+      expect(() => parseEnv(envEmpty, reader)).toThrow(/KAGENT_AGENT_SPEC.*missing or empty/);
+    });
+
+    it('logs deprecation warning when AgentTask.spec.parentDistillation is set', () => {
+      const reader: (path: string) => string | undefined = () => undefined;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        parseEnv(
+          {
+            ...baseEnv,
+            KAGENT_TASK_SPEC: JSON.stringify({
+              targetAgent: 'r',
+              payload: {},
+              parentDistillation: 'old-style summary',
+            }),
+          },
+          reader,
+        );
+        expect(warnSpy).toHaveBeenCalled();
+        const msg = warnSpy.mock.calls[0]?.[0] as string;
+        expect(msg).toContain('parentDistillation is deprecated');
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });

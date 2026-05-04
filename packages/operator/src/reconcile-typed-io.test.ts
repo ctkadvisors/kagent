@@ -12,6 +12,7 @@
  * on the core reconcile suite.
  */
 
+import type { CoreV1Api } from '@kubernetes/client-node';
 import { describe, expect, it, vi } from 'vitest';
 
 import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
@@ -47,6 +48,7 @@ function makeDeps(overrides: {
   idempotencyCache?: IdempotencyCache;
   emitContractViolated?: ReturnType<typeof vi.fn>;
   emitTaskDeduped?: ReturnType<typeof vi.fn>;
+  coreApi?: { createNamespacedConfigMap: ReturnType<typeof vi.fn> };
 }): ReconcileDeps & {
   mocks: {
     customApi: {
@@ -59,6 +61,7 @@ function makeDeps(overrides: {
       patchNamespacedJob: ReturnType<typeof vi.fn>;
     };
     dispatcher: StubDispatcher;
+    coreApi: { createNamespacedConfigMap: ReturnType<typeof vi.fn> } | undefined;
   };
 } {
   const agent = overrides.agent ?? typedAgent;
@@ -92,7 +95,10 @@ function makeDeps(overrides: {
     ...(overrides.emitTaskDeduped !== undefined && {
       emitTaskDeduped: overrides.emitTaskDeduped,
     }),
-    mocks: { customApi, batchApi, dispatcher },
+    ...(overrides.coreApi !== undefined && {
+      coreApi: overrides.coreApi as unknown as CoreV1Api,
+    }),
+    mocks: { customApi, batchApi, dispatcher, coreApi: overrides.coreApi },
   };
 }
 
@@ -474,5 +480,123 @@ describe('enforceCompletionContract', () => {
     const task = completedTask([{ name: 'digest', ref: 'pvc://uid/digest.md' }]);
     const action = await enforceCompletionContract(task, partialAgent, deps);
     expect(action).toBe('cached-replay');
+  });
+});
+
+/* =====================================================================
+ * ConfigMap creation (replaces KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC env)
+ * ===================================================================== */
+
+describe('reconcileAgentTask — per-Job ConfigMap creation', () => {
+  it('creates the per-Job ConfigMap before the Job when coreApi is wired', async () => {
+    const createCm = vi.fn().mockResolvedValue({});
+    const deps = makeDeps({
+      coreApi: { createNamespacedConfigMap: createCm },
+    });
+    // Use a v0.1-style agent (no inputs/outputs) so admission passes
+    // without needing typed bindings.
+    deps.mocks.customApi.getNamespacedCustomObject.mockResolvedValue({
+      ...typedAgent,
+      spec: { model: typedAgent.spec.model },
+    });
+    const task = makeTask();
+
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+
+    // ConfigMap created exactly once.
+    expect(createCm).toHaveBeenCalledTimes(1);
+    const cmCall = createCm.mock.calls[0][0] as {
+      namespace: string;
+      body: { metadata: { name: string }; data: Record<string, string> };
+    };
+    expect(cmCall.namespace).toBe('default');
+    expect(cmCall.body.metadata.name).toBe('kac-task-uid-1');
+    // Both keys present.
+    expect(cmCall.body.data['agent.spec.json']).toBeDefined();
+    expect(cmCall.body.data['task.spec.json']).toBeDefined();
+    // Created BEFORE the Job (createCm ran first; Job create runs second).
+    expect(deps.mocks.batchApi.createNamespacedJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('Job spec uses ConfigMap projection when coreApi is wired (no KAGENT_AGENT_SPEC env)', async () => {
+    const deps = makeDeps({
+      coreApi: { createNamespacedConfigMap: vi.fn().mockResolvedValue({}) },
+    });
+    deps.mocks.customApi.getNamespacedCustomObject.mockResolvedValue({
+      ...typedAgent,
+      spec: { model: typedAgent.spec.model },
+    });
+    const task = makeTask();
+    await reconcileAgentTask(task, deps);
+
+    const jobCall = deps.mocks.batchApi.createNamespacedJob.mock.calls[0][0] as {
+      body: {
+        spec: {
+          template: { spec: { containers: { env: { name: string; value?: string }[] }[] } };
+        };
+      };
+    };
+    const env = jobCall.body.spec.template.spec.containers[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    // KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC dropped.
+    expect(byName.has('KAGENT_AGENT_SPEC')).toBe(false);
+    expect(byName.has('KAGENT_TASK_SPEC')).toBe(false);
+    // KAGENT_AGENT_MODEL still emitted (admission's hot path).
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe(typedAgent.spec.model);
+  });
+
+  it('back-compat: when coreApi is undefined, falls back to env-JSON path', async () => {
+    const deps = makeDeps({});
+    deps.mocks.customApi.getNamespacedCustomObject.mockResolvedValue({
+      ...typedAgent,
+      spec: { model: typedAgent.spec.model },
+    });
+    const task = makeTask();
+    await reconcileAgentTask(task, deps);
+
+    const jobCall = deps.mocks.batchApi.createNamespacedJob.mock.calls[0][0] as {
+      body: {
+        spec: {
+          template: { spec: { containers: { env: { name: string; value?: string }[] }[] } };
+        };
+      };
+    };
+    const env = jobCall.body.spec.template.spec.containers[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.has('KAGENT_AGENT_SPEC')).toBe(true);
+    expect(byName.has('KAGENT_TASK_SPEC')).toBe(true);
+  });
+
+  it('treats 409 AlreadyExists on ConfigMap create as success (idempotent re-reconcile)', async () => {
+    const createCm = vi.fn().mockRejectedValue({ code: 409 });
+    const deps = makeDeps({
+      coreApi: { createNamespacedConfigMap: createCm },
+    });
+    deps.mocks.customApi.getNamespacedCustomObject.mockResolvedValue({
+      ...typedAgent,
+      spec: { model: typedAgent.spec.model },
+    });
+    const task = makeTask();
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    expect(deps.mocks.batchApi.createNamespacedJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks Failed when ConfigMap creation fails with a non-409 error', async () => {
+    const createCm = vi.fn().mockRejectedValue(new Error('etcd unavailable'));
+    const deps = makeDeps({
+      coreApi: { createNamespacedConfigMap: createCm },
+    });
+    deps.mocks.customApi.getNamespacedCustomObject.mockResolvedValue({
+      ...typedAgent,
+      spec: { model: typedAgent.spec.model },
+    });
+    const task = makeTask();
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('failed');
+    expect(result.reason).toContain('config-map');
+    // Job NOT created — config-map failure short-circuits.
+    expect(deps.mocks.batchApi.createNamespacedJob).not.toHaveBeenCalled();
   });
 });

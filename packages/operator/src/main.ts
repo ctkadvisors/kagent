@@ -56,6 +56,7 @@ import {
   reconcileParentFromChildEvent,
   type ReconcileDeps,
 } from './reconcile.js';
+import { IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
 import { buildTriggersBootstrap, type TriggersBootstrapHandle } from './triggers-bootstrap.js';
@@ -691,6 +692,13 @@ export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
       const result = await reconcileAgentTask(task, deps);
       logResult('update', task, result);
       await maybeReconcileParent('update', task, deps);
+      // v0.2.0-typed-io — when the agent-pod's terminal write lands a
+      // Completed phase, validate that all required Agent.spec.outputs
+      // are present in status.outputs. Missing → force Failed +
+      // contract.violated audit. Idempotent: re-firing on relist is
+      // safe (the merge-patch with phase=Failed becomes a no-op once
+      // landed).
+      await maybeEnforceCompletionContract(task, deps);
     },
     onDelete(task) {
       console.log(
@@ -701,6 +709,62 @@ export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
       console.error('[kagent-operator] watch error:', err);
     },
   };
+}
+
+/**
+ * v0.2.0-typed-io — fetch the target Agent and run the completion
+ * contract validator. No-op when the task isn't in `phase: Completed`
+ * (the validator inside also short-circuits — this is a cheap pre-check
+ * to avoid the Agent GET in the hot path).
+ *
+ * Errors are logged and swallowed: the validator's correctness is
+ * desirable but not request-critical, and re-firing on the next
+ * informer event is safe (merge-patch idempotent).
+ */
+async function maybeEnforceCompletionContract(
+  task: import('./crds/index.js').AgentTask,
+  deps: ReconcileDeps,
+): Promise<void> {
+  if (task.status?.phase !== 'Completed') return;
+  const agentName =
+    typeof task.spec.targetAgent === 'string' && task.spec.targetAgent.length > 0
+      ? task.spec.targetAgent
+      : undefined;
+  if (agentName === undefined) return; // capability-targeted tasks: out of scope for v0.2.0
+  const namespace = task.metadata.namespace ?? 'default';
+  let agent: import('./crds/index.js').Agent | undefined;
+  try {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const res = await deps.customApi.getNamespacedCustomObject({
+      group: 'kagent.knuteson.io',
+      version: 'v1alpha1',
+      namespace,
+      plural: 'agents',
+      name: agentName,
+    });
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+    if (res !== null && typeof res === 'object' && (res as { kind?: unknown }).kind === 'Agent') {
+      agent = res as import('./crds/index.js').Agent;
+    }
+  } catch (err) {
+    console.warn(
+      `[kagent-operator] enforceCompletionContract: failed to fetch Agent ${namespace}/${agentName}; skipping:`,
+      err,
+    );
+    return;
+  }
+  if (agent === undefined) return;
+  try {
+    const { enforceCompletionContract } = await import('./reconcile.js');
+    const action = await enforceCompletionContract(task, agent, deps);
+    if (action === 'forced-failed') {
+      console.log(
+        `[kagent-operator] enforceCompletionContract: forced Failed on ${namespace}/${task.metadata.name ?? '(no-name)'} — required outputs missing`,
+      );
+    }
+  } catch (err) {
+    console.warn('[kagent-operator] enforceCompletionContract raised:', err);
+  }
 }
 
 /**
@@ -933,15 +997,22 @@ async function main(): Promise<void> {
       ? agentPodMaxDepthParsed
       : undefined;
 
+  // v0.2.0-typed-io — operator-local idempotency-key cache (24h TTL).
+  // Process-local; the v0.3+ distributed-dedupe migration will swap
+  // this for an etcd-backed implementation behind the same interface.
+  const idempotencyCache = new IdempotencyCache();
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
+    coreApi,
     dispatcher,
     capabilityRegistry,
     listChildrenForParent,
     getTaskByUid,
     emitCycleEvent,
     admissionControlEnabled,
+    idempotencyCache,
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
   };
   const handler = buildHandler(deps);

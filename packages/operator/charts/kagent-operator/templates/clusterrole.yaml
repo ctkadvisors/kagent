@@ -77,3 +77,14 @@ rules:
   - apiGroups: ['']
     resources: ['events']
     verbs: ['create', 'patch']
+  # v0.2.0-typed-io — per-Job ConfigMap carrying agent.spec.json +
+  # task.spec.json (replaces the KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC
+  # env JSON). Closes the ARG_MAX cap and the ps-visible env-string
+  # leak. The ConfigMap is owned by the AgentTask via ownerReferences
+  # so cascading delete of the AgentTask reaps the ConfigMap; we ask
+  # for `delete` explicitly anyway so an orphaned ConfigMap (e.g.
+  # AgentTask hand-deleted with --grace-period=0) can be swept by the
+  # operator on the next reconcile.
+  - apiGroups: ['']
+    resources: ['configmaps']
+    verbs: ['get', 'list', 'watch', 'create', 'delete']

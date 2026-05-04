@@ -14,11 +14,106 @@
  * StatefulSet is a v0.2 affordance once cold-start latency matters.
  */
 
-import type { V1Job, V1PodSecurityContext, V1SecurityContext } from '@kubernetes/client-node';
+import type {
+  V1ConfigMap,
+  V1Job,
+  V1PodSecurityContext,
+  V1SecurityContext,
+} from '@kubernetes/client-node';
 
 import type { Agent, AgentTask } from './crds/index.js';
 
 const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
+
+/* =====================================================================
+ * v0.2.0-typed-io — ConfigMap-projected agent + task spec.
+ *
+ * Phase 4.x flagged two problems with the env-string transport:
+ *
+ *   1. ARG_MAX cap. Linux pid_max (Ubuntu 22.04: ~6 MiB) is hard
+ *      ceiling; the rendered Job's env array also lands in etcd's
+ *      1 MiB per-object limit; large agent specs (toolAllowlists,
+ *      systemPrompts, llmParams) push us toward those bounds.
+ *
+ *   2. `kubectl describe pod` / `/proc/<pid>/environ` leak. Every
+ *      env var on the Pod is observable to anyone with read RBAC on
+ *      pods AND to anything running as the same UID inside the
+ *      container. A multi-line system prompt baked into the env
+ *      lands verbatim in `kubectl get pod -o yaml`.
+ *
+ * v0.2.0 mounts a per-Job ConfigMap at `/var/kagent/config/` carrying
+ *   - agent.spec.json
+ *   - task.spec.json
+ *
+ * The agent-pod's `parseEnv` reads those files when present and falls
+ * back to the env-JSON path for one release (back-compat with rollout
+ * where operator + agent-pod images don't ship in lockstep).
+ *
+ * Mount path is fixed (`/var/kagent/config/`) — admission depends on
+ * the agent-pod knowing the path without an env lookup. The operator
+ * still emits `KAGENT_AGENT_MODEL` env so the admission reconciler's
+ * model-extraction stays trivial (no ConfigMap read in the hot path).
+ * ===================================================================== */
+
+export const CONFIG_MOUNT_PATH = '/var/kagent/config';
+export const CONFIG_VOLUME_NAME = 'kagent-config';
+export const CONFIG_AGENT_SPEC_KEY = 'agent.spec.json';
+export const CONFIG_TASK_SPEC_KEY = 'task.spec.json';
+
+/**
+ * Deterministic ConfigMap name for an AgentTask. Same uid-derivation
+ * pattern as `jobNameForTask`, with a `kac-` prefix so kubectl users
+ * can `get configmap kac-<uid-prefix>` alongside `get job kat-...`.
+ */
+export function configMapNameForTask(task: AgentTask): string {
+  const uid = task.metadata.uid;
+  if (typeof uid !== 'string' || uid.length === 0) {
+    throw new Error('AgentTask is missing metadata.uid — cannot derive ConfigMap name');
+  }
+  return `kac-${uid.slice(0, 50)}`;
+}
+
+/**
+ * Build the per-Job ConfigMap carrying `agent.spec.json` +
+ * `task.spec.json`. OwnerReferences point at the AgentTask so
+ * cascading delete reaps the ConfigMap when the task is deleted.
+ *
+ * v0.2.0 — replaces the `KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC` env
+ * transport. See `buildJobSpec` for the corresponding mount.
+ */
+export function buildAgentTaskConfigMap(agent: Agent, task: AgentTask): V1ConfigMap {
+  const namespace = task.metadata.namespace ?? 'default';
+  return {
+    apiVersion: 'v1',
+    kind: 'ConfigMap',
+    metadata: {
+      name: configMapNameForTask(task),
+      namespace,
+      labels: {
+        'kagent.knuteson.io/agent': agent.metadata.name ?? '',
+        'kagent.knuteson.io/task': task.metadata.name ?? '',
+        'kagent.knuteson.io/managed-by': 'kagent-operator',
+      },
+      // OwnerRef → AgentTask so cascading delete reaps the ConfigMap.
+      // The Job already has its own ownerRef on the same AgentTask;
+      // both get cleaned up on task deletion.
+      ownerReferences: [
+        {
+          apiVersion: task.apiVersion,
+          kind: task.kind,
+          name: task.metadata.name ?? '',
+          uid: task.metadata.uid ?? '',
+          controller: true,
+          blockOwnerDeletion: true,
+        },
+      ],
+    },
+    data: {
+      [CONFIG_AGENT_SPEC_KEY]: JSON.stringify(agent.spec),
+      [CONFIG_TASK_SPEC_KEY]: JSON.stringify(task.spec),
+    },
+  };
+}
 
 /**
  * Job-controller `backoffLimit`. Pinned at 0 — the operator owns retry
@@ -184,6 +279,18 @@ export interface BuildJobSpecOptions {
    * publish-then-unsuspend ordering.
    */
   readonly suspend?: boolean;
+  /**
+   * v0.2.0-typed-io — opt-out of the ConfigMap projection. Default
+   * `true` (i.e. mount ConfigMap, drop the JSON env). Pass `false`
+   * to keep the v0.1 env-JSON path (tests, mid-rollout where the
+   * agent-pod image hasn't been updated yet — its `parseEnv` falls
+   * back to env JSON when the mounted files are absent).
+   *
+   * The ConfigMap itself is owned + created by the reconciler
+   * BEFORE the Job (see `buildAgentTaskConfigMap`); buildJobSpec
+   * just renders the volume + volumeMount that points at it.
+   */
+  readonly useConfigMap?: boolean;
 }
 
 /** Default pod security context applied when caller doesn't override. */
@@ -289,13 +396,35 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
           readonly secretKeyRef: { readonly name: string; readonly key: string };
         };
       };
+  // v0.2.0-typed-io — ConfigMap projection.
+  // When `opts.useConfigMap !== false`, agent.spec.json + task.spec.json
+  // are mounted at /var/kagent/config/ via the per-Job ConfigMap (see
+  // `buildAgentTaskConfigMap`). The full-JSON env vars are dropped to
+  // close the ARG_MAX cap and the `ps`-visible-env leak (Phase 4.x
+  // hardening surface). KAGENT_AGENT_MODEL stays as a tiny env var so
+  // the admission reconciler's model-extraction stays trivial (no
+  // ConfigMap read in the hot path).
+  // Default: ON. Tests / older operators can pass useConfigMap: false
+  // for one release of back-compat (the agent-pod's parseEnv keeps the
+  // env-JSON fallback path).
+  const useConfigMap = opts.useConfigMap !== false;
+
   const env: RenderedEnv[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
     { name: 'KAGENT_TASK_NAMESPACE', value: namespace },
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
-    { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
-    { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
+    // Always emit the model as a tiny env var — admission consults
+    // this without reading the ConfigMap (hot path).
+    { name: 'KAGENT_AGENT_MODEL', value: agent.spec.model },
+    // Back-compat path: when useConfigMap is explicitly false (tests +
+    // pre-v0.2.0 agent-pod images), the full JSON env entries stay.
+    ...(useConfigMap
+      ? []
+      : [
+          { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
+          { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
+        ]),
     { name: 'KAGENT_TASK_DEPTH', value: String(taskDepth) },
     ...artifactEnv,
     ...traceparentEnv,
@@ -361,10 +490,36 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     : undefined;
   const tmpVolumeMount = needsTmpVolume ? { name: TMP_VOLUME_NAME, mountPath: '/tmp' } : undefined;
 
-  const podVolumes = [artifactVolume, tmpVolume].filter(
+  // v0.2.0-typed-io — ConfigMap volume + mount for agent.spec.json +
+  // task.spec.json. The reconciler creates the ConfigMap BEFORE the
+  // Job (idempotent on AlreadyExists); we just render the volume here.
+  // mode 0444 keeps the mount read-only (defense in depth — the
+  // agent-pod has no business mutating these).
+  const configVolume = useConfigMap
+    ? {
+        name: CONFIG_VOLUME_NAME,
+        configMap: {
+          name: configMapNameForTask(task),
+          defaultMode: 0o444,
+          items: [
+            { key: CONFIG_AGENT_SPEC_KEY, path: CONFIG_AGENT_SPEC_KEY },
+            { key: CONFIG_TASK_SPEC_KEY, path: CONFIG_TASK_SPEC_KEY },
+          ],
+        },
+      }
+    : undefined;
+  const configVolumeMount = useConfigMap
+    ? {
+        name: CONFIG_VOLUME_NAME,
+        mountPath: CONFIG_MOUNT_PATH,
+        readOnly: true,
+      }
+    : undefined;
+
+  const podVolumes = [artifactVolume, tmpVolume, configVolume].filter(
     (v): v is NonNullable<typeof v> => v !== undefined,
   );
-  const containerVolumeMounts = [artifactVolumeMount, tmpVolumeMount].filter(
+  const containerVolumeMounts = [artifactVolumeMount, tmpVolumeMount, configVolumeMount].filter(
     (v): v is NonNullable<typeof v> => v !== undefined,
   );
 
