@@ -171,51 +171,110 @@ After Phase 5.x lands, the original Phase 5 workload work resumes:
 
 ---
 
-## Phase 6 (v0.2) — Kata Containers node install + warm pool (~1 week)
+## Forward roadmap — Wave 0 → Wave 4 (v0.1.7 → v1.0)
 
-Operator-side wiring is already shipped (WS-C): `Agent.spec.sandboxProfile` is resolved per-Agent against `agentPod.runtimeClasses.{default,strict}` at Job-spawn time, never globally. What remains is the cluster-side install + measurement work.
+> **Architecture spec:** [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md) — the 7 primitives + 3 cross-cutting concerns this roadmap delivers.
+> **Sub-team plan:** [`WAVES.md`](./WAVES.md) — release-level ownership, parallelism map, file-conflict matrix, validation criteria.
+> **Gateway boundary:** [`GATEWAY-CONTRACT.md`](./GATEWAY-CONTRACT.md) — wire contract for any external model gateway (CTK enterprise, LiteLLM, etc.).
+>
+> The forward-looking phases that previously occupied this slot (Phase 6 Kata install, Phase 7 framework evaluation, Phase 8 Restate durable execution) have been refactored into the wave structure below:
+>
+> - **Kata + warm pool** — operator-side wiring already shipped in v0.1 (WS-C); the remaining cluster-side install is an operational task in `new_localai`, not a kagent release. Sandbox profile selection is a per-Agent capability claim under v0.3.0.
+> - **Framework evaluation** — application concern, not substrate. Out of scope per [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md) §8.
+> - **Restate durable execution** — folded into `v0.3.2-workflows` as the AgentWorkflow primitive's backend.
 
-- [ ] Kata Containers `RuntimeClass` deployed onto K3s nodes via the Kata K8s deployer (this is the remaining gating item — pods that opt into `sandboxProfile: 'strict'` will fail to schedule with a missing-RuntimeClass error until this lands)
-- [x] Agent CRD `sandboxProfile: strict` plumbs to `runtimeClassName: kata` on Agent Pod spec — _operator side wired in v0.1 via `agentPod.runtimeClasses.strict`; toggling that value to `'kata'` lights it up once the node install completes._
-- [ ] Measure overhead: spawn time, RSS, throughput delta vs runc
-- [ ] Warm pool option: `Agent` CRD `warmReplicas: N` materializes a StatefulSet alongside the Job-per-task path
-- [ ] Decide on default sandbox profile based on measured overhead
+### Wave 0 — v0.1 hardening + audit foundation (~2-4 weeks)
 
-**Tag:** `v0.2.0-phase6`
+Tactical fixes + audit/entry-point foundations that later waves depend on. Five sub-teams in parallel.
 
----
+| Tag | Scope | Sub-team | Effort |
+|---|---|---|---|
+| `v0.1.7-attribution` | X-Kagent-{Task-UID,Agent} headers on every LLM call | Gateway | DONE |
+| `v0.1.8-secret-hygiene` | `secretKeyRef` for spawned-Job env (kill plaintext gateway/Langfuse keys in etcd) | Secrets | 1 day |
+| `v0.1.9-isolation` | `KAGENT_TASK_DEPTH` cap + parent→child AgentTask ownerRef + TTL=300 + `get_my_context` tool + assert `backoffLimit=0` | Isolation | 2 days |
+| `v0.1.10-gateway-status` | gateway PATCH `ModelEndpoint.status.observedInFlight` (demoted; optional for enterprise gateway) | Gateway | 2-3h |
+| `v0.1.11-traceparent` | W3C traceparent cross-stage propagation (via runConfig + env) | Gateway | 2h |
+| `v0.1.12-keys-rest` | `POST /admin/keys` REST endpoint on bundled gateway | Gateway | 2h |
+| `v0.1.13-prompts-migrated` | orchestrator + summarizer-{k8s,postgres} → `systemPromptRef` | Hygiene | 10min |
+| `v0.1.14-ci-kind-gate` | `helm install --wait` against ephemeral kind in CI | Hygiene | ½ day |
+| `v0.1.15-audit-stream` | CloudEvents-shaped audit stream on NATS JetStream (foundation for caps + tenancy) | Audit | 3 days |
+| `v0.1.16-entry-points` | `KagentSchedule` CRD + webhook receiver | Entry | 4 days |
 
-## Phase 7 (v0.2) — Framework evaluation (~1–2 weeks)
+**Done when:** every priority queue item from session 2026-05-03 cleared; audit stream emitting events from operator + agent-pod; webhook can mint AgentTasks via shared cap; sub-team file-conflict map clean.
 
-- [ ] Build alternate `@kagent/agent-loop-strands` (Strands TS in pod) + `@kagent/agent-loop-mastra` (Mastra in pod)
-- [ ] Run comparison rig: same researcher workload, three pods (forked AgentExecutor, Strands TS, Mastra)
-- [ ] Decide: keep fork? swap to Strands TS or Mastra? Empirical, not philosophical.
-- [ ] Document the verdict in `docs/V0.2-FRAMEWORK-EVAL.md`
+### Wave 1 — v0.2 substrate I/O contracts (~4-5 weeks with parallelism)
 
-**Tag:** `v0.2.1-phase7`
+Typed dataflow + Workspace + content-addressed Artifacts. v0.2.0 is foundational; v0.2.1 + v0.2.2 fan out in parallel after.
 
----
+| Tag | Scope | Sub-team | Effort |
+|---|---|---|---|
+| `v0.2.0-typed-io` | `Agent.spec.inputs/outputs` schema; `AgentTask.spec.inputs[].from`; admission validation; refuse `Completed` patch with missing required outputs; `idempotencyKey`; migrate `KAGENT_AGENT_SPEC` from env JSON to mounted ConfigMap; deprecate `parentDistillation` | I/O | 2 weeks |
+| `v0.2.1-workspaces` | `Workspace` CRD (PVC-backed, RWX); init-container clone for `source.git`; mounted via `Agent.spec.workspaceClaims`; quota enforcement; storage-class detection | Workspace | 1.5 weeks |
+| `v0.2.2-cas` | Content-addressed artifact store; `read_artifact`/`write_artifact` built-ins keyed by `sha256:<hex>`; ArtifactRef gains `contentHash`; PVC backend (v0.2) abstracted for MinIO/S3 (v0.3+); retention policy | CAS | 2 weeks |
 
-## Phase 8 (v0.3) — Durable execution (~1–2 weeks)
+### Wave 2 — v0.3 authority + lifecycle (~5 weeks with parallelism)
 
-- [ ] Restate adapter for session persistence — pod restart mid-run resumes from checkpoint
-- [ ] `Agent` CRD `durability: restate` flag
-- [ ] Test: kill an agent pod mid-multi-iteration run; confirm resume
+Capability bundles + supervision strategies + durable orchestrators. v0.3.0 is foundational; v0.3.1 + v0.3.2 fan out after.
 
-**Tag:** `v0.3.0-phase8`
+| Tag | Scope | Sub-team | Effort |
+|---|---|---|---|
+| `v0.3.0-capabilities` | Sealed JWT capability bundle (signed by operator CA); per-Agent claims for tools/models/spawn/read/write/egress/tenant; narrows-on-spawn (substrate-validated); `verify_completion` substrate hook; replaces `allowedChildAgents`/`allowedChildTemplates`/inline tool allowlists | Caps | 3 weeks |
+| `v0.3.1-supervision` | `Agent.spec.supervisionStrategy` (one_for_one, one_for_all, rest_for_one, escalate); substrate-handled child-failure routing; structured contract-violation errors | Supervision | 1.5 weeks |
+| `v0.3.2-workflows` | `AgentWorkflow` CRD distinct from `Agent`; Restate-backed durable orchestrator; event-log replay on crash; signal/query API | Workflows | 2.5 weeks |
 
----
+### Wave 3 — v0.4 coordination at scale (~2-3 weeks with full parallelism)
 
-## Future (no tag yet)
+Five mostly-independent components ship in parallel.
 
-These ship if and when there's a concrete driver, not on speculation:
+| Tag | Scope | Sub-team | Effort |
+|---|---|---|---|
+| `v0.4.0-events` | Typed pub/sub on NATS JetStream; `Agent.spec.publishes/subscribes`; capability-gated topic ACLs | Events | 1 week |
+| `v0.4.1-blackboard` | Task-tree-scoped typed KV (NATS JetStream KV backend); `read_blackboard`/`write_blackboard` built-ins | Blackboard | 1 week |
+| `v0.4.2-cache` | Best-effort cache primitive keyed by `(input_hash, image_digest, model_name)`; restore-on-boot, save-on-success | Cache | 1 week |
+| `v0.4.3-identity` | SPIFFE workload identity; mTLS for agent-pod ↔ gateway; per-Agent SVID replaces shared bearer tokens | Identity | 1.5 weeks |
+| `v0.4.4-locality` | NodeAffinity from Workspace placement; speculative execution for slow stragglers; pod-pressure circuit breaker | Locality | 3 days |
 
-- **Streaming responses** — for chat-style consumers; requires SSE pass-through from agent pod through operator to client
-- **Multi-tenant** — namespace-per-tenant + RBAC + LiteLLM virtual keys keyed by tenant
-- **Authority graph / OPA policy enforcement** — only if a real workload demands pre-dispatch policy that detector middleware can't satisfy
-- **Write-enabled Workbench actions** — retry/cancel/create-task once the read-only visibility surface proves useful
-- **Untrusted-code-exec sandbox per tool call** — nested isolation (Bubblewrap or Firecracker pool) inside Kata pods, only when a workload needs it
-- **Strands TS or Mastra adoption** — if Phase 7 verdict says swap
+### Wave 4 — v0.5 tenancy + compliance (~3 weeks with parallelism)
+
+`Tenant` CRD is foundational; v0.5.1-v0.5.4 fan out after.
+
+| Tag | Scope | Sub-team | Effort |
+|---|---|---|---|
+| `v0.5.0-tenancy` | `Tenant` CRD (namespace + cap root + audit subject); per-tenant Agent visibility; tenant-scoped quota | Tenancy | 1.5 weeks |
+| `v0.5.1-egress` | `Agent.spec.egress` → `NetworkPolicy`/`CiliumNetworkPolicy`; default-deny | Egress | 4 days |
+| `v0.5.2-quotas` | Hierarchical org → tenant → Agent quota; pod-pressure cap; quota-breach audit events | Quotas | 1 week |
+| `v0.5.3-versioning` | Immutable Agent CRs post-publish; in-flight task version pinning; migration discipline | Versioning | 1 week |
+| `v0.5.4-keyrotation` | Operator CA rotates SVIDs; gateway-token rotation API; rotation events in audit stream | KeyRotation | 4 days |
+
+### Path to v1.0
+
+```
+Wave 0 (~2-4w) → Wave 1 (~4-5w) → Wave 2 (~5w) → Wave 3 (~2-3w) → Wave 4 (~3w)
+                                                                       │
+                                                                       ▼
+                                                                   v1.0 GA
+```
+
+Critical-path sequential: ~16-20 weeks (~4-5 months). Plenty of slack to absorb scope reveal as primitives reify.
+
+**v1.0 ships when:**
+- All 7 primitives + 3 cross-cutting concerns are operational per [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md)
+- Comparison rig (below) numbers do not regress vs. `homelab-orchestrator` baseline
+- An external enterprise consumer can deploy kagent + plug their own model gateway without forking
+- Audit stream survives a SOC2 dry-run review
+
+### Out of scope through v1.0
+
+These remain explicitly out of substrate scope per [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md) §8:
+
+- ❌ Built-in agent SDK (any framework runs in a pod)
+- ❌ Bundled production model gateway (gateway is external; OSS bundle is dev-convenience only)
+- ❌ Domain-specific tools (researcher / summarizer / validator are application code)
+- ❌ Streaming response support (until a real consumer drives it)
+- ❌ Cluster-wide policy engines (OPA / Kyverno are companions, not substitutes)
+- ❌ Kubernetes-managing agents (Solo.io's [kagent.dev](https://kagent.dev) domain)
+- ❌ Untrusted-code-exec per tool call (Bubblewrap/Firecracker nested sandbox — only if a workload needs it)
+- ❌ Framework swap (Strands TS / Mastra) — application choice, not substrate
 
 ---
 
@@ -229,6 +288,6 @@ Per [`WHY.md`](./WHY.md) §6, the project commits to a **falsifiable success cri
 > - Median end-to-end latency (seconds, AgentTask Created → AgentTask status updated)
 > - Failure mode distribution (F1/F2/F3/refusal/vacuity per detector)
 
-If kagent v0.1 does not improve on the baseline, **v0.2 work (Kata, warm pool, framework swap) is the validation bet, not a presumed evolution.** If v0.2 also fails, this is admit-failure territory, not double-down territory.
+If kagent v0.1 does not improve on the baseline, **Wave 1+ (the substrate primitives in [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md)) is the validation bet, not a presumed evolution.** If Wave 1 also fails, this is admit-failure territory, not double-down territory.
 
 That discipline — falsifiable test before work, not thesis-defense after — is the lesson the kernel project lacked.
