@@ -78,7 +78,7 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 5. ✅ `Job.spec.backoffLimit: 0` pinned via `DEFAULT_BACKOFF_LIMIT` (now exported); unit test asserts the constant.
 6. ✅ New built-in tool: `get_my_context()` returning `{taskUid, taskName, taskNamespace, agentName, parentUid?, depth, budget: {tokensRemaining?, secondsRemaining?}}`. Defined as `defineGetMyContext(deps)` in `builtin-tools.ts`; wired into the substrate-tools provider in `main.ts`.
 
-**Validation:** unit-test smoke covers depth=4 attempting spawn refused with `policy_denied:depth_exceeded`; `K8sTaskCreator.createChildTask` ownerRef test confirms the cascade chain. Pre-existing 231 agent-pod + 406 operator tests still pass; +27 new unit tests across the two packages.
+**Validation:** unit-test smoke covers depth=4 attempting spawn refused with `policy_denied:depth_exceeded`; `K8sTaskCreator.createChildTask` ownerRef test confirms the cascade chain. Pre-existing 231 agent-pod + 406 operator tests still pass; +21 agent-pod, +19 operator new unit tests (252 + 425 totals).
 
 ### 2.3 Sub-team: Gateway
 
