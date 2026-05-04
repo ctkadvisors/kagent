@@ -875,3 +875,105 @@ export function resolveBuiltinTools(
 
 /** Re-export for tests + the runner — keeps the surface importable from one place. */
 export { InProcessToolProvider };
+
+/* =====================================================================
+ * v0.1.9 — get_my_context substrate introspection tool
+ *
+ * Lets an in-pod agent loop ask "who am I, where am I in the spawn
+ * tree, what's left in my budget?" without round-tripping the operator
+ * or making an LLM call. The tool is pure: reads only the parsed
+ * PodConfig + a runner-supplied budget callback. No K8s API traffic,
+ * no network. Mirrors the substrate-tool pattern of
+ * `defineSpawnChildTask` (separate factory function vs. per-tool entry
+ * in `buildBuiltinToolRegistry`) because the data sources are
+ * per-task-instance, not global.
+ *
+ * Returned shape (JSON-encoded as the tool result):
+ *   {
+ *     taskUid:        string,
+ *     taskName:       string,
+ *     taskNamespace:  string,
+ *     agentName:      string,
+ *     parentUid?:     string,                 // present iff this task has a parent
+ *     depth:          number,                 // 0 for root tasks
+ *     budget: {
+ *       tokensRemaining?:  number,            // from runConfig.tokenLimit
+ *       secondsRemaining?: number,            // from optional callback
+ *     },
+ *   }
+ *
+ * The runner registers the tool inside the substrate-tools provider
+ * alongside `spawn_child_task` / `wait_*` (see `main.ts`). When the
+ * Agent spec declares `get_my_context` in its tool list, the executor
+ * routes calls here.
+ * ===================================================================== */
+
+export interface GetMyContextDeps {
+  /** Parsed pod env. Source of truth for taskUid / agentName / depth / parent. */
+  readonly podConfig: import('./env.js').PodConfig;
+  /**
+   * Optional wall-clock budget callback. Returns the remaining seconds
+   * until the parent's Job activeDeadlineSeconds fires (or undefined
+   * when the task has no deadline). Identical contract to the
+   * `remainingBudgetSeconds` opt on `defineSpawnChildTask`. main.ts
+   * wires the same instance into both tools so they share an answer.
+   */
+  readonly remainingBudgetSeconds?: () => number | undefined;
+}
+
+/**
+ * Build the `get_my_context` tool definition. Returns an
+ * `InProcessToolDefinition` the caller stitches into a
+ * `ToolProvider` (or registers via the substrate-tools provider in
+ * main.ts). Pure, synchronous handler; no I/O.
+ */
+export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinition {
+  const { podConfig } = deps;
+  return defineInProcessTool({
+    name: 'get_my_context',
+    description:
+      "Return this task's identity (uid, name, namespace, agent), its " +
+      'depth in the spawn tree (root = 0), its optional parent task UID, ' +
+      'and the remaining budget (tokens, seconds) — without making an ' +
+      'LLM call. Use this BEFORE spawning children to decide whether ' +
+      'enough wall-clock or token budget remains to be useful.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'introspection', 'read-only'],
+    handler: () => {
+      const tokenLimit = podConfig.taskSpec.runConfig?.tokenLimit;
+      const secondsRemaining = deps.remainingBudgetSeconds?.();
+      const parentUid = podConfig.taskSpec.parentTask;
+      const budget: { tokensRemaining?: number; secondsRemaining?: number } = {};
+      if (typeof tokenLimit === 'number' && tokenLimit > 0) {
+        budget.tokensRemaining = tokenLimit;
+      }
+      if (typeof secondsRemaining === 'number' && Number.isFinite(secondsRemaining)) {
+        budget.secondsRemaining = secondsRemaining;
+      }
+      const ctx: {
+        taskUid: string;
+        taskName: string;
+        taskNamespace: string;
+        agentName: string;
+        parentUid?: string;
+        depth: number;
+        budget: { tokensRemaining?: number; secondsRemaining?: number };
+      } = {
+        taskUid: podConfig.taskId,
+        taskName: podConfig.taskName,
+        taskNamespace: podConfig.taskNamespace,
+        agentName: podConfig.agentName,
+        depth: podConfig.taskDepth,
+        budget,
+      };
+      if (typeof parentUid === 'string' && parentUid.length > 0) {
+        ctx.parentUid = parentUid;
+      }
+      return jsonContent(ctx);
+    },
+  });
+}

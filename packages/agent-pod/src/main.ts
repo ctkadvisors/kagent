@@ -36,6 +36,7 @@ import type { RunResult } from './runner.js';
 import type { ToolProvider } from '@kagent/agent-loop';
 import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 
+import { defineGetMyContext } from './builtin-tools.js';
 import { defineSpawnChildTask } from './builtin-tools-spawn.js';
 import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
 import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
@@ -231,7 +232,14 @@ async function main(): Promise<void> {
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
     });
-    const subTools = [spawnDefs, waitChildDef, waitAllDef];
+    // v0.1.9 — get_my_context. Pure introspection, shares the same
+    // remainingBudgetSeconds callback as spawn_child_task so both
+    // tools agree on what's left.
+    const ctxDef = defineGetMyContext({
+      podConfig: config,
+      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+    });
+    const subTools = [spawnDefs, waitChildDef, waitAllDef, ctxDef];
     // WS-M — append the template tool when the operator's
     // template-server URL was injected. Trust boundary: cluster-internal
     // network only (the operator Service is ClusterIP). Tool errors
