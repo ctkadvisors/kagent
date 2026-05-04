@@ -22,12 +22,22 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
-import { adminAuth, buildCapacityResponse, buildUsageResponse } from './admin-routes.js';
+import {
+  adminAuth,
+  buildCapacityResponse,
+  buildUsageResponse,
+  handleCreateApiKey,
+  handleListApiKeys,
+  handleRevokeApiKey,
+  parseCreateApiKeyBody,
+  parseRevokeIdFromUrl,
+} from './admin-routes.js';
 import { authenticate, type ApiKeyLookup } from './auth.js';
 import { parseKagentHeaders } from './headers.js';
 import type { AimdController } from './aimd.js';
 import type { InFlightCounter } from './inflight-counter.js';
 import type { ModelIndex } from './model-index.js';
+import type { ApiKeyRepo } from './db/api-keys.js';
 import type { UsageRepo } from './db/usage.js';
 import { route, type RouterDeps } from './router.js';
 import { createOpenAIError, type ChatCompletionRequest, type ModelListResponse } from './types.js';
@@ -40,6 +50,15 @@ export interface ServerDeps {
   readonly aimd: AimdController;
   readonly routerDeps: RouterDeps;
   readonly apiKeyLookup: ApiKeyLookup;
+  /**
+   * v0.1.12 — full repo handle for the /admin/keys REST surface.
+   * `apiKeyLookup` above is the bearer-token auth path (one method,
+   * `getByHash`); this is the admin-side write surface (`list`,
+   * `insertAndReturn`, `revoke`). Kept as a separate dep so a deploy
+   * can wire the read-only auth path without bringing in the admin
+   * surface (e.g. a reader-only sidecar).
+   */
+  readonly apiKeyRepo: ApiKeyRepo;
   readonly usageRepo: UsageRepo;
   readonly adminToken: string;
   readonly readinessProbe: () => Promise<boolean>;
@@ -103,6 +122,100 @@ export function buildHandler(
       try {
         const body = await buildUsageResponse(url, deps.usageRepo);
         writeJson(res, 200, body);
+      } catch (err) {
+        writeJson(res, 500, {
+          error: { message: err instanceof Error ? err.message : String(err) },
+        });
+      }
+      return;
+    }
+
+    // v0.1.12 — POST /admin/keys: mint a fresh sk-<random> key.
+    // Returns the plaintext exactly once + the stored hash + assigned id.
+    if (method === 'POST' && url === '/admin/keys') {
+      const auth = adminAuth(req, deps.adminToken);
+      if (!auth.ok) {
+        writeJson(res, auth.statusCode ?? 401, {
+          error: { message: auth.message ?? 'unauthorized' },
+        });
+        return;
+      }
+      let raw: unknown;
+      try {
+        raw = await readJsonBody(req);
+      } catch (err) {
+        writeJson(res, 400, {
+          error: { message: err instanceof Error ? err.message : String(err) },
+        });
+        return;
+      }
+      let body;
+      try {
+        body = parseCreateApiKeyBody(raw);
+      } catch (err) {
+        writeJson(res, 400, {
+          error: { message: err instanceof Error ? err.message : String(err) },
+        });
+        return;
+      }
+      try {
+        const created = await handleCreateApiKey(body, deps.apiKeyRepo);
+        writeJson(res, 200, created);
+      } catch (err) {
+        writeJson(res, 500, {
+          error: { message: err instanceof Error ? err.message : String(err) },
+        });
+      }
+      return;
+    }
+
+    // v0.1.12 — GET /admin/keys: list every key in admin-projection
+    // shape (no plaintext, no key_hash; only the hash prefix is shown).
+    if (
+      method === 'GET' &&
+      url.startsWith('/admin/keys') &&
+      parseRevokeIdFromUrl(url) === undefined
+    ) {
+      const auth = adminAuth(req, deps.adminToken);
+      if (!auth.ok) {
+        writeJson(res, auth.statusCode ?? 401, {
+          error: { message: auth.message ?? 'unauthorized' },
+        });
+        return;
+      }
+      try {
+        const body = await handleListApiKeys(deps.apiKeyRepo);
+        writeJson(res, 200, body);
+      } catch (err) {
+        writeJson(res, 500, {
+          error: { message: err instanceof Error ? err.message : String(err) },
+        });
+      }
+      return;
+    }
+
+    // v0.1.12 — DELETE /admin/keys/:id: soft-delete via UPDATE
+    // status='revoked' + revoked_at=NOW(). 404 when no row matches.
+    if (method === 'DELETE' && url.startsWith('/admin/keys/')) {
+      const auth = adminAuth(req, deps.adminToken);
+      if (!auth.ok) {
+        writeJson(res, auth.statusCode ?? 401, {
+          error: { message: auth.message ?? 'unauthorized' },
+        });
+        return;
+      }
+      const id = parseRevokeIdFromUrl(url);
+      if (id === undefined) {
+        writeJson(res, 400, { error: { message: 'expected /admin/keys/:id' } });
+        return;
+      }
+      try {
+        const result = await handleRevokeApiKey(id, deps.apiKeyRepo);
+        if (!result.revoked) {
+          writeJson(res, 404, { error: { message: `api key id=${id} not found` } });
+          return;
+        }
+        writeJson(res, 200, result);
       } catch (err) {
         writeJson(res, 500, {
           error: { message: err instanceof Error ? err.message : String(err) },

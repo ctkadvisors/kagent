@@ -94,6 +94,7 @@ async function main(): Promise<void> {
       h,
     ): Promise<ReturnType<typeof apiKeyRepo.getByHash> extends Promise<infer T> ? T : never> =>
       apiKeyRepo.getByHash(h),
+    apiKeyRepo,
     adminToken: cfg.adminApiToken,
     readinessProbe: () => pingPool(pool),
     routerDeps: {
