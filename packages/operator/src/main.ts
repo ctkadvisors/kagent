@@ -25,7 +25,14 @@ import {
   type V1SecurityContext,
   makeInformer,
 } from '@kubernetes/client-node';
-import { AuditPublisher, TASK_ADMITTED, makeEvent } from '@kagent/audit-events';
+import {
+  AuditPublisher,
+  INFRA_FAULT_OBSERVED,
+  SUPERVISION_APPLIED,
+  SUPERVISION_RESTART_LIMIT_EXCEEDED,
+  TASK_ADMITTED,
+  makeEvent,
+} from '@kagent/audit-events';
 import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import {
@@ -57,6 +64,14 @@ import {
   reconcileParentFromChildEvent,
   type ReconcileDeps,
 } from './reconcile.js';
+import {
+  routeFailureForSupervision,
+  type SupervisionAppliedFields,
+  type SupervisionAuditHooks,
+  type SupervisionRestartLimitExceededFields,
+  type SupervisionRouterDeps,
+  type InfraFaultFields,
+} from './supervision-router.js';
 import { IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
@@ -682,12 +697,16 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
  * Exported for tests and for any embedded harness that wants to drive
  * the operator without booting an informer.
  */
-export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
+export function buildHandler(
+  deps: ReconcileDeps,
+  supervisionDeps?: SupervisionHandlerDeps,
+): AgentTaskHandler {
   return {
     async onAdd(task) {
       const result = await reconcileAgentTask(task, deps);
       logResult('add', task, result);
       await maybeReconcileParent('add', task, deps);
+      await maybeRouteSupervision(task, supervisionDeps);
     },
     async onUpdate(task) {
       const result = await reconcileAgentTask(task, deps);
@@ -700,6 +719,14 @@ export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
       // safe (the merge-patch with phase=Failed becomes a no-op once
       // landed).
       await maybeEnforceCompletionContract(task, deps);
+      // === Wave 2 — Supervision ===
+      // v0.3.1-supervision — when the task lands in phase=Failed, run
+      // the supervision strategy engine against the parent's Agent
+      // (default `one_for_one`). Pure no-op for non-failed tasks +
+      // for root tasks without a parent label. See
+      // supervision-router.ts for the routing semantics + the
+      // `@kagent/supervision` package for the pure decision engine.
+      await maybeRouteSupervision(task, supervisionDeps);
     },
     onDelete(task) {
       console.log(
@@ -710,6 +737,47 @@ export function buildHandler(deps: ReconcileDeps): AgentTaskHandler {
       console.error('[kagent-operator] watch error:', err);
     },
   };
+}
+
+/* === Wave 2 — Supervision ===
+ * Wired by the buildHandler factory; passed in alongside the v0.1
+ * ReconcileDeps so the handler can route Failed events through the
+ * supervision strategy engine without bloating ReconcileDeps. Tests
+ * leave `supervisionDeps` undefined; production wiring constructs
+ * the SupervisionRouterDeps from the same informer/audit objects. */
+export interface SupervisionHandlerDeps {
+  readonly enabled: boolean;
+  readonly router: SupervisionRouterDeps;
+}
+
+async function maybeRouteSupervision(
+  task: import('./crds/index.js').AgentTask,
+  supervisionDeps: SupervisionHandlerDeps | undefined,
+): Promise<void> {
+  if (supervisionDeps === undefined) return;
+  if (!supervisionDeps.enabled) return;
+  if (task.status?.phase !== 'Failed') return;
+  try {
+    const result = await routeFailureForSupervision(task, supervisionDeps.router);
+    const id = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
+    if (result.kind === 'applied') {
+      console.log(
+        `[kagent-operator] supervision: ${id} → ${result.decision.strategy}/${result.decision.action} ` +
+          `targets=${result.decision.targets.length.toString()} ` +
+          `restart-limit-tripped=${result.restartLimitTripped.length.toString()}`,
+      );
+    } else if (result.kind === 'infra-fault-observed') {
+      console.log(`[kagent-operator] supervision: ${id} → infra fault observed: ${result.reason}`);
+    } else if (result.kind === 'escalated') {
+      console.warn(
+        `[kagent-operator] supervision: ${id} → escalation depth cap reached (${result.depth.toString()})`,
+      );
+    } else {
+      console.debug(`[kagent-operator] supervision: ${id} → no-op (${result.reason})`);
+    }
+  } catch (err) {
+    console.error('[kagent-operator] supervision-router raised:', err);
+  }
 }
 
 /**
@@ -1016,7 +1084,30 @@ async function main(): Promise<void> {
     idempotencyCache,
     ...(Object.keys(jobSpecOptions).length > 0 && { jobSpecOptions }),
   };
-  const handler = buildHandler(deps);
+
+  // === Wave 2 — Supervision ===
+  // Wire the supervision router with a mutable audit-hooks holder so
+  // the handler can be constructed BEFORE the audit publisher
+  // (the informer construction depends on the handler; the audit
+  // publisher init order stays where it is). The audit init below
+  // populates `supervisionAuditHolder.hooks` once the publisher is
+  // connected; until then, the router's audit emissions no-op
+  // gracefully (publisher not configured).
+  const supervisionAuditHolder: { hooks?: SupervisionAuditHooks } = {};
+  const supervisionRouterDeps: SupervisionRouterDeps = {
+    customApi,
+    listChildrenForParent,
+    get audit(): SupervisionAuditHooks | undefined {
+      return supervisionAuditHolder.hooks;
+    },
+  } as SupervisionRouterDeps;
+  const supervisionEnabled = process.env.KAGENT_SUPERVISION_ENABLED !== 'false';
+  const supervisionHandlerDeps: SupervisionHandlerDeps = {
+    enabled: supervisionEnabled,
+    router: supervisionRouterDeps,
+  };
+
+  const handler = buildHandler(deps, supervisionHandlerDeps);
   // Single informer-opts object reused for both the AgentTask and the
   // Job/Pod informers — keeps the namespace toggle in lockstep so a
   // misconfiguration can't scope one watch but not the other.
@@ -1117,6 +1208,69 @@ async function main(): Promise<void> {
     console.log(
       `[kagent-operator] audit publisher configured → ${auditNatsUrl} (best-effort, non-critical)`,
     );
+
+    // === Wave 2 — Supervision ===
+    // Wire supervision audit hooks against the same publisher.
+    // Pre-supervision events are NOT emitted until this point — the
+    // mutable holder pattern lets the handler / router stay
+    // referentially stable while the publisher comes online lazily.
+    supervisionAuditHolder.hooks = {
+      emitSupervisionApplied: async (fields: SupervisionAppliedFields) => {
+        const event = makeEvent({
+          type: SUPERVISION_APPLIED,
+          source: auditSource,
+          subject: `AgentTask/${fields.parentTaskNamespace}/${fields.parentTaskName ?? '(no-name)'}`,
+          data: {
+            parentTaskUid: fields.parentTaskUid,
+            parentTaskNamespace: fields.parentTaskNamespace,
+            parentTaskName: fields.parentTaskName,
+            agentName: fields.agentName,
+            strategy: fields.strategy,
+            action: fields.action,
+            failedTaskUid: fields.failedTaskUid,
+            failureReason: fields.failureReason,
+            targets: fields.targets,
+            reason: fields.reason,
+          },
+        });
+        await publisher.publish(event);
+      },
+      emitSupervisionRestartLimitExceeded: async (
+        fields: SupervisionRestartLimitExceededFields,
+      ) => {
+        const event = makeEvent({
+          type: SUPERVISION_RESTART_LIMIT_EXCEEDED,
+          source: auditSource,
+          subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+          data: {
+            taskUid: fields.taskUid,
+            taskNamespace: fields.taskNamespace,
+            taskName: fields.taskName,
+            agentName: fields.agentName,
+            restartCount: fields.restartCount,
+            maxRestarts: fields.maxRestarts,
+          },
+        });
+        await publisher.publish(event);
+      },
+      emitInfraFault: async (fields: InfraFaultFields) => {
+        const event = makeEvent({
+          type: INFRA_FAULT_OBSERVED,
+          source: auditSource,
+          subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+          data: {
+            taskUid: fields.taskUid,
+            taskNamespace: fields.taskNamespace,
+            taskName: fields.taskName,
+            agentName: fields.agentName,
+            source: fields.source,
+            reason: fields.reason,
+            message: fields.message,
+          },
+        });
+        await publisher.publish(event);
+      },
+    };
   } else {
     console.log(
       '[kagent-operator] no KAGENT_AUDIT_NATS_URL set — audit emission disabled (set audit.enabled=true in chart values)',
