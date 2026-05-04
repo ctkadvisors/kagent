@@ -200,12 +200,26 @@ async function main(): Promise<void> {
             return Math.max(0, totalSec - elapsedSec);
           })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
         : undefined;
+    // v0.1.9 — cluster-level depth cap. Operator forwards
+    // `KAGENT_AGENT_POD_MAX_DEPTH` from its own env (Helm value
+    // `agentPod.maxDepth`, default 4) so the in-pod tool refuses
+    // before issuing a K8s create. Bad value → undefined → spawn
+    // tool falls back to its own DEFAULT_AGENT_POD_MAX_DEPTH=4.
+    const maxDepthRaw = process.env.KAGENT_AGENT_POD_MAX_DEPTH;
+    const maxDepthParsed =
+      typeof maxDepthRaw === 'string' && maxDepthRaw.length > 0
+        ? Number.parseInt(maxDepthRaw, 10)
+        : Number.NaN;
+    const maxDepth =
+      Number.isInteger(maxDepthParsed) && maxDepthParsed >= 0 ? maxDepthParsed : undefined;
+
     const spawnDefs = defineSpawnChildTask({
       parent,
       parentAgentName: config.agentName,
       parentAgentSpec: config.agentSpec,
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+      ...(maxDepth !== undefined && { maxDepth }),
     });
     const waitChildDef = defineWaitForChildTask({
       parent,
