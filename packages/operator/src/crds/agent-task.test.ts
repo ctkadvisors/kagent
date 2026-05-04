@@ -52,9 +52,7 @@ describe('fromKindOrNull (admission discriminant)', () => {
   });
 
   it('rejects multiple discriminants set (oneOf violation)', () => {
-    expect(
-      fromKindOrNull({ workspace: 'w', taskUid: 'u', output: 'o' }),
-    ).toBe(null);
+    expect(fromKindOrNull({ workspace: 'w', taskUid: 'u', output: 'o' })).toBe(null);
   });
 
   it('rejects zero discriminants set', () => {

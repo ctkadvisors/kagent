@@ -23,6 +23,8 @@ import type {
   V1VolumeMount,
 } from '@kubernetes/client-node';
 
+import * as cacheController from '@kagent/cache-controller';
+
 import type { Agent, AgentTask, InputDecl } from './crds/index.js';
 import { isFromWorkspace } from './crds/agent-task.js';
 
@@ -250,6 +252,39 @@ export interface BuildJobSpecOptions {
     readonly claimName: string;
     /** Container path the PVC mounts at. Defaults to `/var/kagent/artifacts`. */
     readonly mountPath?: string;
+  };
+  /**
+   * v0.4.2-cache — Wave 3 / Cache sub-team. Per-Agent persistent cache
+   * plumbing. When set + the Agent declares `Agent.spec.caches[]`,
+   * `buildJobSpec` calls {@link buildCacheMounts} internally to derive
+   * keys, probe the cache PVC for hits, and splice an init-container
+   * (cache restore) + per-slot emptyDir mounts onto the rendered Pod.
+   *
+   * The caller is responsible for:
+   *   - emitting `cache.hit` / `cache.miss` audit events from the
+   *     returned `BuildJobSpecResult.cacheSlots[]` (NOT yet exposed
+   *     in v0.4.2; tracked in WAVES.md follow-up — for now, use the
+   *     standalone `buildCacheMounts` helper if you need the slots).
+   *   - resolving the `imageDigest` + `inputArtifactHashes` (the
+   *     reconciler walks the AgentTask informer for upstream artifact
+   *     refs).
+   *
+   * When unset OR when the Agent declares no caches, NO cache plumbing
+   * is added — the field is additive, never invasive.
+   */
+  readonly cache?: {
+    /** Cache PVC claim name. Same PVC the operator pod mounts. */
+    readonly pvcName: string;
+    /** Cache PVC mount path on the OPERATOR pod (NOT the agent-pod). */
+    readonly cachePvcMountOnOperator: string;
+    /** Disk probe — defaults to `existsSync` in main.ts plumbing. */
+    readonly existsOnDisk: (absolutePath: string) => boolean;
+    /** Resolved image digest the operator stamps onto cache key derivation. */
+    readonly imageDigest: string;
+    /** sha256-hex hashes of every kind:'artifact' input bound on the task. */
+    readonly inputArtifactHashes: readonly string[];
+    /** Optional helper-image override (busybox by default). */
+    readonly helperImage?: string;
   };
   /**
    * Pod-level security context. Defaults (WS-A baseline) to:
@@ -519,12 +554,41 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
       }
     : undefined;
 
-  const podVolumes = [artifactVolume, tmpVolume, configVolume].filter(
+  const podVolumes: V1Volume[] = [artifactVolume, tmpVolume, configVolume].filter(
     (v): v is NonNullable<typeof v> => v !== undefined,
   );
-  const containerVolumeMounts = [artifactVolumeMount, tmpVolumeMount, configVolumeMount].filter(
-    (v): v is NonNullable<typeof v> => v !== undefined,
-  );
+  const containerVolumeMounts: V1VolumeMount[] = [
+    artifactVolumeMount,
+    tmpVolumeMount,
+    configVolumeMount,
+  ].filter((v): v is NonNullable<typeof v> => v !== undefined);
+
+  // v0.4.2-cache — Wave 3 / Cache sub-team. When the operator threads
+  // a `cache:` block (Helm `cache.enabled: true`), call the
+  // `buildCacheMounts` helper to derive cache keys + probe the cache
+  // PVC. Splice the result onto the rendered Pod spec:
+  //   - per-slot emptyDirs (always emitted, hit OR miss)
+  //   - one read-only PVC mount + one init-container (only when ≥1 hit)
+  // Returned `cacheResult.perSlot` is intentionally NOT surfaced from
+  // `buildJobSpec` itself — callers that need audit emission should
+  // call `buildCacheMounts` directly. The reconciler's plumbing in
+  // main.ts emits the audit events from a separate helper call.
+  let cacheInitContainers: import('@kubernetes/client-node').V1Container[] = [];
+  if (opts.cache !== undefined && (agent.spec.caches?.length ?? 0) > 0) {
+    const cacheResult = buildCacheMounts({
+      agent,
+      task,
+      pvcName: opts.cache.pvcName,
+      cachePvcMountOnOperator: opts.cache.cachePvcMountOnOperator,
+      existsOnDisk: opts.cache.existsOnDisk,
+      imageDigest: opts.cache.imageDigest,
+      inputArtifactHashes: opts.cache.inputArtifactHashes,
+      ...(opts.cache.helperImage !== undefined && { helperImage: opts.cache.helperImage }),
+    });
+    podVolumes.push(...cacheResult.volumes);
+    containerVolumeMounts.push(...cacheResult.volumeMounts);
+    cacheInitContainers = [...cacheResult.initContainers];
+  }
 
   // WS-C — RuntimeClass resolution: map-driven (per-Agent) wins over
   // the deprecated free-form `opts.runtimeClassName`. Profile defaults
@@ -587,6 +651,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         }),
         ...(podSecurityContext !== undefined && { securityContext: podSecurityContext }),
         ...(podVolumes.length > 0 && { volumes: podVolumes }),
+        ...(cacheInitContainers.length > 0 && { initContainers: cacheInitContainers }),
         containers: [
           {
             name: 'agent',
@@ -908,5 +973,174 @@ export function buildArtifactMounts(opts: BuildArtifactMountsOptions): BuildArti
   return {
     volumes: [{ name: CAS_VOLUME_NAME, persistentVolumeClaim: { claimName: opts.pvcName } }],
     volumeMounts: [{ name: CAS_VOLUME_NAME, mountPath, readOnly: true }],
+  };
+}
+
+/* =====================================================================
+ * v0.4.2-cache — Wave 3 / Cache sub-team.
+ *
+ * `buildCacheMounts` translates `Agent.spec.caches[]` declarations into
+ * the (initContainers, volumes, volumeMounts, perSlotResults) bundle the
+ * operator splices onto the rendered Job spec. Distinct from the Wave 1
+ * helpers (`buildWorkspaceMounts`, `buildArtifactMounts`) — additive
+ * only, no shared state, no shared volume names.
+ *
+ * Topology summary (see `@kagent/cache-controller`'s `restore.ts` for the
+ * gory details):
+ *
+ *   - Per declared cache slot: one emptyDir volume, mounted at the
+ *     slot's `mountPath` on the agent container. Always present.
+ *   - When at least one slot HIT in the PVC probe: one read-only PVC
+ *     volume mounted on a single `kagent-cache-restore` init-container,
+ *     plus all the per-slot emptyDirs mounted there too. The init-
+ *     container `cp -r`s each hit slot's blob from the PVC into the
+ *     emptyDir.
+ *   - When zero slots hit: no init-container, no PVC volume. The
+ *     emptyDirs are still emitted so the agent's mountPath is writable
+ *     on cold start.
+ *
+ * Audit emission (`cache.hit` / `cache.miss`) is the operator's
+ * responsibility AFTER calling this helper — caller pulls
+ * `perSlotResults` and emits one event per entry. Helper stays
+ * pure-functional + side-effect-free.
+ * ===================================================================== */
+
+/**
+ * Inputs to {@link buildCacheMounts}. The caller supplies the PVC name
+ * + mount path (Helm-config'd in `cache:` block) plus a probe that
+ * resolves cache hits on disk.
+ */
+export interface BuildCacheMountsOptions {
+  readonly agent: Agent;
+  readonly task: AgentTask;
+  /**
+   * Cache PVC claim name in the AgentTask's namespace. The same PVC
+   * the operator pod mounts at `cachePvcMountOnOperator` for the disk
+   * probe. v0.4.2 supports the cache PVC and the CAS PVC being the
+   * same volume (Helm `cache.pvcName` defaults to `cas.pvcName`); the
+   * file layouts don't collide (`cas/sha256/...` vs. `cache/sha256/...`).
+   */
+  readonly pvcName: string;
+  /**
+   * Cache PVC mount path on the OPERATOR pod, NOT the agent-pod.
+   * Operator probes for hits via `existsOnDisk(<this>/<rel>)`.
+   */
+  readonly cachePvcMountOnOperator: string;
+  /** Caller-supplied disk probe; defaults to `existsSync` in main.ts. */
+  readonly existsOnDisk: (absolutePath: string) => boolean;
+  /**
+   * Image digest the operator resolved for this Agent's container.
+   * Threaded through so `deriveCacheKey` can substitute `{image_digest}`.
+   * Empty string is acceptable (key derivation handles it deterministically).
+   */
+  readonly imageDigest: string;
+  /**
+   * sha256-hex hashes of every `kind: 'artifact'` input bound on the
+   * task. Resolved by the caller (the reconciler walks
+   * `task.spec.inputs[]` matching `Agent.spec.inputs[].kind === 'artifact'`
+   * and looks up the `cas://sha256:<hex>` URIs from the upstream
+   * AgentTask's status). Empty array when the task binds no artifacts.
+   */
+  readonly inputArtifactHashes: readonly string[];
+  /** Helper image override (defaults to busybox). */
+  readonly helperImage?: string;
+}
+
+/**
+ * Per-slot lookup result the caller emits as `cache.hit` /
+ * `cache.miss` audit events. Distinct from
+ * `@kagent/cache-controller`'s internal `CacheLookupResult` so the
+ * operator's audit-emission code doesn't have to re-derive the slot
+ * name + mount path.
+ */
+export interface BuildCacheMountsSlotResult {
+  /** `Agent.spec.caches[].name` — for the audit event subject. */
+  readonly slotName: string;
+  /** sha256-hex of the rendered key. */
+  readonly key: string;
+  /** Container path the cache mounts at; for the audit event payload. */
+  readonly mountPath: string;
+  readonly outcome: 'hit' | 'miss';
+}
+
+/**
+ * Result the caller splices onto the rendered Job spec. Empty everything
+ * when the Agent declares no caches.
+ *
+ * `initContainers` is shaped as `V1Container` from
+ * `@kubernetes/client-node`; consumers may pass it through to a
+ * `V1PodSpec.initContainers` field unchanged.
+ */
+export interface BuildCacheMountsResult {
+  readonly initContainers: readonly import('@kubernetes/client-node').V1Container[];
+  readonly volumes: readonly V1Volume[];
+  readonly volumeMounts: readonly V1VolumeMount[];
+  readonly perSlot: readonly BuildCacheMountsSlotResult[];
+  readonly hitCount: number;
+  readonly missCount: number;
+}
+
+/**
+ * Build the cache-mount bundle for an Agent + Task pair. Unconditional
+ * call — returns empty arrays when the Agent declares no caches, so
+ * the caller can spread the result into the Job spec without
+ * branching.
+ *
+ * The caller is responsible for emitting `cache.hit` / `cache.miss`
+ * audit events from `perSlot`. Pure-functional otherwise.
+ */
+export function buildCacheMounts(opts: BuildCacheMountsOptions): BuildCacheMountsResult {
+  const slots = opts.agent.spec.caches ?? [];
+  if (slots.length === 0 || typeof opts.pvcName !== 'string' || opts.pvcName.length === 0) {
+    return {
+      initContainers: [],
+      volumes: [],
+      volumeMounts: [],
+      perSlot: [],
+      hitCount: 0,
+      missCount: 0,
+    };
+  }
+
+  // Stage 1 — derive keys + probe each slot. Done via the
+  // pure-functional `lookupCacheEntries` helper from
+  // `@kagent/cache-controller`.
+  const lookups = cacheController.lookupCacheEntries({
+    agent: { spec: { model: opts.agent.spec.model, caches: slots } },
+    task: {
+      spec: { ...(opts.task.spec.inputs !== undefined && { inputs: opts.task.spec.inputs }) },
+    },
+    ctx: {
+      imageDigest: opts.imageDigest,
+      inputArtifactHashes: opts.inputArtifactHashes,
+    },
+    cachePvcMountOnOperator: opts.cachePvcMountOnOperator,
+    existsOnDisk: opts.existsOnDisk,
+  });
+
+  // Stage 2 — build the init-container + volumes via the same
+  // pure-functional helper.
+  const restore = cacheController.buildCacheRestoreInitContainer({
+    slots,
+    lookups,
+    pvcName: opts.pvcName,
+    ...(opts.helperImage !== undefined && { image: opts.helperImage }),
+  });
+
+  // Stage 3 — flatten into the operator-facing slot summary.
+  const perSlot: BuildCacheMountsSlotResult[] = slots.map((s, i) => ({
+    slotName: s.name,
+    key: lookups[i]!.key,
+    mountPath: s.mountPath,
+    outcome: lookups[i]!.outcome,
+  }));
+
+  return {
+    initContainers: restore.initContainers,
+    volumes: restore.volumes,
+    volumeMounts: restore.volumeMounts,
+    perSlot,
+    hitCount: restore.hitCount,
+    missCount: restore.missCount,
   };
 }

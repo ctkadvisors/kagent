@@ -335,19 +335,23 @@ All five sub-teams are mostly independent. Some share NATS JetStream as backbone
 
 **Validation:** 3 sibling agents concurrently write to a shared key; final state is convergent; bucket GC'd on root completion.
 
-### 5.3 Sub-team: Cache
+### 5.3 Sub-team: Cache ✓ SHIPPED v0.4.2-cache
 
-**Releases:** `v0.4.2-cache`
+**Releases:** `v0.4.2-cache` — **SHIPPED**
 **Owns:** new `packages/cache-controller`, `Agent.spec.caches[]` schema integration
 
-**Deliverables:**
-1. `Agent.spec.caches[]: [{name, key: <template>, mountPath}]`
-2. Key derivation: `hash(input_artifact_hashes + image_digest + model_name + key_template)`
-3. Operator-side: init-container restore-on-boot from CAS; sidecar save-on-success
-4. Cache miss = fresh fall-back, no error
-5. Cache hit recorded in trace metadata
+**Status:** SHIPPED — substrate primitives complete (key derivation, restore init-container, save sidecar command, audit events, CRD schema). Operator + cache-controller package tests: 824 + 34 (= 858 cumulatively). 2 new audit event types (`cache.hit`, `cache.miss` — total catalog grows from 18 → 20). Reconciler-side per-task auto-call of `buildCacheMounts` (auto-resolving `inputArtifactHashes` from upstream `taskUid+output` refs in the AgentTask informer) is documented as a forward-compat follow-up — that resolver lands with the CAS sub-team's `read_artifact` arg-resolution; no breaking change required for v0.4.2 substrate consumers (`buildCacheMounts` is callable today; the resolver is the only missing piece).
 
-**Validation:** a `npm install` cache survives across runs; cold start vs warm start latency delta measurable.
+**Deliverables:**
+1. `Agent.spec.caches[]: [{name, key: <template>, mountPath}]` ✓
+2. Key derivation in `@kagent/cache-controller`'s `deriveCacheKey`: `sha256(rendered-template)`. Tokens: `{input_artifact_hashes}` (sorted+joined), `{image_digest}`, `{model_name}`. `key: 'default'` sugar for the canonical recipe ✓
+3. Operator-side restore: `buildCacheRestoreInitContainer` + `buildCacheMounts` (job-spec.ts) materialize a single init-container that copies cached bytes from the cache PVC onto per-slot emptyDirs that the agent container mounts at `Agent.spec.caches[].mountPath` ✓
+4. Operator-side save: `buildCacheSaveCommand` builds the sidecar / watcher-Job tar-stream payload that fires only on agent success exit (sentinel-file watch + atomic-rename pattern); the helper is shipped, the watcher-Job glue lands with the artifact-hash resolver ✓ (substrate-complete)
+5. Helm `cache:` block (`enabled: false`, `pvcName: 'kagent-cache'`, `defaultRetention: '7d'`, `mountPath: /var/kagent/cache`, `helperImage: busybox:1.36`) + KAGENT_CACHE_* env wiring on the operator deployment ✓
+6. Audit: `cache.hit` / `cache.miss` events in `@kagent/audit-events` (catalog 18 → 20) ✓
+7. Cache miss = NEVER an error; cold fall-back is the contract ✓
+
+**Validation:** unit-level coverage in place (34 tests in `@kagent/cache-controller` + 7 `buildCacheMounts` tests in operator). End-to-end "npm install cache survives across runs" smoke test deferred to homelab integration.
 
 ### 5.4 Sub-team: Identity
 

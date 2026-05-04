@@ -28,6 +28,7 @@
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
     "@kagent/audit-events": "workspace:*",
+    "@kagent/cache-controller": "workspace:*",
     "@kagent/capability-types": "workspace:*",
     "@kagent/supervision": "workspace:*",
     "@kagent/triggers": "workspace:*",

@@ -52,9 +52,18 @@ export const WORKFLOW_COMPLETED = 'workflow.completed' as const;
 export const WORKFLOW_FAILED = 'workflow.failed' as const;
 export const WORKFLOW_EVENT_SUBSCRIPTION_PENDING = 'workflow.event_subscription_pending' as const;
 
+/* v0.4.2-cache — Wave 3 / Cache sub-team. Per-Agent persistent caches
+ * keyed by sha256(template-render). One emission per cache-slot lookup
+ * (so an Agent declaring N caches emits N events at admission time).
+ * Cache miss is NEVER an error; the event records that the slot was
+ * looked up + missed for cache-effectiveness telemetry. See
+ * docs/WAVES.md §5.3. */
+export const CACHE_HIT = 'cache.hit' as const;
+export const CACHE_MISS = 'cache.miss' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(18)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(20)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -76,4 +85,6 @@ export const ALL_EVENT_TYPES = Object.freeze([
   WORKFLOW_COMPLETED,
   WORKFLOW_FAILED,
   WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
+  CACHE_HIT,
+  CACHE_MISS,
 ] as const);

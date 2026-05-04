@@ -16,6 +16,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALL_EVENT_TYPES,
+  CACHE_HIT,
+  CACHE_MISS,
   CAPABILITY_MINTED,
   CHILD_SPAWNED,
   CONTRACT_VIOLATED,
@@ -369,11 +371,51 @@ describe('makeEvent — discriminated-union per-type', () => {
     });
     expect(event.data.violation).toBe('missing_required_output');
   });
+
+  /* v0.4.2-cache — Wave 3 / Cache sub-team. */
+  it('builds a cache.hit envelope with the slot key', () => {
+    const event = makeEvent({
+      type: CACHE_HIT,
+      source: 'kagent.knuteson.io/operator',
+      subject: 'AgentTask/default/r-1',
+      data: {
+        taskUid: 'u',
+        taskNamespace: 'default',
+        taskName: 'r-1',
+        agentName: 'agent-x',
+        slotName: 'npm-cache',
+        key: 'a'.repeat(64),
+        mountPath: '/var/cache/npm',
+      },
+    });
+    expect(event.type).toBe('cache.hit');
+    expect(event.data.slotName).toBe('npm-cache');
+    expect(event.data.key.length).toBe(64);
+  });
+
+  it('builds a cache.miss envelope', () => {
+    const event = makeEvent({
+      type: CACHE_MISS,
+      source: 'kagent.knuteson.io/operator',
+      subject: 'AgentTask/default/r-1',
+      data: {
+        taskUid: 'u',
+        taskNamespace: 'default',
+        taskName: 'r-1',
+        agentName: 'agent-x',
+        slotName: 'pip-cache',
+        key: 'b'.repeat(64),
+        mountPath: '/var/cache/pip',
+      },
+    });
+    expect(event.type).toBe('cache.miss');
+    expect(event.data.slotName).toBe('pip-cache');
+  });
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 18 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(18);
+  it('exports exactly 20 event-type strings (10 Wave 0 + 3 v0.3.1-supervision + 5 v0.3.2-workflows + 2 v0.4.2-cache)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(20);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -398,6 +440,9 @@ describe('event-types catalog', () => {
       'workflow.completed',
       'workflow.failed',
       'workflow.event_subscription_pending',
+      // v0.4.2-cache — Wave 3 / Cache sub-team additions.
+      'cache.hit',
+      'cache.miss',
     ]);
   });
 });

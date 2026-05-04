@@ -230,7 +230,7 @@ Five mostly-independent components ship in parallel.
 |---|---|---|---|
 | `v0.4.0-events` | Typed pub/sub on NATS JetStream; `Agent.spec.publishes/subscribes`; capability-gated topic ACLs | Events | 1 week |
 | `v0.4.1-blackboard` | Task-tree-scoped typed KV (NATS JetStream KV backend); `read_blackboard`/`write_blackboard` built-ins | Blackboard | 1 week |
-| `v0.4.2-cache` | Best-effort cache primitive keyed by `(input_hash, image_digest, model_name)`; restore-on-boot, save-on-success | Cache | 1 week |
+| `v0.4.2-cache` ✓ | Best-effort cache primitive keyed by `(input_hash, image_digest, model_name)`; restore-on-boot, save-on-success | Cache | SHIPPED |
 | `v0.4.3-identity` | SPIFFE workload identity; mTLS for agent-pod ↔ gateway; per-Agent SVID replaces shared bearer tokens | Identity | 1.5 weeks |
 | `v0.4.4-locality` | NodeAffinity from Workspace placement; speculative execution for slow stragglers; pod-pressure circuit breaker | Locality | 3 days |
 

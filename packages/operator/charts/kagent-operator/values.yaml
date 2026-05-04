@@ -320,6 +320,60 @@ cas:
     # sure the reachability set is what you think it is.
     dryRun: false
 
+# Wave 3 — Cache
+# ---------------------------------------------------------------------
+# v0.4.2-cache — per-Agent persistent caches keyed by sha256 of a
+# rendered template. See docs/WAVES.md §5.3 + docs/SUBSTRATE-V1.md §3.5.
+#
+# Cache identity:
+#   sha256( "<template-rendered>" )
+#
+# The default template (`Agent.spec.caches[].key: 'default'`) sugars to
+#   `{input_artifact_hashes}+{image_digest}+{model_name}`
+# so a re-run with the same image, model, and input artifact hashes
+# resolves to the same URI → cache hit. Cache miss is NEVER an error;
+# the agent runs cold and may populate the slot lazily.
+#
+# Cache and CAS share the same on-disk sharding (`<root>/cache/sha256/<2>/<62>/...`
+# vs. `<root>/cas/sha256/<2>/<62>/...`); the same disk-walk + dedup
+# tooling backs both, so `cache.pvcName` MAY equal `cas.pvcName`. Default
+# is to share the CAS PVC so operators don't have to provision two RWX
+# volumes for a substrate that only writes a few MB of cache per task.
+#
+# What v0.4.2 ships:
+#   - `Agent.spec.caches[]` schema (CRD + TS + drift check)
+#   - `@kagent/cache-controller` package (pure-functional)
+#   - `buildCacheMounts` helper in operator job-spec.ts
+#   - cache.hit / cache.miss audit events
+#   - this Helm block + KAGENT_CACHE_* env wiring
+#
+# What's deferred (forward-compat, no breaking change required):
+#   - Reconciler-side auto-call of buildCacheMounts (requires the
+#     upstream artifact-hash resolver, which the CAS sub-team is
+#     working on as part of `read_artifact` arg-resolution)
+#   - Save-sidecar materialization on `phase=Completed` (the helper
+#     `buildCacheSaveCommand` is shipped; the watcher-Job glue lands
+#     with the resolver work)
+cache:
+  enabled: false
+  # PVC claim name in the AgentTask's namespace. Defaults to sharing
+  # the CAS PVC (`cas.pvcName`) when set, else `kagent-cache`. Provision
+  # separately when you want CAS and cache GC retention to diverge.
+  pvcName: 'kagent-cache'
+  # Container path the PVC mounts at INSIDE THE OPERATOR pod (the
+  # operator probes for hits via existsSync). The agent-pod's per-slot
+  # mountPath is independent — set per-Agent via Agent.spec.caches[].mountPath.
+  mountPath: '/var/kagent/cache'
+  # Default retention duration for any cache slot not refreshed by a
+  # successful run. Format: integer + unit (`s|m|h|d`); single-unit
+  # only. Cache GC piggybacks on the existing CAS GC infra in
+  # follow-up wiring; v0.4.2 records the value but does not run a
+  # standalone cache-GC sweep.
+  defaultRetention: '7d'
+  # Helper image used by the restore init-container + save sidecar.
+  # busybox is sufficient — we need mkdir / cp / tar.
+  helperImage: 'busybox:1.36'
+
 # LLM gateway integration (spec §3, §3.2 admission flow). Off by default
 # — kagent works without the gateway (agents talk to backends via
 # litellmBaseUrl as today). Set enabled=true to:

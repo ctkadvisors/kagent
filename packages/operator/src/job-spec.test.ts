@@ -10,6 +10,7 @@ import {
   ARTIFACT_VOLUME_NAME,
   buildAgentTaskConfigMap,
   buildArtifactMounts,
+  buildCacheMounts,
   buildJobSpec,
   CAS_VOLUME_NAME,
   CONFIG_AGENT_SPEC_KEY,
@@ -856,5 +857,159 @@ describe('buildArtifactMounts (Wave 1 / CAS)', () => {
   it('volume name is stable (CAS_VOLUME_NAME) for status patching', () => {
     expect(CAS_VOLUME_NAME).toBe('kagent-cas');
     expect(DEFAULT_CAS_MOUNT_PATH).toBe('/var/kagent/cas');
+  });
+});
+
+describe('buildCacheMounts (Wave 3 / Cache)', () => {
+  function agentWithCaches(caches?: Agent['spec']['caches']): Agent {
+    return {
+      ...sampleAgent,
+      spec: {
+        ...sampleAgent.spec,
+        ...(caches !== undefined && { caches }),
+      },
+    };
+  }
+
+  it('returns empty everything when Agent declares no caches', () => {
+    const result = buildCacheMounts({
+      agent: sampleAgent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: [],
+    });
+    expect(result.initContainers).toEqual([]);
+    expect(result.volumes).toEqual([]);
+    expect(result.volumeMounts).toEqual([]);
+    expect(result.perSlot).toEqual([]);
+    expect(result.hitCount).toBe(0);
+    expect(result.missCount).toBe(0);
+  });
+
+  it('returns empty everything when pvcName is empty (cache disabled)', () => {
+    const agent = agentWithCaches([{ name: 'npm', key: 'default', mountPath: '/c/npm' }]);
+    const result = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: '',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => true,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: [],
+    });
+    expect(result.initContainers).toEqual([]);
+    expect(result.volumes).toEqual([]);
+    expect(result.perSlot).toEqual([]);
+  });
+
+  it('produces per-slot emptyDir mounts even on cache miss', () => {
+    const agent = agentWithCaches([{ name: 'npm', key: 'default', mountPath: '/c/npm' }]);
+    const result = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: [],
+    });
+    expect(result.initContainers).toEqual([]);
+    // Per-slot emptyDir IS emitted so the agent's mountPath is writable.
+    expect(result.volumes).toHaveLength(1);
+    expect(result.volumes[0]?.emptyDir).toBeDefined();
+    expect(result.volumeMounts[0]?.mountPath).toBe('/c/npm');
+    expect(result.perSlot[0]?.outcome).toBe('miss');
+    expect(result.hitCount).toBe(0);
+    expect(result.missCount).toBe(1);
+  });
+
+  it('emits init-container + cache PVC mount when at least one slot hits', () => {
+    const agent = agentWithCaches([
+      { name: 'npm', key: 'default', mountPath: '/c/npm' },
+      { name: 'pip', key: 'default', mountPath: '/c/pip' },
+    ]);
+    let probeCount = 0;
+    const result = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      // Hit only the first probe.
+      existsOnDisk: () => probeCount++ === 0,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: [],
+    });
+    expect(result.initContainers).toHaveLength(1);
+    expect(result.initContainers[0]?.name).toBe('kagent-cache-restore');
+    expect(result.hitCount).toBe(1);
+    expect(result.missCount).toBe(1);
+    // Volume layout: 1 read-only PVC + 2 per-slot emptyDirs.
+    expect(result.volumes).toHaveLength(3);
+    const pvcVolume = result.volumes.find((v) => v.name === 'kagent-cache');
+    expect(pvcVolume?.persistentVolumeClaim?.readOnly).toBe(true);
+    expect(result.perSlot.map((s) => s.outcome)).toEqual(['hit', 'miss']);
+  });
+
+  it('every perSlot entry has a 64-char sha256 hex key', () => {
+    const agent = agentWithCaches([{ name: 'a', key: 'default', mountPath: '/c/a' }]);
+    const result = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: ['hashA'],
+    });
+    expect(result.perSlot[0]?.key).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('input-artifact-hash order does NOT change the derived keys', () => {
+    const agent = agentWithCaches([{ name: 'npm', key: 'default', mountPath: '/c/npm' }]);
+    const a = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: ['x', 'y'],
+    });
+    const b = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:abc',
+      inputArtifactHashes: ['y', 'x'],
+    });
+    expect(a.perSlot[0]?.key).toBe(b.perSlot[0]?.key);
+  });
+
+  it('changing image digest changes the derived key', () => {
+    const agent = agentWithCaches([{ name: 'npm', key: 'default', mountPath: '/c/npm' }]);
+    const a = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:v1',
+      inputArtifactHashes: [],
+    });
+    const b = buildCacheMounts({
+      agent,
+      task: sampleTask,
+      pvcName: 'kagent-cache',
+      cachePvcMountOnOperator: '/mnt/cache',
+      existsOnDisk: () => false,
+      imageDigest: 'sha256:v2',
+      inputArtifactHashes: [],
+    });
+    expect(a.perSlot[0]?.key).not.toBe(b.perSlot[0]?.key);
   });
 });

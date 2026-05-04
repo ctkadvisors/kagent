@@ -209,9 +209,7 @@ describe('parseEnv', () => {
     it('falls back to env JSON when ConfigMap files are absent (back-compat)', () => {
       const reader: (path: string) => string | undefined = () => undefined;
       const cfg = parseEnv(baseEnv, reader);
-      expect(cfg.agentSpec.model).toBe(
-        'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-      );
+      expect(cfg.agentSpec.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
     });
 
     it('boot-fails with descriptive error when both file path and env are absent', () => {

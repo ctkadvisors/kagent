@@ -151,6 +151,57 @@ spec:
                   items:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                # ---- v0.4.2-cache — Wave 3 / Cache sub-team.
+                # Per-Agent persistent caches keyed by sha256(template-render).
+                # See docs/WAVES.md §5.3 + docs/SUBSTRATE-V1.md §3.5.
+                caches:
+                  type: array
+                  description: |
+                    Per-Agent persistent caches. Each entry is one
+                    cache slot the operator restores at task admission
+                    (init-container copy from cache PVC) and saves at
+                    task completion (sidecar tar-stream back to cache
+                    PVC). Cache identity is sha256 of the rendered
+                    `key` template; same template render → same cache
+                    URI → cache hit. Miss is NEVER an error.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - key
+                      - mountPath
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 63
+                        pattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$'
+                        description: |
+                          Per-Agent stable identifier; the second
+                          path segment of the cache URI
+                          (cache://sha256:<key>/<name>).
+                      key:
+                        type: string
+                        minLength: 1
+                        description: |
+                          Template string. Recognized tokens:
+                          {input_artifact_hashes}, {image_digest},
+                          {model_name}. The literal `default` is
+                          sugar for the canonical recipe
+                          `{input_artifact_hashes}+{image_digest}+{model_name}`.
+                          Any literal substring (e.g.
+                          `npm-{image_digest}-v2`) is preserved
+                          verbatim. Unrecognized {tokens} pass
+                          through unchanged (forward-compat).
+                      mountPath:
+                        type: string
+                        minLength: 1
+                        description: |
+                          Container path the cache contents land at on
+                          restore; same path the sidecar walks on save.
+                          The substrate never picks a path on the
+                          agent's behalf (default-deny per the typed-I/O
+                          mount-path discipline).
                 # ---- v0.3.0-capabilities — Wave 2 / Caps sub-team.
                 # The substrate's sealed-authority primitive per
                 # docs/SUBSTRATE-V1.md §3.6. When set, the operator's

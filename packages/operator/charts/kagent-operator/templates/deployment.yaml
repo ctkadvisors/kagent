@@ -236,6 +236,22 @@ spec:
             - name: KAGENT_CAS_GC_DRY_RUN
               value: {{ .Values.cas.gc.dryRun | quote }}
             {{- end }}
+            {{- if .Values.cache.enabled }}
+            # Wave 3 — Cache
+            # v0.4.2-cache per-Agent persistent caches. Operator-side
+            # restore-on-boot via init-container; save-on-success via
+            # sidecar. Off by default.
+            - name: KAGENT_CACHE_ENABLED
+              value: "true"
+            - name: KAGENT_CACHE_PVC_NAME
+              value: {{ .Values.cache.pvcName | quote }}
+            - name: KAGENT_CACHE_MOUNT_PATH
+              value: {{ .Values.cache.mountPath | quote }}
+            - name: KAGENT_CACHE_RETENTION_DEFAULT
+              value: {{ .Values.cache.defaultRetention | quote }}
+            - name: KAGENT_CACHE_HELPER_IMAGE
+              value: {{ .Values.cache.helperImage | quote }}
+            {{- end }}
             # WS-A — security context defaults for spawned agent pods.
             # Operator's main.ts buildJobSpecOptionsFromEnv parses these
             # JSON envs and threads them into BuildJobSpecOptions so

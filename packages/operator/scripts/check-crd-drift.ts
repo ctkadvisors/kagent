@@ -243,6 +243,8 @@ const expectations: readonly CRDExpectation[] = [
       'inputs',
       'outputs',
       'workspaceClaims',
+      // v0.4.2-cache — Wave 3 / Cache sub-team.
+      'caches',
       // v0.3.1-supervision — Wave 2 / Supervision sub-team.
       'supervisionStrategy',
       'maxRestarts',
