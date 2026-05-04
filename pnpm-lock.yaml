@@ -52,6 +52,12 @@ importers:
       '@kagent/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
+      '@kagent/audit-events':
+        specifier: workspace:*
+        version: link:../audit-events
+      '@kagent/capability-types':
+        specifier: workspace:*
+        version: link:../capability-types
       '@kagent/in-process-tool-provider':
         specifier: workspace:*
         version: link:../in-process-tool-provider
@@ -64,6 +70,9 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
     devDependencies:
       tsx:
         specifier: 4.21.0
@@ -74,6 +83,12 @@ importers:
       nats:
         specifier: 2.29.3
         version: 2.29.3
+
+  packages/capability-types:
+    dependencies:
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
 
   packages/cli:
     dependencies:
@@ -146,12 +161,18 @@ importers:
       '@kagent/audit-events':
         specifier: workspace:*
         version: link:../audit-events
+      '@kagent/capability-types':
+        specifier: workspace:*
+        version: link:../capability-types
       '@kagent/triggers':
         specifier: workspace:*
         version: link:../triggers
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
       nats:
         specifier: 2.29.3
         version: 2.29.3
@@ -1706,8 +1727,8 @@ packages:
     resolution: {integrity: sha512-HGYWWS/ehqTV3xN10i23tkPkpH46MLCIMFNCaaKNavAXTF1RkqxawEPtnjnGZ6XKSInBKkiOA5BKS+aZiY3AvA==}
     engines: {node: '>=8'}
 
-  jose@6.2.2:
-    resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
+  jose@6.2.3:
+    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
   js-tokens@10.0.0:
     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
@@ -2880,7 +2901,7 @@ snapshots:
       express: 5.2.1
       express-rate-limit: 8.4.1(express@5.2.1)
       hono: 4.12.15
-      jose: 6.2.2
+      jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -3904,7 +3925,7 @@ snapshots:
       html-escaper: 2.0.2
       istanbul-lib-report: 3.0.1
 
-  jose@6.2.2: {}
+  jose@6.2.3: {}
 
   js-tokens@10.0.0: {}
 
@@ -4071,7 +4092,7 @@ snapshots:
 
   openid-client@6.8.3:
     dependencies:
-      jose: 6.2.2
+      jose: 6.2.3
       oauth4webapi: 3.8.5
 
   optionator@0.9.4:

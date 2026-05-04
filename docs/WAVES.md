@@ -242,20 +242,20 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 ### 4.1 Sub-team: Caps (foundational, blocks Supervision + Workflows)
 
-**Releases:** `v0.3.0-capabilities`
-**Owns:** new `packages/capability-issuer`, JWT signing/validation, operator capability admission, agent-pod cap consumer
+**Releases:** `v0.3.0-capabilities` — **SHIPPED**
+**Owns:** new `@kagent/capability-types` package, operator `cap-ca` + `cap-issuer`, operator capability admission, agent-pod cap consumer
 **Depends on:** Audit (Wave 0) — every cap mint emits an audit event
 
 **Deliverables:**
-1. JWT capability bundle schema per [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md) §3.6
-2. Operator CA: cert-manager Issuer for capability JWT signing
-3. Capability-issuer controller: mints cap on AgentTask admission; signs; stores `capabilityRef: <jti>` on AgentTask
-4. Agent-pod consumer: reads cap via mounted file or env; surfaces relevant claims via `get_my_context`
-5. Spawn narrowing: `defineSpawnChildTask` and admission both validate child cap ⊆ parent cap
-6. Replace `allowedChildAgents` / `allowedChildTemplates` / `KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS` with cap claims (legacy fields stay readable for one release with deprecation warning)
-7. `verify_completion` substrate hook: AgentTask admission can carry `verifyContract: { llmJudgePromptRef? | scriptRef? }` that runs at status patch time and refuses Completed if it fails
+1. **SHIPPED.** JWT capability bundle schema published as `@kagent/capability-types` per [`SUBSTRATE-V1.md`](./SUBSTRATE-V1.md) §3.6 — types, validators, glob-match, JOSE round-trip helpers (ES256 + RS256; HS256/none rejected). 67 tests.
+2. **SHIPPED.** Operator CA: file-mount path (Helm Secret) is the production default — works WITHOUT cert-manager. cert-manager Issuer path is data-equivalent (chart provisions the Issuer/Certificate; operator just reads the rotated Secret). JWKS document exposed via operator template-server `GET /.well-known/jwks.json`. Rotation cutover via secondary public-key path.
+3. **SHIPPED (logic).** Capability-issuer (`packages/operator/src/cap-issuer.ts`): `mintCapabilityForTask(ca, { task, agent, parentBundle? })` resolves Agent claims, narrows by parent bundle, signs via the CA. The reconciler-side wiring that actually invokes this on every admitted AgentTask is **DEFERRED** to a follow-up release (the issuer + CA are tested + ready; main.ts wiring is the only remaining glue).
+4. **SHIPPED.** Agent-pod consumer (`packages/agent-pod/src/cap-consumer.ts`): reads JWT via mounted Secret-volume file (`KAGENT_CAP_JWT_FILE` — never env), verifies against operator JWKS, surfaces decoded claims via `defineGetMyContext` (extends the introspection result with `capability: { jti, expiresAt, tools, spawn, read, write, egress, tenant }`).
+5. **SHIPPED.** Spawn narrowing: `defineSpawnChildTask` (in-pod) + `validateCapabilityBounds` (operator admission) both refuse `policy_denied:capability_violation` when child target is outside parent's `cap.claims.spawn` (defense in depth). `capability.used` audit hook fires on successful spawn.
+6. **SHIPPED.** Deprecation shim: when an Agent declares `capabilityClaims`, the legacy `allowedChildAgents` / `allowedChildTemplates` / `KAGENT_BUILTIN_TOOLS_HTTP_ALLOW_DOMAINS` fields are SKIPPED in spawn-narrowing (cap takes over). When `capabilityClaims` absent, legacy behavior unchanged. Templates encoded as `template:<name>` patterns under `claims.spawn` so the agent-pod's spawn tool admits them via the `from-template` label round-trip.
+7. **DEFERRED.** `verify_completion` substrate hook: schema field added (`AgentTask.spec.verifyContract: { scriptRef?, llmJudgePromptRef? }` + `status.verification`), but the reconciler-side runner (one-shot Job spawn for scriptRef, model-gateway dispatch for llmJudgePromptRef) is deferred. Schema is forward-compatible — Wave 2 follow-up release lights it up.
 
-**Validation:** an Agent that tries to spawn outside its `cap.claims.spawn` allowlist gets `policy_denied:capability_violation`; cap rotation test confirms expired caps fail closed; audit stream shows `capability.minted` + `capability.used` events.
+**Validation:** ✅ The schema gate, narrowing predicate, and JWT sign+verify round-trip are exhaustively tested (~120 tests in this lane). The end-to-end "operator mints, mounts, agent-pod verifies, spawn narrows" path is integration-level and lands with the issuer-controller wiring follow-up.
 
 ### 4.2 Sub-team: Supervision
 

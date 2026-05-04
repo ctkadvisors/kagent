@@ -24,10 +24,13 @@
   ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
+    "@kagent/audit-events": "workspace:*",
+    "@kagent/capability-types": "workspace:*",
     "@kagent/in-process-tool-provider": "workspace:*",
     "@kagent/openai-compat": "workspace:*",
     "@kagent/trace-sinks": "workspace:*",
-    "@kubernetes/client-node": "1.4.0"
+    "@kubernetes/client-node": "1.4.0",
+    "jose": "6.2.3"
   },
   "devDependencies": {
     "tsx": "4.21.0"

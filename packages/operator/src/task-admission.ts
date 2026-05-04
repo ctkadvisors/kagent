@@ -33,14 +33,9 @@
  * across that change (hash + key are the only inputs).
  */
 
-import type {
-  Agent,
-  AgentSpec,
-  AgentTask,
-  AgentTaskSpec,
-  OutputRef,
-} from './crds/index.js';
+import type { Agent, AgentSpec, AgentTask, AgentTaskSpec, OutputRef } from './crds/index.js';
 import {
+  API_GROUP_VERSION,
   hashTaskInputs,
   inputsMissingMountPath,
   outputsByName,
@@ -110,6 +105,66 @@ export function validateAgentTaskInputs(
     unknownBindings: bindingResult.unknown,
     malformed: bindingResult.malformed,
     mountPathMissing,
+  };
+}
+
+/* =====================================================================
+ * v0.3.0-capabilities — capability admission validator
+ *
+ * Defense-in-depth gate: even if a compromised agent-pod's
+ * `spawn_child_task` skipped the in-pod cap check, the operator's
+ * admission MUST refuse to admit a child whose Agent claims escalate
+ * past the parent's. Mirrors the in-pod refusal taxonomy
+ * (`policy_denied:capability_violation`) so per-trace observability
+ * rolls up.
+ * ===================================================================== */
+
+import {
+  claimsSubsetViolations,
+  formatViolations,
+  type CapabilityBundle,
+} from '@kagent/capability-types';
+import { resolveAgentClaims } from './cap-issuer.js';
+
+export type CapabilityAdmissionValidation =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: 'CapabilityViolation';
+      readonly message: string;
+    };
+
+/**
+ * Validate the target Agent's resolved claims are ⊆ parent's bundle
+ * claims. Used by admission BEFORE Job creation when the spawning
+ * task carried a verifiable parent capability bundle. When no parent
+ * bundle is present (root task), the validator passes trivially —
+ * the issuer assigns whatever claims the Agent declares.
+ *
+ * Refusal `reason: 'CapabilityViolation'` lands as a status
+ * condition + a `contract.violated` audit event; the AgentTask is
+ * marked Failed with `policy_denied:capability_violation` to mirror
+ * the in-pod refusal string.
+ */
+export function validateCapabilityBounds(
+  agent: Agent | AgentSpec,
+  parentBundle: CapabilityBundle | undefined,
+): CapabilityAdmissionValidation {
+  if (parentBundle === undefined) return { ok: true };
+  const agentRef: Agent =
+    'spec' in agent
+      ? agent
+      : { apiVersion: API_GROUP_VERSION, kind: 'Agent', metadata: {}, spec: agent };
+  // Pass the full Agent CR shape to resolveAgentClaims; it accepts
+  // the (Agent | AgentSpec)-narrowing pattern same as our other
+  // validators.
+  const agentClaims = resolveAgentClaims(agentRef);
+  const violations = claimsSubsetViolations(agentClaims, parentBundle.claims);
+  if (violations.length === 0) return { ok: true };
+  return {
+    ok: false,
+    reason: 'CapabilityViolation',
+    message: `policy_denied:capability_violation — Agent claims escalate past parent cap (jti=${parentBundle.jti}): ${formatViolations(violations)}`,
   };
 }
 

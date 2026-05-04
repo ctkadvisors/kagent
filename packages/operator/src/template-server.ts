@@ -71,6 +71,14 @@ export interface TemplateServerDeps {
   readonly resolveNamespace: (req: IncomingMessage) => string;
   /** Test-injectable clock; production uses Date. */
   readonly clock?: () => Date;
+  /**
+   * v0.3.0-capabilities — JWKS provider. When set, the server exposes
+   * `GET /.well-known/jwks.json` returning the operator's CA public
+   * keys (one + optionally a previous-key for rotation cutover).
+   * Verifiers (agent-pod cap consumer) fetch this to verify minted
+   * JWTs without a shared secret.
+   */
+  readonly jwksProvider?: () => { readonly keys: readonly unknown[] };
 }
 
 /**
@@ -79,11 +87,32 @@ export interface TemplateServerDeps {
  */
 export function buildInstantiateHandler(deps: TemplateServerDeps) {
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = req.url ?? '';
+
+    // v0.3.0-capabilities — JWKS endpoint for verifiers (agent-pod
+    // cap consumer + downstream substrate gates). GET only; cache
+    // for the JWT TTL window so verifiers minimize key fetches.
+    if (url === '/.well-known/jwks.json') {
+      if (req.method !== 'GET') {
+        writeJson(res, 405, { code: 'method_not_allowed', message: 'method must be GET' });
+        return;
+      }
+      if (deps.jwksProvider === undefined) {
+        writeJson(res, 404, {
+          code: 'jwks_disabled',
+          message: 'capability JWKS not configured on this operator',
+        });
+        return;
+      }
+      const jwks = deps.jwksProvider();
+      writeJsonWithCache(res, 200, jwks, 'public, max-age=300');
+      return;
+    }
+
     if (req.method !== 'POST') {
       writeJson(res, 405, { code: 'method_not_allowed', message: 'method must be POST' });
       return;
     }
-    const url = req.url ?? '';
     const match = url.match(ROUTE_RE);
     if (match === null) {
       writeJson(res, 404, { code: 'not_found', message: 'unknown route' });
@@ -279,6 +308,21 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
     });
     req.on('error', (err) => reject(err));
   });
+}
+
+function writeJsonWithCache(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  cacheControl: string,
+): void {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(payload, 'utf8').toString(),
+    'cache-control': cacheControl,
+  });
+  res.end(payload);
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {

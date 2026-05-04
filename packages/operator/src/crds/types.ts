@@ -16,6 +16,8 @@
 
 import type { V1ObjectMeta } from '@kubernetes/client-node';
 
+import type { CapabilityClaims } from '@kagent/capability-types';
+
 import type { ArtifactRef } from './artifact-ref.js';
 
 export const API_GROUP = 'kagent.knuteson.io';
@@ -174,6 +176,38 @@ export interface AgentSpec {
    * accept the field without a CRD-bump dependency on Workspace.
    */
   readonly workspaceClaims?: readonly Record<string, unknown>[];
+
+  /* ---- v0.3.0-capabilities — Wave 2 sub-team Caps.
+   * The substrate's sealed-authority primitive per docs/SUBSTRATE-V1.md
+   * §3.6. When set, this is the upper bound on the capability bundle
+   * the operator's capability-issuer mints for tasks invoking this
+   * Agent. Spawn-narrowing enforces children ⊆ parent at admission.
+   *
+   * When set, the legacy fields below are IGNORED with a one-line WARN
+   * log on Agent admission (deprecation shim, one release):
+   *   - allowedChildAgents     → use claims.spawn (glob patterns supported)
+   *   - allowedChildTemplates  → use claims.spawn (glob patterns)
+   *   - egress (env)           → use claims.egress
+   *
+   * When unset, the legacy fields continue to apply (back-compat). */
+
+  /**
+   * Capability claims this Agent is permitted to mint into a JWT
+   * capability bundle for any of its tasks. Each claim category is a
+   * glob-pattern array (per `@kagent/capability-types` glob dialect):
+   *
+   *   - tools     — built-in tools the agent loop may invoke
+   *   - models    — model ids the agent may call (OpenAI-compat)
+   *   - spawn     — Agent name patterns this agent may spawn
+   *   - read/write — `cas://` + `workspace:` prefixed targets
+   *   - egress    — hostname patterns the HTTP-tool family may reach
+   *   - tenant    — opaque tenant id (Wave 4 Tenancy)
+   *   - publish/subscribe — Wave 3 Events topic patterns
+   *
+   * Schema mirror at `packages/operator/manifests/crds/agent.yaml`
+   * under `spec.properties.capabilityClaims`.
+   */
+  readonly capabilityClaims?: CapabilityClaims;
 }
 
 /* =====================================================================
@@ -375,6 +409,61 @@ export interface AgentTaskSpec {
    * stable across that change.
    */
   readonly idempotencyKey?: string;
+
+  /**
+   * v0.3.0-capabilities — Wave 2 Caps sub-team.
+   *
+   * `verifyContract` is the substrate-level post-completion gate.
+   * When set, the reconciler runs the verification at terminal-status
+   * patch time and refuses Completed if the verification fails (the
+   * task lands Failed with `reason: 'verify_failed'` instead).
+   *
+   * Modes:
+   *   - `scriptRef`: substrate spawns a one-shot Job with the
+   *     referenced artifact as the entrypoint script; the script
+   *     receives `KAGENT_TASK_OUTPUTS_JSON` env. Exit 0 → admit
+   *     Completed; non-zero → patch Failed.
+   *   - `llmJudgePromptRef`: the operator dispatches the prompt
+   *     template (rendered with the task outputs) to the model
+   *     gateway; the response's `verdict` field gates Completed.
+   *
+   * Either mode may be set; both is admissible (each independently
+   * gates). When neither is set the field acts as a no-op (current
+   * pre-v0.3.0 behavior).
+   *
+   * Audit:
+   *   - `verification.passed` event on success.
+   *   - `verification.failed` event on failure (carries the failure
+   *     reason + a digest of the verifier's output).
+   *
+   * Field is reserved at v0.3.0; the implementation is wired in
+   * subsequent commits per the Wave 2 brief.
+   */
+  readonly verifyContract?: VerifyContract;
+}
+
+/**
+ * Substrate-level post-completion verification contract. Per
+ * docs/WAVES.md §4.1 deliverable 7: at status-patch time the
+ * reconciler runs the contract; failure → Completed → Failed with
+ * `reason: 'verify_failed'`.
+ */
+export interface VerifyContract {
+  /**
+   * Reference to an artifact whose body is a verifier script. Spawned
+   * as a one-shot Job; receives the task outputs as env.
+   *
+   * Ref shape mirrors `Agent.spec.systemPromptRef` — opaque
+   * `{ name, version? }` resolved through Langfuse / artifact backend.
+   */
+  readonly scriptRef?: { readonly name: string; readonly version?: number };
+
+  /**
+   * Reference to an LLM-judge prompt template. The operator dispatches
+   * the rendered prompt to the model gateway; the response is parsed
+   * for a `verdict` field.
+   */
+  readonly llmJudgePromptRef?: { readonly name: string; readonly version?: number };
 }
 
 /* =====================================================================
@@ -521,6 +610,32 @@ export interface AgentTaskStatus {
   readonly failureCount?: number;
   /** Children that have not reached a terminal phase yet. */
   readonly inFlightCount?: number;
+
+  /**
+   * v0.3.0-capabilities — Wave 2 Caps sub-team.
+   *
+   * The `<jti>` of the JWT capability bundle the operator's
+   * capability-issuer minted for this task. Used for forensics
+   * (re-find the bundle in the operator's capability registry by
+   * jti) + revocation. Operator-owned; the agent-pod NEVER writes
+   * this — the cap is signed BEFORE the Job is admitted.
+   */
+  readonly capabilityRef?: string;
+
+  /**
+   * v0.3.0-capabilities — Wave 2 Caps sub-team.
+   *
+   * Verification result captured by the reconciler when
+   * `AgentTask.spec.verifyContract` is set. Populated only after the
+   * verifier runs (Completed status patch path). Absent on tasks
+   * that don't declare a verifyContract.
+   */
+  readonly verification?: {
+    readonly passed: boolean;
+    readonly mode: 'script' | 'llmJudge';
+    readonly reason?: string;
+    readonly completedAt?: string;
+  };
 }
 
 export interface AgentTask {
