@@ -83,6 +83,15 @@ agentPod:
   # `value` (plaintext) still works but renders a deprecation warning
   # in NOTES.txt. When all three fields are empty, the env is omitted.
   #
+  # v0.1.8 secret-hygiene: when `secretName` is set, the chart's
+  # deployment template ALSO renders two side env vars holding the
+  # original Secret coordinates
+  # (`KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_NAME` and
+  # `KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_KEY`). The operator's
+  # `buildJobSpecOptionsFromEnv` reads these and forwards
+  # `valueFrom.secretKeyRef` onto every spawned agent Job — keeping
+  # the plaintext out of the spawned Job's etcd object.
+  #
   # Example:
   #   litellmApiKey:
   #     secretName: cloudflare-ai-gateway

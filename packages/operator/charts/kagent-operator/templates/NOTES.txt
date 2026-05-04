@@ -21,35 +21,119 @@ Resources installed:
   {{- end }}
 
 {{- /*
-WS-A — security-baseline deprecation warnings. Plaintext values in
-agentPod.litellmApiKey.value / agentPod.otlpHeaders.value still WORK
-(the deployment renders the plaintext env), but the secret-ref form
-is strongly preferred so the operator's PodSpec never carries the
-plaintext.
+v0.1.8 secret-hygiene + WS-A security baseline — deprecation warnings.
+
+Plaintext values for sensitive fields still WORK end-to-end (the chart
+renders an inline `value:` env on the operator pod, and the operator
+copies it onto every spawned agent Job's env). They are DEPRECATED
+because the plaintext lands in:
+
+  - the operator Deployment's PodSpec (visible in
+    `kubectl get deploy ... -o yaml` and in any GitOps audit trail)
+  - every spawned agent Job's etcd object (visible in
+    `kubectl get pod <agent-pod> -o yaml`)
+  - the agent-pod's `/proc/<pid>/environ` at runtime
+
+The secret-ref form keeps the plaintext on the kubelet's read path
+ONLY (resolved into the running container's env at start time, never
+written into etcd or any pod spec).
 */}}
+{{- $hasPlaintextSecret := false }}
 {{- if .Values.agentPod.litellmApiKey.value }}
+{{- $hasPlaintextSecret = true }}
 
-WARNING: agentPod.litellmApiKey.value (plaintext) is set. This renders
-the LiteLLM API key directly into the operator's PodSpec, where it
-shows up in `kubectl get deploy -o yaml` and in any GitOps audit
-trail. Migrate to the secret-ref form:
-
-  agentPod:
-    litellmApiKey:
-      secretName: <existing-secret-in-{{ .Release.Namespace }}>
-      secretKey:  <key-within-that-secret>
-
-(Then `kubectl create secret generic` / Sealed-Secret as appropriate.)
+╔══════════════════════════════════════════════════════════════════╗
+║ WARNING (v0.1.8 secret-hygiene): agentPod.litellmApiKey.value     ║
+║ (plaintext) is set. This renders the LiteLLM API key directly    ║
+║ into the operator's PodSpec AND every spawned agent Job's etcd   ║
+║ object — visible to anyone with namespace `get pods`.            ║
+║                                                                   ║
+║ Migrate to the secret-ref form. The operator forwards it as       ║
+║ `valueFrom.secretKeyRef` on every spawned Job:                   ║
+║                                                                   ║
+║   agentPod:                                                       ║
+║     litellmApiKey:                                                ║
+║       secretName: <existing-secret-in-this-namespace>            ║
+║       secretKey:  <key-within-that-secret>                        ║
+║                                                                   ║
+║ (Then `kubectl create secret generic` / Sealed-Secret as needed.) ║
+╚══════════════════════════════════════════════════════════════════╝
 {{- end }}
 {{- if .Values.agentPod.otlpHeaders.value }}
+{{- $hasPlaintextSecret = true }}
 
-WARNING: agentPod.otlpHeaders.value (plaintext) is set — same caveat
-as litellmApiKey above. Migrate to:
+╔══════════════════════════════════════════════════════════════════╗
+║ WARNING (v0.1.8 secret-hygiene): agentPod.otlpHeaders.value       ║
+║ (plaintext) is set. The Bearer token in the headers ends up in   ║
+║ the operator PodSpec AND every spawned Job's etcd object.        ║
+║                                                                   ║
+║ Migrate to:                                                       ║
+║                                                                   ║
+║   agentPod:                                                       ║
+║     otlpHeaders:                                                  ║
+║       secretName: <existing-secret>                               ║
+║       secretKey:  <key>                                           ║
+╚══════════════════════════════════════════════════════════════════╝
+{{- end }}
+{{- if and .Values.langfuse.enabled (not .Values.langfuse.apiKey.secretName) }}
+{{- $hasPlaintextSecret = true }}
 
-  agentPod:
-    otlpHeaders:
-      secretName: <existing-secret>
-      secretKey:  <key>
+╔══════════════════════════════════════════════════════════════════╗
+║ WARNING (v0.1.8 secret-hygiene): langfuse.enabled=true but        ║
+║ langfuse.apiKey.secretName is unset. The operator boots the       ║
+║ Langfuse-managed prompt fetcher path, but every spawned agent     ║
+║ Job will start without Langfuse credentials and prompt fetches    ║
+║ will fail.                                                        ║
+║                                                                   ║
+║ Provide the Langfuse keys via secret-ref:                        ║
+║                                                                   ║
+║   langfuse:                                                       ║
+║     enabled: true                                                 ║
+║     apiKey:                                                       ║
+║       secretName: <secret-with-public+secret-keys>               ║
+║       publicKeyKey: public                                        ║
+║       secretKeyKey: secret                                        ║
+╚══════════════════════════════════════════════════════════════════╝
+{{- end }}
+{{- if and .Values.llmGateway.enabled (not .Values.llmGateway.apiKey.secretName) }}
+{{- $hasPlaintextSecret = true }}
+
+╔══════════════════════════════════════════════════════════════════╗
+║ WARNING (v0.1.8 secret-hygiene): llmGateway.enabled=true but      ║
+║ llmGateway.apiKey.secretName is unset. Spawned agent-pods will   ║
+║ contact the gateway without a Bearer token; gateway requests     ║
+║ will be rejected unless the gateway is configured for anonymous  ║
+║ traffic.                                                          ║
+║                                                                   ║
+║ Provide the gateway token via secret-ref:                        ║
+║                                                                   ║
+║   llmGateway:                                                     ║
+║     enabled: true                                                 ║
+║     apiKey:                                                       ║
+║       secretName: <secret-with-token>                             ║
+║       secretKey: token                                            ║
+╚══════════════════════════════════════════════════════════════════╝
+{{- end }}
+{{- if $hasPlaintextSecret }}
+
+After migration, validate the spawned-Job env spec contains zero
+plaintext for any name matching `KEY|SECRET`:
+
+  kubectl get pod <agent-pod> -o yaml \
+    | grep -E 'KEY|SECRET' | grep '^[[:space:]]*value:' && \
+    echo "FAIL: plaintext secrets in pod spec" || \
+    echo "OK: only valueFrom.secretKeyRef for sensitive env"
+{{- else }}
+
+✓ All sensitive env vars on the operator are sourced via
+  `valueFrom.secretKeyRef`. The operator forwards the same shape onto
+  every spawned agent Job, keeping plaintext out of etcd and out of
+  `kubectl get pod -o yaml`. Validate with:
+
+    kubectl get pod <agent-pod> -o yaml \
+      | grep -E 'KEY|SECRET' | grep '^[[:space:]]*value:'
+
+  → should print nothing.
 {{- end }}
 
 To inspect the operator's effective env (and confirm the secret-ref
