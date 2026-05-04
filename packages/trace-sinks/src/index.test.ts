@@ -83,15 +83,18 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
   it('Test B6 — barrel exports exactly the documented runtime-visible named members', () => {
     // Runtime-visible exports:
     //   3 classes — StdoutSink, JsonlFileSink, OtelTraceSink
-    //   4 OTel sink helpers — isOtelEnabled, setupOtelExporter, traceIdFromRunId, langfuseTraceUrl
+    //   7 OTel sink helpers — isOtelEnabled, setupOtelExporter,
+    //     traceIdFromRunId, langfuseTraceUrl, plus the v0.1.11 W3C
+    //     Trace Context propagation helpers spanIdFromRunId,
+    //     buildTraceparentFromRunId, parseTraceparent
     //   2 langfuse-otel-format constants — DEFAULT_CONTENT_MODE, DEFAULT_PREVIEW_CHARS
     //   8 langfuse-otel-format functions — applyContentMode, formatLlmCallAttrs,
     //     formatRootSpanAttrs, formatRunCompleteAttrs, formatToolCallAttrs,
     //     parseContentMode, toLangfuseJsonString, truncatePreservingJson
     // Type-only exports (StdoutSinkOptions, JsonlFileSinkOptions,
-    // OtelTraceSinkOptions, ContentMode, RunContext) are erased at
-    // runtime. Adding a new runtime export REQUIRES updating this
-    // assertion.
+    // OtelTraceSinkOptions, ContentMode, RunContext, ParsedTraceparent)
+    // are erased at runtime. Adding a new runtime export REQUIRES
+    // updating this assertion.
     const runtimeKeys = Object.keys(mod).sort();
     expect(runtimeKeys).toEqual([
       'DEFAULT_CONTENT_MODE',
@@ -100,6 +103,7 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
       'OtelTraceSink',
       'StdoutSink',
       'applyContentMode',
+      'buildTraceparentFromRunId',
       'formatLlmCallAttrs',
       'formatRootSpanAttrs',
       'formatRunCompleteAttrs',
@@ -107,7 +111,9 @@ describe('@ctkadvisors/local-trace-sinks — barrel contract', () => {
       'isOtelEnabled',
       'langfuseTraceUrl',
       'parseContentMode',
+      'parseTraceparent',
       'setupOtelExporter',
+      'spanIdFromRunId',
       'toLangfuseJsonString',
       'traceIdFromRunId',
       'truncatePreservingJson',
