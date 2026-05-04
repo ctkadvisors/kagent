@@ -12,11 +12,11 @@ operator pod can restrict ingress to label `kagent.knuteson.io/role=
 agent-pod`, but v0.1 leans on RBAC + the operator's own validation as
 the gate (homelab posture per AGENT-TEMPLATES.md §8.1).
 
-Gated on `agentPod.templates.enabled` so a chart install with
-templates disabled doesn't materialize a Service the operator isn't
-listening on.
+Gated on `agentPod.templates.enabled OR capabilities.enabled` so the
+same ClusterIP Service also fronts the JWKS endpoint when per-task
+capability JWTs are enabled.
 */}}
-{{- if .Values.agentPod.templates.enabled -}}
+{{- if or .Values.agentPod.templates.enabled .Values.capabilities.enabled -}}
 apiVersion: v1
 kind: Service
 metadata:
