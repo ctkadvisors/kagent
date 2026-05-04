@@ -27,7 +27,14 @@
  * would stay pinned in `Dispatched`.
  */
 
-import { StdoutSink, isOtelEnabled, OtelTraceSink, setupOtelExporter } from '@kagent/trace-sinks';
+import {
+  StdoutSink,
+  buildTraceparentFromRunId,
+  isOtelEnabled,
+  OtelTraceSink,
+  parseTraceparent,
+  setupOtelExporter,
+} from '@kagent/trace-sinks';
 import type { TraceSink } from '@kagent/agent-loop';
 
 import type { PodConfig } from './env.js';
@@ -116,6 +123,14 @@ async function main(): Promise<void> {
     const { tracer, shutdown } = await setupOtelExporter({
       serviceName: `kagent-agent-pod/${config.agentName}`,
     });
+    // v0.1.11 — when the operator threaded `OTEL_TRACEPARENT` (which
+    // it does when the parent agent-pod stamped
+    // `runConfig.traceparent` on this child task), parse it into a
+    // remote parent SpanContext for OtelTraceSink so the child's
+    // agent.run span lands as a real child of the parent's span. When
+    // unset / malformed, fall through to the deterministic-from-runId
+    // path — root tasks keep their own root trace.
+    const inheritedParent = parseInheritedParentSpanContext(process.env);
     sinks.push(
       new OtelTraceSink({
         tracer,
@@ -129,11 +144,12 @@ async function main(): Promise<void> {
           }),
         },
         contentMode: config.traceContentMode,
+        ...(inheritedParent !== undefined && { parentSpanContext: inheritedParent }),
       }),
     );
     otelShutdown = shutdown;
     console.log(
-      `[kagent-agent-pod] OTel exporter wired → ${process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '(default)'} (contentMode=${config.traceContentMode})`,
+      `[kagent-agent-pod] OTel exporter wired → ${process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '(default)'} (contentMode=${config.traceContentMode})${inheritedParent !== undefined ? ` (parent traceId=${inheritedParent.traceId})` : ''}`,
     );
   }
 
@@ -195,12 +211,23 @@ async function main(): Promise<void> {
             return Math.max(0, totalSec - elapsedSec);
           })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
         : undefined;
+    // v0.1.11 — when OTel is wired (the OTel-enabled branch above ran),
+    // build a `getTraceparent` callback the spawn tool stamps onto
+    // child task specs. Production constructs this from the parent's
+    // own task UID so the child's OtelTraceSink can re-derive the
+    // exact same root span ID this pod's sink uses for its agent.run
+    // span. When OTel is NOT wired, the callback is omitted — the
+    // spawn tool's "traceparent absent" branch fires.
+    const getTraceparent: (() => string) | undefined = isOtelEnabled(process.env)
+      ? buildSpawnTraceparentGetter(config.taskId)
+      : undefined;
     const spawnDefs = defineSpawnChildTask({
       parent,
       parentAgentName: config.agentName,
       parentAgentSpec: config.agentSpec,
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+      ...(getTraceparent !== undefined && { getTraceparent }),
     });
     const waitChildDef = defineWaitForChildTask({
       parent,
@@ -330,6 +357,54 @@ if (isDirectInvocation) {
     console.error('[kagent-agent-pod] fatal:', err);
     process.exit(1);
   });
+}
+
+/**
+ * v0.1.11 — build the spawn-side traceparent getter.
+ *
+ * The spawn tool's `getTraceparent` callback returns the parent
+ * agent-pod's current W3C traceparent header value at the moment of
+ * spawn. We compose it deterministically from the parent's task UID
+ * via `buildTraceparentFromRunId(taskId)`, which matches exactly the
+ * trace ID + root span ID that this pod's OtelTraceSink uses for its
+ * own `agent.run` span. End effect: the child's OtelTraceSink seeds
+ * its root span context to the parent's span — child trace tree
+ * becomes a child of the parent's, not a sibling.
+ *
+ * Cheap pure helper — exported here so tests can hit it without
+ * booting the full main loop.
+ */
+export function buildSpawnTraceparentGetter(taskId: string): () => string {
+  return () => buildTraceparentFromRunId(taskId);
+}
+
+/**
+ * v0.1.11 — read `OTEL_TRACEPARENT` out of the environment and parse
+ * it into a `{traceId, spanId}` shape suitable for
+ * `OtelTraceSinkOptions.parentSpanContext`.
+ *
+ * Returns `undefined` when:
+ *   - The env var is absent or empty (root tasks; pre-v0.1.11 behavior).
+ *   - The env var fails W3C v00 validation. We log a warning instead
+ *     of throwing so a malformed traceparent can never gate a child
+ *     task from running — the trace just degrades to "no parent
+ *     context" (sibling trace), the same outcome as if the env wasn't
+ *     set. Hard-fail-on-mis-stamp would be a footgun the substrate
+ *     doesn't get to make for the child.
+ */
+export function parseInheritedParentSpanContext(
+  env: Readonly<Record<string, string | undefined>>,
+): { readonly traceId: string; readonly spanId: string } | undefined {
+  const raw = env.OTEL_TRACEPARENT;
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const parsed = parseTraceparent(raw);
+  if (parsed === undefined) {
+    console.warn(
+      `[kagent-agent-pod] OTEL_TRACEPARENT="${raw}" is not a valid W3C v00 traceparent; ignoring (child will be its own root trace)`,
+    );
+    return undefined;
+  }
+  return { traceId: parsed.traceId, spanId: parsed.spanId };
 }
 
 /**
