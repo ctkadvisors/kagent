@@ -226,6 +226,39 @@ spec:
                       items:
                         type: string
                         minLength: 1
+                # ---- v0.3.1-supervision — Wave 2 / Supervision sub-team.
+                # Erlang/OTP-style supervision strategy + per-task
+                # restart cap. See docs/WAVES.md §4.2 + the
+                # `@kagent/supervision` package's strategy engine.
+                supervisionStrategy:
+                  type: string
+                  enum:
+                    - one_for_one
+                    - one_for_all
+                    - rest_for_one
+                    - escalate
+                  default: one_for_one
+                  description: |
+                    Strategy the operator applies when a child
+                    AgentTask of THIS agent's task fails.
+                    one_for_one (default): restart only the failed
+                    child. one_for_all: terminate every sibling +
+                    restart the subtree. rest_for_one: terminate the
+                    failed child + every sibling started AFTER it
+                    (start-order). escalate: propagate the failure to
+                    the parent task; the parent's strategy handles
+                    this subtree as a single failed child.
+                maxRestarts:
+                  type: integer
+                  minimum: 0
+                  default: 3
+                  description: |
+                    Per-AgentTask restart cap. The operator
+                    increments AgentTask.status.restartCount each
+                    time supervision restarts a task; once
+                    restartCount >= maxRestarts the operator
+                    fails-closed with reason=restart_limit_exceeded.
+                    Setting 0 disables restarts entirely.
       additionalPrinterColumns:
         - name: Model
           type: string

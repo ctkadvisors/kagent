@@ -288,6 +288,16 @@ spec:
                   description: |
                     The <jti> of the JWT capability bundle the
                     operator's capability-issuer minted for this task.
+                # ---- v0.3.1-supervision — Wave 2 / Supervision sub-team.
+                restartCount:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Number of times the operator's supervision engine
+                    has restarted THIS task. Compared against
+                    Agent.spec.maxRestarts; when >= maxRestarts the
+                    operator fails-closed with
+                    reason=restart_limit_exceeded.
                 verification:
                   type: object
                   description: |

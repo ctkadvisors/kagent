@@ -371,6 +371,19 @@ spec:
                     The <jti> of the JWT capability bundle the
                     operator's capability-issuer minted for this task.
                     Used for forensics + revocation.
+                # ---- v0.3.1-supervision — Wave 2 / Supervision sub-team.
+                restartCount:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    Number of times the operator's supervision engine
+                    has restarted THIS task. Bumped each time
+                    evaluateStrategy returns `restart` (or this task
+                    appears in the targets[] of a
+                    terminate-and-restart-{tree,subset} action).
+                    Compared against Agent.spec.maxRestarts; when
+                    >= maxRestarts the operator fails-closed instead
+                    of restarting.
                 verification:
                   type: object
                   description: |

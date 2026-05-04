@@ -208,7 +208,52 @@ export interface AgentSpec {
    * under `spec.properties.capabilityClaims`.
    */
   readonly capabilityClaims?: CapabilityClaims;
+
+  /* ---- v0.3.1-supervision — Wave 2 / Supervision sub-team.
+   * Erlang/OTP supervision strategy for the failure-handling
+   * behavior the operator applies to children of THIS agent's tasks.
+   * See docs/WAVES.md §4.2 and `@kagent/supervision`'s strategy
+   * engine for the action-set per strategy. */
+
+  /**
+   * Strategy the operator applies when a child AgentTask of THIS
+   * agent's task fails (see `@kagent/supervision`).
+   *   - `one_for_one`   restart only the failed child (DEFAULT —
+   *                     matches v0.1's implicit "fail one, others
+   *                     continue" semantics so existing Agents that
+   *                     don't declare the field don't change behavior).
+   *   - `one_for_all`   terminate every sibling + restart the subtree.
+   *   - `rest_for_one`  terminate failed + every sibling started
+   *                     after it (start-order); restart that subset.
+   *   - `escalate`      propagate the failure to the parent task; the
+   *                     parent's strategy then handles this subtree
+   *                     as a single failed child.
+   */
+  readonly supervisionStrategy?: SupervisionStrategy;
+
+  /**
+   * Per-AgentTask restart cap. Default 3, min 0. The operator
+   * increments `AgentTask.status.restartCount` each time the
+   * supervision engine returns `restart` for a task; once
+   * `restartCount >= maxRestarts`, the operator FAILS-CLOSED instead
+   * of restarting (`reason: restart_limit_exceeded`). Setting `0`
+   * disables restarts entirely — the first failure is terminal.
+   *
+   * The substrate's job is to bound restart loops, not to relitigate
+   * an LLM's contract violation indefinitely. Tune up only when an
+   * application is genuinely transient-failure prone.
+   */
+  readonly maxRestarts?: number;
 }
+
+/**
+ * Mirror of `@kagent/supervision`'s strategy enum, declared here so
+ * the CRD type surface doesn't pull in the supervision package's
+ * runtime exports just for the literal-union. Keep these two in sync
+ * (the supervision package is the source of truth — anything beyond
+ * "the four OTP behaviors" lands there first).
+ */
+export type SupervisionStrategy = 'one_for_one' | 'one_for_all' | 'rest_for_one' | 'escalate';
 
 /* =====================================================================
  * Typed I/O — input + output declarations on `Agent.spec`.
@@ -636,6 +681,19 @@ export interface AgentTaskStatus {
     readonly reason?: string;
     readonly completedAt?: string;
   };
+
+  /**
+   * v0.3.1-supervision — Wave 2 / Supervision sub-team.
+   *
+   * Number of times the operator's supervision engine has restarted
+   * THIS task. Bumped each time `evaluateStrategy` returns `restart`
+   * (or `terminate-and-restart-{tree,subset}` for tasks in the
+   * targets[] list). When `restartCount >= Agent.spec.maxRestarts`,
+   * the operator fails-closed with `reason: restart_limit_exceeded`
+   * instead of restarting again. Default 0 (operator omits the field
+   * for never-restarted tasks).
+   */
+  readonly restartCount?: number;
 }
 
 export interface AgentTask {
