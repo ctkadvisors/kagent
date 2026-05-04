@@ -35,6 +35,7 @@
     "@kagent/locality-controller": "workspace:*",
     "@kagent/supervision": "workspace:*",
     "@kagent/triggers": "workspace:*",
+    "@kagent/versioning-controller": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
     "jose": "6.2.3",
     "nats": "2.29.3"

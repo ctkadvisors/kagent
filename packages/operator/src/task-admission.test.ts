@@ -661,3 +661,113 @@ describe('tenantLabelPatch', () => {
     });
   });
 });
+
+/* =====================================================================
+ * v0.5.3-versioning — Wave 4 / Versioning admission helpers.
+ * ===================================================================== */
+
+import {
+  AGENT_REMOVED_REFUSAL_REASON,
+  evaluateAgentLifecycleAtAdmission,
+  pinAgentVersion,
+} from './task-admission.js';
+import { DEPRECATED_ANNOTATION, REMOVED_AT_ANNOTATION } from './crds/index.js';
+
+describe('pinAgentVersion', () => {
+  it('returns the Agent.spec.version when set', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, version: '1.2.3' },
+    };
+    const pin = pinAgentVersion(baseTask, agent);
+    expect(pin.version).toBe('1.2.3');
+    expect(pin.wasAlreadyPinned).toBe(false);
+  });
+
+  it('falls back to 0.0.0 when Agent.spec.version is absent', () => {
+    const pin = pinAgentVersion(baseTask, baseAgent);
+    expect(pin.version).toBe('0.0.0');
+    expect(pin.wasAlreadyPinned).toBe(false);
+  });
+
+  it('returns the existing pin when AgentTask.status.agentVersion is already set (idempotent)', () => {
+    const pinnedTask: AgentTask = {
+      ...baseTask,
+      status: { agentVersion: '0.9.5' },
+    };
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, version: '1.0.0' }, // newer version published
+    };
+    const pin = pinAgentVersion(pinnedTask, agent);
+    expect(pin.version).toBe('0.9.5');
+    expect(pin.wasAlreadyPinned).toBe(true);
+  });
+
+  it('falls back to 0.0.0 when version is empty string', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      spec: { ...baseAgent.spec, version: '' },
+    };
+    const pin = pinAgentVersion(baseTask, agent);
+    expect(pin.version).toBe('0.0.0');
+  });
+});
+
+describe('evaluateAgentLifecycleAtAdmission', () => {
+  const NOW = Date.parse('2026-05-04T00:00:00Z');
+
+  it('admits an active Agent with status: active', () => {
+    const r = evaluateAgentLifecycleAtAdmission(baseAgent, NOW);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lifecycle.status).toBe('active');
+  });
+
+  it('admits a deprecated Agent (warning, not refusal)', () => {
+    const agent: Agent = {
+      ...baseAgent,
+      metadata: {
+        ...baseAgent.metadata,
+        annotations: { [DEPRECATED_ANNOTATION]: 'true' },
+      },
+    };
+    const r = evaluateAgentLifecycleAtAdmission(agent, NOW);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lifecycle.status).toBe('deprecated');
+  });
+
+  it('refuses a removed Agent with policy_denied:agent_removed', () => {
+    const past = new Date(NOW - 1).toISOString();
+    const agent: Agent = {
+      ...baseAgent,
+      metadata: {
+        ...baseAgent.metadata,
+        annotations: { [REMOVED_AT_ANNOTATION]: past },
+      },
+    };
+    const r = evaluateAgentLifecycleAtAdmission(agent, NOW);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('AgentRemoved');
+      expect(r.message).toContain(AGENT_REMOVED_REFUSAL_REASON);
+      expect(r.lifecycle.status).toBe('removed');
+    }
+  });
+
+  it('admits a deprecated Agent with future removed-at', () => {
+    const future = new Date(NOW + 24 * 3600 * 1000).toISOString();
+    const agent: Agent = {
+      ...baseAgent,
+      metadata: {
+        ...baseAgent.metadata,
+        annotations: {
+          [DEPRECATED_ANNOTATION]: 'true',
+          [REMOVED_AT_ANNOTATION]: future,
+        },
+      },
+    };
+    const r = evaluateAgentLifecycleAtAdmission(agent, NOW);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lifecycle.status).toBe('deprecated');
+  });
+});

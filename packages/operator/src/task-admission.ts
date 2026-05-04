@@ -631,3 +631,126 @@ export function validateEventTopicsAgainstClaims(agent: Agent | AgentSpec): Even
     violations,
   };
 }
+
+/* =====================================================================
+ * v0.5.3-versioning — Wave 4 / Versioning admission helpers.
+ *
+ * Per docs/WAVES.md §6.4 deliverables 3 + 5:
+ *
+ *   - `pinAgentVersion(task, agent)` — At AgentTask admission time,
+ *     resolve the named Agent's CURRENT `spec.version` and produce
+ *     the IMMUTABLE `AgentTask.status.agentVersion` string. Default to
+ *     `'0.0.0'` when the Agent didn't declare a version (legacy v0.1
+ *     CR). Idempotent — when the task already has a pinned version
+ *     (forwarded by an event-trigger or admission retry), the
+ *     existing pin wins.
+ *
+ *   - `evaluateAgentLifecycleAtAdmission(agent, now)` — Wraps
+ *     `evaluateLifecycle` from the versioning-controller into a
+ *     refusal-or-warning admission verdict. `removed` → refuse with
+ *     `policy_denied:agent_removed`. `deprecated` → admit with the
+ *     `agent.deprecated_used` audit-event hint. `active` → admit.
+ *
+ * The reconciler invokes both helpers at AgentTask admission time
+ * AFTER capability + tenant validation and BEFORE Job creation.
+ * ===================================================================== */
+
+import {
+  DEFAULT_AGENT_VERSION,
+  evaluateLifecycle,
+  type LifecycleEvaluation,
+} from '@kagent/versioning-controller';
+
+/**
+ * Result of `pinAgentVersion`. The status patch the operator applies
+ * uses `version`; `wasAlreadyPinned` is a diagnostic for the audit
+ * (`agent.deprecated_used`) hook + retry-loop logging.
+ */
+export interface AgentVersionPin {
+  readonly version: string;
+  readonly wasAlreadyPinned: boolean;
+}
+
+/**
+ * Resolve `AgentTask.status.agentVersion`. Pure: no K8s I/O. Reads:
+ *
+ *   1. The task's existing `status.agentVersion` (if already pinned —
+ *      every retry / re-reconcile of a previously admitted task keeps
+ *      its pin).
+ *   2. The resolved Agent's `spec.version` (else `'0.0.0'` baseline).
+ *
+ * The reconciler stamps the returned `version` onto the task's
+ * status subresource via `patchStatusWithRetry` BEFORE building the
+ * Job spec, so the index lookup at Job-build time can re-fetch the
+ * exact (name, version) Agent CR.
+ */
+export function pinAgentVersion(
+  task: AgentTask | AgentTaskSpec,
+  agent: Agent | AgentSpec,
+): AgentVersionPin {
+  const existing =
+    'status' in task && task.status !== undefined ? task.status.agentVersion : undefined;
+  if (typeof existing === 'string' && existing.length > 0) {
+    return { version: existing, wasAlreadyPinned: true };
+  }
+  const spec = 'spec' in agent ? agent.spec : agent;
+  const declared = spec.version;
+  const version =
+    typeof declared === 'string' && declared.length > 0 ? declared : DEFAULT_AGENT_VERSION;
+  return { version, wasAlreadyPinned: false };
+}
+
+/**
+ * Refusal taxonomy mirror — `policy_denied:agent_removed` aligns with
+ * the rest of the substrate's `policy_denied:*` rejection strings
+ * (depth_exceeded, capability_violation, tenant_namespace_mismatch).
+ */
+export const AGENT_REMOVED_REFUSAL_REASON = 'policy_denied:agent_removed' as const;
+
+/**
+ * Result of `evaluateAgentLifecycleAtAdmission`. `ok: true` admits
+ * the task; the `lifecycle` field carries the evaluation so callers
+ * can choose whether to fire `agent.deprecated_used` (when
+ * `lifecycle.status === 'deprecated'`) without re-running the
+ * classifier.
+ */
+export type AgentLifecycleAdmission =
+  | { readonly ok: true; readonly lifecycle: LifecycleEvaluation }
+  | {
+      readonly ok: false;
+      readonly reason: 'AgentRemoved';
+      readonly message: string;
+      readonly lifecycle: LifecycleEvaluation;
+    };
+
+/**
+ * Run the deprecation/removal lifecycle classifier on the resolved
+ * Agent CR at AgentTask admission time. Returns:
+ *
+ *   - `ok: true` for `'active'` and `'deprecated'` (the latter
+ *     warrants the `agent.deprecated_used` audit emission, which is
+ *     the caller's responsibility — this helper only carries the
+ *     classification result).
+ *   - `ok: false, reason: 'AgentRemoved'` for `'removed'`. The
+ *     refusal message is pre-formatted with the same
+ *     `policy_denied:agent_removed` prefix the in-pod / depth gates
+ *     use.
+ *
+ * In-flight tasks pinned to a removed (name, version) continue —
+ * their reconcile path uses `lookupExact`, not this admission gate.
+ */
+export function evaluateAgentLifecycleAtAdmission(
+  agent: Agent,
+  now: number = Date.now(),
+): AgentLifecycleAdmission {
+  const lifecycle = evaluateLifecycle(agent, now);
+  if (lifecycle.status === 'removed') {
+    return {
+      ok: false,
+      reason: 'AgentRemoved',
+      message: `${AGENT_REMOVED_REFUSAL_REASON} — ${lifecycle.message}`,
+      lifecycle,
+    };
+  }
+  return { ok: true, lifecycle };
+}
