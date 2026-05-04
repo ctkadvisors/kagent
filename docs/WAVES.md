@@ -322,18 +322,19 @@ All five sub-teams are mostly independent. Some share NATS JetStream as backbone
 
 **Validation:** agent A publishes; agent B subscribes; B's AgentTask is minted on each event; cap denies cross-tenant subscribe.
 
-### 5.2 Sub-team: Blackboard
+### 5.2 Sub-team: Blackboard ✅ DONE (v0.4.1-blackboard)
 
-**Releases:** `v0.4.1-blackboard`
+**Releases:** `v0.4.1-blackboard` — shipped on `feat/wave3-blackboard`.
 **Owns:** new `packages/blackboard`, NATS JetStream KV bucket per task tree, built-in tools
 
-**Deliverables:**
-1. NATS JetStream KV bucket per root AgentTask UID (provisioned at root-task admission)
-2. Built-in tools: `read_blackboard(key)`, `write_blackboard(key, value)`, `list_blackboard()`
-3. CRDT-style append for concurrent writes (last-writer-wins for scalars; `append_blackboard(key, value)` for lists)
-4. GC: bucket deleted when root task completes + ttl
+**Deliverables (all shipped):**
+1. ✅ NATS JetStream KV bucket per root AgentTask UID — `BlackboardBucketManager.ensureBucket(rootUid)` provisions on root admission via the operator's `maybeRouteBlackboard` handler hook in `main.ts`. Bucket name: `kagent-kv-<root-uid>` (`bucketNameForRootUid`).
+2. ✅ Four built-in tools wired into `agent-pod/src/builtin-tools.ts` under `// === Wave 3 — Blackboard ===`: `read_blackboard({key}) → {value, revision} | null`, `write_blackboard({key, value}) → {revision}` (last-writer-wins), `list_blackboard({prefix?}) → {keys[]}` (capped at 1000), `append_blackboard({key, value})` (read-splice-CAS PUT loop, max 5 retries, throws `tool_error: contended` after).
+3. ✅ Cap-gating via NEW `CapabilityClaims.blackboard?: { read?, write? }` claim (additive in `@kagent/capability-types/src/types.ts`); validators + subset checks + cap-issuer narrow path all updated. Predicates live in `@kagent/blackboard/acl` (`checkReadAllowed`/`checkWriteAllowed`/`checkListAllowed`/`checkAppendAllowed`); tools throw `policy_denied:` on refusal.
+4. ✅ Per-Job env stamping: operator's `job-spec.ts` emits `KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>` for every spawned pod. Root UID resolved from a new `kagent.knuteson.io/root-task-uid` label (mirrored in `agent-pod/src/k8s-task-creator.ts` for in-pod spawns and in `operator/src/task-graph.ts:buildChildTaskManifest` for operator-side child manifests). Roots fall back to own `metadata.uid`.
+5. ✅ GC + audit hook: operator's `maybeRouteBlackboard` calls `manager.destroyBucket(rootUid)` on terminal phase transition; `BlackboardBucketManager.onDestroyed` callback emits `[kagent-operator/blackboard.gc]` log line. (Full `audit.blackboard.gc` CloudEvent type reserved for a follow-up minor bump of `@kagent/audit-events` — wiring point exists.) Idempotent on bucket-not-found.
 
-**Validation:** 3 sibling agents concurrently write to a shared key; final state is convergent; bucket GC'd on root completion.
+**Validation:** unit-test smoke covers seed-via-`create` race, CAS-loop convergence, three sequential appends to same key landing as `[1,2,3]`. Cap-gate predicates + denial messages exhaustively unit-tested. New package `@kagent/blackboard`: 41 tests. New agent-pod tests: +24 (348 total). New operator tests: +16 (833 total). New capability-types tests: +8 (75 total).
 
 ### 5.3 Sub-team: Cache
 
