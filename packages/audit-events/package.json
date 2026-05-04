@@ -1,0 +1,30 @@
+{
+  "name": "@kagent/audit-events",
+  "version": "0.0.0",
+  "private": true,
+  "description": "CloudEvents v1.0 envelope + NATS JetStream publisher for the kagent substrate audit stream — every substrate decision (admission, capability mint, secret access, spawn, completion, contract violation, quota breach) emits a record on the `audit` stream for SOC2-shaped compliance.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "nats": "2.29.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
