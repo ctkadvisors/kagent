@@ -25,12 +25,14 @@ import {
   type V1SecurityContext,
   makeInformer,
 } from '@kubernetes/client-node';
+import { AuditPublisher, TASK_ADMITTED, makeEvent } from '@kagent/audit-events';
 import { connect, headers as natsHeaders, type NatsConnection } from 'nats';
 
 import {
   buildAdmissionReconciler,
   unsuspendJobApi,
   type AdmissionReconciler,
+  type EmitTaskAdmittedFn,
 } from './admission.js';
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import {
@@ -328,6 +330,13 @@ interface BuildAdmissionWiringInput {
   readonly batchApi: import('@kubernetes/client-node').BatchV1Api;
   readonly customApi: import('@kubernetes/client-node').CustomObjectsApi;
   readonly watchNamespace: string | undefined;
+  /**
+   * Wave 0 Audit (v0.1.15-audit-stream) — invoked once per successful
+   * admission with the parent AgentTask's identifying fields. main()
+   * wires this against an AuditPublisher when audit.enabled=true.
+   * Optional: omit to disable audit emission entirely.
+   */
+  readonly emitAudit?: EmitTaskAdmittedFn;
 }
 
 /**
@@ -447,6 +456,11 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
       return agent !== undefined && isAgent(agent) ? agent : undefined;
     },
     unsuspendJob: (namespace, name) => unsuspendJobApi(batchApi, namespace, name),
+    // Wave 0 Audit — pass through optional task.admitted emission hook.
+    // When the chart's `audit.enabled=true` is set, main() constructs
+    // an AuditPublisher + a closure that turns the (taskUid,…) tuple
+    // into a CloudEvent and publishes onto `audit.task.admitted`.
+    ...(input.emitAudit !== undefined && { emitAudit: input.emitAudit }),
   });
 
   // ---- Subscribe events → re-evaluate ------------------------------
@@ -861,6 +875,52 @@ async function main(): Promise<void> {
     informerOpts,
   );
 
+  // Wave 0 sub-team Audit (v0.1.15-audit-stream). When the chart's
+  // `audit.enabled=true` (default) sets KAGENT_AUDIT_NATS_URL on this
+  // deployment, construct the AuditPublisher and connect lazily. The
+  // publisher's best-effort contract means an unreachable NATS does
+  // NOT break the operator — `connect()` logs a warning and individual
+  // `publish()` calls warn-and-no-op until the URL becomes reachable.
+  //
+  // The audit stream itself is provisioned by the chart's
+  // post-install/post-upgrade Helm hook
+  // (`templates/audit-stream.yaml`); the operator just publishes onto
+  // `audit.task.admitted` (the proof-of-life emission). Other emission
+  // sites land in subsequent commits per docs/WAVES.md §2.5.
+  const auditNatsUrl = normalizeOptionalEnv(process.env.KAGENT_AUDIT_NATS_URL);
+  const auditSource = `kagent.knuteson.io/operator`;
+  let auditPublisher: AuditPublisher | undefined;
+  let emitTaskAdmitted: EmitTaskAdmittedFn | undefined;
+  if (auditNatsUrl !== undefined) {
+    auditPublisher = new AuditPublisher({ source: auditSource });
+    // connect() is best-effort; do NOT block boot on it.
+    void auditPublisher.connect(auditNatsUrl);
+    const publisher = auditPublisher;
+    emitTaskAdmitted = async (fields) => {
+      const event = makeEvent({
+        type: TASK_ADMITTED,
+        source: auditSource,
+        subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+        data: {
+          taskUid: fields.taskUid,
+          taskNamespace: fields.taskNamespace,
+          taskName: fields.taskName,
+          agentName: fields.agentName,
+          model: fields.model,
+          decision: 'admitted',
+        },
+      });
+      await publisher.publish(event);
+    };
+    console.log(
+      `[kagent-operator] audit publisher configured → ${auditNatsUrl} (best-effort, non-critical)`,
+    );
+  } else {
+    console.log(
+      '[kagent-operator] no KAGENT_AUDIT_NATS_URL set — audit emission disabled (set audit.enabled=true in chart values)',
+    );
+  }
+
   // LLM-gateway bundle (spec §3.2). When admission control is enabled
   // we boot three additional informers (Job + ModelEndpoint + Agent),
   // construct the admission reconciler, and wire event subscriptions.
@@ -883,6 +943,7 @@ async function main(): Promise<void> {
         batchApi,
         customApi,
         watchNamespace,
+        ...(emitTaskAdmitted !== undefined && { emitAudit: emitTaskAdmitted }),
       })
     : undefined;
 
@@ -905,6 +966,13 @@ async function main(): Promise<void> {
         await admissionWiring.stop();
       } catch (err) {
         console.error('[kagent-operator] admission informer stop failed:', err);
+      }
+    }
+    if (auditPublisher !== undefined) {
+      try {
+        await auditPublisher.close();
+      } catch (err) {
+        console.error('[kagent-operator] audit publisher close failed:', err);
       }
     }
     if (onShutdownExtra !== undefined) {

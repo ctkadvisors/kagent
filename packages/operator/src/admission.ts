@@ -63,6 +63,19 @@ import type { Agent, ModelEndpoint } from './crds/index.js';
 import { unsuspendJob as unsuspendJobApi } from './job-annotator.js';
 
 /* =====================================================================
+ * Audit emission — Wave 0 sub-team Audit (v0.1.15-audit-stream).
+ *
+ * On every successful un-suspend the reconciler fires a
+ * `task.admitted` CloudEvent through the optional `emitAudit`
+ * callback. Best-effort by contract: the callback never throws (the
+ * AuditPublisher handles its own errors); we still wrap the await in
+ * a try/catch so a buggy override can't break the dispatch path.
+ *
+ * Other sub-teams add their emission callsites in subsequent commits
+ * per docs/WAVES.md §2.5.
+ * ===================================================================== */
+
+/* =====================================================================
  * Constants
  * ===================================================================== */
 
@@ -326,6 +339,29 @@ export type AgentLookupFn = (namespace: string, name: string) => Agent | undefin
  */
 export type UnsuspendJobFn = (namespace: string, name: string) => Promise<void>;
 
+/**
+ * Optional audit emission hook — fired once per successful admission
+ * with the un-suspended Job's identifying fields. Wave 0 Audit
+ * proof-of-life integration; main.ts wires this to a
+ * `@kagent/audit-events` AuditPublisher in production. Tests assert
+ * this hook is invoked exactly once per admission with the right
+ * shape.
+ *
+ * The hook MUST be best-effort (the underlying AuditPublisher already
+ * is): a thrown promise from `emitAudit` is caught + logged inside
+ * the reconciler so a failing audit emission never breaks the
+ * dispatch path. Audit is observability, not request-critical.
+ */
+export interface AdmittedTaskAuditFields {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string;
+  readonly model: string | undefined;
+}
+
+export type EmitTaskAdmittedFn = (fields: AdmittedTaskAuditFields) => Promise<void>;
+
 export interface AdmissionDeps {
   /**
    * Master switch. When false, `evaluate()` is a no-op. The
@@ -341,6 +377,13 @@ export interface AdmissionDeps {
   readonly listModelEndpoints: ModelEndpointLister;
   readonly lookupAgent: AgentLookupFn;
   readonly unsuspendJob: UnsuspendJobFn;
+  /**
+   * Optional audit-emission hook (Wave 0 Audit). Called once per
+   * successfully un-suspended Job with the parent AgentTask's
+   * identifying fields. Absent in tests that don't care about audit;
+   * wired in main.ts in production.
+   */
+  readonly emitAudit?: EmitTaskAdmittedFn;
 }
 
 export interface AdmissionSummary {
@@ -421,10 +464,11 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
   // every chosen Job lands; if one fails, the cap math no longer
   // matches reality. Sequential lets us course-correct on 409 by
   // re-evaluating from scratch.
-  for (const ref of decision1.admittable) {
+  for (const entry of decision1.admittable) {
     try {
-      await deps.unsuspendJob(ref.namespace, ref.name);
+      await deps.unsuspendJob(entry.ref.namespace, entry.ref.name);
       admitted++;
+      await emitAdmittedAuditEvent(deps, entry.job);
     } catch (err) {
       if (isConflict(err)) {
         conflicts++;
@@ -433,7 +477,7 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
         break;
       }
       console.error(
-        `[kagent-operator] admission: failed to un-suspend ${ref.namespace}/${ref.name}:`,
+        `[kagent-operator] admission: failed to un-suspend ${entry.ref.namespace}/${entry.ref.name}:`,
         err,
       );
       errors++;
@@ -449,10 +493,11 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
     // Don't double-count `skipped` — the second pass counts the same
     // skipped queue. Use whichever is larger for the summary.
     skipped = Math.max(skipped, decision2.skipped);
-    for (const ref of decision2.admittable) {
+    for (const entry of decision2.admittable) {
       try {
-        await deps.unsuspendJob(ref.namespace, ref.name);
+        await deps.unsuspendJob(entry.ref.namespace, entry.ref.name);
         admitted++;
+        await emitAdmittedAuditEvent(deps, entry.job);
       } catch (err) {
         if (isConflict(err)) {
           conflicts++;
@@ -461,7 +506,7 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
           break;
         }
         console.error(
-          `[kagent-operator] admission: failed to un-suspend ${ref.namespace}/${ref.name}:`,
+          `[kagent-operator] admission: failed to un-suspend ${entry.ref.namespace}/${entry.ref.name}:`,
           err,
         );
         errors++;
@@ -478,8 +523,83 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
   return summary;
 }
 
+/**
+ * Wave 0 Audit proof-of-life: extract identifying fields from the
+ * un-suspended Job and call the `emitAudit` hook (if wired). Best-
+ * effort: failures are logged + swallowed so a buggy emission can
+ * never break the dispatch path.
+ *
+ * Field extraction:
+ *   - taskUid:     `metadata.ownerReferences[0].uid` (Job is owned by
+ *                  AgentTask per `buildJobSpec`).
+ *   - taskName:    `metadata.labels['kagent.knuteson.io/task']`.
+ *   - taskNamespace: `metadata.namespace` (we only ever spawn into
+ *                  the AgentTask's own namespace).
+ *   - agentName:   `metadata.labels['kagent.knuteson.io/agent']`
+ *                  (`AGENT_LABEL`).
+ *   - model:       parsed from `KAGENT_AGENT_SPEC` env via
+ *                  `extractModelFromJob`.
+ *
+ * If any required field is missing (defensive — the operator's own
+ * job-spec.ts always sets them, but a hand-edited Job that satisfies
+ * the managed-by selector might not), the function logs and skips
+ * emission rather than emitting a malformed event.
+ */
+async function emitAdmittedAuditEvent(deps: AdmissionDeps, job: V1Job): Promise<void> {
+  if (deps.emitAudit === undefined) return;
+  const ownerRef = job.metadata?.ownerReferences?.[0];
+  const taskUid = ownerRef?.uid;
+  const taskName = job.metadata?.labels?.[TASK_LABEL] ?? ownerRef?.name;
+  const taskNamespace = job.metadata?.namespace;
+  const agentName = job.metadata?.labels?.[AGENT_LABEL];
+  const model = extractModelFromJob(job);
+  if (
+    typeof taskUid !== 'string' ||
+    taskUid.length === 0 ||
+    typeof taskName !== 'string' ||
+    taskName.length === 0 ||
+    typeof taskNamespace !== 'string' ||
+    taskNamespace.length === 0 ||
+    typeof agentName !== 'string' ||
+    agentName.length === 0
+  ) {
+    console.warn(
+      `[kagent-operator] admission: cannot emit task.admitted audit event for ${
+        job.metadata?.namespace ?? '(no-ns)'
+      }/${job.metadata?.name ?? '(no-name)'} — missing parent task ref`,
+    );
+    return;
+  }
+  try {
+    await deps.emitAudit({
+      taskUid,
+      taskNamespace,
+      taskName,
+      agentName,
+      model,
+    });
+  } catch (err) {
+    // The AuditPublisher already swallows its own errors per the
+    // best-effort contract; this catches any caller-injected hook
+    // that misbehaves so the dispatch path stays clean.
+    console.warn('[kagent-operator] admission: emitAudit hook raised (audit dropped):', err);
+  }
+}
+
+/**
+ * Job label key carrying the parent AgentTask name. Mirrors
+ * job-watch.ts:TASK_LABEL_KEY (kept duplicated here so admission
+ * stays import-cycle-free against job-watch).
+ */
+const TASK_LABEL = 'kagent.knuteson.io/task';
+
+interface AdmittableEntry {
+  readonly ref: JobRef;
+  readonly job: V1Job;
+}
+
 interface DecisionPass {
-  readonly admittable: readonly JobRef[];
+  readonly admittable: readonly AdmittableEntry[];
   /** Count of suspended Jobs we couldn't admit (no ModelEndpoint, capacity exhausted). */
   readonly skipped: number;
 }
@@ -527,17 +647,34 @@ function computeDecision(deps: AdmissionDeps): DecisionPass {
     }
   }
 
-  const admittable = selectAdmittable({
+  const admittableRefs = selectAdmittable({
     suspendedJobs,
     runningJobs,
     modelEndpoints,
     agentMaxInFlight,
   });
 
+  // Pair each admitted JobRef back to its source V1Job so the
+  // outer loop has the full Job context for the audit emission
+  // (taskUid, agent label, model env, …). selectAdmittable preserves
+  // namespace+name as the join key.
+  const jobByKey = new Map<string, V1Job>();
+  for (const job of suspendedJobs) {
+    const ns = job.metadata?.namespace ?? 'default';
+    const nm = job.metadata?.name ?? '';
+    jobByKey.set(`${ns}/${nm}`, job);
+  }
+  const admittable: AdmittableEntry[] = [];
+  for (const ref of admittableRefs) {
+    const job = jobByKey.get(`${ref.namespace}/${ref.name}`);
+    if (job === undefined) continue; // defensive — shouldn't happen
+    admittable.push({ ref, job });
+  }
+
   // "Skipped" = suspended Jobs we did NOT admit. Useful for
   // observability (logs) and tests. Includes Jobs blocked on
   // missing ModelEndpoint, capacity exhausted, missing model, etc.
-  const admittedNames = new Set(admittable.map((r) => `${r.namespace}/${r.name}`));
+  const admittedNames = new Set(admittableRefs.map((r) => `${r.namespace}/${r.name}`));
   let skipped = 0;
   for (const job of suspendedJobs) {
     const ns = job.metadata?.namespace ?? 'default';

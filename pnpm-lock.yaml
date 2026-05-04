@@ -143,6 +143,9 @@ importers:
       '@kagent/agent-loop':
         specifier: workspace:*
         version: link:../agent-loop
+      '@kagent/audit-events':
+        specifier: workspace:*
+        version: link:../audit-events
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
