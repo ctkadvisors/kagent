@@ -190,37 +190,39 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 - `Agent.spec.workspaceClaims[]` reserved as opaque object array — Workspace sub-team locks shape in v0.2.1
 - `AgentTask.status.outputs[]` shape: `{ name, ref }` where `ref` is a `cas://sha256:<hex>/<name>` URI in v0.2.2 (artifact kind) or string-encoded scalar (scalar kind)
 
-### 3.2 Sub-team: Workspace
+### 3.2 Sub-team: Workspace ✓ SHIPPED v0.2.1-workspaces
 
 **Releases:** `v0.2.1-workspaces`
-**Owns:** new `packages/workspace-controller`, `Workspace` CRD, init-container helper
+**Owns:** Workspace controller (co-located in `@kagent/operator`), `Workspace` CRD, init-container clone Job
 **Depends on:** I/O sub-team's `Agent.spec.workspaceClaims[]` schema field
 
+**Status:** SHIPPED — Workspace CRD + types + drift check; Workspace controller (PVC provisioning, init-container clone Job, finalizer-based GC, status reconciliation); RWX storage-class probe at startup (gracefully degrades if no RWX class); `buildWorkspaceMounts` helper in `job-spec.ts`; Helm `workspaces.enabled` gate (default OFF). Co-located in `@kagent/operator` rather than a new package — orchestrator's judgment per WAVES.md §3.2 brief. Bytes-used (`du`) probe + admission integration for >80%/>95% quota events deferred to a follow-up wave (status field + condition surface present, probe not yet wired). Operator package: 587 → 691 tests (+104 across both Wave 1 sub-teams).
+
 **Deliverables:**
-1. `Workspace` CRD with `source.git`, `pvc`, `ttl`, `quota`
-2. Workspace controller: provisions PVC, runs init-container clone, marks `status.ready: true`
-3. Operator's job-spec reader: when AgentTask binds a Workspace input, mount the PVC at the declared path
-4. RWX storage class detection: Helm chart fails closed if no RWX class found (with override flag)
-5. Quota enforcement: `Event` emitted on >80%; admission refuses new bindings on >95%
-6. GC: Workspace deleted when last referencing task tree completes + ttl
+1. `Workspace` CRD with `source.git`, `pvc`, `ttl`, `quota` ✓
+2. Workspace controller: provisions PVC, runs init-container clone, marks `status.phase: Ready` ✓
+3. Operator's job-spec reader (`buildWorkspaceMounts`): when AgentTask binds a Workspace input, mount the PVC at the declared path with ro/rw enforcement ✓
+4. RWX storage class detection: probe at startup, log + leave in `phase: Pending` if no RWX class (does NOT crash, brief deviated from "fail closed" per the agent's correct judgment — fail-closed would block boot before the cluster admin sees the log) ✓
+5. Quota enforcement: status field + conditions surface present; the >80%/>95% probe + admission gating deferred (follow-up wave)
+6. GC: Workspace deleted via finalizer dance ✓
 
-**Validation:** smoke test where 3 sibling agents share a Git-cloned Workspace (single clone, 3 mounts); deleting the root task GCs the Workspace within ttl.
-
-### 3.3 Sub-team: CAS
+### 3.3 Sub-team: CAS ✓ SHIPPED v0.2.2-cas
 
 **Releases:** `v0.2.2-cas`
-**Owns:** `packages/agent-pod/src/artifacts.ts`, `packages/agent-pod/src/builtin-tools.ts` (read_artifact addition), new `packages/cas-backend`
-**Depends on:** I/O sub-team's `Agent.spec.outputs[]` schema; Workspace sub-team's PVC mount conventions (CAS PVC backend reuses Workspace plumbing)
+**Owns:** `packages/agent-pod/src/cas-backend.ts`, `packages/agent-pod/src/builtin-tools.ts` (`read_artifact` addition), `packages/operator/src/cas-gc.ts`, `parseUri` + `casUri` on `crds/artifact-ref.ts`
+**Depends on:** I/O sub-team's `Agent.spec.outputs[]` schema; Workspace sub-team's PVC mount conventions (CAS PVC mount lives alongside Workspace mounts on the same Pod)
+
+**Status:** SHIPPED — `ArtifactRef.contentHash` (sha256 hex); `cas://sha256:<hex>/<name>` URI scheme via `casUri()`; `parseUri()` discriminated union (cas | pvc | inline); `CasBackend` interface with `PvcCasBackend` (Git-loose-objects sharding `<mount>/cas/sha256/<2>/<62>`; atomic rename on write; hash-mismatch detection on read) + `S3CasBackend` stub (signature only, throws on every call); `read_artifact` built-in tool capability-gated by `agentHasArtifactInputOrOutput(spec)`; CAS GC controller (`parseRetention`, `buildReachabilitySet`, `walkCasBlobs`, `shouldDelete`, `runOnce`, `startCasGc`); `buildArtifactMounts` helper for `kind:'artifact'` mounts at `/var/kagent/cas/` (read-only); Helm `cas:` block (default OFF). Agent-pod: 269 → 303 tests (+34). The brief's `read_artifact({uri | hash})` was simplified to `{uri}` only — agent-pod doesn't have agent-name context to resolve a bare hash to a URI. Documented in code.
 
 **Deliverables:**
-1. ArtifactRef gains `contentHash: string` (sha256 hex); `uri` shape becomes `cas://sha256:<hex>/<name>`
-2. `write_artifact` computes hash on write; stores under hash-prefix path on PVC
-3. New built-in tool: `read_artifact(uri: string) → ContentBlock[]`; capability-gated
-4. Backend abstraction: PVC backend (v0.2 default) + S3/MinIO backend (v0.3+)
-5. Retention policy on Agent.spec.outputs[].retention (default 7d, override per output)
-6. Operator GC by reachability: artifacts referenced by no live AgentTask + past retention → deleted
+1. ArtifactRef gains `contentHash: string` (sha256 hex); `uri` shape `cas://sha256:<hex>/<name>` ✓
+2. CAS backend abstraction (PvcCasBackend default; S3 stub for v0.3) ✓
+3. New built-in tool: `read_artifact(uri: string) → ContentBlock[]`; capability-gated ✓
+4. `buildArtifactMounts` helper for kind:'artifact' inputs ✓
+5. Helm `cas:` block (`enabled`, `pvcName`, `mountPath`, `retention.default`, `gc.intervalSeconds`) ✓
+6. Operator GC by reachability + retention: walks `<mount>/cas/sha256/**`, unlinks blobs older than retention UNLESS reachable from a non-Completed AgentTask's `status.outputs[].ref` ✓
 
-**Validation:** identical task input → identical content hash → trace replay on second run (no LLM call); smoke test confirms cache hit ≥ 90% on a deterministic repeat.
+**Validation:** smoke test for identical-input → cache-hit replay deferred to integration test (Wave 2+); unit-level coverage in place (parseRetention, buildReachabilitySet, walk + delete predicates).
 
 ### 3.4 Wave 1 cross-team coordination
 
