@@ -83,6 +83,52 @@ export function validateCapabilityClaims(raw: unknown): Validation<CapabilityCla
       out.tenant = v;
       continue;
     }
+    if (cat === 'blackboard') {
+      // v0.4.1-blackboard — nested-object claim. Both `read` and
+      // `write` are optional readonly arrays of non-empty glob strings.
+      // Unknown keys rejected so the authority surface stays
+      // enumerable (mirrors top-level claim handling).
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+        return {
+          ok: false,
+          error: 'capabilityClaims.blackboard must be an object with optional read/write arrays',
+        };
+      }
+      const bb = v as Record<string, unknown>;
+      for (const key of Object.keys(bb)) {
+        if (key !== 'read' && key !== 'write') {
+          return {
+            ok: false,
+            error: `capabilityClaims.blackboard has unknown key "${key}"; allowed: read, write`,
+          };
+        }
+      }
+      const blackboard: { read?: readonly string[]; write?: readonly string[] } = {};
+      for (const sub of ['read', 'write'] as const) {
+        if (!(sub in bb)) continue;
+        const subVal = bb[sub];
+        if (!Array.isArray(subVal)) {
+          return {
+            ok: false,
+            error: `capabilityClaims.blackboard.${sub} must be an array of strings`,
+          };
+        }
+        const list: string[] = [];
+        for (let i = 0; i < subVal.length; i++) {
+          const item = (subVal as unknown[])[i];
+          if (typeof item !== 'string' || item.length === 0) {
+            return {
+              ok: false,
+              error: `capabilityClaims.blackboard.${sub}[${String(i)}] must be a non-empty string`,
+            };
+          }
+          list.push(item);
+        }
+        blackboard[sub] = list;
+      }
+      out.blackboard = blackboard;
+      continue;
+    }
     // Array categories.
     if (!Array.isArray(v)) {
       return {
@@ -101,9 +147,9 @@ export function validateCapabilityClaims(raw: unknown): Validation<CapabilityCla
       }
       list.push(item);
     }
-    // Type narrowing: every category except 'tenant' is an array
-    // category by construction; the early `if (cat === 'tenant')` above
-    // returns before reaching this point.
+    // Type narrowing: every category except 'tenant' / 'blackboard' is
+    // an array category by construction; the early branches above
+    // return before reaching this point.
     assignArrayCategory(out, cat, list);
   }
   return { ok: true, value: out };
@@ -241,6 +287,11 @@ function assignArrayCategory(
     case 'tenant':
       // Unreachable — tenant is handled before assignArrayCategory in
       // validateCapabilityClaims. Listed here for exhaustiveness.
+      return;
+    case 'blackboard':
+      // Unreachable — blackboard is a nested-object claim handled
+      // before assignArrayCategory in validateCapabilityClaims.
+      // Listed here for exhaustiveness.
       return;
   }
 }

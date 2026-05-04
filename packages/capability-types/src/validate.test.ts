@@ -65,6 +65,41 @@ describe('validateCapabilityClaims', () => {
     expect(validateCapabilityClaims({ tenant: '' }).ok).toBe(false);
     expect(validateCapabilityClaims({ tenant: 42 }).ok).toBe(false);
   });
+
+  /* v0.4.1-blackboard — Wave 3 Blackboard sub-team. */
+  it('admits a fully populated blackboard claim', () => {
+    const r = validateCapabilityClaims({
+      blackboard: { read: ['findings.*'], write: ['my-task:*'] },
+    });
+    expect(r.ok).toBe(true);
+    expect(validValue(r)?.blackboard).toEqual({
+      read: ['findings.*'],
+      write: ['my-task:*'],
+    });
+  });
+
+  it('admits a blackboard claim with only one of read/write', () => {
+    const r = validateCapabilityClaims({ blackboard: { read: ['*'] } });
+    expect(r.ok).toBe(true);
+    expect(validValue(r)?.blackboard).toEqual({ read: ['*'] });
+  });
+
+  it('rejects blackboard with unknown sub-key', () => {
+    const r = validateCapabilityClaims({ blackboard: { rogue: ['x'] } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('unknown key');
+  });
+
+  it('rejects blackboard array entries that are not non-empty strings', () => {
+    expect(validateCapabilityClaims({ blackboard: { read: [42] } }).ok).toBe(false);
+    expect(validateCapabilityClaims({ blackboard: { write: [''] } }).ok).toBe(false);
+    expect(validateCapabilityClaims({ blackboard: { read: 'foo' } }).ok).toBe(false);
+  });
+
+  it('rejects blackboard that is not an object', () => {
+    expect(validateCapabilityClaims({ blackboard: ['x'] }).ok).toBe(false);
+    expect(validateCapabilityClaims({ blackboard: 'x' }).ok).toBe(false);
+  });
 });
 
 describe('validateCapabilityBundle', () => {
