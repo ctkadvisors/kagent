@@ -122,6 +122,36 @@ export interface CapabilityClaims {
    * shape + reservation rationale as `publish`.
    */
   readonly subscribe?: readonly string[];
+
+  /**
+   * Blackboard KV ACL — Wave 3 Blackboard surface (v0.4.1-blackboard).
+   *
+   * Each task tree gets one NATS JetStream KV bucket
+   * (`kagent-kv-<root-task-uid>`) provisioned at root admission and
+   * GC'd on root completion + ttl. The four built-in tools
+   * (`read_blackboard`, `write_blackboard`, `list_blackboard`,
+   * `append_blackboard`) gate against the glob lists below.
+   *
+   * Asymmetric splits — read vs write are intentionally independent
+   * so a task can be a "consumer" (read everything; write nothing) or
+   * a "producer" (write under a namespace; read nothing). Both lists
+   * empty / unset = the blackboard tools are entirely unavailable to
+   * the task (fail-closed; tools throw `policy_denied:`).
+   *
+   * `list_blackboard` is gated by `read` (listing is a read).
+   * `append_blackboard` requires BOTH `read` (CAS-loop must read the
+   * current revision) AND `write` (CAS-loop puts the spliced array).
+   *
+   * Pattern dialect is the same minimal `*`-only glob as the rest of
+   * the claim categories. Examples:
+   *   `read:  ['findings.*']`              admit reads under findings.
+   *   `write: ['my-task-uid:*']`           admit writes under own ns.
+   *   `read:  ['*']`                       full bucket read.
+   */
+  readonly blackboard?: {
+    readonly read?: readonly string[];
+    readonly write?: readonly string[];
+  };
 }
 
 /**
@@ -183,7 +213,8 @@ export type CapabilityClaimCategory =
   | 'egress'
   | 'tenant'
   | 'publish'
-  | 'subscribe';
+  | 'subscribe'
+  | 'blackboard';
 
 /**
  * Frozen array of every claim category — used by the test suite + the
@@ -200,6 +231,7 @@ export const ALL_CAPABILITY_CLAIM_CATEGORIES = Object.freeze([
   'tenant',
   'publish',
   'subscribe',
+  'blackboard',
 ] as const) as readonly CapabilityClaimCategory[];
 
 /**

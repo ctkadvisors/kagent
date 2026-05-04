@@ -1133,3 +1133,294 @@ export function defineReadArtifact(deps: ReadArtifactDeps): InProcessToolDefinit
     },
   });
 }
+
+/* =====================================================================
+ * Wave 3 — Blackboard
+ *
+ * Per-task-tree scratch KV on NATS JetStream. The operator provisions
+ * one bucket per root AgentTask (`kagent-kv-<root-uid>`) at admission
+ * and stamps `KAGENT_BLACKBOARD_BUCKET=<name>` on every spawned Job's
+ * env. Children inherit the bucket via the env, so sibling agents
+ * coordinate without having to discover each other.
+ *
+ * Four tools, all cap-gated by `CapabilityClaims.blackboard.{read,write}`:
+ *
+ *   - `read_blackboard({key})         → {value, revision} | null`
+ *   - `write_blackboard({key, value}) → {revision}`            (last-writer-wins)
+ *   - `list_blackboard({prefix?})     → {keys[]}`              (capped)
+ *   - `append_blackboard({key, value})→ {revision, length}`    (CAS-loop)
+ *
+ * Wire pattern mirrors `defineSpawnChildTask` / `defineGetMyContext`:
+ * a separate factory function (vs. an entry in
+ * `buildBuiltinToolRegistry`) because the data sources are
+ * per-task-instance — the BlackboardClient + cap claim are resolved at
+ * runner boot from env + cap-bundle.
+ *
+ * Refusal taxonomy (mirrors `assertUrlIsSafe` in this file):
+ *   - `policy_denied: <reason>` — cap claim doesn't admit the action.
+ *     Surface to the LLM via the standard tool-error path.
+ *   - `tool_error: blackboard not configured` — bucket env unset.
+ *     Caller should drop the tool from Agent.spec.tools rather than
+ *     calling it.
+ *   - Other `Error` propagation — transport / size / revision-conflict
+ *     bubble up via the in-process tool provider's catch-arm.
+ *
+ * Append CAS loop:
+ *   1. Read current entry (revision R, value V).
+ *   2. If absent: try create([new_value]). On RevisionMismatchError,
+ *      restart the loop.
+ *   3. If present: V must be an array (or convertible-to-array via
+ *      single-element wrap when V is a scalar — fail-closed: refuse
+ *      non-array existing values to keep the contract crisp).
+ *   4. Splice value onto V; cas(R+1's slot via R) to publish.
+ *   5. On RevisionMismatchError: restart loop. Hard cap on retries
+ *      (5 by default) — beyond that, throw `tool_error: contended` so
+ *      the agent loop sees a clear failure rather than spinning.
+ * ===================================================================== */
+
+import type { BlackboardClient } from '@kagent/blackboard';
+import {
+  RevisionMismatchError,
+  checkAppendAllowed,
+  checkListAllowed,
+  checkReadAllowed,
+  checkWriteAllowed,
+  denyReasonToMessage,
+  type BlackboardClaim,
+} from '@kagent/blackboard';
+
+/** Hard cap on append-CAS retries before we throw `tool_error: contended`. */
+export const APPEND_BLACKBOARD_MAX_RETRIES = 5;
+
+/** Hard cap on the per-call key length. NATS' subject-naming rules
+ *  cap individual subject tokens at ~255 bytes; we are stricter so
+ *  human-readable trace logs stay legible. */
+export const BLACKBOARD_MAX_KEY_BYTES = 256;
+
+/** Default `list_blackboard` cap when caller doesn't override. */
+export const BLACKBOARD_LIST_DEFAULT_MAX = 1000;
+
+/**
+ * Inputs to the blackboard tool factory. The runner builds one of
+ * these per task at boot when:
+ *   - `KAGENT_BLACKBOARD_BUCKET` is set in env (operator stamped it)
+ *   - The Agent declares any of the 4 blackboard tool names in
+ *     `Agent.spec.tools`
+ *
+ * Cap claim: optional. When absent or shape-empty, every tool refuses
+ * with `policy_denied: no blackboard capability claim — tool unavailable`,
+ * matching the substrate's fail-closed posture for all cap-gated tools.
+ */
+export interface BlackboardToolDeps {
+  readonly client: BlackboardClient;
+  /**
+   * `CapabilityClaims.blackboard` — the optional ACL nested object.
+   * Tool wrappers consult the predicates in `@kagent/blackboard/acl`.
+   * Undefined = no claim → all four tools refuse (fail-closed).
+   */
+  readonly claim?: BlackboardClaim | undefined;
+  /**
+   * Override the retry cap on append's CAS loop. Tests pin to 1 to
+   * exercise the contended path deterministically.
+   */
+  readonly maxAppendRetries?: number;
+}
+
+/**
+ * Build the four blackboard tools. Returns an array suitable for
+ * registering inside the substrate-tools provider in main.ts.
+ */
+export function defineBlackboardTools(
+  deps: BlackboardToolDeps,
+): readonly InProcessToolDefinition[] {
+  const { client } = deps;
+  const claim = deps.claim;
+  const maxRetries =
+    typeof deps.maxAppendRetries === 'number' && deps.maxAppendRetries >= 0
+      ? deps.maxAppendRetries
+      : APPEND_BLACKBOARD_MAX_RETRIES;
+
+  const validateKey = (key: string): void => {
+    if (typeof key !== 'string' || key.length === 0) {
+      throw new Error('blackboard: "key" must be a non-empty string');
+    }
+    // UTF-8 byte length — overlong keys explode subject names + KV
+    // index size for marginal value.
+    const byteLen = new TextEncoder().encode(key).byteLength;
+    if (byteLen > BLACKBOARD_MAX_KEY_BYTES) {
+      throw new Error(
+        `blackboard: key length ${String(byteLen)} bytes exceeds max ${String(BLACKBOARD_MAX_KEY_BYTES)}`,
+      );
+    }
+  };
+
+  const readDef = defineInProcessTool({
+    name: 'read_blackboard',
+    description:
+      'Read the latest value at a key on the task-tree blackboard. ' +
+      'Returns {value, revision} or null when the key is absent or ' +
+      'soft-deleted. Cap-gated by blackboard.read; refuses with ' +
+      'policy_denied when the key is not in the read claim.',
+    inputSchema: {
+      type: 'object',
+      required: ['key'],
+      properties: {
+        key: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'blackboard', 'read-only'],
+    handler: async (args) => {
+      const key = requireStringArg(args, 'key');
+      validateKey(key);
+      const deny = checkReadAllowed(claim, key);
+      if (deny !== null) {
+        throw new Error(`policy_denied: ${denyReasonToMessage(deny)} (key="${key}")`);
+      }
+      const entry = await client.read(key);
+      return jsonContent(entry);
+    },
+  });
+
+  const writeDef = defineInProcessTool({
+    name: 'write_blackboard',
+    description:
+      'Last-writer-wins write to a key on the task-tree blackboard. ' +
+      'Value must be JSON-serializable. Returns {revision}. Cap-gated ' +
+      'by blackboard.write; refuses with policy_denied when the key ' +
+      'is not in the write claim.',
+    inputSchema: {
+      type: 'object',
+      required: ['key', 'value'],
+      properties: {
+        key: { type: 'string' },
+        value: {},
+      },
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'blackboard', 'write'],
+    handler: async (args) => {
+      const key = requireStringArg(args, 'key');
+      validateKey(key);
+      // `value` may legitimately be any JSON-serializable shape
+      // (including `null` and `false`); we only refuse strict
+      // `undefined` (impossible to receive from a JSON-decoded
+      // tool-call args object, but defensive).
+      if (!('value' in args)) {
+        throw new Error('blackboard: "value" argument is required');
+      }
+      const deny = checkWriteAllowed(claim, key);
+      if (deny !== null) {
+        throw new Error(`policy_denied: ${denyReasonToMessage(deny)} (key="${key}")`);
+      }
+      const revision = await client.put(key, args.value);
+      return jsonContent({ revision });
+    },
+  });
+
+  const listDef = defineInProcessTool({
+    name: 'list_blackboard',
+    description:
+      'List keys on the task-tree blackboard, optionally filtered by ' +
+      'literal prefix. Returns {keys: string[]}. Capped at 1000 ' +
+      'entries. Cap-gated by blackboard.read (listing is a read).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefix: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'blackboard', 'read-only'],
+    handler: async (args) => {
+      const deny = checkListAllowed(claim);
+      if (deny !== null) {
+        throw new Error(`policy_denied: ${denyReasonToMessage(deny)}`);
+      }
+      const prefix = typeof args.prefix === 'string' ? args.prefix : undefined;
+      const keys = await client.list(prefix, BLACKBOARD_LIST_DEFAULT_MAX);
+      return jsonContent({ keys });
+    },
+  });
+
+  const appendDef = defineInProcessTool({
+    name: 'append_blackboard',
+    description:
+      'CRDT-style append a single value onto a list-typed key on the ' +
+      'task-tree blackboard. Concurrent appends converge via NATS KV ' +
+      'compare-and-swap; the loop retries on revision conflict (max ' +
+      `${String(maxRetries)}). Returns {revision, length}. Cap-gated by ` +
+      'BOTH blackboard.read AND blackboard.write (CAS-loop reads + writes).',
+    inputSchema: {
+      type: 'object',
+      required: ['key', 'value'],
+      properties: {
+        key: { type: 'string' },
+        value: {},
+      },
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'blackboard', 'write'],
+    handler: async (args) => {
+      const key = requireStringArg(args, 'key');
+      validateKey(key);
+      if (!('value' in args)) {
+        throw new Error('blackboard: "value" argument is required');
+      }
+      const deny = checkAppendAllowed(claim, key);
+      if (deny !== null) {
+        throw new Error(`policy_denied: ${denyReasonToMessage(deny)} (key="${key}")`);
+      }
+      const newItem: unknown = args.value;
+      let attempt = 0;
+      // Bounded retry: read-splice-CAS-PUT loop. Caller sees a clear
+      // `tool_error: contended` after `maxRetries` failed CAS attempts
+      // rather than the loop spinning forever.
+      while (attempt <= maxRetries) {
+        attempt++;
+        const entry = await client.read(key);
+        if (entry === null) {
+          // Seed with [newItem] via create (refuses on race with
+          // another writer; we catch + restart).
+          try {
+            const revision = await client.create(key, [newItem]);
+            return jsonContent({ revision, length: 1 });
+          } catch (err) {
+            if (err instanceof RevisionMismatchError) {
+              continue; // someone else seeded — re-read + splice
+            }
+            throw err;
+          }
+        }
+        // Existing value MUST be an array. We refuse to silently coerce
+        // (e.g. wrap a scalar) — append is a typed operation, the
+        // caller should `write_blackboard` first to install the array.
+        if (!Array.isArray(entry.value)) {
+          throw new Error(
+            `tool_error: append_blackboard: existing value at "${key}" is not an array (got ${typeof entry.value})`,
+          );
+        }
+        // entry.value is `unknown` from BlackboardEntry; the
+        // `Array.isArray` narrow above guarantees an array but the
+        // type system widens to `any[]`. Re-cast through the explicit
+        // `unknown[]` so the spread doesn't propagate `any`.
+        const existingArray = entry.value as readonly unknown[];
+        const next: unknown[] = [...existingArray, newItem];
+        try {
+          const revision = await client.cas(key, next, entry.revision);
+          return jsonContent({ revision, length: next.length });
+        } catch (err) {
+          if (err instanceof RevisionMismatchError) {
+            continue; // re-read + splice on the next iteration
+          }
+          throw err;
+        }
+      }
+      throw new Error(
+        `tool_error: append_blackboard: gave up after ${String(maxRetries)} CAS retries on "${key}"`,
+      );
+    },
+  });
+
+  return [readDef, writeDef, listDef, appendDef];
+}

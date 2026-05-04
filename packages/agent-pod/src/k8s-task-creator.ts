@@ -62,6 +62,18 @@ export const FROM_TEMPLATE_LABEL = 'kagent.knuteson.io/from-template';
  */
 export const TASK_DEPTH_LABEL = 'kagent.knuteson.io/task-depth';
 
+/**
+ * v0.4.1-blackboard — Wave 3 / Blackboard sub-team. Local mirror of
+ * the operator's canonical `ROOT_TASK_UID_LABEL` constant in
+ * `packages/operator/src/job-spec.ts`. Stamped on every spawned
+ * child so the operator's job-spec render path can derive the
+ * `KAGENT_BLACKBOARD_BUCKET` env without walking the parent chain.
+ * For the parent's own (root-uid lookup): if the parent itself
+ * carries this label, the value is the root UID; otherwise the
+ * parent IS the root and its UID is the root UID.
+ */
+export const ROOT_TASK_UID_LABEL = 'kagent.knuteson.io/root-task-uid';
+
 /** Parent identity threaded into child manifests. */
 export interface ParentIdentity {
   readonly uid: string;
@@ -78,6 +90,16 @@ export interface ParentIdentity {
    * callers don't have to thread depth through every path.
    */
   readonly depth?: number;
+  /**
+   * v0.4.1-blackboard — Wave 3 Blackboard sub-team. The parent's
+   * resolved root-task UID. When the parent IS the root, this equals
+   * the parent UID; for grandchildren+ the parent inherits its own
+   * parent's value. The agent-pod's main.ts derives this from
+   * `PodConfig.rootTaskUid` (env-stamped by the operator's job-spec
+   * render path). Optional in the type so test fixtures can omit;
+   * production wiring always supplies it.
+   */
+  readonly rootUid?: string;
 }
 
 export interface ChildTaskInput {
@@ -183,6 +205,17 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
           : 0;
       const childDepth = parentDepth + 1;
 
+      // v0.4.1-blackboard — Wave 3 / Blackboard sub-team. Resolve the
+      // root-task UID. When the parent IS the root (parent.rootUid
+      // unset), the parent's own UID becomes the root for the child.
+      // Otherwise the child inherits the parent's already-resolved
+      // root UID. Either way: every descendant carries the SAME label
+      // value, so they all share a single per-tree blackboard bucket.
+      const childRootUid =
+        typeof parent.rootUid === 'string' && parent.rootUid.length > 0
+          ? parent.rootUid
+          : parent.uid;
+
       const manifest: Record<string, unknown> = {
         apiVersion: `${KAGENT_GROUP}/${KAGENT_VERSION}`,
         kind: 'AgentTask',
@@ -194,6 +227,7 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
             'app.kubernetes.io/created-by': 'kagent-agent-pod',
             [PARENT_TASK_UID_LABEL]: parent.uid,
             [TASK_DEPTH_LABEL]: String(childDepth),
+            [ROOT_TASK_UID_LABEL]: childRootUid,
           },
           ownerReferences: [
             {

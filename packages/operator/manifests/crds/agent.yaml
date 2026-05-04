@@ -277,6 +277,36 @@ spec:
                       items:
                         type: string
                         minLength: 1
+                    blackboard:
+                      type: object
+                      description: |
+                        Wave 3 Blackboard KV ACL (v0.4.1-blackboard).
+                        Each task tree gets one NATS JetStream KV
+                        bucket; the four built-in tools
+                        (read/write/list/append _blackboard) gate
+                        against the glob lists below. Both lists
+                        empty / unset = the blackboard tools are
+                        unavailable to the task (fail-closed).
+                      properties:
+                        read:
+                          type: array
+                          description: |
+                            Key-glob patterns the task may read /
+                            list. `list_blackboard` is gated by
+                            `read`.
+                          items:
+                            type: string
+                            minLength: 1
+                        write:
+                          type: array
+                          description: |
+                            Key-glob patterns the task may write.
+                            `append_blackboard` requires both `read`
+                            (CAS-loop reads current revision) and
+                            `write` (CAS-loop puts spliced array).
+                          items:
+                            type: string
+                            minLength: 1
                 # ---- v0.3.1-supervision — Wave 2 / Supervision sub-team.
                 # Erlang/OTP-style supervision strategy + per-task
                 # restart cap. See docs/WAVES.md §4.2 + the

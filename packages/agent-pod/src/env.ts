@@ -220,32 +220,28 @@ export interface PodConfig {
   /**
    * v0.4.3-identity (Wave 3 / Identity sub-team). When
    * `KAGENT_LITELLM_USE_SVID=true`, the agent-pod's LLM client wires
-   * an SVID-backed mTLS context against the SPIRE workload-API socket
-   * (or the spiffe-helper-materialized cert files). When unset / false,
-   * the bearer-token fall-back path is used.
-   *
-   * The probe outcome (`probeGatewayMtls`) decides at runtime whether
-   * mTLS is actually live; this flag just gates the probe attempt.
+   * an SVID-backed mTLS context against the SPIRE workload-API socket.
    */
   readonly identity: PodIdentityConfig;
+  /**
+   * v0.4.1-blackboard — Wave 3 / Blackboard sub-team. The resolved
+   * root-task UID for this task's tree. Surfaced so K8sTaskCreator's
+   * `parent.rootUid` field is populated when this pod spawns
+   * children — every descendant shares the same bucket. Optional —
+   * legacy pods carry undefined and the spawn path treats the
+   * parent's own UID as the new root.
+   */
+  readonly rootTaskUid?: string;
 }
 
 /**
- * v0.4.3-identity — agent-pod-side identity config snapshot. Built
- * from KAGENT_IDENTITY_ENABLED + KAGENT_LITELLM_USE_SVID +
- * KAGENT_SVID_* env vars. `enabled=false` is the production-default
- * (until ops flips the chart `identity.enabled=true`).
+ * v0.4.3-identity — agent-pod-side identity config snapshot.
  */
 export interface PodIdentityConfig {
-  /** True when KAGENT_LITELLM_USE_SVID=true (set by the operator chart). */
   readonly useSvidForLlm: boolean;
-  /** SPIFFE ID this pod attests as. Operator stamps via env. */
   readonly spiffeId: string | undefined;
-  /** Override path for SVID cert PEM. Defaults to /var/kagent/svid/tls.crt. */
   readonly svidCertPath: string | undefined;
-  /** Override path for SVID key PEM. Defaults to /var/kagent/svid/tls.key. */
   readonly svidKeyPath: string | undefined;
-  /** Override path for SVID bundle PEM. Defaults to /var/kagent/svid/bundle.pem. */
   readonly svidBundlePath: string | undefined;
 }
 
@@ -297,6 +293,10 @@ export function parseEnv(
   const traceContentMode = parseTraceContentMode(env.KAGENT_TRACE_CONTENT_MODE);
   const taskDepth = parseTaskDepth(env.KAGENT_TASK_DEPTH);
   const identity = parseIdentityConfig(env);
+  // v0.4.1-blackboard — root-task UID from operator-stamped
+  // KAGENT_BLACKBOARD_BUCKET (`kagent-kv-<root-uid>`). Undefined for
+  // pre-Wave 3 deploys; spawn path treats parent UID as root then.
+  const rootTaskUid = parseRootTaskUidFromBucket(env.KAGENT_BLACKBOARD_BUCKET);
 
   const config: PodConfig = {
     taskId,
@@ -313,6 +313,7 @@ export function parseEnv(
     traceContentMode,
     taskDepth,
     identity,
+    ...(rootTaskUid !== undefined && { rootTaskUid }),
   };
   return config;
 }
@@ -360,6 +361,22 @@ export function parseTaskDepth(raw: string | undefined): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
   return n;
+}
+
+/**
+ * v0.4.1-blackboard — Parse the root-task UID out of
+ * `KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>`. Returns undefined
+ * when the env is absent / malformed. Defensive: an unparseable value
+ * silently maps to undefined rather than throwing — the agent loop
+ * runs without blackboard tools rather than refusing to boot.
+ * Exported for unit tests.
+ */
+export function parseRootTaskUidFromBucket(raw: string | undefined): string | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const prefix = 'kagent-kv-';
+  if (!raw.startsWith(prefix)) return undefined;
+  const rest = raw.slice(prefix.length);
+  return rest.length > 0 ? rest : undefined;
 }
 
 /**

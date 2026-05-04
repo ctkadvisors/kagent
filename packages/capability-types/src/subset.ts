@@ -93,6 +93,26 @@ export function claimsSubsetViolations(
     }
   }
 
+  // v0.4.1-blackboard — nested-object claim. Each sub-array
+  // (read/write) is a glob list with the same subset semantics as the
+  // top-level array categories.
+  if (child.blackboard !== undefined) {
+    const cBb = child.blackboard;
+    const pBb = parent.blackboard;
+    for (const sub of ['read', 'write'] as const) {
+      const c = cBb[sub];
+      const p = pBb?.[sub];
+      if (!patternListIsSubset(c, p)) {
+        const cList = (c ?? []).join(', ');
+        const pList = (p ?? []).join(', ');
+        violations.push({
+          category: `blackboard.${sub}`,
+          detail: `child.blackboard.${sub}=[${cList}] is not a subset of parent.blackboard.${sub}=[${pList}]`,
+        });
+      }
+    }
+  }
+
   return violations;
 }
 

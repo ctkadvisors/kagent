@@ -81,6 +81,38 @@ describe('claimsSubsetViolations', () => {
     expect(v.length).toBe(1);
     expect(v[0]?.category).toBe('models');
   });
+
+  /* v0.4.1-blackboard — Wave 3 Blackboard sub-team. */
+  it('admits a narrower blackboard claim', () => {
+    const parent: CapabilityClaims = {
+      blackboard: { read: ['*'], write: ['mine.*'] },
+    };
+    const child: CapabilityClaims = {
+      blackboard: { read: ['findings.*'], write: ['mine.42'] },
+    };
+    expect(claimsSubsetViolations(child, parent)).toEqual([]);
+  });
+
+  it('rejects a child that broadens blackboard.read', () => {
+    const parent: CapabilityClaims = {
+      blackboard: { read: ['findings.*'] },
+    };
+    const child: CapabilityClaims = {
+      blackboard: { read: ['*'] },
+    };
+    const v = claimsSubsetViolations(child, parent);
+    expect(v.length).toBe(1);
+    expect(v[0]?.category).toBe('blackboard.read');
+  });
+
+  it('rejects a child that broadens blackboard.write when parent has none', () => {
+    const child: CapabilityClaims = {
+      blackboard: { write: ['anything'] },
+    };
+    const v = claimsSubsetViolations(child, {});
+    expect(v.length).toBe(1);
+    expect(v[0]?.category).toBe('blackboard.write');
+  });
 });
 
 describe('claimsAreSubsetOf', () => {

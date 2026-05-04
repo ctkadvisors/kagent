@@ -213,12 +213,28 @@ export function buildChildTaskManifest(parent: AgentTask, spec: ChildTaskSpec): 
     blockOwnerDeletion: true,
   };
 
+  // v0.4.1-blackboard — Wave 3 / Blackboard sub-team. Resolve the
+  // root-task UID. If the parent itself carries
+  // `ROOT_TASK_UID_LABEL`, the parent is a non-root and the child
+  // inherits that value. Otherwise the parent IS the root, so its
+  // own UID becomes the child's root UID. The label is what the
+  // operator's job-spec render path reads to emit
+  // KAGENT_BLACKBOARD_BUCKET; every descendant in a tree therefore
+  // shares one bucket. Local string constant (mirror of
+  // operator/src/job-spec.ts:ROOT_TASK_UID_LABEL) — task-graph.ts is
+  // a pure / leaf module that doesn't import job-spec.
+  const ROOT_TASK_UID_LABEL = 'kagent.knuteson.io/root-task-uid';
+  const parentRootUid = parent.metadata.labels?.[ROOT_TASK_UID_LABEL];
+  const childRootUid =
+    typeof parentRootUid === 'string' && parentRootUid.length > 0 ? parentRootUid : parentUid;
+
   const metadata: V1ObjectMeta = {
     name: spec.name,
     namespace: parentNamespace,
     labels: {
       [PARENT_TASK_UID_LABEL]: parentUid,
       ...(isValidLabelValue(parentName) && { [PARENT_TASK_NAME_LABEL]: parentName }),
+      [ROOT_TASK_UID_LABEL]: childRootUid,
     },
     annotations: {
       [PARENT_TASK_NAME_ANNOTATION]: parentName,

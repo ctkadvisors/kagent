@@ -379,6 +379,31 @@ describe('buildJobSpec', () => {
     expect(byName.get('KAGENT_TASK_DEPTH')).toBe('0');
   });
 
+  /* v0.4.1-blackboard — Wave 3 / Blackboard sub-team. */
+  it('stamps KAGENT_BLACKBOARD_BUCKET=kagent-kv-<own-uid> on root tasks (no label)', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_BLACKBOARD_BUCKET')).toBe(
+      `kagent-kv-${sampleTask.metadata.uid ?? ''}`,
+    );
+  });
+
+  it('stamps KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid-label> on child tasks', () => {
+    const child: AgentTask = {
+      ...sampleTask,
+      metadata: {
+        ...sampleTask.metadata,
+        uid: 'uid-grandchild',
+        labels: { 'kagent.knuteson.io/root-task-uid': 'uid-root-tree' },
+      },
+    };
+    const job = buildJobSpec(sampleAgent, child);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_BLACKBOARD_BUCKET')).toBe('kagent-kv-uid-root-tree');
+  });
+
   it('labels the Pod with agent + task + managed-by', () => {
     const job = buildJobSpec(sampleAgent, sampleTask);
     const labels = job.spec?.template?.metadata?.labels ?? {};

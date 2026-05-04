@@ -1,0 +1,31 @@
+{
+  "name": "@kagent/blackboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "NATS JetStream KV-backed task-tree blackboard. One bucket per root AgentTask (kagent-kv-<root-uid>); ships the bucket-lifecycle helper for the operator and the typed client surface the agent-pod's four built-in blackboard tools call.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kagent/capability-types": "workspace:*",
+    "nats": "2.29.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

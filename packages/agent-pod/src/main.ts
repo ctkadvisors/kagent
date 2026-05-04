@@ -43,10 +43,11 @@ import type { RunResult } from './runner.js';
 import type { ToolProvider } from '@kagent/agent-loop';
 import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 
-import { defineGetMyContext } from './builtin-tools.js';
+import { defineBlackboardTools, defineGetMyContext } from './builtin-tools.js';
 import { defineSpawnChildTask } from './builtin-tools-spawn.js';
 import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
 import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
+import { buildBlackboardClientFromEnv } from './blackboard-client.js';
 import { createInClusterK8sTaskCreator } from './k8s-task-creator.js';
 import { runAgentTask } from './runner.js';
 import { buildStatusPatch, makeCustomObjectsApi, writeStatus } from './status.js';
@@ -204,6 +205,15 @@ async function main(): Promise<void> {
       // child. The cap is enforced in the spawn tool itself
       // (defineSpawnChildTask) BEFORE we get here on a refused call.
       depth: config.taskDepth,
+      // v0.4.1-blackboard — Wave 3 / Blackboard sub-team. Forward this
+      // task's resolved root UID (parsed from KAGENT_BLACKBOARD_BUCKET).
+      // K8sTaskCreator stamps it onto every spawned child so the
+      // operator's job-spec render path emits the same
+      // KAGENT_BLACKBOARD_BUCKET on the child — every descendant
+      // shares one bucket per root tree. Undefined falls back to
+      // "treat parent UID as the new root" inside K8sTaskCreator
+      // (back-compat with pre-Wave 3 deploys).
+      ...(config.rootTaskUid !== undefined && { rootUid: config.rootTaskUid }),
     };
     // Compute remaining wall-clock budget against the runConfig
     // timeout so child timeouts get clamped to "what the parent could
@@ -285,6 +295,63 @@ async function main(): Promise<void> {
     console.log('[kagent-agent-pod] substrate tools ENABLED (spawn_child_task + wait_*)');
   }
 
+  // === Wave 3 — Blackboard ===
+  // v0.4.1-blackboard. The four blackboard tools register independently
+  // of the spawn flag — they are useful even in chat-only / no-children
+  // tasks (e.g. a single agent that wants persistent scratch state
+  // across restart). The runner gates registration on:
+  //   1. `KAGENT_BLACKBOARD_BUCKET` set (operator stamped it from the
+  //      root task's UID). Absent = bucket not provisioned → tools
+  //      cannot connect → drop them entirely so the LLM doesn't see
+  //      tools it'll get errors on.
+  //   2. `KAGENT_NATS_URL` set (same NATS broker the dispatcher /
+  //      audit publisher use; we share the connection conceptually
+  //      via lazy `connect()`).
+  //
+  // Cap-gating happens INSIDE each tool wrapper against the optional
+  // capability bundle's `claims.blackboard.{read,write}` ACL. The
+  // runner doesn't try to "filter by claim" at registration time —
+  // that would conflate two layers and would silently swallow a
+  // mis-configured Agent.spec.tools entry.
+  let blackboardTools: ToolProvider | undefined;
+  const bbBucket = process.env.KAGENT_BLACKBOARD_BUCKET;
+  const bbNatsUrl = process.env.KAGENT_NATS_URL;
+  if (
+    typeof bbBucket === 'string' &&
+    bbBucket.length > 0 &&
+    typeof bbNatsUrl === 'string' &&
+    bbNatsUrl.length > 0
+  ) {
+    try {
+      const client = await buildBlackboardClientFromEnv({
+        bucket: bbBucket,
+        natsUrl: bbNatsUrl,
+      });
+      const defs = defineBlackboardTools({
+        client,
+        // Cap-bundle wiring: when v0.3.0 cap-consumer is loaded, its
+        // claims.blackboard sub-object gates each tool. Until then
+        // (cap bundle absent), the four tools refuse with
+        // policy_denied — fail-closed.
+        ...(typeof process.env.KAGENT_BLACKBOARD_FAIL_OPEN === 'string' &&
+        process.env.KAGENT_BLACKBOARD_FAIL_OPEN === 'true'
+          ? { claim: { read: ['*'], write: ['*'] } }
+          : {}),
+      });
+      blackboardTools = new InProcessToolProvider({
+        id: 'kagent-blackboard',
+        tools: [...defs],
+      });
+      console.log(
+        `[kagent-agent-pod] blackboard tools ENABLED bucket=${bbBucket} (read/write/list/append _blackboard)`,
+      );
+    } catch (err) {
+      console.warn(
+        `[kagent-agent-pod] blackboard tools DISABLED — boot failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   // v0.1.6 — Langfuse-managed prompt fetcher. Wired only when the
   // operator threaded KAGENT_LANGFUSE_HOST + creds (chart values
   // langfuse.{enabled,host,publicKeySecret,secretKeySecret}). Agents
@@ -303,6 +370,7 @@ async function main(): Promise<void> {
       sinks,
       signal: shutdownController.signal,
       ...(substrateTools !== undefined && { spawnTools: substrateTools }),
+      ...(blackboardTools !== undefined && { blackboardTools }),
       ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
     });
   } catch (err) {
