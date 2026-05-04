@@ -27,6 +27,7 @@
  * would stay pinned in `Dispatched`.
  */
 
+import { AuditPublisher, CAPABILITY_USED, makeEvent } from '@kagent/audit-events';
 import {
   StdoutSink,
   buildTraceparentFromRunId,
@@ -36,6 +37,7 @@ import {
   setupOtelExporter,
 } from '@kagent/trace-sinks';
 import type { TraceSink } from '@kagent/agent-loop';
+import type { CapabilityBundle } from '@kagent/capability-types';
 
 import type { PodConfig } from './env.js';
 import { parseEnv } from './env.js';
@@ -49,6 +51,7 @@ import { defineSpawnChildTask } from './builtin-tools-spawn.js';
 import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
 import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tools-wait.js';
 import { buildBlackboardClientFromEnv } from './blackboard-client.js';
+import { loadCapabilityOptional } from './cap-consumer.js';
 import { createInClusterK8sTaskCreator } from './k8s-task-creator.js';
 import { runAgentTask } from './runner.js';
 import { buildStatusPatch, makeCustomObjectsApi, writeStatus } from './status.js';
@@ -110,6 +113,58 @@ async function main(): Promise<void> {
     `[kagent-agent-pod] boot ${config.taskNamespace}/${config.taskName} ` +
       `agent=${config.agentName} model=${config.agentSpec.model}`,
   );
+
+  const loadedCapability = await loadCapabilityOptional({ env: process.env });
+  const capabilityBundle = loadedCapability?.bundle;
+  if (capabilityBundle !== undefined) {
+    console.log(
+      `[kagent-agent-pod] capability bundle loaded jti=${capabilityBundle.jti} exp=${String(capabilityBundle.exp)}`,
+    );
+  } else {
+    console.warn('[kagent-agent-pod] capability bundle absent; running legacy claim path');
+  }
+
+  const auditNatsUrl = process.env.KAGENT_AUDIT_NATS_URL;
+  const auditSource = 'kagent.knuteson.io/agent-pod';
+  let auditPublisher: AuditPublisher | undefined;
+  let auditReady: Promise<void> = Promise.resolve();
+  const pendingAuditWrites: Promise<void>[] = [];
+  if (typeof auditNatsUrl === 'string' && auditNatsUrl.length > 0) {
+    auditPublisher = new AuditPublisher({ source: auditSource });
+    // Best-effort: start connecting immediately, but keep task boot off
+    // the audit path. Individual writes await this promise before
+    // publishing so early spawn events don't race the initial NATS
+    // connect; `AuditPublisher.connect()` swallows failures by design.
+    auditReady = auditPublisher.connect(auditNatsUrl);
+    console.log(`[kagent-agent-pod] audit publisher configured → ${auditNatsUrl}`);
+  }
+  const closeAuditPublisher = async (): Promise<void> => {
+    if (auditPublisher !== undefined) {
+      await Promise.allSettled(pendingAuditWrites);
+      await auditPublisher.close();
+    }
+  };
+  const emitCapUsed: Parameters<typeof defineSpawnChildTask>[0]['emitCapUsed'] | undefined =
+    auditPublisher !== undefined
+      ? (event) => {
+          const write = auditReady.then(async () => {
+            await auditPublisher?.publish(
+              makeEvent({
+                type: CAPABILITY_USED,
+                source: auditSource,
+                subject: `AgentTask/${config.taskNamespace}/${config.taskName}`,
+                data: {
+                  capabilityId: event.capabilityId,
+                  taskUid: config.taskId,
+                  claim: event.category,
+                  target: event.target,
+                },
+              }),
+            );
+          });
+          pendingAuditWrites.push(write);
+        }
+      : undefined;
 
   // OTel exporter — pointed at Langfuse via OTEL_EXPORTER_OTLP_TRACES_ENDPOINT.
   // When unset, we silently skip OTel and only use StdoutSink. Keeps local
@@ -250,9 +305,11 @@ async function main(): Promise<void> {
       parentAgentName: config.agentName,
       parentAgentSpec: config.agentSpec,
       k8s,
+      ...(capabilityBundle !== undefined && { parentCapability: capabilityBundle }),
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
       ...(getTraceparent !== undefined && { getTraceparent }),
       ...(maxDepth !== undefined && { maxDepth }),
+      ...(emitCapUsed !== undefined && { emitCapUsed }),
     });
     const waitChildDef = defineWaitForChildTask({
       parent,
@@ -269,6 +326,7 @@ async function main(): Promise<void> {
     // tools agree on what's left.
     const ctxDef = defineGetMyContext({
       podConfig: config,
+      ...(capabilityBundle !== undefined && { capabilityBundle }),
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
     });
     const subTools = [spawnDefs, waitChildDef, waitAllDef, ctxDef];
@@ -328,16 +386,14 @@ async function main(): Promise<void> {
         bucket: bbBucket,
         natsUrl: bbNatsUrl,
       });
+      const failOpenBlackboard =
+        process.env.KAGENT_BLACKBOARD_FAIL_OPEN === 'true'
+          ? { read: ['*'], write: ['*'] }
+          : undefined;
+      const blackboardClaim = capabilityBundle?.claims.blackboard ?? failOpenBlackboard;
       const defs = defineBlackboardTools({
         client,
-        // Cap-bundle wiring: when v0.3.0 cap-consumer is loaded, its
-        // claims.blackboard sub-object gates each tool. Until then
-        // (cap bundle absent), the four tools refuse with
-        // policy_denied — fail-closed.
-        ...(typeof process.env.KAGENT_BLACKBOARD_FAIL_OPEN === 'string' &&
-        process.env.KAGENT_BLACKBOARD_FAIL_OPEN === 'true'
-          ? { claim: { read: ['*'], write: ['*'] } }
-          : {}),
+        ...(blackboardClaim !== undefined && { claim: blackboardClaim }),
       });
       blackboardTools = new InProcessToolProvider({
         id: 'kagent-blackboard',
@@ -375,22 +431,9 @@ async function main(): Promise<void> {
       | { readonly publish?: readonly string[] }
       | undefined;
     const publishClaims = claims?.publish;
-    const publisher = new eventsModule.EventPublisher({
-      source: `kagent.knuteson.io/agent-pod/${config.agentName}/${config.taskId}`,
-      ...(publishClaims !== undefined && { publishClaims }),
-    });
-    await publisher.connect(eventsNatsUrl).catch((err: unknown) => {
-      console.warn(
-        `[kagent-agent-pod] publish_event NATS connect failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
-    // Cap bundle: in this release the Wave 2 issuer-controller wiring
-    // is still landing; we synthesize a minimal bundle from the
-    // shadow-claim shape on the Agent spec so publish_event has the
-    // gate it needs. The spawn-tool already follows the same pattern
-    // (its `parentCapability` arg is optional pending issuer wiring).
-    const fallbackBundle =
-      publishClaims !== undefined
+    const publishCapabilityBundle: CapabilityBundle | undefined =
+      capabilityBundle ??
+      (publishClaims !== undefined
         ? {
             iss: 'kagent.knuteson.io/operator',
             sub: `task-uid:${config.taskId}`,
@@ -399,10 +442,21 @@ async function main(): Promise<void> {
             jti: `pod-${config.taskId.slice(0, 8)}`,
             claims: { publish: publishClaims },
           }
-        : undefined;
+        : undefined);
+    const publisher = new eventsModule.EventPublisher({
+      source: `kagent.knuteson.io/agent-pod/${config.agentName}/${config.taskId}`,
+      ...(publishCapabilityBundle?.claims.publish !== undefined && {
+        publishClaims: publishCapabilityBundle.claims.publish,
+      }),
+    });
+    await publisher.connect(eventsNatsUrl).catch((err: unknown) => {
+      console.warn(
+        `[kagent-agent-pod] publish_event NATS connect failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
     const publishDef = definePublishEvent({
       publisher,
-      capabilityBundle: fallbackBundle,
+      capabilityBundle: publishCapabilityBundle,
       declaredPublishes: declared,
     });
     eventsTools = new InProcessToolProvider({
@@ -435,6 +489,7 @@ async function main(): Promise<void> {
       ...(blackboardTools !== undefined && { blackboardTools }),
       ...(eventsTools !== undefined && { eventsTools }),
       ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
+      ...(capabilityBundle !== undefined && { capabilityBundle }),
     });
   } catch (err) {
     // If the runner threw because we already aborted, treat it as a
@@ -464,6 +519,7 @@ async function main(): Promise<void> {
         api,
       );
       if (otelShutdown !== undefined) await otelShutdown();
+      await closeAuditPublisher();
       process.exit(1);
     }
   }
@@ -496,6 +552,7 @@ async function main(): Promise<void> {
     await otelShutdown();
     console.log('[kagent-agent-pod] OTel flushed');
   }
+  await closeAuditPublisher();
 
   console.log(`[kagent-agent-pod] status patched, exiting`);
 }
