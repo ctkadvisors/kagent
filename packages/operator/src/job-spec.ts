@@ -187,6 +187,24 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     );
   }
 
+  // v0.1.11 — W3C Trace Context propagation. When the parent
+  // agent-pod's `spawn_child_task` stamped `runConfig.traceparent`
+  // on this AgentTask, surface it as `OTEL_TRACEPARENT` so the
+  // spawned agent-pod's main.ts can seed its OtelTraceSink root
+  // span context with the parent's span. The string is the literal
+  // W3C traceparent header value
+  // (`<2hex>-<32hex traceId>-<16hex spanId>-<2hex flags>`) — no
+  // re-encoding. The CRD admission schema enforces the shape, so
+  // this stage trusts the value verbatim. Absence (root tasks, or
+  // any spawned task whose parent didn't have OTel wired) just
+  // omits the env var; the child becomes a fresh root trace, the
+  // pre-v0.1.11 behavior.
+  const traceparentEnv: { name: string; value: string }[] = [];
+  const traceparent = task.spec.runConfig?.traceparent;
+  if (typeof traceparent === 'string' && traceparent.length > 0) {
+    traceparentEnv.push({ name: 'OTEL_TRACEPARENT', value: traceparent });
+  }
+
   const env: { name: string; value: string }[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
@@ -195,6 +213,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
     { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
     ...artifactEnv,
+    ...traceparentEnv,
     ...(opts.extraEnv ?? []).map((e) => ({ name: e.name, value: e.value })),
   ];
 
