@@ -12,11 +12,29 @@
  * the agent-pod Dockerfile + main.ts header for the TLS-parity story).
  */
 
-export { agentHasArtifactInputOrOutput, parseEnv } from './env.js';
-export type { AgentSpecEnv, AgentTaskRunConfigEnv, PodConfig, TaskSpecEnv } from './env.js';
+export { agentHasArtifactInputOrOutput, parseEnv, parseIdentityConfig } from './env.js';
+export type {
+  AgentSpecEnv,
+  AgentTaskRunConfigEnv,
+  PodConfig,
+  PodIdentityConfig,
+  TaskSpecEnv,
+} from './env.js';
 
 export { composeSignals, pickUserMessage, resolveToolProviders, runAgentTask } from './runner.js';
 export type { ArtifactRef, RunDeps, RunResult } from './runner.js';
+
+/* v0.4.3-identity — Wave 3 / Identity sub-team SVID consumer + mTLS probe. */
+export { loadIdentityHandle, probeGatewayMtls } from './svid-client.js';
+export type {
+  IdentityHandle,
+  LoadIdentityHandleInput,
+  ProbeFetchResponse,
+  ProbeGatewayMtlsInput,
+  ProbeGatewayMtlsResult,
+  SvidMaterial,
+  SvidMtlsContext,
+} from './svid-client.js';
 
 export { buildCancelledResult, buildShutdownPlan } from './main.js';
 export type { ShutdownPlan } from './main.js';
