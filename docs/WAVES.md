@@ -52,7 +52,7 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 
 ### 2.1 Sub-team: Secrets
 
-**Releases:** `v0.1.8-secret-hygiene`
+**Releases:** `v0.1.8-secret-hygiene` ✓ DONE
 **Owns:** `packages/operator/charts/kagent-operator/templates/`, `packages/operator/src/main.ts` (env-injection block), `packages/operator/src/job-spec.ts` (env construction)
 **Reads but doesn't own:** any Helm value defaults
 

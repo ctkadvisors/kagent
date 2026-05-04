@@ -456,4 +456,89 @@ describe('buildJobSpec', () => {
     const names = volumes.map((v) => v.name).sort();
     expect(names).toEqual([ARTIFACT_VOLUME_NAME, TMP_VOLUME_NAME].sort());
   });
+
+  /* =====================================================================
+   * v0.1.8 — secret-hygiene. Spawned-Job env entries that carry a key
+   * or secret MUST be expressed as `valueFrom.secretKeyRef`, never as
+   * inline `value:`. Today we accept both shapes in the typed
+   * `extraEnv` array; this group of tests pins the rendered Job spec
+   * to the secret-ref shape and asserts the failure mode for any
+   * regression (a plaintext `value:` for a name matching `KEY|SECRET`
+   * would land in etcd, `kubectl describe pod`, and `/proc/<pid>/environ`).
+   * ===================================================================== */
+
+  it('accepts an extraEnv entry carrying a valueFrom.secretKeyRef and emits it verbatim', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      extraEnv: [
+        {
+          name: 'KAGENT_LITELLM_API_KEY',
+          valueFrom: {
+            secretKeyRef: { name: 'cloudflare-ai-gateway', key: 'api-key' },
+          },
+        },
+      ],
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const apiKeyEntry = env.find((e) => e.name === 'KAGENT_LITELLM_API_KEY');
+    expect(apiKeyEntry).toBeDefined();
+    expect(apiKeyEntry?.value).toBeUndefined();
+    expect(apiKeyEntry?.valueFrom?.secretKeyRef?.name).toBe('cloudflare-ai-gateway');
+    expect(apiKeyEntry?.valueFrom?.secretKeyRef?.key).toBe('api-key');
+  });
+
+  it('mixes plaintext and secret-ref extraEnv entries side-by-side', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      extraEnv: [
+        { name: 'KAGENT_LITELLM_BASE_URL', value: 'http://gw/v1' },
+        {
+          name: 'KAGENT_LITELLM_API_KEY',
+          valueFrom: { secretKeyRef: { name: 'gw', key: 'token' } },
+        },
+        {
+          name: 'KAGENT_LANGFUSE_SECRET_KEY',
+          valueFrom: { secretKeyRef: { name: 'lf', key: 'sk' } },
+        },
+      ],
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    expect(env.find((e) => e.name === 'KAGENT_LITELLM_BASE_URL')?.value).toBe('http://gw/v1');
+    expect(
+      env.find((e) => e.name === 'KAGENT_LITELLM_API_KEY')?.valueFrom?.secretKeyRef?.name,
+    ).toBe('gw');
+    expect(
+      env.find((e) => e.name === 'KAGENT_LANGFUSE_SECRET_KEY')?.valueFrom?.secretKeyRef?.key,
+    ).toBe('sk');
+  });
+
+  it('emits ZERO inline `value:` entries for any name matching /KEY|SECRET/i when extraEnv supplies secretRefs', () => {
+    // The brief's secret-hygiene contract: rendered Job spec has zero
+    // `value:` entries for any name matching /(?i)KEY|SECRET/. This
+    // is the regression test the v0.1.8 release is gated on.
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      extraEnv: [
+        // Sensitive names: secretRef-shaped only.
+        {
+          name: 'KAGENT_LITELLM_API_KEY',
+          valueFrom: { secretKeyRef: { name: 'gw', key: 'token' } },
+        },
+        {
+          name: 'KAGENT_LANGFUSE_SECRET_KEY',
+          valueFrom: { secretKeyRef: { name: 'lf', key: 'sk' } },
+        },
+        {
+          name: 'KAGENT_LANGFUSE_PUBLIC_KEY',
+          valueFrom: { secretKeyRef: { name: 'lf', key: 'pk' } },
+        },
+        // Non-sensitive plaintext is fine.
+        { name: 'KAGENT_LITELLM_BASE_URL', value: 'http://gw/v1' },
+        { name: 'KAGENT_LANGFUSE_HOST', value: 'http://lf' },
+      ],
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const sensitive = /(?:KEY|SECRET)/i;
+    const offenders = env.filter(
+      (e) => sensitive.test(e.name) && typeof e.value === 'string' && e.value.length > 0,
+    );
+    expect(offenders).toEqual([]);
+  });
 });
