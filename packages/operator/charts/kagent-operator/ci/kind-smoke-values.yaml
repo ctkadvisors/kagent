@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Values overlay for the `helm-smoke-kind` CI gate. Consumed by the
+# .github/workflows/ci.yml `helm-smoke-kind` job: kind cluster boots,
+# the operator + agent-pod images are built locally, loaded into kind,
+# and `helm install --wait` runs against this overlay.
+#
+# Goals:
+#   1. Pin every image to the `ci-smoke` tag the workflow loaded into
+#      kind so no GHCR pull is attempted on a clean kind node.
+#   2. Disable enforcement-only resources (NetworkPolicy) that depend
+#      on a CNI not present in kind (kindnet has partial support and
+#      we don't want a smoke flake on policy variance).
+#   3. Skip the bundled smoke AgentTask — there is no real LLM endpoint
+#      reachable from the kind cluster and the gate's job is to catch
+#      Helm template / operator-startup regressions, not LLM round-trips.
+#   4. Disable the Phase-5 artifact PVC — the homelab default
+#      StorageClass `ai-models-storage` does not exist in kind and we
+#      don't need persistence for a smoke run.
+
+image:
+  repository: ghcr.io/ctkadvisors/kagent-operator
+  tag: ci-smoke
+  pullPolicy: IfNotPresent
+
+agentPod:
+  image:
+    repository: ghcr.io/ctkadvisors/kagent-agent-pod
+    tag: ci-smoke
+    pullPolicy: IfNotPresent
+  artifactStorage:
+    enabled: false
+
+networkPolicy:
+  enabled: false
+
+smokeTest:
+  enabled: false

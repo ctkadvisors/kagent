@@ -160,9 +160,165 @@ jobs:
           CHART_PATH: ${{ matrix.path }}
         run: helm template "$CHART_NAME" "$CHART_PATH" --set smokeTest.enabled=true > /dev/null
 
+  helm-smoke-kind:
+    name: Helm install + smoke (kind)
+    needs: [verify, crd-drift, helm-smoke]
+    # Catches Helm-template + operator-startup regressions BEFORE they
+    # reach a live cluster:
+    #   1. Build operator + workbench images locally (linux/amd64 only;
+    #      no push, no QEMU emulation, fast).
+    #   2. `kind load docker-image` so the kind nodes can run them.
+    #   3. `helm install --wait` against both charts using the
+    #      `ci/kind-smoke-values.yaml` overlay (image tag pinned to
+    #      `ci-smoke`; smoke AgentTask + NetworkPolicy + artifact PVC
+    #      disabled — see overlay headers).
+    #   4. `kubectl wait` on the operator + workbench Deployments;
+    #      assert CRDs land in `Established`.
+    # The kind cluster is torn down by `helm/kind-action` post-job.
+    #
+    # We deliberately skip the AgentTask flow (no real LLM is reachable
+    # from the kind cluster) — the gate's purpose is template + startup
+    # validation per WAVES.md §2.4. End-to-end LLM round-trips are
+    # exercised separately on the homelab via Argo.
+    #
+    # `agent-pod` is NOT built here because no AgentTasks are spawned;
+    # `KAGENT_AGENT_POD_IMAGE` is set on the operator Deployment but
+    # the image is never pulled.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build operator image (linux/amd64, local only)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: packages/operator/Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ghcr.io/ctkadvisors/kagent-operator:ci-smoke
+          cache-from: type=gha,scope=operator
+          cache-to: type=gha,mode=max,scope=operator
+
+      - name: Build workbench-api image (linux/amd64, local only)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: packages/workbench-api/Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ghcr.io/ctkadvisors/kagent-workbench-api:ci-smoke
+          cache-from: type=gha,scope=workbench-api
+          cache-to: type=gha,mode=max,scope=workbench-api
+
+      - name: Build workbench-ui image (linux/amd64, local only)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: packages/workbench-ui/Dockerfile
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: ghcr.io/ctkadvisors/kagent-workbench-ui:ci-smoke
+          cache-from: type=gha,scope=workbench-ui
+          cache-to: type=gha,mode=max,scope=workbench-ui
+
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          cluster_name: kagent-smoke
+          # Pin a recent kind node image. Bump in lockstep with kind
+          # action upgrades; mismatch surfaces as image-pull errors at
+          # cluster create.
+          node_image: kindest/node:v1.31.2
+
+      - name: Load operator + workbench images into kind
+        run: |
+          kind load docker-image \
+            ghcr.io/ctkadvisors/kagent-operator:ci-smoke \
+            ghcr.io/ctkadvisors/kagent-workbench-api:ci-smoke \
+            ghcr.io/ctkadvisors/kagent-workbench-ui:ci-smoke \
+            --name kagent-smoke
+
+      - name: Setup Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4
+        with:
+          version: v3.16.3
+
+      - name: Create kagent-system namespace
+        run: kubectl create namespace kagent-system
+
+      - name: Helm install kagent-operator (--wait)
+        run: |
+          helm install kagent-operator \
+            packages/operator/charts/kagent-operator \
+            --namespace kagent-system \
+            --values packages/operator/charts/kagent-operator/ci/kind-smoke-values.yaml \
+            --wait \
+            --timeout 5m
+
+      - name: Helm install kagent-workbench (--wait)
+        run: |
+          helm install kagent-workbench \
+            packages/operator/charts/kagent-workbench \
+            --namespace kagent-system \
+            --values packages/operator/charts/kagent-workbench/ci/kind-smoke-values.yaml \
+            --wait \
+            --timeout 5m
+
+      - name: Verify CRDs Established
+        # `helm install` waits on Deployments/StatefulSets but does not
+        # block on CustomResourceDefinition.status.conditions. Assert
+        # explicitly so a CRD that fails to install (e.g. invalid
+        # OpenAPI schema) fails this gate.
+        run: |
+          for crd in agents.kagent.knuteson.io \
+                    agenttasks.kagent.knuteson.io \
+                    agentcapabilities.kagent.knuteson.io \
+                    agenttemplates.kagent.knuteson.io \
+                    modelendpoints.kagent.knuteson.io; do
+            kubectl wait --for=condition=Established \
+              "crd/${crd}" \
+              --timeout=60s
+          done
+
+      - name: Verify operator + workbench Deployments Available
+        # Belt-and-suspenders alongside `helm --wait`. `helm --wait`
+        # exits as soon as resource generation == observed, which on
+        # ImagePullBackOff or CrashLoopBackOff still produces a
+        # rollout-incomplete state. `kubectl wait --for=condition=Available`
+        # is the strict gate.
+        run: |
+          kubectl wait --for=condition=Available \
+            deployment/kagent-operator \
+            -n kagent-system \
+            --timeout=3m
+          kubectl wait --for=condition=Available \
+            deployment/kagent-workbench \
+            -n kagent-system \
+            --timeout=3m
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          echo '== Pods =='
+          kubectl get pods -n kagent-system -o wide || true
+          echo '== Events =='
+          kubectl get events -n kagent-system --sort-by=.lastTimestamp || true
+          echo '== Operator logs =='
+          kubectl logs -n kagent-system deployment/kagent-operator --all-containers --tail=200 || true
+          echo '== Workbench logs =='
+          kubectl logs -n kagent-system deployment/kagent-workbench --all-containers --tail=200 || true
+
   build-images:
     name: Build + sign + SBOM (${{ matrix.name }})
-    needs: [verify, crd-drift, helm-smoke]
+    needs: [verify, crd-drift, helm-smoke, helm-smoke-kind]
     # Only build / push images on tag pushes (releases) or manual
     # dispatch. Plain main / PR runs skip this job — verify + crd-drift
     # is the per-commit gate; images are an explicit release artifact.
