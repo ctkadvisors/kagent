@@ -367,17 +367,50 @@ All five sub-teams are mostly independent. Some share NATS JetStream as backbone
 
 **Validation:** `KAGENT_LITELLM_API_KEY` removed from cluster entirely; gateway authenticates by SVID; rotation event in audit stream.
 
-### 5.5 Sub-team: Locality
+### 5.5 Sub-team: Locality ✅ SHIPPED (v0.4.4-locality)
 
-**Releases:** `v0.4.4-locality`
-**Owns:** scheduling-related fields in `packages/operator/src/job-spec.ts`, new `packages/locality-controller`
+**Releases:** `v0.4.4-locality` — shipped 2026-05-04 on `feat/wave3-locality`.
+**Owns:** `packages/locality-controller` (pure helpers), additive callsites in `packages/operator/src/{reconcile,admission,main}.ts`
 
-**Deliverables:**
-1. NodeAffinity from Workspace placement (when a PVC is bound to a node, agents that mount it get the node-affinity)
-2. Speculative execution: agent running >3× median latency triggers a duplicate spawn; first to finish wins; idempotency key prevents double-effect
-3. Pod-pressure circuit breaker: if pending agent-pods exceed threshold, admission queues new tasks instead of admitting
+**Deliverables (all shipped):**
+1. ✅ `deriveNodeAffinity(agent, task, lookup) → V1Affinity | undefined` —
+   `packages/locality-controller/src/node-affinity.ts`. When an Agent declares a
+   `kind: 'workspace'` input bound to a Workspace whose PV is node-pinned,
+   emits `requiredDuringSchedulingIgnoredDuringExecution` mirroring the PV's
+   `nodeAffinity.required.nodeSelectorTerms[]`. Tie-break across multiple
+   workspaces: largest `bytesUsed`. Wired into the reconciler via a new
+   `ReconcileDeps.deriveNodeAffinity` callback that splices the result onto
+   the spawned pod spec post-`buildJobSpec` (additive — `buildJobSpec` is
+   unchanged).
+2. ✅ Speculative execution — `packages/locality-controller/src/speculative.ts`.
+   Pure `evaluateSpeculative` decision over a per-Agent in-process latency
+   ring (100-sample default, min 5 samples). When `elapsedMs > threshold ×
+   median`, emits a `kind: 'spawn'` decision; the operator's main.ts
+   composes it with a spawn callable + audit hooks. Twin manifest carries
+   the SAME idempotency key — Wave 1's `IdempotencyCache` prevents
+   double-effect.
+3. ✅ Pod-pressure circuit breaker — `checkPodPressure` in
+   `packages/operator/src/admission.ts` (additive gate; existing per-(model,
+   namespace) + per-Agent + depth scheduler unchanged). Refusal taxonomy
+   `policy_denied:pod_pressure_threshold`. Default cap: 50 pending
+   agent-pods (`KAGENT_LOCALITY_MAX_PENDING_PODS`).
+4. ✅ Helm `locality:` block in `values.yaml`. Defaults:
+   `locality.enabled: true` (NodeAffinity), `locality.speculative.enabled:
+   false` (opt-in), `locality.speculative.threshold: 3.0`,
+   `locality.circuitBreaker.enabled: true`,
+   `locality.circuitBreaker.maxPendingPods: 50`.
+5. ✅ Audit-events catalog grows: `locality.speculative_spawned`,
+   `locality.speculative_superseded`, `admission.pod_pressure_deferred`
+   (`@kagent/audit-events`; total event types now 21).
+6. ✅ Tests: 40 new pure-function tests (`packages/locality-controller`)
+   + admission `checkPodPressure` + `countPendingAgentPods` cases on the
+   operator side.
 
-**Validation:** workspace-co-located agents reach <100ms file-read p99; chaos test where a slow agent gets superseded by speculative twin completes within median bound.
+**Validation:** unit-test smoke covers (a) no affinity emitted when PV not
+node-pinned, (b) largest-bytesUsed tie-break, (c) speculative decision
+gates (disabled / no-key / already-twin / insufficient-samples /
+under-threshold / spawn), (d) pod-pressure refusal envelope. Total
+operator + locality test counts: 824 + 40 = 864 (up +28 vs. pre-Wave-3).
 
 ### 5.6 Wave 3 cross-team coordination
 

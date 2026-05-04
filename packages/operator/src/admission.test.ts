@@ -1378,3 +1378,64 @@ describe('buildAdmissionReconciler — Wave 0 Audit emission', () => {
     expect(summary.admitted).toBe(1);
   });
 });
+
+/* =====================================================================
+ * Wave 3 / Locality — pod-pressure circuit breaker
+ * ===================================================================== */
+
+describe('countPendingAgentPods', () => {
+  it('counts pods in phase=Pending', async () => {
+    const { countPendingAgentPods } = await import('./admission.js');
+    const pods = [
+      { status: { phase: 'Pending' } },
+      { status: { phase: 'Pending' } },
+      { status: { phase: 'Running' } },
+      { status: { phase: 'Succeeded' } },
+      {},
+    ];
+    expect(countPendingAgentPods(pods)).toBe(2);
+  });
+
+  it('returns 0 for empty input', async () => {
+    const { countPendingAgentPods } = await import('./admission.js');
+    expect(countPendingAgentPods([])).toBe(0);
+  });
+});
+
+describe('checkPodPressure', () => {
+  it('passes when observed <= threshold', async () => {
+    const { checkPodPressure } = await import('./admission.js');
+    expect(checkPodPressure(0, 50).ok).toBe(true);
+    expect(checkPodPressure(50, 50).ok).toBe(true);
+  });
+
+  it('refuses with structured taxonomy when observed > threshold', async () => {
+    const { checkPodPressure, POD_PRESSURE_REFUSAL_REASON } = await import('./admission.js');
+    const result = checkPodPressure(51, 50);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe(POD_PRESSURE_REFUSAL_REASON);
+      expect(result.observed).toBe(51);
+      expect(result.threshold).toBe(50);
+      expect(result.message).toContain('51');
+      expect(result.message).toContain('50');
+      expect(result.message).toContain('policy_denied:pod_pressure_threshold');
+    }
+  });
+
+  it('passes when threshold is invalid (NaN/negative) — fail-OPEN to avoid bricking on misconfig', async () => {
+    const { checkPodPressure } = await import('./admission.js');
+    expect(checkPodPressure(100, Number.NaN).ok).toBe(true);
+    expect(checkPodPressure(100, -1).ok).toBe(true);
+  });
+
+  it('passes when observed is invalid', async () => {
+    const { checkPodPressure } = await import('./admission.js');
+    expect(checkPodPressure(Number.NaN, 50).ok).toBe(true);
+  });
+
+  it('exposes the default threshold constant', async () => {
+    const { DEFAULT_POD_PRESSURE_MAX_PENDING_PODS } = await import('./admission.js');
+    expect(DEFAULT_POD_PRESSURE_MAX_PENDING_PODS).toBe(50);
+  });
+});

@@ -179,6 +179,19 @@ export interface ReconcileDeps {
    * the idempotency cache replay path. Same best-effort contract.
    */
   readonly emitTaskDeduped?: (fields: TaskDedupedAuditFields) => Promise<void>;
+
+  /* ---- Wave 3 — Locality (v0.4.4-locality).
+   * Optional NodeAffinity derivation. When `deriveNodeAffinity`
+   * is set AND it returns a non-undefined V1Affinity, the reconciler
+   * patches the Job AFTER buildJobSpec to add the affinity onto the
+   * spawned pod template. Strictly additive — buildJobSpec stays
+   * unchanged (per docs/WAVES.md §5.5 coordination note). When unset
+   * or returning undefined, no affinity is added (fallback = K8s
+   * default scheduler picks any node). */
+  readonly deriveNodeAffinity?: (
+    agent: Agent,
+    task: AgentTask,
+  ) => import('@kubernetes/client-node').V1Affinity | undefined;
 }
 
 /**
@@ -322,6 +335,19 @@ export async function reconcileAgentTask(
     suspend: true,
     useConfigMap,
   });
+
+  // Wave 3 — Locality. When the locality-controller's
+  // `deriveNodeAffinity` returns a V1Affinity (Workspace's PV is
+  // node-pinned), splice it onto the spawned pod's spec post-build.
+  // Additive only — never refactor buildJobSpec (per
+  // docs/WAVES.md §5.5 coordination note).
+  if (deps.deriveNodeAffinity !== undefined) {
+    const affinity = deps.deriveNodeAffinity(agent, task);
+    if (affinity !== undefined && job.spec?.template?.spec !== undefined) {
+      job.spec.template.spec.affinity = affinity;
+    }
+  }
+
   const jobName = jobNameForTask(task);
   try {
     await createJobIdempotent(job, deps.batchApi);

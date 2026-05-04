@@ -61,9 +61,20 @@ export const WORKFLOW_EVENT_SUBSCRIPTION_PENDING = 'workflow.event_subscription_
 export const CACHE_HIT = 'cache.hit' as const;
 export const CACHE_MISS = 'cache.miss' as const;
 
+/* v0.4.4-locality — Wave 3 / Locality sub-team. Three substrate
+ * decisions the locality engine emits: a speculative duplicate was
+ * spawned for a slow primary (`locality.speculative_spawned`), a
+ * loser of the race was marked `superseded`
+ * (`locality.speculative_superseded`), and admission deferred a task
+ * because pod-pressure (pending agent-pods) crossed the threshold
+ * (`admission.pod_pressure_deferred`). */
+export const LOCALITY_SPECULATIVE_SPAWNED = 'locality.speculative_spawned' as const;
+export const LOCALITY_SPECULATIVE_SUPERSEDED = 'locality.speculative_superseded' as const;
+export const ADMISSION_POD_PRESSURE_DEFERRED = 'admission.pod_pressure_deferred' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(20)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(23)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -87,4 +98,7 @@ export const ALL_EVENT_TYPES = Object.freeze([
   WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
   CACHE_HIT,
   CACHE_MISS,
+  LOCALITY_SPECULATIVE_SPAWNED,
+  LOCALITY_SPECULATIVE_SUPERSEDED,
+  ADMISSION_POD_PRESSURE_DEFERRED,
 ] as const);

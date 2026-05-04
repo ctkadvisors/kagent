@@ -30,6 +30,7 @@
     "@kagent/audit-events": "workspace:*",
     "@kagent/cache-controller": "workspace:*",
     "@kagent/capability-types": "workspace:*",
+    "@kagent/locality-controller": "workspace:*",
     "@kagent/supervision": "workspace:*",
     "@kagent/triggers": "workspace:*",
     "@kubernetes/client-node": "1.4.0",

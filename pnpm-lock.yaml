@@ -146,6 +146,12 @@ importers:
         specifier: 4.21.0
         version: 4.21.0
 
+  packages/locality-controller:
+    dependencies:
+      '@kubernetes/client-node':
+        specifier: 1.4.0
+        version: 1.4.0
+
   packages/mcp-tool-provider:
     dependencies:
       '@kagent/agent-loop':
@@ -179,6 +185,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/locality-controller':
+        specifier: workspace:*
+        version: link:../locality-controller
       '@kagent/supervision':
         specifier: workspace:*
         version: link:../supervision

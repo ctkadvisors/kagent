@@ -636,6 +636,73 @@ workflows:
     # same host as `address`, port 9070 (Restate convention).
     adminAddress: 'http://restate.kagent-system.svc.cluster.local:9070'
 
+# ---------------------------------------------------------------------
+# Wave 3 — Locality
+# ---------------------------------------------------------------------
+# Co-locate agent-pods with their Workspace's PVC node, dedup slow
+# tasks via speculative twins, and back-pressure admission against
+# pending-pod overload (v0.4.4-locality, per docs/SUBSTRATE-V1.md +
+# docs/WAVES.md §5.5).
+#
+# Three independent toggles:
+#
+#   - `enabled` (NodeAffinity from Workspace placement). When the
+#     Workspace's bound PV is node-pinned, the operator emits
+#     `requiredDuringSchedulingIgnoredDuringExecution` on the
+#     spawned pod so K8s lands the agent-pod on the SAME node as the
+#     PV. Turns a cross-node RWX hop into a local FS read. ON by
+#     default — additive when no node-pinned PV exists; degrades
+#     gracefully (no affinity emitted) when the Workspace controller
+#     is off or the PV's nodeAffinity is absent.
+#
+#   - `speculative.enabled` (speculative duplicate spawning). When
+#     an AgentTask runs > `speculative.threshold` × per-Agent median
+#     latency, the operator spawns a duplicate with the SAME
+#     idempotency key. The Wave 1 idempotency cache (24h) prevents
+#     double-effect — the slower one's run is discarded; status →
+#     `superseded`. OFF by default — speculative doubles spawns and
+#     budget; opt in once latency is your bottleneck.
+#
+#   - `circuitBreaker.enabled` (pod-pressure backstop). When the
+#     pending agent-pod count > `circuitBreaker.maxPendingPods`,
+#     admission refuses new dispatches with
+#     `policy_denied:pod_pressure_threshold`; the AgentTask stays
+#     Pending and re-evaluates on the next informer event. ON by
+#     default — substrate-side safety against pending-pod overload.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_LOCALITY_ENABLED=true|false
+#   KAGENT_LOCALITY_SPECULATIVE_ENABLED=true|false
+#   KAGENT_LOCALITY_SPECULATIVE_THRESHOLD=<float, default 3.0>
+#   KAGENT_LOCALITY_CIRCUIT_BREAKER_ENABLED=true|false
+#   KAGENT_LOCALITY_MAX_PENDING_PODS=<integer, default 50>
+#
+# RBAC: existing operator ClusterRole already covers PV/PVC/Workspace
+# reads via the workspace-controller block — no new verbs needed.
+locality:
+  # NodeAffinity from Workspace placement. Substrate-level — leave on.
+  # Set `false` when running in clusters whose CSI doesn't expose
+  # node-pinned PVs (cloud RWX without topology) so the operator
+  # doesn't waste GET cycles on a futile lookup.
+  enabled: true
+  speculative:
+    # OFF by default. Speculative twin spawns DOUBLE the LLM token
+    # spend on slow tasks; turn on only when latency is the
+    # bottleneck.
+    enabled: false
+    # Multiplier vs. per-Agent median latency. `elapsed > threshold ×
+    # median` triggers the duplicate. 3.0 catches genuine outliers
+    # without firing on normal variance; lower = more aggressive.
+    threshold: 3.0
+  circuitBreaker:
+    # ON by default. Substrate safety — refuses to admit when too
+    # many pods are pending.
+    enabled: true
+    # Pending-pod cap above which admission defers. 50 fits a single
+    # K3s node comfortably; bump for multi-node clusters with
+    # adequate scheduler capacity.
+    maxPendingPods: 50
+
 # Smoke-test manifests — Agent + AgentTask + verification Job aimed at
 # the configured agent-pod inference endpoint. Disable in production
 # clusters; ship enabled = true on first install to prove the substrate
