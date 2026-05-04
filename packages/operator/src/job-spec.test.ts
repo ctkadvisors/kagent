@@ -9,7 +9,9 @@ import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
 import {
   ARTIFACT_VOLUME_NAME,
   buildAgentTaskConfigMap,
+  buildArtifactMounts,
   buildJobSpec,
+  CAS_VOLUME_NAME,
   CONFIG_AGENT_SPEC_KEY,
   CONFIG_MOUNT_PATH,
   CONFIG_TASK_SPEC_KEY,
@@ -17,6 +19,7 @@ import {
   configMapNameForTask,
   DEFAULT_ARTIFACT_MOUNT_PATH,
   DEFAULT_BACKOFF_LIMIT,
+  DEFAULT_CAS_MOUNT_PATH,
   DEFAULT_CONTAINER_SECURITY_CONTEXT,
   DEFAULT_POD_SECURITY_CONTEXT,
   DEFAULT_TTL_SECONDS_AFTER_FINISHED,
@@ -778,5 +781,80 @@ describe('buildJobSpec — ConfigMap mount (v0.2.0 default)', () => {
     const items = configVol?.configMap?.items ?? [];
     const keys = items.map((i) => i.key).sort();
     expect(keys).toEqual([CONFIG_AGENT_SPEC_KEY, CONFIG_TASK_SPEC_KEY].sort());
+  });
+});
+
+describe('buildArtifactMounts (Wave 1 / CAS)', () => {
+  function agentWith(inputs?: Agent['spec']['inputs'], outputs?: Agent['spec']['outputs']): Agent {
+    return {
+      ...sampleAgent,
+      spec: {
+        ...sampleAgent.spec,
+        ...(inputs !== undefined && { inputs }),
+        ...(outputs !== undefined && { outputs }),
+      },
+    };
+  }
+
+  it('returns empty arrays when Agent has no inputs / outputs', () => {
+    const result = buildArtifactMounts({ pvcName: 'kagent-cas', agent: sampleAgent });
+    expect(result.volumes).toEqual([]);
+    expect(result.volumeMounts).toEqual([]);
+  });
+
+  it('returns empty arrays when only scalar / workspace inputs', () => {
+    const agent = agentWith([
+      { name: 'k', kind: 'scalar' },
+      { name: 'corpus', kind: 'workspace', mountPath: '/mnt/corpus' },
+    ]);
+    const result = buildArtifactMounts({ pvcName: 'kagent-cas', agent });
+    expect(result.volumes).toEqual([]);
+    expect(result.volumeMounts).toEqual([]);
+  });
+
+  it('emits one volume + one read-only mount when an artifact INPUT is declared', () => {
+    const agent = agentWith([{ name: 'brief', kind: 'artifact', mountPath: '/var/kagent/cas' }]);
+    const result = buildArtifactMounts({ pvcName: 'kagent-cas', agent });
+    expect(result.volumes).toEqual([
+      { name: CAS_VOLUME_NAME, persistentVolumeClaim: { claimName: 'kagent-cas' } },
+    ]);
+    expect(result.volumeMounts).toEqual([
+      { name: CAS_VOLUME_NAME, mountPath: DEFAULT_CAS_MOUNT_PATH, readOnly: true },
+    ]);
+  });
+
+  it('emits one volume + mount when only artifact OUTPUTS are declared', () => {
+    const agent = agentWith(undefined, [{ name: 'digest', kind: 'artifact' }]);
+    const result = buildArtifactMounts({ pvcName: 'kagent-cas', agent });
+    expect(result.volumes).toHaveLength(1);
+    expect(result.volumeMounts).toHaveLength(1);
+  });
+
+  it('honors a custom mountPath', () => {
+    const agent = agentWith([{ name: 'brief', kind: 'artifact' }]);
+    const result = buildArtifactMounts({
+      pvcName: 'kagent-cas',
+      mountPath: '/custom/cas',
+      agent,
+    });
+    expect(result.volumeMounts[0]?.mountPath).toBe('/custom/cas');
+  });
+
+  it('returns empty arrays when pvcName is empty (CAS disabled)', () => {
+    const agent = agentWith([{ name: 'brief', kind: 'artifact' }]);
+    const result = buildArtifactMounts({ pvcName: '', agent });
+    expect(result.volumes).toEqual([]);
+    expect(result.volumeMounts).toEqual([]);
+  });
+
+  it('mount is read-only (writers go through the in-pod CAS backend, not the mount)', () => {
+    const agent = agentWith([{ name: 'brief', kind: 'artifact' }]);
+    const result = buildArtifactMounts({ pvcName: 'kagent-cas', agent });
+    expect(result.volumeMounts[0]?.readOnly).toBe(true);
+  });
+
+  it('volume name is stable (CAS_VOLUME_NAME) for status patching', () => {
+    expect(CAS_VOLUME_NAME).toBe('kagent-cas');
+    expect(DEFAULT_CAS_MOUNT_PATH).toBe('/var/kagent/cas');
   });
 });

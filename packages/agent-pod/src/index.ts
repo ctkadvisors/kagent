@@ -12,7 +12,7 @@
  * the agent-pod Dockerfile + main.ts header for the TLS-parity story).
  */
 
-export { parseEnv } from './env.js';
+export { agentHasArtifactInputOrOutput, parseEnv } from './env.js';
 export type { AgentSpecEnv, AgentTaskRunConfigEnv, PodConfig, TaskSpecEnv } from './env.js';
 
 export { composeSignals, pickUserMessage, resolveToolProviders, runAgentTask } from './runner.js';
@@ -23,6 +23,7 @@ export type { ShutdownPlan } from './main.js';
 
 export {
   buildBuiltinToolRegistry,
+  defineReadArtifact,
   resolveBuiltinTools,
   parseAllowedDomains,
   isHostAllowed,
@@ -31,7 +32,7 @@ export {
   parseFeed,
   ENV_ALLOW_DOMAINS,
 } from './builtin-tools.js';
-export type { RssItem } from './builtin-tools.js';
+export type { ReadArtifactDeps, RssItem } from './builtin-tools.js';
 
 export { buildStatusPatch, writeStatus, makeCustomObjectsApi } from './status.js';
 export type { StatusPatch } from './status.js';
@@ -52,3 +53,7 @@ export {
   INLINE_DEFAULT_MAX_BYTES,
 } from './artifacts.js';
 export type { ArtifactWriterEnv, WriteArtifactResult } from './artifacts.js';
+
+/* v0.2.2-cas — content-addressed-storage backend abstraction. */
+export { casShardPath, hashBytes, PvcCasBackend, S3CasBackend } from './cas-backend.js';
+export type { CasBackend, CasWriteResult, S3CasBackendOptions } from './cas-backend.js';

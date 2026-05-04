@@ -804,3 +804,109 @@ export function buildWorkspaceMounts(input: BuildWorkspaceMountsInput): Workspac
 
   return { volumes, volumeMounts };
 }
+
+/* =====================================================================
+ * Wave 1 — CAS artifact mount helper (v0.2.2-cas).
+ *
+ * Distinct from the Workspace sub-team's `buildWorkspaceMounts` (which
+ * lives on the parallel feat/wave1-workspaces branch) — additive only,
+ * no shared state. The two helpers are merged independently into main;
+ * neither writes into the other's volume / mount namespace.
+ *
+ * `buildArtifactMounts(opts)` translates an Agent's `spec.inputs[]` of
+ * `kind: 'artifact'` into the (volume, volumeMounts) pair the operator
+ * appends to a spawned Job's pod spec. The shared CAS PVC is mounted
+ * read-only at `/var/kagent/cas/` (the agent-pod's `read_artifact`
+ * tool resolves `cas://` URIs against the same prefix). The mount is
+ * read-only because writes go through the in-pod CAS backend (which
+ * resolves the actual on-disk shard path from sha256 of the bytes), and
+ * because read-only RWX mounts let many agent-pods share the volume
+ * without any per-task fencing.
+ *
+ * The helper returns empty arrays when the Agent declares no artifact
+ * inputs OR when CAS Helm values are disabled — additive, never invasive.
+ * ===================================================================== */
+
+/** Default mount path the CAS PVC lands at inside every agent-pod. */
+export const DEFAULT_CAS_MOUNT_PATH = '/var/kagent/cas';
+
+/** Volume name used for the CAS PVC in spawned pod specs. */
+export const CAS_VOLUME_NAME = 'kagent-cas';
+
+/**
+ * Inputs the operator passes to `buildArtifactMounts`. Mirrors the
+ * Helm-time `cas:` block — `pvcName` + `mountPath` come from operator
+ * env (KAGENT_CAS_PVC_NAME / KAGENT_CAS_MOUNT_PATH); `agent` is the
+ * resolved CR the reconciler is materializing.
+ */
+export interface BuildArtifactMountsOptions {
+  /** PVC claim name in the AgentTask's namespace (e.g. `kagent-cas`). */
+  readonly pvcName: string;
+  /** Container path the PVC mounts at. Defaults to `/var/kagent/cas`. */
+  readonly mountPath?: string;
+  /**
+   * Resolved Agent for this AgentTask. The helper inspects
+   * `spec.inputs[]` to decide whether the mount is needed.
+   */
+  readonly agent: Agent;
+}
+
+/**
+ * One pod-level Volume + zero-or-more containerVolumeMounts the helper
+ * returns. The reconciler concatenates these onto the existing volume
+ * lists in `buildJobSpec` — additive only.
+ */
+export interface BuildArtifactMountsResult {
+  readonly volumes: readonly {
+    readonly name: string;
+    readonly persistentVolumeClaim: { readonly claimName: string };
+  }[];
+  readonly volumeMounts: readonly {
+    readonly name: string;
+    readonly mountPath: string;
+    readonly readOnly?: boolean;
+  }[];
+}
+
+/**
+ * Build the CAS PVC volume + read-only mount when the Agent declares at
+ * least one `kind: 'artifact'` input. Returns empty arrays otherwise so
+ * the caller can unconditionally spread the result without branching.
+ *
+ * Admission validates the schema-level inputs[] contract (see Wave 1.1
+ * I/O sub-team's `validateAgentTaskInputs`); this helper only consumes
+ * the resolved Agent and emits the K8s plumbing.
+ */
+export function buildArtifactMounts(opts: BuildArtifactMountsOptions): BuildArtifactMountsResult {
+  if (typeof opts.pvcName !== 'string' || opts.pvcName.length === 0) {
+    return { volumes: [], volumeMounts: [] };
+  }
+  const inputs = opts.agent.spec.inputs ?? [];
+  let needsMount = false;
+  for (const i of inputs) {
+    if (i.kind === 'artifact') {
+      needsMount = true;
+      break;
+    }
+  }
+  // Outputs of `kind: 'artifact'` ALSO trigger the mount because the
+  // agent-pod's writer publishes via the in-pod CAS backend, which
+  // currently writes onto the same PVC. (When the v0.3 S3 backend lands
+  // and an Agent uses S3-only outputs, this branch flips to inputs-only.)
+  const outputs = opts.agent.spec.outputs ?? [];
+  if (!needsMount) {
+    for (const o of outputs) {
+      if (o.kind === 'artifact') {
+        needsMount = true;
+        break;
+      }
+    }
+  }
+  if (!needsMount) return { volumes: [], volumeMounts: [] };
+
+  const mountPath = opts.mountPath ?? DEFAULT_CAS_MOUNT_PATH;
+  return {
+    volumes: [{ name: CAS_VOLUME_NAME, persistentVolumeClaim: { claimName: opts.pvcName } }],
+    volumeMounts: [{ name: CAS_VOLUME_NAME, mountPath, readOnly: true }],
+  };
+}

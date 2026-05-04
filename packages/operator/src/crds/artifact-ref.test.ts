@@ -6,11 +6,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  casUri,
   DEFAULT_ARTIFACT_PVC,
   INLINE_DEFAULT_MAX_BYTES,
   inlineSafe,
   isArtifactRef,
   parseArtifactUri,
+  parseUri,
   pvcUri,
 } from './artifact-ref.js';
 
@@ -202,5 +204,136 @@ describe('inlineSafe', () => {
 
   it('rejects non-string content (defensive)', () => {
     expect(inlineSafe(123 as unknown as string, 'text/markdown').kind).toBe('reference-needed');
+  });
+});
+
+/* =====================================================================
+ * v0.2.2-cas — content-addressed storage URI scheme.
+ *
+ * URI shape: cas://sha256:<hex>/<name>
+ *   - <hex>  = lowercase 64 char sha256 hex
+ *   - <name> = relative human-friendly file name (any UTF-8, validated
+ *              by the same path-traversal rules as pvcUri)
+ *
+ * Identity = hash(bytes). Two AgentTasks producing the same bytes
+ * produce one stored object; the URI is identical and re-running the
+ * task replays the cached trace without an LLM call. Pattern follows
+ * Bazel remote cache + Nix store + Git pack files.
+ * ===================================================================== */
+
+describe('casUri', () => {
+  it('produces canonical cas://sha256:<hex>/<name> shape', () => {
+    const hex = 'a'.repeat(64);
+    expect(casUri(hex, 'digest.md')).toBe(`cas://sha256:${hex}/digest.md`);
+  });
+
+  it('preserves nested name segments (e.g. screenshots/01.png)', () => {
+    const hex = 'b'.repeat(64);
+    expect(casUri(hex, 'screenshots/01.png')).toBe(`cas://sha256:${hex}/screenshots/01.png`);
+  });
+
+  it('rejects names beginning with "/"', () => {
+    expect(() => casUri('a'.repeat(64), '/escape.md')).toThrow(/must not begin with/);
+  });
+
+  it('rejects names containing ".." segments (path traversal)', () => {
+    expect(() => casUri('a'.repeat(64), '../escape.md')).toThrow(/must not contain/);
+    expect(() => casUri('a'.repeat(64), 'a/../b.md')).toThrow(/must not contain/);
+  });
+
+  it('rejects empty hash', () => {
+    expect(() => casUri('', 'name.md')).toThrow(/contentHash required/);
+  });
+
+  it('rejects empty name', () => {
+    expect(() => casUri('a'.repeat(64), '')).toThrow(/name required/);
+  });
+
+  it('rejects malformed hash (non-hex)', () => {
+    expect(() => casUri('XYZ' + 'a'.repeat(61), 'name.md')).toThrow(/contentHash/);
+  });
+
+  it('rejects malformed hash (wrong length)', () => {
+    expect(() => casUri('abc', 'name.md')).toThrow(/contentHash/);
+    expect(() => casUri('a'.repeat(63), 'name.md')).toThrow(/contentHash/);
+    expect(() => casUri('a'.repeat(65), 'name.md')).toThrow(/contentHash/);
+  });
+
+  it('lowercases hex (canonical form)', () => {
+    const upper = 'A'.repeat(64);
+    expect(casUri(upper, 'a.md')).toBe(`cas://sha256:${'a'.repeat(64)}/a.md`);
+  });
+});
+
+describe('parseUri (cas + pvc + inline)', () => {
+  it('parses cas://sha256:<hex>/<name> into scheme + hash + name', () => {
+    const hex = '0123456789abcdef'.repeat(4); // 64 chars
+    expect(parseUri(`cas://sha256:${hex}/digest.md`)).toEqual({
+      scheme: 'cas',
+      hash: hex,
+      name: 'digest.md',
+    });
+  });
+
+  it('parses nested cas names', () => {
+    const hex = 'c'.repeat(64);
+    expect(parseUri(`cas://sha256:${hex}/screenshots/01.png`)).toEqual({
+      scheme: 'cas',
+      hash: hex,
+      name: 'screenshots/01.png',
+    });
+  });
+
+  it('returns null on cas with malformed hash', () => {
+    expect(parseUri('cas://sha256:abc/x.md')).toBeNull();
+    expect(parseUri('cas://md5:abc/x.md')).toBeNull(); // wrong algo
+    expect(parseUri('cas://sha256:/x.md')).toBeNull();
+  });
+
+  it('returns null on cas with no name', () => {
+    expect(parseUri(`cas://sha256:${'a'.repeat(64)}`)).toBeNull();
+    expect(parseUri(`cas://sha256:${'a'.repeat(64)}/`)).toBeNull();
+  });
+
+  it('parses pvc:// URIs into scheme + name (legacy back-compat)', () => {
+    const parsed = parseUri('pvc://kagent-artifacts/uid-1/digest.md');
+    expect(parsed?.scheme).toBe('pvc');
+    expect(parsed?.name).toBe('digest.md');
+  });
+
+  it('parses inline://sha256:<hex> URIs into scheme + hash', () => {
+    const hex = 'd'.repeat(64);
+    expect(parseUri(`inline://sha256:${hex}`)).toEqual({
+      scheme: 'inline',
+      hash: hex,
+    });
+  });
+
+  it('returns null on unknown scheme', () => {
+    expect(parseUri('ftp://server/x')).toBeNull();
+  });
+
+  it('returns null on non-string', () => {
+    expect(parseUri(undefined as unknown as string)).toBeNull();
+    expect(parseUri('')).toBeNull();
+  });
+});
+
+describe('isArtifactRef + contentHash', () => {
+  it('accepts a ref with a valid sha256-hex contentHash', () => {
+    expect(
+      isArtifactRef({
+        uri: 'cas://sha256:abc/x.md',
+        contentHash: 'a'.repeat(64),
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a ref without contentHash (optional for inline://)', () => {
+    expect(isArtifactRef({ uri: 'inline://sha256:abc' })).toBe(true);
+  });
+
+  it('rejects non-string contentHash', () => {
+    expect(isArtifactRef({ uri: 'pvc://k/u/x', contentHash: 12 })).toBe(false);
   });
 });
