@@ -27,3 +27,60 @@ metadata:
     app.kubernetes.io/created-by: rc-pilot-runbook
   annotations:
     kagent.knuteson.io/evidence-bundle: enterprise-pilot-rc1
+---
+# kagent-agent-pod ServiceAccount + namespace-local Role + RoleBinding.
+# The operator chart only creates these in its release namespace
+# (kagent-system); spawning agent pods in the kagent-rc-pilot namespace
+# requires the same SA + Role here too. Permissions mirror the
+# operator chart's `kagent-agent-pod` Role in kagent-system —
+# narrow access to the kagent.knuteson.io group only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kagent-agent-pod
+  namespace: kagent-rc-pilot
+  labels:
+    app.kubernetes.io/name: kagent-operator
+    app.kubernetes.io/component: agent-pod
+    kagent.knuteson.io/role: rc-pilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kagent-agent-pod
+  namespace: kagent-rc-pilot
+  labels:
+    app.kubernetes.io/name: kagent-operator
+    app.kubernetes.io/component: agent-pod
+    kagent.knuteson.io/role: rc-pilot
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks/status']
+    verbs: ['get', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['get', 'list', 'create']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agents']
+    verbs: ['get', 'list']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttemplates']
+    verbs: ['get', 'list']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kagent-agent-pod
+  namespace: kagent-rc-pilot
+  labels:
+    app.kubernetes.io/name: kagent-operator
+    app.kubernetes.io/component: agent-pod
+    kagent.knuteson.io/role: rc-pilot
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kagent-agent-pod
+subjects:
+  - kind: ServiceAccount
+    name: kagent-agent-pod
+    namespace: kagent-rc-pilot
