@@ -377,14 +377,21 @@ jobs:
             type=ref,event=tag
             type=sha,format=short
 
-      - name: Build + push image (multi-arch)
+      - name: Build + push image (linux/amd64)
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.file }}
           push: true
-          platforms: linux/amd64,linux/arm64
+          # v0.1.6-ga-hardening.4 — arm64 dropped from the matrix.
+          # The Wave 4 expanded TS compile (operator + agent-pod
+          # transitively pull every workspace package now) does not
+          # finish under arm64 QEMU emulation inside the 30-minute
+          # GitHub-hosted-runner budget. Homelab K3s is amd64-only;
+          # arm64 returns when we wire native arm64 runners or split
+          # per-arch jobs.
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Belt-and-suspenders: buildkit-native attestations for SBOM
