@@ -148,6 +148,21 @@ export const KEYROTATION_CAP_MINTED_WITH_TTL = 'keyrotation.cap_minted_with_ttl'
 export const KEYROTATION_GATEWAY_ROTATED = 'keyrotation.gateway_rotated' as const;
 export const KEYROTATION_GATEWAY_UNSUPPORTED = 'keyrotation.gateway_unsupported' as const;
 
+/* Phase 5 P4 wire-up — parent-from-child re-aggregate. Emitted by the
+ * operator each time `reconcileParentFromChildEvent` patches a parent
+ * AgentTask's `status.children` / `status.aggregatePhase` /
+ * counter projection. Distinct from `task.spawned` /
+ * `task.completed` (substrate-level lifecycle of a single task) and
+ * from `child.spawned` (parent-perspective tree-edge creation): this
+ * event records the parent-perspective FOLD over its children
+ * whenever the projection changes. One emission per parent-status
+ * patch (idempotent no-ops do NOT emit). Carries before/after
+ * counter snapshots so audit warehouses can reconstruct the per-edge
+ * transition without joining sibling events. See
+ * `docs/TASK-GRAPH.md` §3 + §4 + the Phase 5 entry in
+ * `docs/ROADMAP.md`. */
+export const PARENT_CHILDREN_AGGREGATED = 'parent.children_aggregated' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
  * (`expect(ALL_EVENT_TYPES.length).toBe(43)`) and for downstream tools
@@ -197,4 +212,5 @@ export const ALL_EVENT_TYPES = Object.freeze([
   KEYROTATION_CAP_MINTED_WITH_TTL,
   KEYROTATION_GATEWAY_ROTATED,
   KEYROTATION_GATEWAY_UNSUPPORTED,
+  PARENT_CHILDREN_AGGREGATED,
 ] as const);
