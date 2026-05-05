@@ -537,6 +537,35 @@ describe('buildJobSpec', () => {
     expect(byName.get('KAGENT_ARTIFACT_PVC_NAME')).toBe('kagent-artifacts');
   });
 
+  it('omits KAGENT_ARTIFACT_MAX_BYTES when artifactPvc.maxBytes is unset', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts' },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const names = env.map((e) => e.name);
+    expect(names).not.toContain('KAGENT_ARTIFACT_MAX_BYTES');
+  });
+
+  it('injects KAGENT_ARTIFACT_MAX_BYTES when artifactPvc.maxBytes is set', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      artifactPvc: { claimName: 'kagent-artifacts', maxBytes: 26214400 },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_ARTIFACT_MAX_BYTES')).toBe('26214400');
+  });
+
+  it('drops malformed maxBytes (negative / zero / non-finite) silently', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const job = buildJobSpec(sampleAgent, sampleTask, {
+        artifactPvc: { claimName: 'kagent-artifacts', maxBytes: bad },
+      });
+      const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+      const names = env.map((e) => e.name);
+      expect(names).not.toContain('KAGENT_ARTIFACT_MAX_BYTES');
+    }
+  });
+
   /* =====================================================================
    * Suspended Job creation — WS-F (suspended publish + dispatch ordering)
    * ===================================================================== */

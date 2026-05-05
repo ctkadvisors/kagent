@@ -5,8 +5,9 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { createArtifactRegistry } from './artifacts.js';
 import type { RunResult } from './runner.js';
-import { buildStatusPatch } from './status.js';
+import { buildArtifactsOnlyPatch, buildStatusPatch } from './status.js';
 
 const baseResult: RunResult = {
   runId: 'task-uid-1',
@@ -131,5 +132,99 @@ describe('buildStatusPatch', () => {
     expect(patch.phase).toBe('Failed');
     expect(patch.artifacts).toHaveLength(1);
     expect(patch.artifacts?.[0]?.uri).toBe('pvc://kagent-artifacts/task-uid-1/partial.md');
+  });
+
+  /* =====================================================================
+   * v0.1 P3 wire-up — artifacts flush on Completed AND non-completed
+   * terminal paths (cancelled, timeout, budget_exceeded). The runner
+   * builds RunResult.artifacts from the registry snapshot in all cases.
+   * ===================================================================== */
+
+  it('artifact flush survives non-completed terminal paths', () => {
+    for (const status of ['cancelled', 'timeout', 'budget_exceeded'] as const) {
+      const result: RunResult = {
+        ...baseResult,
+        status,
+        artifacts: [
+          {
+            uri: `pvc://kagent-artifacts/task-uid-1/partial-${status}.md`,
+            mediaType: 'text/markdown',
+            sizeBytes: 4,
+            checksum: 'sha256:deadbeef',
+            contentHash: 'deadbeef',
+          },
+        ],
+      };
+      const patch = buildStatusPatch(result, fixedNow);
+      expect(patch.phase).toBe('Failed');
+      expect(patch.artifacts).toHaveLength(1);
+      expect(patch.artifacts?.[0]?.uri).toBe(
+        `pvc://kagent-artifacts/task-uid-1/partial-${status}.md`,
+      );
+      // contentHash forward-compat field round-trips.
+      expect(patch.artifacts?.[0]?.contentHash).toBe('deadbeef');
+    }
+  });
+
+  it('artifact flush is the SAME shape on Completed and Failed', () => {
+    // The substrate contract: status.artifacts is identically populated
+    // regardless of the terminal phase — so a Workbench renderer can
+    // treat the field uniformly.
+    const ref = {
+      uri: 'pvc://kagent-artifacts/task-uid-1/uniform.md',
+      mediaType: 'text/markdown',
+      sizeBytes: 7,
+      checksum: 'sha256:abc',
+      contentHash: 'abc',
+      name: 'uniform.md',
+      producedAt: '2026-04-26T09:50:00.000Z',
+    };
+    const completed = buildStatusPatch(
+      { ...baseResult, status: 'completed', artifacts: [ref] },
+      fixedNow,
+    );
+    const failed = buildStatusPatch(
+      { ...baseResult, status: 'failed', error: { message: 'x' }, artifacts: [ref] },
+      fixedNow,
+    );
+    expect(completed.artifacts).toEqual(failed.artifacts);
+  });
+});
+
+/* =====================================================================
+ * buildArtifactsOnlyPatch — registry-flush helper.
+ *
+ * Used by callers that want to surface the in-pod ArtifactRegistry's
+ * current snapshot independent of a full RunResult (e.g. a future
+ * heartbeat / intermediate status update path).
+ * ===================================================================== */
+
+describe('buildArtifactsOnlyPatch', () => {
+  it('emits {artifacts: [...]} when the snapshot is non-empty', () => {
+    const registry = createArtifactRegistry();
+    registry.add({
+      uri: 'pvc://kagent-artifacts/uid-1/digest.md',
+      name: 'digest.md',
+      mediaType: 'text/markdown',
+      sizeBytes: 7,
+      checksum: 'sha256:xyz',
+      contentHash: 'xyz',
+    });
+    const patch = buildArtifactsOnlyPatch(registry.snapshot());
+    expect(patch.artifacts).toHaveLength(1);
+    expect(patch.artifacts?.[0]?.uri).toBe('pvc://kagent-artifacts/uid-1/digest.md');
+  });
+
+  it('emits {} when the snapshot is empty (omits the field)', () => {
+    const patch = buildArtifactsOnlyPatch([]);
+    expect(patch.artifacts).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(patch, 'artifacts')).toBe(false);
+  });
+
+  it('returns a defensive copy so caller mutation does not leak', () => {
+    const refs = [{ uri: 'pvc://k/u/a.md', name: 'a.md' }];
+    const patch = buildArtifactsOnlyPatch(refs);
+    (patch.artifacts as { uri: string }[] | undefined)?.push({ uri: 'leaked' });
+    expect(refs).toHaveLength(1);
   });
 });

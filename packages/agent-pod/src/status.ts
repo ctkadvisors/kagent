@@ -41,9 +41,11 @@ export interface StatusPatch {
   readonly structuralVerdict?: { readonly suspicious: readonly string[] };
   /**
    * Artifact references produced by the agent run, forwarded as-is from
-   * `RunResult.artifacts`. Empty array is omitted (keeps the merge-patch
-   * minimal — no need to clear a field that was never set). See
-   * `docs/ARTIFACTS.md`.
+   * `RunResult.artifacts` (which itself merges the in-pod
+   * ArtifactRegistry's snapshot with trace-harvested refs — see
+   * `runner.ts` `mergeArtifactSources`). Empty array is omitted (keeps
+   * the merge-patch minimal — no need to clear a field that was never
+   * set). See `docs/ARTIFACTS.md`.
    */
   readonly artifacts?: readonly ArtifactRef[];
 }
@@ -51,6 +53,18 @@ export interface StatusPatch {
 /**
  * Translate a RunResult into a status patch. Pure function — split out
  * from the K8s call so it's testable without booting a kube client.
+ *
+ * Artifact-flush contract (v0.1 P3 wire-up):
+ *   - The registry is flushed on EVERY status patch (Completed AND
+ *     Failed paths), not just at completion. This means a partial run
+ *     that landed two artifacts before timing out still surfaces both
+ *     refs in `AgentTask.status.artifacts` — the operator's downstream
+ *     consumers (Workbench, sibling AgentTasks, GC) get a faithful
+ *     view of what work survived.
+ *   - The same applies to non-completed terminal paths (cancellation,
+ *     budget_exceeded, timeout) routed through `Failed`. The runner
+ *     populates `RunResult.artifacts` from the same registry snapshot
+ *     in all cases — see `runAgentTask` in `runner.ts`.
  */
 export function buildStatusPatch(result: RunResult, now: Date): StatusPatch {
   const completedAt = now.toISOString();
@@ -84,6 +98,26 @@ export function buildStatusPatch(result: RunResult, now: Date): StatusPatch {
     structuralVerdict: verdict,
     ...(artifactsPatch !== undefined && artifactsPatch),
   };
+}
+
+/**
+ * Helper: build a status patch directly from an in-pod
+ * {@link ArtifactRegistry} snapshot rather than a full RunResult.
+ * Used by callers that want to flush artifacts mid-run (heartbeat /
+ * intermediate status update path) without inventing a synthetic
+ * RunResult. Empty registry → returns just `{ artifacts: [] }`-empty
+ * (i.e. undefined patch field) so the caller's merge-patch stays
+ * minimal.
+ *
+ * NOTE: v0.1 only patches at terminal-completion (see `main.ts`); this
+ * helper is here so the wiring is in place when a future heartbeat
+ * path lands. Tests cover both shapes.
+ */
+export function buildArtifactsOnlyPatch(
+  artifacts: readonly ArtifactRef[],
+): Pick<StatusPatch, 'artifacts'> {
+  if (artifacts.length === 0) return {};
+  return { artifacts: [...artifacts] };
 }
 
 /**

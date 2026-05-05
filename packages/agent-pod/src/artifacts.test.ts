@@ -26,8 +26,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   buildPvcUri,
+  createArtifactRegistry,
+  DEFAULT_ARTIFACT_MAX_BYTES,
   DEFAULT_ARTIFACTS_DIR,
   DEFAULT_PVC_NAME,
+  ENV_ARTIFACT_MAX_BYTES,
   ENV_ARTIFACTS_DIR,
   ENV_ARTIFACTS_PVC_NAME,
   ENV_TASK_ID,
@@ -35,6 +38,7 @@ import {
   inlineSafeForArtifact,
   isArtifactRefShape,
   resolveWriterEnv,
+  resolveWriterEnvOrDisabled,
   tryParseArtifactRefFromToolOutput,
   validateArtifactName,
   writeArtifactToDisk,
@@ -186,6 +190,7 @@ describe('resolveWriterEnv', () => {
       artifactsDir: DEFAULT_ARTIFACTS_DIR,
       pvcName: DEFAULT_PVC_NAME,
       taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
     });
   });
 
@@ -199,7 +204,23 @@ describe('resolveWriterEnv', () => {
       artifactsDir: '/mnt/artifacts',
       pvcName: 'kagent-artifacts-prod',
       taskUid: 'uid-2',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
     });
+  });
+
+  it('honors explicit KAGENT_ARTIFACT_MAX_BYTES', () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-3',
+      [ENV_ARTIFACT_MAX_BYTES]: '1048576',
+    };
+    expect(resolveWriterEnv(env).maxBytes).toBe(1048576);
+  });
+
+  it('falls back to DEFAULT_ARTIFACT_MAX_BYTES on malformed cap', () => {
+    for (const raw of ['', '0', '-1', 'NaN', 'huge']) {
+      const env = { [ENV_TASK_ID]: 'uid-x', [ENV_ARTIFACT_MAX_BYTES]: raw };
+      expect(resolveWriterEnv(env).maxBytes).toBe(DEFAULT_ARTIFACT_MAX_BYTES);
+    }
   });
 
   it('throws when KAGENT_TASK_ID is missing', () => {
@@ -209,12 +230,71 @@ describe('resolveWriterEnv', () => {
 });
 
 /* =====================================================================
+ * resolveWriterEnvOrDisabled — strict gating contract for the
+ * `disabled` error path (default-OFF when operator hasn't enabled the
+ * Helm chart's artifactStorage block).
+ * ===================================================================== */
+
+describe('resolveWriterEnvOrDisabled', () => {
+  it('returns disabled when KAGENT_TASK_ID is missing', () => {
+    const r = resolveWriterEnvOrDisabled({});
+    expect('disabled' in r).toBe(true);
+    if ('disabled' in r) expect(r.reason).toMatch(/KAGENT_TASK_ID/);
+  });
+
+  it('returns disabled when KAGENT_ARTIFACTS_DIR is unset', () => {
+    const r = resolveWriterEnvOrDisabled({ [ENV_TASK_ID]: 'uid-1' });
+    expect('disabled' in r).toBe(true);
+    if ('disabled' in r) expect(r.reason).toMatch(/KAGENT_ARTIFACTS_DIR/);
+  });
+
+  it('returns disabled when KAGENT_ARTIFACT_PVC_NAME is unset', () => {
+    const r = resolveWriterEnvOrDisabled({
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: '/var/kagent/artifacts',
+    });
+    expect('disabled' in r).toBe(true);
+    if ('disabled' in r) expect(r.reason).toMatch(/KAGENT_ARTIFACT_PVC_NAME/);
+  });
+
+  it('returns a writable env when both PVC env vars are set', () => {
+    const r = resolveWriterEnvOrDisabled({
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: '/var/kagent/artifacts',
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    });
+    expect('disabled' in r).toBe(false);
+    if (!('disabled' in r)) {
+      expect(r.taskUid).toBe('uid-1');
+      expect(r.maxBytes).toBe(DEFAULT_ARTIFACT_MAX_BYTES);
+    }
+  });
+
+  it('threads maxBytes through from env on the enabled branch', () => {
+    const r = resolveWriterEnvOrDisabled({
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: '/var/kagent/artifacts',
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+      [ENV_ARTIFACT_MAX_BYTES]: '2048',
+    });
+    if (!('disabled' in r)) {
+      expect(r.maxBytes).toBe(2048);
+    }
+  });
+});
+
+/* =====================================================================
  * writeArtifactToDisk — atomic, hashed, scoped
  * ===================================================================== */
 
 describe('writeArtifactToDisk', () => {
   it('happy path: creates the file under <root>/<task-uid>/<name>', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     const r = writeArtifactToDisk('digest.md', '# hello', 'text/markdown', env);
     expect(r.path).toBe(join(tmpRoot, 'uid-1', 'digest.md'));
     expect(existsSync(r.path)).toBe(true);
@@ -222,7 +302,12 @@ describe('writeArtifactToDisk', () => {
   });
 
   it('returns a well-shaped ArtifactRef', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     const fixedNow = new Date('2026-04-28T14:23:11Z');
     const r = writeArtifactToDisk('digest.md', '# hello', 'text/markdown', env, fixedNow);
     const expected = createHash('sha256').update('# hello', 'utf8').digest('hex');
@@ -232,12 +317,18 @@ describe('writeArtifactToDisk', () => {
       mediaType: 'text/markdown',
       sizeBytes: Buffer.byteLength('# hello', 'utf8'),
       checksum: `sha256:${expected}`,
+      contentHash: expected,
       producedAt: '2026-04-28T14:23:11.000Z',
     });
   });
 
   it('checksum matches sha256 of the bytes (utf-8 multi-byte)', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     const content = 'rapport-français-🚀';
     const r = writeArtifactToDisk('utf8.md', content, 'text/markdown', env);
     const expected = createHash('sha256').update(content, 'utf8').digest('hex');
@@ -246,7 +337,12 @@ describe('writeArtifactToDisk', () => {
   });
 
   it('atomic write: leaves no .tmp behind on success', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     writeArtifactToDisk('digest.md', '# hello', 'text/markdown', env);
     const dir = join(tmpRoot, 'uid-1');
     const entries = readdirSync(dir);
@@ -254,7 +350,12 @@ describe('writeArtifactToDisk', () => {
   });
 
   it('creates nested directories for slash-bearing names', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     const r = writeArtifactToDisk('screenshots/01.png', 'binary-ish', 'image/png', env);
     expect(existsSync(r.path)).toBe(true);
     expect(r.ref.uri).toBe('pvc://kagent-artifacts/uid-1/screenshots/01.png');
@@ -262,7 +363,12 @@ describe('writeArtifactToDisk', () => {
   });
 
   it('refuses path traversal via name', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     expect(() => writeArtifactToDisk('../escape.md', 'x', 'text/markdown', env)).toThrow(/".."/);
     expect(() => writeArtifactToDisk('/abs.md', 'x', 'text/markdown', env)).toThrow(
       /must not begin with "\/"/,
@@ -270,19 +376,34 @@ describe('writeArtifactToDisk', () => {
   });
 
   it('refuses control chars via name', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     expect(() => writeArtifactToDisk('foo\nbar.md', 'x', 'text/markdown', env)).toThrow(
       /non-printable/,
     );
   });
 
   it('refuses empty mediaType', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     expect(() => writeArtifactToDisk('a.md', 'x', '', env)).toThrow(/mediaType/);
   });
 
   it('handles 0-byte content (sentinel file)', () => {
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     const r = writeArtifactToDisk('marker', '', 'text/plain', env);
     expect(existsSync(r.path)).toBe(true);
     expect(readFileSync(r.path, 'utf8')).toBe('');
@@ -290,8 +411,18 @@ describe('writeArtifactToDisk', () => {
   });
 
   it('writes are scoped under the task-uid directory (no cross-task leak)', () => {
-    const env1 = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-A' };
-    const env2 = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-B' };
+    const env1 = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-A',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
+    const env2 = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-B',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     writeArtifactToDisk('shared.md', 'A version', 'text/markdown', env1);
     writeArtifactToDisk('shared.md', 'B version', 'text/markdown', env2);
     expect(readFileSync(join(tmpRoot, 'uid-A', 'shared.md'), 'utf8')).toBe('A version');
@@ -302,7 +433,12 @@ describe('writeArtifactToDisk', () => {
     // The whole point of the WS-D scheme split: any returned `pvc://`
     // URI must round-trip to a stat-able file on disk. The inline path
     // returns `inline://` exactly so this assertion can never lie.
-    const env = { artifactsDir: tmpRoot, pvcName: 'kagent-artifacts', taskUid: 'uid-1' };
+    const env = {
+      artifactsDir: tmpRoot,
+      pvcName: 'kagent-artifacts',
+      taskUid: 'uid-1',
+      maxBytes: DEFAULT_ARTIFACT_MAX_BYTES,
+    };
     const r = writeArtifactToDisk('digest.md', 'hello', 'text/markdown', env);
     expect(r.ref.uri.startsWith('pvc://')).toBe(true);
     // Reverse-map the URI back to the on-disk path. We mirror the
@@ -643,15 +779,17 @@ describe('write_artifact tool', () => {
     expect(entries).toEqual(['first.md']);
   });
 
-  it('refuses missing name / mediaType / content args', async () => {
+  it('refuses missing name and content args (mediaType is OPTIONAL — defaults to application/octet-stream)', async () => {
     const env = {
       [ENV_TASK_ID]: 'uid-1',
       [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
     };
     const reg = buildBuiltinToolRegistry({ env });
     const def = reg.get('write_artifact')!;
     const provider = new InProcessToolProvider({ tools: [def] });
 
+    // Missing `name` always errors.
     const r1 = await provider.executeTool(
       call('write_artifact', { mediaType: 'text/plain', content: 'x' }),
       ctx(),
@@ -659,22 +797,27 @@ describe('write_artifact tool', () => {
     expect(r1.isError).toBe(true);
     expect(contentString(r1)).toMatch(/required string argument "name"/);
 
+    // Missing `mediaType` is now OK — the writer falls back to
+    // application/octet-stream and the call succeeds.
     const r2 = await provider.executeTool(
-      call('write_artifact', { name: 'x.md', content: 'x' }),
+      call('write_artifact', { name: 'omits-mediatype.bin', content: 'x' }),
       ctx(),
     );
-    expect(r2.isError).toBe(true);
-    expect(contentString(r2)).toMatch(/required string argument "mediaType"/);
+    expect(r2.isError).toBe(false);
+    const blocks2 = r2.content as { type: string; text: string }[];
+    const ref2 = JSON.parse(blocks2[0]!.text) as ArtifactRef;
+    expect(ref2.mediaType).toBe('application/octet-stream');
 
+    // Missing `content` errors.
     const r3 = await provider.executeTool(
       call('write_artifact', { name: 'x.md', mediaType: 'text/plain' }),
       ctx(),
     );
     expect(r3.isError).toBe(true);
-    expect(contentString(r3)).toMatch(/required string argument "content"/);
+    expect(contentString(r3)).toMatch(/required argument "content"/);
   });
 
-  it('surfaces resolveWriterEnv error when KAGENT_TASK_ID is missing', async () => {
+  it('surfaces a disabled error when KAGENT_TASK_ID is missing', async () => {
     const env = { [ENV_ARTIFACTS_DIR]: tmpRoot };
     const reg = buildBuiltinToolRegistry({ env });
     const def = reg.get('write_artifact')!;
@@ -690,4 +833,420 @@ describe('write_artifact tool', () => {
     expect(r.isError).toBe(true);
     expect(contentString(r)).toMatch(/KAGENT_TASK_ID/);
   });
+
+  /* =====================================================================
+   * v0.1 P3 wire-up — disabled-storage default-OFF semantics.
+   * ===================================================================== */
+
+  it('returns a disabled error when KAGENT_ARTIFACT_PVC_NAME is unset', async () => {
+    // KAGENT_TASK_ID present, KAGENT_ARTIFACTS_DIR present, but the PVC
+    // name env var is absent — this is the operator's "Helm chart not
+    // wired" posture. Substrate must refuse cleanly rather than write to
+    // an unmounted dir.
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'x.md',
+        mediaType: 'text/plain',
+        content: 'x',
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/disabled/);
+    expect(contentString(r)).toMatch(/KAGENT_ARTIFACT_PVC_NAME/);
+  });
+
+  it('returns a disabled error when KAGENT_ARTIFACTS_DIR is unset', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'x.md',
+        mediaType: 'text/plain',
+        content: 'x',
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/disabled/);
+    expect(contentString(r)).toMatch(/KAGENT_ARTIFACTS_DIR/);
+  });
+
+  it('inline:true short-circuit ALSO works when storage is disabled (text-only path)', async () => {
+    // The substrate contract: inline://sha256:<hex> is non-durable and
+    // doesn't touch the FS — so it's safely available even when the PVC
+    // isn't mounted. Lets an Agent fall back to embedding small text
+    // payloads in status.result without losing the tool entirely.
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      // No KAGENT_ARTIFACT_PVC_NAME or KAGENT_ARTIFACTS_DIR.
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'tiny.md',
+        mediaType: 'text/markdown',
+        content: 'hello',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    const blocks = r.content as { type: string; text: string }[];
+    const ref = JSON.parse(blocks[0]!.text) as ArtifactRef;
+    expect(ref.uri.startsWith('inline://sha256:')).toBe(true);
+  });
+
+  /* =====================================================================
+   * v0.1 P3 wire-up — base64 content path.
+   * ===================================================================== */
+
+  it('accepts base64-encoded binary content', async () => {
+    const taskUid = `uid-${randomUUID().slice(0, 8)}`;
+    const env = {
+      [ENV_TASK_ID]: taskUid,
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    // PNG header bytes (89 50 4E 47 0D 0A 1A 0A) — a real binary payload
+    // the LLM might receive from a screenshot tool and need to round-trip.
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'screenshot.png',
+        mediaType: 'image/png',
+        content: { base64: pngHeader.toString('base64') },
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    const blocks = r.content as { type: string; text: string }[];
+    const ref = JSON.parse(blocks[0]!.text) as ArtifactRef;
+    expect(ref.sizeBytes).toBe(pngHeader.byteLength);
+    // Disk content matches the decoded bytes byte-for-byte.
+    const onDisk = readFileSync(join(tmpRoot, taskUid, 'screenshot.png'));
+    expect(onDisk.equals(pngHeader)).toBe(true);
+    // sha256 of the bytes matches the contentHash field.
+    const expectedHex = createHash('sha256').update(pngHeader).digest('hex');
+    expect(ref.contentHash).toBe(expectedHex);
+    expect(ref.checksum).toBe(`sha256:${expectedHex}`);
+  });
+
+  it('rejects malformed base64 content', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'x.bin',
+        mediaType: 'application/octet-stream',
+        content: { base64: 'not!valid!base64*' },
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/not valid base64/);
+  });
+
+  it('rejects non-string base64 field', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'x.bin',
+        mediaType: 'application/octet-stream',
+        content: { base64: 42 as unknown as string },
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/content\.base64/);
+  });
+
+  /* =====================================================================
+   * v0.1 P3 wire-up — KAGENT_ARTIFACT_MAX_BYTES enforcement.
+   * ===================================================================== */
+
+  it('refuses oversized writes (UTF-8 string content)', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+      [ENV_ARTIFACT_MAX_BYTES]: '1024', // 1 KiB cap
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'big.md',
+        mediaType: 'text/markdown',
+        content: 'a'.repeat(2048),
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/artifact too large/);
+    expect(contentString(r)).toMatch(/2048 > 1024/);
+  });
+
+  it('refuses oversized writes (base64 binary content)', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+      [ENV_ARTIFACT_MAX_BYTES]: '16',
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const bigBytes = Buffer.alloc(64).fill(0xff);
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'big.bin',
+        mediaType: 'application/octet-stream',
+        content: { base64: bigBytes.toString('base64') },
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/artifact too large/);
+  });
+
+  /* =====================================================================
+   * v0.1 P3 wire-up — in-pod ArtifactRegistry flush.
+   * ===================================================================== */
+
+  it('threads successful refs into the in-pod ArtifactRegistry', async () => {
+    const taskUid = `uid-${randomUUID().slice(0, 8)}`;
+    const env = {
+      [ENV_TASK_ID]: taskUid,
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const registry = createArtifactRegistry();
+    const reg = buildBuiltinToolRegistry({ env, artifactRegistry: registry });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    expect(registry.isEmpty()).toBe(true);
+
+    await provider.executeTool(
+      call('write_artifact', {
+        name: 'first.md',
+        mediaType: 'text/markdown',
+        content: '# first',
+      }),
+      ctx(),
+    );
+    expect(registry.isEmpty()).toBe(false);
+    expect(registry.snapshot()).toHaveLength(1);
+    expect(registry.snapshot()[0]!.uri).toBe(`pvc://kagent-artifacts/${taskUid}/first.md`);
+
+    await provider.executeTool(
+      call('write_artifact', {
+        name: 'second.md',
+        mediaType: 'text/markdown',
+        content: '# second',
+      }),
+      ctx(),
+    );
+    expect(registry.snapshot()).toHaveLength(2);
+  });
+
+  it('does NOT push refs into the registry when the write fails', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const registry = createArtifactRegistry();
+    const reg = buildBuiltinToolRegistry({
+      env,
+      artifactRegistry: registry,
+      writeArtifact: () => {
+        throw new Error('simulated FS failure');
+      },
+    });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'x.md',
+        mediaType: 'text/markdown',
+        content: 'x',
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(registry.isEmpty()).toBe(true);
+  });
+
+  it('inline:true synthetic ref is also recorded in the registry', async () => {
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const registry = createArtifactRegistry();
+    const reg = buildBuiltinToolRegistry({ env, artifactRegistry: registry });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    await provider.executeTool(
+      call('write_artifact', {
+        name: 'small.md',
+        mediaType: 'text/markdown',
+        content: 'tiny',
+        inline: true,
+      }),
+      ctx(),
+    );
+    const snapshot = registry.snapshot();
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0]!.uri.startsWith('inline://sha256:')).toBe(true);
+    expect(snapshot[0]!.name).toBe('small.md');
+  });
+
+  it('registry de-dupes on identical URI (last-write-wins)', async () => {
+    // Two writes to the same name → one ref in the registry, with the
+    // most recent metadata. Useful when an agent updates a digest in
+    // place during the run.
+    const env = {
+      [ENV_TASK_ID]: 'uid-1',
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const registry = createArtifactRegistry();
+    const reg = buildBuiltinToolRegistry({ env, artifactRegistry: registry });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    await provider.executeTool(
+      call('write_artifact', {
+        name: 'digest.md',
+        mediaType: 'text/markdown',
+        content: 'v1',
+      }),
+      ctx(),
+    );
+    await provider.executeTool(
+      call('write_artifact', {
+        name: 'digest.md',
+        mediaType: 'text/markdown',
+        content: 'v2-much-longer-content-than-v1',
+      }),
+      ctx(),
+    );
+    const snapshot = registry.snapshot();
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0]!.sizeBytes).toBe(
+      Buffer.byteLength('v2-much-longer-content-than-v1', 'utf8'),
+    );
+  });
+
+  /* =====================================================================
+   * v0.1 P3 wire-up — contentHash field forward-compat with v0.2.2-cas.
+   * ===================================================================== */
+
+  it('emits both checksum (algo-prefixed) and contentHash (bare hex) on the ref', async () => {
+    const taskUid = `uid-${randomUUID().slice(0, 8)}`;
+    const env = {
+      [ENV_TASK_ID]: taskUid,
+      [ENV_ARTIFACTS_DIR]: tmpRoot,
+      [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts',
+    };
+    const reg = buildBuiltinToolRegistry({ env });
+    const def = reg.get('write_artifact')!;
+    const provider = new InProcessToolProvider({ tools: [def] });
+    const r = await provider.executeTool(
+      call('write_artifact', {
+        name: 'fingerprint.md',
+        mediaType: 'text/markdown',
+        content: 'fingerprint-me',
+      }),
+      ctx(),
+    );
+    const blocks = r.content as { type: string; text: string }[];
+    const ref = JSON.parse(blocks[0]!.text) as ArtifactRef;
+    const expectedHex = createHash('sha256').update('fingerprint-me').digest('hex');
+    expect(ref.contentHash).toBe(expectedHex);
+    expect(ref.checksum).toBe(`sha256:${expectedHex}`);
+  });
+});
+
+/* =====================================================================
+ * createArtifactRegistry — pure helper coverage.
+ * ===================================================================== */
+
+describe('createArtifactRegistry', () => {
+  it('starts empty', () => {
+    const r = createArtifactRegistry();
+    expect(r.isEmpty()).toBe(true);
+    expect(r.snapshot()).toEqual([]);
+  });
+
+  it('add() inserts a ref keyed by URI', () => {
+    const r = createArtifactRegistry();
+    r.add({ uri: 'pvc://k/u/a.md' });
+    expect(r.isEmpty()).toBe(false);
+    expect(r.snapshot()).toHaveLength(1);
+  });
+
+  it('add() with duplicate URI overwrites (last-write-wins)', () => {
+    const r = createArtifactRegistry();
+    r.add({ uri: 'pvc://k/u/a.md', sizeBytes: 1 });
+    r.add({ uri: 'pvc://k/u/a.md', sizeBytes: 99 });
+    expect(r.snapshot()).toHaveLength(1);
+    expect(r.snapshot()[0]!.sizeBytes).toBe(99);
+  });
+
+  it('add() ignores refs with no URI (defensive)', () => {
+    const r = createArtifactRegistry();
+    r.add({ uri: '' });
+    r.add({ uri: undefined as unknown as string });
+    expect(r.isEmpty()).toBe(true);
+  });
+
+  it('snapshot() returns a defensive copy (caller mutation doesn’t leak back)', () => {
+    const r = createArtifactRegistry();
+    r.add({ uri: 'pvc://k/u/a.md' });
+    const s1 = r.snapshot() as ArtifactRef[];
+    s1.push({ uri: 'pvc://k/u/leaked.md' });
+    expect(r.snapshot()).toHaveLength(1);
+  });
+});
+
+/* =====================================================================
+ * resolveWriterEnvOrDisabled passthrough sanity — already covered above
+ * but include one inline runtime check that the export resolves.
+ * ===================================================================== */
+
+it('resolveWriterEnvOrDisabled is exported and callable', () => {
+  expect(typeof resolveWriterEnvOrDisabled).toBe('function');
 });

@@ -387,6 +387,19 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   // added and the tool fails fast at boot if invoked.
   const artifactPvcName = env.KAGENT_ARTIFACT_PVC_NAME;
   const artifactMountPath = env.KAGENT_ARTIFACT_MOUNT_PATH;
+  // v0.1 P3 wire-up — per-write byte cap forwarded onto every spawned
+  // Job's env. Parsed here so a malformed Helm value (negative,
+  // non-numeric) is dropped before it reaches the agent-pod (which
+  // would then fall back to its compiled-in default — same outcome).
+  const artifactMaxBytesRaw = env.KAGENT_ARTIFACT_MAX_BYTES;
+  const artifactMaxBytes = ((): number | undefined => {
+    if (typeof artifactMaxBytesRaw !== 'string' || artifactMaxBytesRaw.length === 0) {
+      return undefined;
+    }
+    const n = Number(artifactMaxBytesRaw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) return undefined;
+    return n;
+  })();
 
   // WS-A — security contexts for spawned agent pods. Helm's
   // `agentPodSecurityContext.pod` / `.container` are JSON-encoded
@@ -441,6 +454,7 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
           claimName: artifactPvcName,
           ...(typeof artifactMountPath === 'string' &&
             artifactMountPath.length > 0 && { mountPath: artifactMountPath }),
+          ...(typeof artifactMaxBytes === 'number' && { maxBytes: artifactMaxBytes }),
         },
       }),
     ...(podSecurityContext !== undefined && { podSecurityContext }),

@@ -31,6 +31,10 @@ const TOUCHED_VARS = [
   'KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_NAME',
   'KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_KEY',
   'KAGENT_AUDIT_NATS_URL',
+  // v0.1 P3 wire-up — artifact PVC plumbing.
+  'KAGENT_ARTIFACT_PVC_NAME',
+  'KAGENT_ARTIFACT_MOUNT_PATH',
+  'KAGENT_ARTIFACT_MAX_BYTES',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -286,5 +290,57 @@ describe('buildJobSpecOptionsFromEnv — secret-hygiene (v0.1.8)', () => {
       (e) => sensitive.test(e.name) && typeof e.value === 'string' && e.value.length > 0,
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+/* =====================================================================
+ * v0.1 P3 wire-up — artifact PVC plumbing.
+ *
+ * The operator's deployment.yaml stamps `KAGENT_ARTIFACT_PVC_NAME`,
+ * `KAGENT_ARTIFACT_MOUNT_PATH`, and `KAGENT_ARTIFACT_MAX_BYTES` onto
+ * the operator's own env (gated on `agentPod.artifactStorage.enabled`).
+ * `buildJobSpecOptionsFromEnv` reads them and produces an `artifactPvc`
+ * block that `buildJobSpec` then renders into every spawned Job's env
+ * + volume mount.
+ * ===================================================================== */
+
+describe('buildJobSpecOptionsFromEnv — artifactPvc plumbing (P3)', () => {
+  it('omits artifactPvc entirely when KAGENT_ARTIFACT_PVC_NAME is unset', () => {
+    const opts = buildJobSpecOptionsFromEnv();
+    expect(opts.artifactPvc).toBeUndefined();
+  });
+
+  it('threads claimName + mountPath + maxBytes when all three env vars are set', () => {
+    process.env.KAGENT_ARTIFACT_PVC_NAME = 'kagent-artifacts';
+    process.env.KAGENT_ARTIFACT_MOUNT_PATH = '/var/kagent/artifacts';
+    process.env.KAGENT_ARTIFACT_MAX_BYTES = '26214400';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    expect(opts.artifactPvc).toEqual({
+      claimName: 'kagent-artifacts',
+      mountPath: '/var/kagent/artifacts',
+      maxBytes: 26214400,
+    });
+  });
+
+  it('omits maxBytes when KAGENT_ARTIFACT_MAX_BYTES is unset', () => {
+    process.env.KAGENT_ARTIFACT_PVC_NAME = 'kagent-artifacts';
+    process.env.KAGENT_ARTIFACT_MOUNT_PATH = '/var/kagent/artifacts';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    expect(opts.artifactPvc).toEqual({
+      claimName: 'kagent-artifacts',
+      mountPath: '/var/kagent/artifacts',
+    });
+    expect((opts.artifactPvc as { maxBytes?: unknown }).maxBytes).toBeUndefined();
+  });
+
+  it('drops malformed maxBytes values silently (operator falls through to agent-pod default)', () => {
+    process.env.KAGENT_ARTIFACT_PVC_NAME = 'kagent-artifacts';
+    for (const bad of ['', '0', '-1', 'NaN', 'big', '12.5']) {
+      process.env.KAGENT_ARTIFACT_MAX_BYTES = bad;
+      const opts = buildJobSpecOptionsFromEnv();
+      expect((opts.artifactPvc as { maxBytes?: unknown }).maxBytes).toBeUndefined();
+    }
   });
 });

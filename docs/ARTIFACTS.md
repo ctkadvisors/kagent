@@ -240,3 +240,92 @@ status:
 3. **Compression at write time?** PNG/HAR compress poorly; markdown gzips ~4x. Tradeoff is CPU on the agent-pod vs. PVC bytes. Defer until storage pressure is real.
 4. **Read-side ergonomics for downstream consumers.** A second AgentTask that wants to consume an upstream artifact gets the URI in its `payload`; v0.1 mounts the same PVC and reads through the helper. Cross-cluster or non-K8s consumers (a chat UI fetching a digest) need HTTP. That is the first concrete trigger for MinIO + presigned URLs.
 5. **Quota.** Without per-Agent or per-namespace quota, a runaway agent could fill the PVC. Watch via existing K8s PVC monitoring; revisit a hard quota when the first incident happens.
+
+---
+
+## 9. v0.1 PVC writer (Phase 5 P3 wire-up)
+
+**Status:** shipped. Implementation lives in `packages/agent-pod/src/artifacts.ts` (writer + registry) and `packages/agent-pod/src/builtin-tools.ts` (`write_artifact` tool). Operator-side mount + env wiring lives in `packages/operator/src/job-spec.ts` and `packages/operator/src/main.ts`.
+
+### 9.1 Helm values (operator chart)
+
+```yaml
+agentPod:
+  artifactStorage:
+    enabled: true                     # default-OFF when unset; tool returns `disabled` error
+    pvcName: kagent-artifacts         # PVC claim name in the AgentTask namespace
+    mountPath: /var/kagent/artifacts  # container path; forwarded as KAGENT_ARTIFACTS_DIR
+    maxBytes: 26214400                # per-write byte cap (25 MiB default); 0/-1/unset → use agent-pod compiled-in default
+    size: 10Gi
+    storageClassName: ai-models-storage
+    accessMode: ReadWriteMany
+```
+
+When `enabled: false` (or the keys are absent because an operator runs without the chart), the operator does NOT stamp the env vars onto spawned Jobs. The agent-pod's `write_artifact` tool then refuses every call with `tool_error: write_artifact: artifact storage is disabled (...)` — the LLM sees a clean failure rather than writes silently landing on an unmounted FS.
+
+### 9.2 Agent-pod env contract
+
+| Env var | Source | Default | Semantics |
+|---|---|---|---|
+| `KAGENT_ARTIFACTS_DIR` | operator → Helm `agentPod.artifactStorage.mountPath` | unset → tool disabled | Container path the PVC mounts at. |
+| `KAGENT_ARTIFACT_PVC_NAME` | operator → Helm `agentPod.artifactStorage.pvcName` | unset → tool disabled | PVC claim name; embedded in the returned `pvc://<pvcName>/...` URI. |
+| `KAGENT_ARTIFACT_MAX_BYTES` | operator → Helm `agentPod.artifactStorage.maxBytes` | 25 MiB (`26214400`) | Per-write byte cap on the decoded payload (UTF-8 length for string content, raw byte length for base64). |
+| `KAGENT_TASK_ID` | operator (always set) | required | Per-task UID; the writer uses it as the per-pod isolation prefix (`<KAGENT_ARTIFACTS_DIR>/<KAGENT_TASK_ID>/<name>`). |
+
+### 9.3 `write_artifact` built-in tool — input contract
+
+```ts
+{
+  name: string,                                    // relative path; no `..`, leading `/`, or control chars
+  content: string | { base64: string },            // UTF-8 string OR strict-base64 binary
+  mediaType?: string,                              // optional; default 'application/octet-stream'
+  inline?: boolean                                 // when true + content fits inline-safe rules, returns inline:// ref
+}
+```
+
+Returns:
+
+```ts
+{
+  uri: 'pvc://kagent-artifacts/<task-uid>/<name>', // or 'inline://sha256:<hex>' on the inline path
+  name: string,
+  mediaType: string,
+  sizeBytes: number,
+  checksum: 'sha256:<hex>',
+  contentHash: '<hex>',                            // bare sha256 hex; v0.2.2-cas forward-compat
+  producedAt: '<RFC 3339 timestamp>'
+}
+```
+
+### 9.4 Error taxonomy
+
+The tool maps every refusal into `tool_error: write_artifact: <reason>` so a single grep over Langfuse traces surfaces them:
+
+| Error message fragment | Cause |
+|---|---|
+| `artifact storage is disabled (...)` | One of the operator-injected env vars is missing — Helm chart not enabled. |
+| `"name" must not begin with "/"` | Name is an absolute path. |
+| `"name" must not contain ".." segments` | Path-traversal attempt. |
+| `"name" must not contain non-printable characters` | Control character (NUL, newline, etc.) in the name. |
+| `artifact too large (<actual> > <cap> bytes)` | Decoded content exceeded `KAGENT_ARTIFACT_MAX_BYTES`. |
+| `"content.base64" is not valid base64` | Strict base64 decode failed. |
+| `"content.base64" decode round-trip mismatch` | Truncated / corrupted base64 input. |
+
+### 9.5 In-pod ArtifactRegistry → status flush
+
+The `write_artifact` handler pushes every successful ref into a per-run in-pod `ArtifactRegistry` (`createArtifactRegistry()` in `artifacts.ts`). The runner reads `registry.snapshot()` AND merges with `collectArtifactsFromTraces()` to build `RunResult.artifacts`.
+
+`buildStatusPatch` flushes the resulting refs into `AgentTask.status.artifacts` on EVERY status patch — Completed AND Failed (cancelled / timeout / budget_exceeded). A partial run that landed two artifacts before timing out surfaces both refs in etcd.
+
+### 9.6 Forward-compat with v0.2.2-cas
+
+The URI shape is identical: `pvc://<pvc>/<task-uid>/<name>` parses cleanly through both `parseArtifactUri` (legacy) and `parseUri` (CAS-aware) in `packages/operator/src/crds/artifact-ref.ts`. The `contentHash` field on every emitted ref carries the bare sha256 hex of the bytes, so an in-flight migration to `cas://sha256:<hex>/<name>` URIs is metadata-only — no agent-pod code changes, no consumer schema updates.
+
+CAS-backed dedupe (v0.2.2) reads the same field. The PVC writer is the substrate's first source of `contentHash` values; the CAS sub-team's hashed-shard layout (`cas/sha256/<first-2-hex>/<remaining-62-hex>`) reuses the same hash space so a v0.1 artifact promoted into CAS keeps its identity.
+
+### 9.7 Design choices resolved by judgment call (no spec ambiguity)
+
+- **`mediaType` is optional in the tool args** even though the original `ArtifactRef` design proposed it as required. Falling back to `application/octet-stream` is RFC 6838-correct and keeps the LLM-facing surface minimal — most binary payloads (screenshots via `{base64:...}`) don't need an explicit type.
+- **The legacy `resolveWriterEnv` (back-compat) keeps falling back to defaults**; the new `resolveWriterEnvOrDisabled` is the strict gate the tool consults. The legacy entry point is kept callable so existing direct-disk-writer tests stay green during the v0.1 → v0.1.x transition.
+- **Inline path is admissible even when storage is disabled** for text-only payloads. The substrate contract for `inline://sha256:<hex>` is "bytes live in `status.result.content`, not on disk", so the inline shortcut doesn't need PVC plumbing. This lets an Agent fall back to inlining small text outputs even on a cluster where the artifact PVC isn't enabled.
+- **Registry de-dupes on `uri` (last-write-wins)** so an Agent that overwrites a file in place during the run produces ONE entry in `status.artifacts` with the most recent metadata rather than a confusing per-write log.

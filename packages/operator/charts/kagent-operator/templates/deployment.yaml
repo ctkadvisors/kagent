@@ -237,6 +237,19 @@ spec:
               value: {{ .Values.agentPod.artifactStorage.pvcName | quote }}
             - name: KAGENT_ARTIFACT_MOUNT_PATH
               value: {{ .Values.agentPod.artifactStorage.mountPath | quote }}
+            {{- with .Values.agentPod.artifactStorage.maxBytes }}
+            # v0.1 P3 wire-up — per-write byte cap forwarded onto every
+            # spawned Job's env. The agent-pod's write_artifact tool
+            # refuses any single artifact larger than this. Omitted when
+            # 0 / -1 / unset so the agent-pod falls back to its
+            # compiled-in default (25 MiB). `int64` cast prevents Helm
+            # from rendering large integers in scientific notation
+            # (e.g. 2.62144e+07) which the Number(...) parser in
+            # `resolveWriterEnv` would happily accept but a human
+            # reading the rendered Job spec would not.
+            - name: KAGENT_ARTIFACT_MAX_BYTES
+              value: {{ int64 . | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.cas.enabled }}
             # Wave 1 — CAS

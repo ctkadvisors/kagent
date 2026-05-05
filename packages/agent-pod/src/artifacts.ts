@@ -57,6 +57,11 @@ import { resolve, sep } from 'node:path';
 /**
  * Reference to an opaque byte payload produced by an agent run.
  * Structurally compatible with the operator's canonical type.
+ *
+ * `contentHash` was added in v0.2.2-cas as the bare-hex (no algorithm
+ * prefix) sibling of `checksum` — the v0.1 PVC writer populates it
+ * verbatim so the URI scheme is forward-compatible with CAS-backed
+ * dedupe (which reads the same field name + same hash space).
  */
 export interface ArtifactRef {
   readonly uri: string;
@@ -65,6 +70,14 @@ export interface ArtifactRef {
   readonly checksum?: string;
   readonly name?: string;
   readonly producedAt?: string;
+  /**
+   * Bare lowercase-hex sha256 of the bytes. Mirrors the canonical CRD
+   * field at `packages/operator/src/crds/artifact-ref.ts`. Identical
+   * hash-space to `checksum`'s suffix; populated by the PVC writer so
+   * an in-flight migration to a CAS backend can `cas://sha256:<hash>`
+   * with zero schema change.
+   */
+  readonly contentHash?: string;
 }
 
 /* =====================================================================
@@ -80,11 +93,30 @@ export const ENV_ARTIFACTS_PVC_NAME = 'KAGENT_ARTIFACT_PVC_NAME';
 /** Env var: per-task UID; the operator already injects this. */
 export const ENV_TASK_ID = 'KAGENT_TASK_ID';
 
+/**
+ * Env var: per-write byte cap. The writer refuses any single artifact
+ * whose UTF-8 / decoded-base64 byte length exceeds this value, returning
+ * a `tool_error: artifact too large (...)` error to the caller. Defaults
+ * to {@link DEFAULT_ARTIFACT_MAX_BYTES} when unset / malformed.
+ *
+ * Helm value: `agentPod.artifactStorage.maxBytes`. The operator forwards
+ * it onto every spawned Job's env via `BuildJobSpecOptions.artifactPvc.maxBytes`.
+ */
+export const ENV_ARTIFACT_MAX_BYTES = 'KAGENT_ARTIFACT_MAX_BYTES';
+
 /** Default mount path when `KAGENT_ARTIFACTS_DIR` is unset. */
 export const DEFAULT_ARTIFACTS_DIR = '/var/kagent/artifacts';
 
 /** Default PVC name (mirrors `DEFAULT_ARTIFACT_PVC` in the operator). */
 export const DEFAULT_PVC_NAME = 'kagent-artifacts';
+
+/**
+ * Default per-write byte cap. 25 MiB is well above the largest expected
+ * v0.1 payload (HAR files top out around 5 MiB per docs/ARTIFACTS.md
+ * §7c) and well below the SMB-fronted PVC's per-write practical ceiling.
+ * Operators tune via `agentPod.artifactStorage.maxBytes` in Helm values.
+ */
+export const DEFAULT_ARTIFACT_MAX_BYTES = 25 * 1024 * 1024;
 
 /**
  * Default soft cap on inline content. Mirrors `INLINE_DEFAULT_MAX_BYTES`
@@ -197,7 +229,31 @@ export interface ArtifactWriterEnv {
   readonly pvcName: string;
   /** Task UID — the per-pod scope. */
   readonly taskUid: string;
+  /** Hard per-write byte cap. Defaults to {@link DEFAULT_ARTIFACT_MAX_BYTES}. */
+  readonly maxBytes: number;
 }
+
+/**
+ * Sentinel value returned by {@link resolveWriterEnvOrDisabled} when the
+ * substrate has not been wired with an artifact PVC. The `write_artifact`
+ * tool surfaces this as `tool_error: write_artifact: artifact storage is
+ * disabled (...)` so the LLM gets a clear error and the trace shows the
+ * policy denial. Mirrors the gateway's `policy_denied:` taxonomy.
+ */
+export interface DisabledWriterEnv {
+  readonly disabled: true;
+  readonly reason: string;
+}
+
+/**
+ * Discriminated union for the writer's resolved env. Either a
+ * fully-populated `ArtifactWriterEnv` (PVC plumbing live) or a
+ * `DisabledWriterEnv` carrying a human-readable reason (PVC plumbing
+ * absent — typically because the operator's Helm chart hasn't enabled
+ * `agentPod.artifactStorage`, so no `KAGENT_ARTIFACT_PVC_NAME` was
+ * injected onto the spawned Job).
+ */
+export type ResolvedWriterEnv = ArtifactWriterEnv | DisabledWriterEnv;
 
 /** Result of a successful write. */
 export interface WriteArtifactResult {
@@ -207,9 +263,28 @@ export interface WriteArtifactResult {
 }
 
 /**
+ * Parse the per-write byte cap from env. Returns
+ * {@link DEFAULT_ARTIFACT_MAX_BYTES} when unset / malformed / non-positive
+ * so a fat-fingered Helm value can't silently disable the cap.
+ */
+function parseMaxBytes(raw: string | undefined): number {
+  if (typeof raw !== 'string' || raw.length === 0) return DEFAULT_ARTIFACT_MAX_BYTES;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    return DEFAULT_ARTIFACT_MAX_BYTES;
+  }
+  return n;
+}
+
+/**
  * Resolve the writer environment from process env. Throws when the
  * task UID is missing — the agent-pod cannot scope writes safely
  * without it.
+ *
+ * NOTE: this LEGACY entry-point keeps the v0.1 contract — the PVC name
+ * and dir fall back to defaults rather than reporting "disabled". For
+ * the explicit gating contract the user-facing tool consults, prefer
+ * {@link resolveWriterEnvOrDisabled}.
  */
 export function resolveWriterEnv(
   env: Readonly<Record<string, string | undefined>>,
@@ -223,16 +298,84 @@ export function resolveWriterEnv(
     typeof dirRaw === 'string' && dirRaw.length > 0 ? dirRaw : DEFAULT_ARTIFACTS_DIR;
   const pvcRaw = env[ENV_ARTIFACTS_PVC_NAME];
   const pvcName = typeof pvcRaw === 'string' && pvcRaw.length > 0 ? pvcRaw : DEFAULT_PVC_NAME;
-  return { artifactsDir, pvcName, taskUid };
+  const maxBytes = parseMaxBytes(env[ENV_ARTIFACT_MAX_BYTES]);
+  return { artifactsDir, pvcName, taskUid, maxBytes };
 }
 
 /**
- * Persist `content` (UTF-8) to the per-task directory and return a
- * substrate-canonical `ArtifactRef`. Atomic: writes to `<name>.tmp`,
- * fsyncs, renames to `<name>`. The returned `path` is the visible
- * file (post-rename).
+ * Resolve the writer environment with explicit "disabled" semantics.
+ * Differs from {@link resolveWriterEnv} in that it returns a tagged
+ * `DisabledWriterEnv` when EITHER the PVC name OR the mount path is
+ * absent — i.e. when the operator did NOT inject the artifact-PVC env
+ * vars. Default OFF: the operator's Helm chart only stamps these vars
+ * when `agentPod.artifactStorage.enabled=true`, so an operator that
+ * runs without the chart values gets a clean `disabled` error rather
+ * than a write to an unmounted path.
+ *
+ * Reasons surfaced via `DisabledWriterEnv.reason`:
+ *   - `KAGENT_ARTIFACT_PVC_NAME unset (operator did not enable agentPod.artifactStorage)`
+ *   - `KAGENT_ARTIFACTS_DIR unset (operator did not enable agentPod.artifactStorage)`
+ *   - `KAGENT_TASK_ID missing` (the strict task-uid invariant)
+ *
+ * The substrate contract: the operator decides whether the artifact
+ * primitive is available by writing the env vars, not by the agent-pod
+ * inferring it. This keeps the failure mode crisp + cluster-uniform.
+ */
+export function resolveWriterEnvOrDisabled(
+  env: Readonly<Record<string, string | undefined>>,
+): ResolvedWriterEnv {
+  const taskUid = env[ENV_TASK_ID];
+  if (typeof taskUid !== 'string' || taskUid.length === 0) {
+    return {
+      disabled: true,
+      reason: `${ENV_TASK_ID} missing — the operator must inject the per-task UID`,
+    };
+  }
+  // Strict gating: BOTH dir and PVC name must be set by the operator.
+  // Default-deny is the substrate posture; an operator that hasn't
+  // wired the PVC must NOT see writes happen by accident.
+  const dirRaw = env[ENV_ARTIFACTS_DIR];
+  if (typeof dirRaw !== 'string' || dirRaw.length === 0) {
+    return {
+      disabled: true,
+      reason:
+        `${ENV_ARTIFACTS_DIR} unset — artifact storage is disabled. ` +
+        `Set agentPod.artifactStorage.enabled=true in the operator chart.`,
+    };
+  }
+  const pvcRaw = env[ENV_ARTIFACTS_PVC_NAME];
+  if (typeof pvcRaw !== 'string' || pvcRaw.length === 0) {
+    return {
+      disabled: true,
+      reason:
+        `${ENV_ARTIFACTS_PVC_NAME} unset — artifact storage is disabled. ` +
+        `Set agentPod.artifactStorage.enabled=true in the operator chart.`,
+    };
+  }
+  const maxBytes = parseMaxBytes(env[ENV_ARTIFACT_MAX_BYTES]);
+  return { artifactsDir: dirRaw, pvcName: pvcRaw, taskUid, maxBytes };
+}
+
+/**
+ * Default media type assigned when the caller does not declare one.
+ * `application/octet-stream` is the RFC 6838 fallback for "opaque
+ * bytes" — appropriate for the v0.1 writer because the substrate has
+ * no business inferring a content type from the bytes themselves.
+ */
+export const DEFAULT_MEDIA_TYPE = 'application/octet-stream';
+
+/**
+ * Persist `content` (UTF-8 string or raw bytes) to the per-task
+ * directory and return a substrate-canonical `ArtifactRef`. Atomic:
+ * writes to `<name>.tmp`, fsyncs, renames to `<name>`. The returned
+ * `path` is the visible file (post-rename).
  *
  * Throws on FS errors so the caller can surface a clean tool error.
+ *
+ * Size cap: `env.maxBytes` is enforced BEFORE the FS write so a hostile
+ * / runaway agent never lands oversized bytes on the PVC. The error
+ * shape is `tool_error: write_artifact: artifact too large (...)` —
+ * machine-greppable for trace analytics.
  *
  * INVARIANT: this function ALWAYS persists to disk before returning;
  * the returned `pvc://...` URI is always followable to a real file at
@@ -244,17 +387,34 @@ export function resolveWriterEnv(
  */
 export function writeArtifactToDisk(
   name: string,
-  content: string,
+  content: string | Buffer | Uint8Array,
   mediaType: string,
   env: ArtifactWriterEnv,
   now: Date = new Date(),
 ): WriteArtifactResult {
   const safeName = validateArtifactName(name);
-  if (typeof content !== 'string') {
-    throw new Error('write_artifact: "content" must be a UTF-8 string');
-  }
+  // Accept either a UTF-8 string OR pre-decoded bytes (Buffer / Uint8Array).
+  // The tool layer handles base64 → Buffer conversion BEFORE handing off
+  // here; the writer stays codec-agnostic from this point on.
+  const bytes: Buffer = ((): Buffer => {
+    if (typeof content === 'string') {
+      return Buffer.from(content, 'utf8');
+    }
+    if (content instanceof Buffer) return content;
+    if (content instanceof Uint8Array)
+      return Buffer.from(content.buffer, content.byteOffset, content.byteLength);
+    throw new Error('write_artifact: "content" must be a UTF-8 string or Buffer/Uint8Array');
+  })();
   if (typeof mediaType !== 'string' || mediaType.length === 0) {
     throw new Error('write_artifact: "mediaType" must be a non-empty string');
+  }
+  // Refuse oversize writes BEFORE touching the FS. Catches a runaway
+  // agent (or LLM-fabricated body) before any bytes hit disk.
+  if (bytes.byteLength > env.maxBytes) {
+    throw new Error(
+      `write_artifact: artifact too large (${String(bytes.byteLength)} > ${String(env.maxBytes)} bytes); ` +
+        `tune via KAGENT_ARTIFACT_MAX_BYTES (Helm: agentPod.artifactStorage.maxBytes)`,
+    );
   }
 
   // Build target paths and verify they cannot escape the task-uid dir
@@ -272,9 +432,14 @@ export function writeArtifactToDisk(
   const targetDir = targetPath.slice(0, targetPath.lastIndexOf(sep));
   mkdirSync(targetDir, { recursive: true });
 
-  // Encode once; this is also what we hash + size.
-  const bytes = Buffer.from(content, 'utf8');
-  const checksum = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  // Encode once; this is also what we hash + size. `contentHash` is the
+  // bare hex digest (no algo prefix) — matches the v0.2.2-cas
+  // ArtifactRef field shape so a future CAS migration is metadata-only.
+  // `checksum` is the algo-prefixed form for back-compat with v0.1
+  // consumers that already grep for `sha256:`.
+  const hex = createHash('sha256').update(bytes).digest('hex');
+  const checksum = `sha256:${hex}`;
+  const contentHash = hex;
 
   // Atomic write: open with O_WRONLY|O_CREAT|O_TRUNC, write, fsync,
   // close, rename. If anything throws between mkdir and rename, the
@@ -312,6 +477,7 @@ export function writeArtifactToDisk(
     mediaType,
     sizeBytes: bytes.byteLength,
     checksum,
+    contentHash,
     producedAt: now.toISOString(),
   };
   return { ref, path: targetPath };
@@ -357,7 +523,70 @@ export function inlineArtifactRef(
     mediaType,
     sizeBytes: bytes.byteLength,
     checksum: `sha256:${hex}`,
+    contentHash: hex,
     producedAt: now.toISOString(),
+  };
+}
+
+/* =====================================================================
+ * In-pod ArtifactRegistry — flushable list shared with status.ts.
+ *
+ * The runner threads ONE registry through the entire run; the
+ * `write_artifact` tool pushes successful refs into it. The status
+ * patcher reads `registry.snapshot()` to thread refs into
+ * `AgentTask.status.artifacts` on EVERY status patch (not just the
+ * terminal one) — so a partial run that crashed after a write still
+ * surfaces the bytes that did land.
+ *
+ * Why a registry vs. trace harvesting alone:
+ *   - The trace pipeline truncates oversize tool outputs
+ *     (`...[truncated N chars]...`) — a long ArtifactRef would be
+ *     unparseable at status-patch time.
+ *   - Some non-completed terminal paths (cancellation, timeout) bypass
+ *     the trace flush; the registry survives those paths because it
+ *     was populated synchronously at write time.
+ *   - The registry is the single source of truth tests can assert
+ *     against; trace-parsing remains as a forward-compat fallback for
+ *     pre-registry agent-pod images.
+ *
+ * Mutation is intentionally minimal — `add` + `snapshot` only. No
+ * remove / clear / mutate operations exist; the substrate's contract
+ * is "every successful write is permanent for the run's lifetime".
+ * ===================================================================== */
+
+/**
+ * Append-only registry of ArtifactRefs the in-pod writer has produced
+ * during this run. Thread-safety is not a concern (the agent loop is
+ * single-threaded), but the snapshot is a defensive copy so a caller
+ * that holds a reference can't mutate the internal state.
+ */
+export interface ArtifactRegistry {
+  /** Push one ref into the registry. Idempotent on identical URI strings. */
+  add(ref: ArtifactRef): void;
+  /** Defensive copy of the current ref list. */
+  snapshot(): readonly ArtifactRef[];
+  /** True when at least one ref has been added. */
+  isEmpty(): boolean;
+}
+
+/**
+ * Build a fresh in-memory registry. Keyed by `ref.uri` (last-write-wins
+ * on duplicate URIs — useful when an agent overwrites an artifact and
+ * we only want the latest metadata in the status patch).
+ */
+export function createArtifactRegistry(): ArtifactRegistry {
+  const byUri = new Map<string, ArtifactRef>();
+  return {
+    add(ref: ArtifactRef): void {
+      if (typeof ref.uri !== 'string' || ref.uri.length === 0) return;
+      byUri.set(ref.uri, ref);
+    },
+    snapshot(): readonly ArtifactRef[] {
+      return [...byUri.values()];
+    },
+    isEmpty(): boolean {
+      return byUri.size === 0;
+    },
   };
 }
 
@@ -423,6 +652,7 @@ export function isArtifactRefShape(value: unknown): boolean {
   if (v.name !== undefined && typeof v.name !== 'string') return false;
   if (v.mediaType !== undefined && typeof v.mediaType !== 'string') return false;
   if (v.checksum !== undefined && typeof v.checksum !== 'string') return false;
+  if (v.contentHash !== undefined && typeof v.contentHash !== 'string') return false;
   if (v.producedAt !== undefined && typeof v.producedAt !== 'string') return false;
   if (v.sizeBytes !== undefined) {
     if (typeof v.sizeBytes !== 'number' || !Number.isFinite(v.sizeBytes) || v.sizeBytes < 0) {

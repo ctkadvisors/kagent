@@ -267,6 +267,15 @@ export interface BuildJobSpecOptions {
     readonly claimName: string;
     /** Container path the PVC mounts at. Defaults to `/var/kagent/artifacts`. */
     readonly mountPath?: string;
+    /**
+     * v0.1 P3 wire-up — per-write byte cap forwarded as
+     * `KAGENT_ARTIFACT_MAX_BYTES` on the spawned Job's env. The agent-
+     * pod's `write_artifact` tool refuses any write whose UTF-8 /
+     * decoded-base64 length exceeds this value. Optional — when unset,
+     * the agent-pod falls back to its compiled-in default (25 MiB).
+     * Helm value: `agentPod.artifactStorage.maxBytes`.
+     */
+    readonly maxBytes?: number;
   };
   /**
    * v0.3.0-capabilities — per-task capability JWT Secret mounted into
@@ -431,6 +440,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   // in-pod `write_artifact` tool reads + add a matching volume mount
   // below. Done here (rather than at the writer level) so the agent-pod
   // image stays unaware of K8s primitives.
+  //
+  // v0.1 P3 wire-up — `KAGENT_ARTIFACT_MAX_BYTES` is forwarded when
+  // `artifactPvc.maxBytes` is set (Helm value
+  // `agentPod.artifactStorage.maxBytes`). When unset, the agent-pod
+  // falls back to its compiled-in default (25 MiB).
   const artifactEnv: { name: string; value: string }[] = [];
   if (opts.artifactPvc !== undefined) {
     const mountPath = opts.artifactPvc.mountPath ?? DEFAULT_ARTIFACT_MOUNT_PATH;
@@ -438,6 +452,16 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
       { name: 'KAGENT_ARTIFACTS_DIR', value: mountPath },
       { name: 'KAGENT_ARTIFACT_PVC_NAME', value: opts.artifactPvc.claimName },
     );
+    if (
+      typeof opts.artifactPvc.maxBytes === 'number' &&
+      Number.isFinite(opts.artifactPvc.maxBytes) &&
+      opts.artifactPvc.maxBytes > 0
+    ) {
+      artifactEnv.push({
+        name: 'KAGENT_ARTIFACT_MAX_BYTES',
+        value: String(Math.floor(opts.artifactPvc.maxBytes)),
+      });
+    }
   }
 
   // v0.1.11 — W3C Trace Context propagation. When the parent

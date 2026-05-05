@@ -39,7 +39,11 @@ import {
 import { OpenAICompatibleLLMClient } from '@kagent/openai-compat';
 import { StdoutSink } from '@kagent/trace-sinks';
 
-import { tryParseArtifactRefFromToolOutput } from './artifacts.js';
+import {
+  createArtifactRegistry,
+  tryParseArtifactRefFromToolOutput,
+  type ArtifactRegistry,
+} from './artifacts.js';
 import { resolveBuiltinTools } from './builtin-tools.js';
 import type { PodConfig } from './env.js';
 import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
@@ -155,6 +159,16 @@ export interface RunDeps {
    * the full `CapabilityBundle` shape lives in `@kagent/capability-types`.
    */
   readonly capabilityBundle?: { readonly claims?: { readonly tenant?: string } };
+  /**
+   * v0.1 P3 — in-pod artifact registry. The `write_artifact` tool
+   * pushes successful refs into this registry as they are produced;
+   * `RunResult.artifacts` is built from `registry.snapshot()` UNION
+   * the trace-collation fallback. When undefined, the runner mints a
+   * fresh registry — production callers should not pass this in.
+   * Tests inject one to assert specific contents without driving the
+   * full agent loop.
+   */
+  readonly artifactRegistry?: ArtifactRegistry;
 }
 
 /**
@@ -208,12 +222,19 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
 
   const sinks = deps.sinks ?? [new StdoutSink()];
 
+  // P3 — mint (or accept an injected) artifact registry BEFORE the
+  // tool providers are resolved, so the `write_artifact` handler can
+  // push successful refs into the same instance the run-result harvest
+  // reads from. ONE registry per run; persists for the entire executor
+  // loop so mid-run reads (status flush) see partial state.
+  const artifactRegistry = deps.artifactRegistry ?? createArtifactRegistry();
+
   // Resolve tool providers: tests may inject explicitly via deps; in
   // production we read `Agent.spec.tools` and look each name up in the
   // built-in registry. Unknown names throw here at boot — fail fast so
   // the operator sees a `Failed` AgentTask with a clear runner error
   // rather than a silently-degraded loop.
-  const toolProviders = resolveToolProviders(config, deps);
+  const toolProviders = resolveToolProviders(config, deps, { artifactRegistry });
 
   const executor = new AgentExecutor({
     registry,
@@ -259,13 +280,25 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
 
-  // P3 — collate ArtifactRefs from `write_artifact` tool_call traces.
-  // The atomic file write already happened inside the tool handler; we
-  // just harvest the structured ref the handler emitted as its tool
-  // result so the operator can thread it into AgentTask.status.artifacts.
-  // Tool errors (isError=true traces) are skipped — a partial run still
-  // surfaces any successful refs.
-  const artifacts = collectArtifactsFromTraces(result.traces);
+  // P3 — collate ArtifactRefs.
+  //
+  // Source-of-truth ordering:
+  //   1. The in-pod ArtifactRegistry (authoritative — the
+  //      `write_artifact` handler pushes into it synchronously,
+  //      survives trace truncation + non-completed terminal paths).
+  //   2. Trace harvesting via `collectArtifactsFromTraces` is kept as
+  //      a forward-compat fallback; refs found ONLY in the trace
+  //      stream (e.g. injected by an external sidecar that emits
+  //      tool_call entries) are merged in. Duplicates are deduped on
+  //      `uri`.
+  //
+  // Both paths drop `inline://...` refs from `RunResult.artifacts`
+  // because the substrate contract is "RunResult.artifacts is
+  // followable to durable bytes."
+  const artifacts = mergeArtifactSources(
+    artifactRegistry.snapshot(),
+    collectArtifactsFromTraces(result.traces),
+  );
 
   return {
     runId: result.runId,
@@ -277,6 +310,35 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(result.error !== undefined && { error: { message: result.error.message } }),
     ...(artifacts.length > 0 && { artifacts }),
   };
+}
+
+/**
+ * Merge two artifact sources (registry + trace harvest), deduping on
+ * URI (registry-side wins on conflict because the registry was
+ * populated synchronously inside the writer). `inline://` URIs are
+ * dropped — the substrate contract for `RunResult.artifacts` is
+ * "followable to durable bytes."
+ *
+ * Exported for the runner test suite.
+ */
+export function mergeArtifactSources(
+  registry: readonly ArtifactRef[],
+  fromTraces: readonly ArtifactRef[],
+): readonly ArtifactRef[] {
+  const byUri = new Map<string, ArtifactRef>();
+  // Registry first so the same URI from a later trace harvest does not
+  // overwrite the registry's authoritative metadata.
+  for (const ref of registry) {
+    if (typeof ref.uri !== 'string' || ref.uri.length === 0) continue;
+    if (ref.uri.startsWith('inline://')) continue;
+    byUri.set(ref.uri, ref);
+  }
+  for (const ref of fromTraces) {
+    if (typeof ref.uri !== 'string' || ref.uri.length === 0) continue;
+    if (ref.uri.startsWith('inline://')) continue;
+    if (!byUri.has(ref.uri)) byUri.set(ref.uri, ref);
+  }
+  return [...byUri.values()];
 }
 
 /**
@@ -455,10 +517,25 @@ export function pickUserMessage(config: PodConfig): string {
  *
  * Throws on unknown tool names with a clear, operator-actionable message.
  */
-export function resolveToolProviders(config: PodConfig, deps: RunDeps): readonly ToolProvider[] {
+export function resolveToolProviders(
+  config: PodConfig,
+  deps: RunDeps,
+  /**
+   * Optional injection of the in-pod artifact registry. When present
+   * the built-in `write_artifact` tool pushes successful refs into it
+   * (single source-of-truth for the run-result harvest). Defaults to
+   * undefined for back-compat with existing call sites that build the
+   * provider list standalone (e.g. test suites).
+   */
+  options: { artifactRegistry?: ArtifactRegistry } = {},
+): readonly ToolProvider[] {
   if (deps.toolProviders !== undefined) return deps.toolProviders;
   const out: ToolProvider[] = [];
-  const builtin = resolveBuiltinTools(config.agentSpec.tools);
+  const builtin = resolveBuiltinTools(config.agentSpec.tools, {
+    ...(options.artifactRegistry !== undefined && {
+      artifactRegistry: options.artifactRegistry,
+    }),
+  });
   if (builtin !== null) out.push(builtin);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
   // v0.4.1-blackboard

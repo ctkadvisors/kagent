@@ -272,8 +272,20 @@ agentPod:
     enabled: true
     # PVC claim name (referenced from the spawned Job's volume mount).
     pvcName: 'kagent-artifacts'
-    # Container path the PVC mounts at inside every agent pod.
+    # Container path the PVC mounts at inside every agent pod. Forwarded
+    # to the agent-pod as `KAGENT_ARTIFACTS_DIR` so the in-pod
+    # `write_artifact` tool persists outputs under
+    # `<mountPath>/<task-uid>/<name>`.
     mountPath: '/var/kagent/artifacts'
+    # Per-write byte cap forwarded as KAGENT_ARTIFACT_MAX_BYTES.
+    # Refuses any single artifact whose decoded byte length exceeds
+    # this value with a `tool_error: write_artifact: artifact too
+    # large (...)` error. Default 25 MiB matches the docs/ARTIFACTS.md
+    # §7c upper bound (HAR files); raise for browser workloads, lower
+    # for tighter substrate budgets. Set to 0 / -1 / non-numeric to
+    # have the operator omit the env var (agent-pod falls back to its
+    # compiled-in default).
+    maxBytes: 26214400
     # PVC size. SMB-backed, so this is the upper bound the StorageClass
     # honors at provisioning time; the underlying SMB share's free
     # space is the real cap.

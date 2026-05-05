@@ -50,9 +50,10 @@ import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 import {
   inlineArtifactRef,
   inlineSafeForArtifact,
-  resolveWriterEnv,
+  resolveWriterEnvOrDisabled,
   validateArtifactName,
   writeArtifactToDisk,
+  type ArtifactRegistry,
 } from './artifacts.js';
 import type { CasBackend } from './cas-backend.js';
 
@@ -640,6 +641,17 @@ interface BuildOpts {
    * Defaults to `() => new Date()`.
    */
   readonly now?: () => Date;
+  /**
+   * In-pod registry — accepts ArtifactRefs as `write_artifact` produces
+   * them. The runner threads ONE registry through the entire run; the
+   * status patcher reads `registry.snapshot()` on every status update
+   * (terminal AND any intermediate path) so even a cancelled/timeout
+   * task surfaces the artifacts that did land. Optional: when undefined,
+   * registry-flush is skipped and the trace-collator path remains
+   * authoritative (back-compat for tests that don't construct a
+   * registry).
+   */
+  readonly artifactRegistry?: ArtifactRegistry;
 }
 
 /**
@@ -740,29 +752,44 @@ export function buildBuiltinToolRegistry(
   // operator's status patch threads into AgentTask.status.artifacts).
   //
   // env knobs (resolved per call so a test can override either):
-  //   - KAGENT_ARTIFACTS_DIR    (default: /var/kagent/artifacts)
-  //   - KAGENT_ARTIFACT_PVC_NAME (default: kagent-artifacts)
-  //   - KAGENT_TASK_ID          (required; the operator already injects)
+  //   - KAGENT_ARTIFACTS_DIR        (operator-injected; required to enable)
+  //   - KAGENT_ARTIFACT_PVC_NAME    (operator-injected; required to enable)
+  //   - KAGENT_ARTIFACT_MAX_BYTES   (default 25 MiB)
+  //   - KAGENT_TASK_ID              (required; the operator already injects)
+  //
+  // When EITHER of the artifact env vars is unset, the tool refuses with
+  // `tool_error: write_artifact: artifact storage is disabled (...)` so
+  // the LLM gets a clean failure rather than a write to an unmounted
+  // path. Mirrors the Helm chart's default-OFF posture.
   const writer = opts.writeArtifact ?? writeArtifactToDisk;
   const clock = opts.now ?? ((): Date => new Date());
+  const registry = opts.artifactRegistry;
   const writeArtifact = defineInProcessTool({
     name: 'write_artifact',
     description:
-      'Persist a UTF-8 string to the per-task PVC mount and return an ' +
-      'ArtifactRef ({uri, name, mediaType, sizeBytes, checksum, producedAt}). ' +
-      'The operator forwards refs into AgentTask.status.artifacts. Names ' +
-      'must be relative (no leading "/" or ".." segments) and must not ' +
-      'contain control characters. When `inline` is true and the content ' +
-      'is small + textual, the tool returns a synthetic ref WITHOUT ' +
-      'touching the filesystem so the caller can choose to embed the ' +
-      'content directly in status.result.content instead.',
+      'Persist a UTF-8 string OR base64-encoded bytes to the per-task ' +
+      'PVC mount and return an ArtifactRef ({uri, name, mediaType, ' +
+      'sizeBytes, checksum, contentHash, producedAt}). The operator ' +
+      'forwards refs into AgentTask.status.artifacts. Names must be ' +
+      'relative (no leading "/" or ".." segments) and must not contain ' +
+      'control characters. Pass `content` as a UTF-8 string for text ' +
+      'payloads or as `{base64: "..."}` for binary payloads. When ' +
+      '`inline` is true and the content is small + textual, the tool ' +
+      'returns a synthetic ref WITHOUT touching the filesystem so the ' +
+      'caller can embed the content directly in status.result.content. ' +
+      'Refuses writes that exceed the operator-configured ' +
+      'KAGENT_ARTIFACT_MAX_BYTES cap (default 25 MiB).',
     inputSchema: {
       type: 'object',
-      required: ['name', 'mediaType', 'content'],
+      required: ['name', 'content'],
       properties: {
         name: { type: 'string' },
         mediaType: { type: 'string' },
-        content: { type: 'string' },
+        // `content` is one-of: a UTF-8 string, OR an object with a
+        // base64 field. The runtime handler enforces the discriminant —
+        // JSON Schema's `oneOf` would complicate the inputSchema for
+        // older LLM tool-calling shims.
+        content: {},
         inline: { type: 'boolean' },
       },
       additionalProperties: false,
@@ -770,34 +797,70 @@ export function buildBuiltinToolRegistry(
     tags: ['write', 'artifacts'],
     handler: (args) => {
       const name = requireStringArg(args, 'name');
-      const mediaType = requireStringArg(args, 'mediaType');
-      const content = requireStringArgAllowEmpty(args, 'content');
+      // mediaType is OPTIONAL (per the user-facing spec); fall back to
+      // application/octet-stream so the writer's strict mediaType check
+      // never trips on a caller that omitted it. Text-mode inline-safe
+      // detection is gated on `text/...` so omitting mediaType means
+      // bytes go to disk — exactly the right default for binary blobs.
+      const rawMediaType = args.mediaType;
+      const mediaType =
+        typeof rawMediaType === 'string' && rawMediaType.length > 0
+          ? rawMediaType
+          : 'application/octet-stream';
+      const decoded = decodeWriteArtifactContent(args.content);
       const inline = args.inline === true;
-      const writerEnv = resolveWriterEnv(env);
+
+      // Resolve env strictly: when the operator did not stamp the PVC
+      // env vars, refuse with a `disabled` error rather than writing to
+      // an unmounted path (which would silently land bytes on the
+      // ephemeral container FS). The reason carries the env var name +
+      // a Helm-values pointer so operators can self-service the fix.
+      const resolved = resolveWriterEnvOrDisabled(env);
+      if ('disabled' in resolved) {
+        // Inline path is still admissible — it doesn't touch the FS,
+        // and the substrate contract for `inline://` is "bytes live in
+        // status.result.content" (not durable on PVC). So we permit
+        // the inline short-circuit even when the PVC isn't wired.
+        if (inline && decoded.kind === 'text' && inlineSafeForArtifact(decoded.text, mediaType)) {
+          validateArtifactName(name);
+          const synthetic = inlineArtifactRef(decoded.text, mediaType, clock());
+          if (registry !== undefined) {
+            registry.add({ ...synthetic, name });
+          }
+          return jsonContent({ ...synthetic, name });
+        }
+        throw new Error(
+          `tool_error: write_artifact: artifact storage is disabled (${resolved.reason})`,
+        );
+      }
+
       // Inline short-circuit: when the caller asks for inline AND the
       // payload qualifies, skip the FS round-trip and return a synthetic
-      // ref under the `inline://sha256:<hex>` scheme. The previous
-      // implementation returned a `pvc://...` URI from this branch
-      // even though no bytes were written — which lied to anyone who
-      // tried to follow the URI later. The substrate contract is now:
+      // ref under the `inline://sha256:<hex>` scheme. Substrate contract:
       //   `pvc://`    ⟹ bytes ARE durably on disk (followable)
       //   `inline://` ⟹ bytes are NOT persisted (caller must inline)
-      // The runner's `collectArtifactsFromTraces` drops `inline://`
-      // refs from `RunResult.artifacts` so durable consumers don't see
-      // them.
-      //
-      // The name validation runs only as a sanity check — the inline
-      // ref does not embed `name` in its URI (the URI is content-
-      // addressed via the sha256 hex), but we still want to refuse
-      // path-traversal early so the same input is not subsequently
-      // accepted by the disk writer if the LLM retries without
-      // `inline:true`.
-      if (inline && inlineSafeForArtifact(content, mediaType)) {
+      // Inline is text-only — base64-encoded binary payloads always
+      // round-trip through the disk writer.
+      if (inline && decoded.kind === 'text' && inlineSafeForArtifact(decoded.text, mediaType)) {
         validateArtifactName(name);
-        const synthetic = inlineArtifactRef(content, mediaType, clock());
+        const synthetic = inlineArtifactRef(decoded.text, mediaType, clock());
+        if (registry !== undefined) {
+          registry.add({ ...synthetic, name });
+        }
         return jsonContent({ ...synthetic, name });
       }
-      const result = writer(name, content, mediaType, writerEnv, clock());
+
+      // Disk path — text content goes through verbatim, bytes are
+      // forwarded as-is to the writer's Buffer/Uint8Array overload.
+      const writerInput: string | Buffer = decoded.kind === 'text' ? decoded.text : decoded.bytes;
+      const result = writer(name, writerInput, mediaType, resolved, clock());
+      // Push into the registry BEFORE returning so a downstream
+      // truncation of the tool output (trace pipeline) does not lose
+      // the ref — the registry is the authoritative source for the
+      // status patcher. last-write-wins on duplicate URIs.
+      if (registry !== undefined) {
+        registry.add(result.ref);
+      }
       return jsonContent(result.ref);
     },
   });
@@ -818,17 +881,54 @@ function requireStringArg(args: Record<string, unknown>, key: string): string {
   return v;
 }
 
-/**
- * Like `requireStringArg` but allows the empty string. `write_artifact`
- * legitimately accepts a 0-byte payload (e.g. a sentinel marker file)
- * so we cannot reject `''` at the arg-parsing layer.
- */
-function requireStringArgAllowEmpty(args: Record<string, unknown>, key: string): string {
-  const v = args[key];
-  if (typeof v !== 'string') {
-    throw new Error(`missing or wrong-type required string argument "${key}"`);
+/* =====================================================================
+ * write_artifact — content discriminator helper.
+ *
+ * `args.content` is one-of:
+ *   - a UTF-8 string (text payloads, including the empty string)
+ *   - an object `{ base64: "<padded-or-unpadded>" }` (binary payloads)
+ *
+ * Anything else throws. Strict base64 decode (no whitespace, RFC 4648
+ * alphabet only — `Buffer.from(s, 'base64')` is permissive enough for
+ * minor padding variations the LLM might emit).
+ * ===================================================================== */
+
+type DecodedContent =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'bytes'; readonly bytes: Buffer };
+
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function decodeWriteArtifactContent(raw: unknown): DecodedContent {
+  if (typeof raw === 'string') {
+    return { kind: 'text', text: raw };
   }
-  return v;
+  if (typeof raw === 'object' && raw !== null && 'base64' in raw) {
+    const b64 = (raw as { base64?: unknown }).base64;
+    if (typeof b64 !== 'string') {
+      throw new Error('missing or wrong-type required string argument "content.base64"');
+    }
+    // Strip surrounding whitespace once (some LLMs add a trailing newline);
+    // anything else fails the strict regex below.
+    const trimmed = b64.trim();
+    if (!BASE64_RE.test(trimmed)) {
+      throw new Error('tool_error: write_artifact: "content.base64" is not valid base64');
+    }
+    const bytes = Buffer.from(trimmed, 'base64');
+    // Round-trip sanity check: re-encoding must reproduce the input
+    // (modulo padding) — guards against silently truncated input where
+    // `Buffer.from(...,'base64')` drops bytes after a malformed character.
+    const reencoded = bytes.toString('base64');
+    const normalizedInput = trimmed.replace(/=+$/, '');
+    const normalizedReencoded = reencoded.replace(/=+$/, '');
+    if (normalizedInput !== normalizedReencoded) {
+      throw new Error('tool_error: write_artifact: "content.base64" decode round-trip mismatch');
+    }
+    return { kind: 'bytes', bytes };
+  }
+  throw new Error(
+    'missing or wrong-type required argument "content" (must be a string or { base64: string })',
+  );
 }
 
 function jsonContent(value: unknown): ContentBlock[] {
