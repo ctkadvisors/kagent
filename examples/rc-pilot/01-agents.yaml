@@ -186,5 +186,14 @@ metadata:
 spec:
   model: nemotron-3-nano:4b
   version: 0.1.0
-  systemPrompt: 'This agent intentionally fails to pull its container image.'
+  systemPrompt: 'This agent intentionally fails at startup.'
   sandboxProfile: default
+  # v0.1.7-rig.1: force a real platform failure visible in container
+  # terminated reason. The agent-pod's resolveBuiltinTools rejects
+  # unknown names at boot; status.error contains "unknown built-in
+  # tool" and the pod transitions to terminal Error. This is what
+  # the evidence checklist's "platform failure visible in container
+  # terminated reason" row actually wants to capture, regardless of
+  # whether ImagePullBackOff is the trigger or a config-time refusal.
+  tools:
+    - nonexistent_tool_for_testing
