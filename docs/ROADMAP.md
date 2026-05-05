@@ -202,6 +202,12 @@ Tactical fixes + audit/entry-point foundations that later waves depend on. Five 
 
 **Done when:** every priority queue item from session 2026-05-03 cleared; audit stream emitting events from operator + agent-pod; webhook can mint AgentTasks via shared cap; sub-team file-conflict map clean.
 
+**Enterprise Pilot RC evidence pack:** [`GA-HARDENING.md`](./GA-HARDENING.md)
+defines the Workbench-backed evidence surface; [`GA-EVIDENCE-CHECKLIST.md`](./GA-EVIDENCE-CHECKLIST.md)
+is the reviewer checklist; `scripts/collect-workbench-evidence.mjs`
+captures Workbench health, task list, task detail JSON, and a Markdown
+summary without touching reconciler/runtime code.
+
 ### Wave 1 — v0.2 substrate I/O contracts (~4-5 weeks with parallelism)
 
 Typed dataflow + Workspace + content-addressed Artifacts. v0.2.0 is foundational; v0.2.1 + v0.2.2 fan out in parallel after.

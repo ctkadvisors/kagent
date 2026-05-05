@@ -117,6 +117,27 @@ Per-pod SVID, gateway authenticates by client cert. Eliminates bearer tokens ent
 
 Equivalent shape to per-Agent token (§4.2); just with token issuance via OAuth flow rather than direct K8s `Secret`. Gateway **MAY** support; not required.
 
+### 4.5 Key rotation endpoint (Enterprise Pilot RC)
+
+Enterprise Pilot gateways **MUST** expose:
+
+```
+POST /v1/admin/keys/rotate
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{}
+```
+
+Expected response:
+
+- `2xx` with `{ "rotationId": "<opaque>" }` or an empty body means rotation was accepted.
+- `401` / `403` means the supplied admin token is invalid or under-scoped.
+- `404` means the gateway does not implement the rotation extension. kagent treats this as an unsupported/no-op fallback so OSS and legacy gateways keep working, but Enterprise Pilot RC evidence should record it as a warning.
+- Other non-2xx statuses are transient failures and should be retried by the key-rotation controller on its next cadence.
+
+The endpoint rotates gateway-side bearer material. It does **not** accept private keys, certs, SVIDs, or other caller-supplied credential material.
+
 ---
 
 ## 5. Required response headers
@@ -266,3 +287,17 @@ This contract is versioned semver via the `kagent` repo. Breaking changes requir
 Forward-compatible additions (new optional headers, new modes) ship in minor releases without notice.
 
 The contract is the *only* coupling between kagent and any model gateway. Anything outside this document is implementation detail and may change unilaterally.
+
+---
+
+## 14. Conformance evidence
+
+The repo ships a lightweight, fetch-injected conformance harness in `@kagent/llm-gateway`:
+
+```sh
+pnpm --filter @kagent/llm-gateway test -- src/conformance.test.ts
+```
+
+The mocked CI path verifies that the probe sends `traceparent`, `X-Kagent-Task-UID`, `X-Kagent-Agent`, and `X-Kagent-Tenant`; classifies `429` / `503` `Retry-After`; probes `/v1/admin/keys/rotate`; and evaluates the mTLS/SVID-to-bearer fallback expectation.
+
+For live Enterprise Pilot RC evidence, use the runbook in [`GATEWAY-CONFORMANCE.md`](./GATEWAY-CONFORMANCE.md).
