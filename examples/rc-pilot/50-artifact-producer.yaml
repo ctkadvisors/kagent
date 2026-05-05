@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 50 — Artifact producer. Targets the `rc-pilot-artifact-writer`
+# Agent which is wired to invoke the substrate `write_artifact` built-in
+# tool. The operator's PVC-backed artifact writer (v0.1) attaches a
+# `pvc://kagent-artifacts/<task-uid>/<name>` URI to AgentTask.status.artifacts.
+#
+# Expected Workbench evidence:
+#   status.artifacts.length         >= 1
+#   status.artifacts[0].uri         starts with 'pvc://kagent-artifacts/'
+#   status.artifacts[0].mediaType   'text/markdown'
+#   pilotEvidence.artifacts.count   matches status.artifacts.length
+#
+# OPEN QUESTION (see README.md §"Open questions"):
+# `agentPod.artifacts.enabled` is the chart-side gate that mounts the
+# PVC and enables the write_artifact tool. If your local install runs
+# without it, the AgentTask still completes but the artifact list is
+# empty — explicitly mark that row reviewed in summary.md.
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row "Artifact producer".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-artifact-producer
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: artifact-producer
+spec:
+  targetAgent: rc-pilot-artifact-writer
+  payload:
+    smokeTest: true
+    artifactName: report.md
+    artifactMediaType: text/markdown
+  originalUserMessage: |
+    Write a 5-bullet report on K3s networking suitable for an SRE
+    handoff. Persist the markdown as an artifact named `report.md`
+    via the write_artifact tool, then return a one-line confirmation.
+  expectedTools:
+    - write_artifact
+  runConfig:
+    timeoutSeconds: 180
+    maxIterations: 6

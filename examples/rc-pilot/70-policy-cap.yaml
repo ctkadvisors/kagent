@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 70 — Policy cap visibility. Targets the
+# `rc-pilot-policy-capped` Agent declared in 01-agents.yaml. The agent
+# carries `maxConcurrentChildren: 2`, `maxInFlightTasks: 4`, an
+# `allowedChildAgents` list, and an `allowedChildTemplates` list — the
+# four fields the GA evidence checklist's "Policy cap" row demands.
+#
+# This task does NOT need to TRIGGER the cap; the requirement is that
+# the cap fields are VISIBLE on `pilotEvidence.policy`. A simple
+# single-shot invocation is sufficient — the projection is derived
+# from the target Agent CR at detail-fetch time.
+#
+# Expected Workbench evidence:
+#   pilotEvidence.policy.maxConcurrentChildren == 2
+#   pilotEvidence.policy.maxInFlightTasks      == 4
+#   pilotEvidence.policy.allowedChildAgents    contains 'rc-pilot-summarizer'
+#   pilotEvidence.policy.allowedChildTemplates contains 'rc-pilot-research-template'
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row "Policy cap".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-policy-cap
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: policy-cap
+spec:
+  targetAgent: rc-pilot-policy-capped
+  payload:
+    smokeTest: true
+  originalUserMessage: 'In one sentence, why are concurrency caps important on shared LLM endpoints?'
+  runConfig:
+    timeoutSeconds: 120
+    maxIterations: 4

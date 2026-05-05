@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 40 — Parent/child delegation graph. The orchestrator agent
+# is told to spawn 2-3 children via the `spawn_child_task` built-in.
+# The operator's parent re-reconcile (see packages/operator/src/reconcile.ts
+# §reconcileParentFromChildEvent) walks
+# `kagent.knuteson.io/parent-task-uid=<parent uid>` to project
+# children + counters back onto the parent's `status.children`,
+# `status.aggregatePhase`, and `status.{success,failure,inFlight}Count`.
+#
+# Expected Workbench evidence:
+#   status.children.length          >= 2
+#   status.aggregatePhase           one of 'AllComplete' / 'AnyFailed' / etc.
+#   status.successCount + failureCount + inFlightCount == childCount
+#   pilotEvidence.taskGraph         populated
+#
+# Children inherit the tenant + parent-task-uid labels via the
+# operator's child-mint path; reviewers verifying audit correlation
+# should also pull at least one child's task-detail JSON via the
+# evidence collector and confirm the `parentTaskUid` audit field is
+# set.
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row "Parent/child delegation".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-delegation
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: delegation
+spec:
+  targetAgent: rc-pilot-orchestrator
+  payload:
+    smokeTest: true
+    expectedChildren: 2
+  originalUserMessage: |
+    Decompose this into TWO child tasks targeting `rc-pilot-summarizer`,
+    each summarizing a different K3s sub-topic (e.g. "k3s networking" and
+    "k3s storage"). Use the spawn_child_task tool. After both children
+    complete, return a one-paragraph rollup.
+  expectedTools:
+    - spawn_child_task
+  runConfig:
+    timeoutSeconds: 600
+    maxIterations: 16
