@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { parseEnv } from './env.js';
+import { parseBackendApiKeys, parseEnv } from './env.js';
 
 describe('parseEnv', () => {
   it('parses minimal required env (DATABASE_URL + ADMIN_API_TOKEN)', () => {
@@ -18,6 +18,7 @@ describe('parseEnv', () => {
     expect(cfg.port).toBe(4000);
     expect(cfg.backendTimeoutMs).toBe(60000);
     expect(cfg.modelEndpointNamespace).toBe('kagent-system');
+    expect(cfg.backendApiKeys).toEqual({});
   });
 
   it('parses optional overrides', () => {
@@ -61,5 +62,119 @@ describe('parseEnv', () => {
         BACKEND_TIMEOUT_MS: '-1',
       }),
     ).toThrow(/BACKEND_TIMEOUT_MS/);
+  });
+
+  it('exposes backendApiKeys when BACKEND_API_KEY_* vars are set', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://x',
+      ADMIN_API_TOKEN: 'tok',
+      BACKEND_API_KEY_CLOUDFLARE: 'cf-secret',
+      BACKEND_API_KEY_OPENAI: 'sk-openai',
+    });
+    expect(cfg.backendApiKeys).toEqual({
+      cloudflare: 'cf-secret',
+      openai: 'sk-openai',
+    });
+    // Frozen — substrate config is immutable.
+    expect(Object.isFrozen(cfg.backendApiKeys)).toBe(true);
+  });
+});
+
+describe('parseBackendApiKeys', () => {
+  it('returns empty map when no BACKEND_API_KEY_* vars are set', () => {
+    expect(parseBackendApiKeys({})).toEqual({});
+  });
+
+  it('returns empty map when keys are present but empty strings', () => {
+    expect(
+      parseBackendApiKeys({
+        BACKEND_API_KEY_CLOUDFLARE: '',
+        BACKEND_API_KEY_OPENAI: '',
+      }),
+    ).toEqual({});
+  });
+
+  it('parses a single configured backend', () => {
+    expect(parseBackendApiKeys({ BACKEND_API_KEY_CLOUDFLARE: 'cf-token' })).toEqual({
+      cloudflare: 'cf-token',
+    });
+  });
+
+  it('parses multiple configured backends', () => {
+    expect(
+      parseBackendApiKeys({
+        BACKEND_API_KEY_CLOUDFLARE: 'cf',
+        BACKEND_API_KEY_OPENAI: 'sk',
+        BACKEND_API_KEY_ANTHROPIC: 'sk-ant',
+        BACKEND_API_KEY_GROQ: 'gsk',
+      }),
+    ).toEqual({
+      cloudflare: 'cf',
+      openai: 'sk',
+      anthropic: 'sk-ant',
+      groq: 'gsk',
+    });
+  });
+
+  it('trims surrounding whitespace from values', () => {
+    // Helm string templating sometimes adds a trailing newline.
+    expect(parseBackendApiKeys({ BACKEND_API_KEY_CLOUDFLARE: '  cf-token \n' })).toEqual({
+      cloudflare: 'cf-token',
+    });
+  });
+
+  it('throws when a key is set but contains only whitespace (likely empty Secret)', () => {
+    expect(() => parseBackendApiKeys({ BACKEND_API_KEY_CLOUDFLARE: '   \n  ' })).toThrow(
+      /BACKEND_API_KEY_CLOUDFLARE/,
+    );
+  });
+
+  it('ignores unrelated env vars', () => {
+    expect(
+      parseBackendApiKeys({
+        DATABASE_URL: 'postgres://x',
+        ADMIN_API_TOKEN: 'tok',
+        BACKEND_API_KEY_CLOUDFLARE: 'cf',
+        // Looks like a backend key but not in the union — ignored.
+        BACKEND_API_KEY_FUTUREPROVIDER: 'whatever',
+        // OpenAI SDK auto-loaded var; we deliberately don't read this
+        // (chart consumers must use BACKEND_API_KEY_OPENAI explicitly).
+        OPENAI_API_KEY: 'leaked-from-sdk',
+      }),
+    ).toEqual({
+      cloudflare: 'cf',
+    });
+  });
+
+  it('returns a frozen map', () => {
+    const out = parseBackendApiKeys({ BACKEND_API_KEY_CLOUDFLARE: 'cf' });
+    expect(Object.isFrozen(out)).toBe(true);
+  });
+
+  it('covers all BackendKind union members', () => {
+    // All declared in the BACKEND_API_KEY_ENV_VARS table — guard against
+    // a new BackendKind being added to the union without an env entry.
+    const out = parseBackendApiKeys({
+      BACKEND_API_KEY_OLLAMA: 'a',
+      BACKEND_API_KEY_LOCALAI: 'b',
+      BACKEND_API_KEY_CLOUDFLARE: 'c',
+      BACKEND_API_KEY_OPENAI: 'd',
+      BACKEND_API_KEY_ANTHROPIC: 'e',
+      BACKEND_API_KEY_BEDROCK: 'f',
+      BACKEND_API_KEY_GROQ: 'g',
+      BACKEND_API_KEY_EXO: 'h',
+      BACKEND_API_KEY_MOCK: 'i',
+    });
+    expect(Object.keys(out).sort()).toEqual([
+      'anthropic',
+      'bedrock',
+      'cloudflare',
+      'exo',
+      'groq',
+      'localai',
+      'mock',
+      'ollama',
+      'openai',
+    ]);
   });
 });

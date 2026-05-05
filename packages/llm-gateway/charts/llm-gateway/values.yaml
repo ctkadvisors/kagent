@@ -38,6 +38,34 @@ adminApiToken:
   secretName: '' # required when enabled=true
   secretKey: token
 
+# Backend (provider) API keys. The gateway consults these when routing
+# a request to a backendKind that requires an Authorization header
+# (cloudflare, openai, anthropic, bedrock, groq, …). A backend with no
+# key configured is sent unauthenticated — correct for ollama / localai
+# / exo / mock; incorrect for the cloud providers (those will 401 at
+# request time).
+#
+# `name` references a single Secret in the release namespace; `keys`
+# maps each BackendKind to a key WITHIN that Secret. Backends not
+# listed (or pointing at empty keys) are skipped — no env injection,
+# no Authorization header at request time.
+#
+# Provisioning the Secret is the operator's responsibility. Example:
+#   kubectl -n kagent-system create secret generic kagent-llm-gateway-backend-keys \
+#     --from-literal=cf-api-token='...' \
+#     --from-literal=openai-api-key='sk-...'
+backendApiKeysSecret:
+  name: ''
+  keys:
+    cloudflare: ''
+    openai: ''
+    anthropic: ''
+    bedrock: ''
+    groq: ''
+    localai: ''
+    ollama: ''
+    exo: ''
+
 # Database. See spec §3.7.
 database:
   # REQUIRED when enabled=true (and bundled=false): where the DSN comes from.

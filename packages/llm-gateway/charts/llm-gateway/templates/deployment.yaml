@@ -103,6 +103,27 @@ spec:
             # CR watches and to label its OTEL spans.
             - name: KAGENT_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            # Per-backend API keys. The gateway's env loader
+            # (`packages/llm-gateway/src/env.ts` `parseBackendApiKeys`)
+            # reads `BACKEND_API_KEY_<KIND>` for each known BackendKind
+            # and packs them into routerDeps.backendApiKeys, which the
+            # provider call site (`router.ts:142`) consults. Each key
+            # in `backendApiKeysSecret.keys` that is non-empty becomes
+            # one env entry; empty keys are skipped so the gateway
+            # treats those backends as "no key configured" (correct
+            # for ollama / localai / exo).
+            {{- if .Values.backendApiKeysSecret.name }}
+            {{- $secretName := .Values.backendApiKeysSecret.name }}
+            {{- range $kind, $secretKey := .Values.backendApiKeysSecret.keys }}
+            {{- if $secretKey }}
+            - name: BACKEND_API_KEY_{{ $kind | upper }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName | quote }}
+                  key: {{ $secretKey | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz

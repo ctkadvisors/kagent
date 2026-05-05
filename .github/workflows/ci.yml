@@ -160,6 +160,29 @@ jobs:
           CHART_PATH: ${{ matrix.path }}
         run: helm template "$CHART_NAME" "$CHART_PATH" --set smokeTest.enabled=true > /dev/null
 
+      - name: helm template (ci value overlays)
+        # Each chart's `ci/values-*.yaml` is a documented opinionated
+        # configuration the chart promises to support. Render every one
+        # so a regression in any overlay (BYO postgres, bundled postgres,
+        # backend-keys, …) surfaces here rather than in a homelab sync.
+        # Skips silently when a chart has no `ci/` directory.
+        # All inputs are static workflow-matrix values; not user input.
+        env:
+          CHART_NAME: ${{ matrix.name }}
+          CHART_PATH: ${{ matrix.path }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "$CHART_PATH/ci" ]; then
+            echo "no ci/ overlays for $CHART_NAME — skipping"
+            exit 0
+          fi
+          shopt -s nullglob
+          for f in "$CHART_PATH"/ci/values-*.yaml; do
+            echo "::group::render $CHART_NAME with $(basename "$f")"
+            helm template "$CHART_NAME" "$CHART_PATH" -f "$f" > /dev/null
+            echo "::endgroup::"
+          done
+
   helm-smoke-kind:
     name: Helm install + smoke (kind)
     needs: [verify, crd-drift, helm-smoke]

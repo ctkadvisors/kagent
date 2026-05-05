@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+
+# CI values overlay — exercises the per-backend API key Secret path.
+# Asserts: gateway env contains BACKEND_API_KEY_CLOUDFLARE +
+# BACKEND_API_KEY_OPENAI sourced from the named Secret; no env entries
+# for backends with empty key mappings.
+#
+# Mirrors the homelab pattern: one Secret holds all provider tokens,
+# the chart wires each into its own env var so the gateway's env
+# loader can route per-backend without leaking unrelated tokens into
+# the wrong provider call.
+
+enabled: true
+
+database:
+  bundled: false
+  dsnSecretRef:
+    name: external-pg
+    key: dsn
+
+adminApiToken:
+  secretName: llm-gateway-token
+  secretKey: token
+
+backendApiKeysSecret:
+  name: kagent-llm-gateway-backend-keys
+  keys:
+    cloudflare: cf-api-token
+    openai: openai-api-key
+    # Other backends left empty → no env entry rendered for them; the
+    # gateway treats them as "no key configured" and they 401 if a
+    # ModelEndpoint with that backendKind tries to dispatch through.

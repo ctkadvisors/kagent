@@ -42,7 +42,10 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 async function main(): Promise<void> {
   const cfg = parseEnv(process.env);
 
-  console.log(`[llm-gateway] boot port=${String(cfg.port)} ns=${cfg.modelEndpointNamespace}`);
+  const configuredBackends = Object.keys(cfg.backendApiKeys).sort().join(',') || '<none>';
+  console.log(
+    `[llm-gateway] boot port=${String(cfg.port)} ns=${cfg.modelEndpointNamespace} backendApiKeys=[${configuredBackends}]`,
+  );
 
   const pool = createPool({ connectionString: cfg.databaseUrl });
   // Migrations run synchronously at boot — keeps the chart's
@@ -102,6 +105,7 @@ async function main(): Promise<void> {
       inFlight,
       aimd,
       usage: usageRecorder,
+      backendApiKeys: cfg.backendApiKeys,
     },
   });
 
