@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Enterprise Pilot RC evidence-pack scenario bundle. See README.md for
+# the full runbook + checklist mapping. Apply with:
+#
+#   kubectl apply -k examples/rc-pilot/
+#
+# Resources land in the `kagent-rc-pilot` namespace. Cleanup with
+# `kubectl delete -k examples/rc-pilot/`. The bundle assumes the
+# `kagent-operator` chart is already installed in `kagent-system`
+# (or wherever the operator runs) with the feature gates enumerated
+# in the runbook §1 already turned on.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kagent-rc-pilot
+
+# All scenario CRs are stamped with shared labels so the Workbench
+# evidence collector and reviewers can filter the bundle as a unit.
+# The `kagent.knuteson.io/tenant=enterprise-pilot` stamp is also what
+# the audit-stamps scenario verifies against `pilotEvidence.audit.tenant`.
+# `labels` (with `includeSelectors: false`) replaces the deprecated
+# `commonLabels` on Kustomize 5.x; we keep selectors clean so the
+# operator's parent/child label-selector LIST paths are unaffected.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: kagent-rc-pilot
+      app.kubernetes.io/created-by: rc-pilot-runbook
+      kagent.knuteson.io/role: rc-pilot
+      kagent.knuteson.io/tenant: enterprise-pilot
+
+commonAnnotations:
+  kagent.knuteson.io/evidence-bundle: enterprise-pilot-rc1
+
+resources:
+  - 00-namespace.yaml
+  - 01-agents.yaml
+  - 10-happy-path.yaml
+  - 20-forced-timeout.yaml
+  - 30-image-pull-fail.yaml
+  - 40-delegation.yaml
+  - 50-artifact-producer.yaml
+  - 60-verifier.yaml
+  - 70-policy-cap.yaml
+  - 80-audit-stamps.yaml

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# `kagent-rc-pilot` — isolated namespace for the Enterprise Pilot RC
+# evidence-pack scenarios. Workbench reads from cached CRD objects, so
+# the namespace exists primarily so the reviewer can filter the
+# task list by --namespace kagent-rc-pilot when capturing evidence.
+#
+# RBAC notes:
+#   - The operator already has cluster-wide watch on Agents / AgentTasks
+#     (see packages/operator/charts/kagent-operator/templates/clusterrole.yaml).
+#   - The agent-pod ServiceAccount + Role/RoleBinding are created by the
+#     operator chart in the operator's namespace; cross-namespace agent
+#     workloads require `agentPod.rbac.createInWorkloadNamespaces=true`
+#     OR the operator chart values to set `watchAllNamespaces=true`.
+#     Enumerated in README.md §1 "Prereqs check".
+#   - Workbench reads via the Workbench API ClusterRole; no extra
+#     namespace-local RBAC needed for the evidence collector.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kagent-rc-pilot
+  labels:
+    kagent.knuteson.io/tenant: enterprise-pilot
+    kagent.knuteson.io/role: rc-pilot
+    app.kubernetes.io/managed-by: kagent-rc-pilot
+    app.kubernetes.io/created-by: rc-pilot-runbook
+  annotations:
+    kagent.knuteson.io/evidence-bundle: enterprise-pilot-rc1

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 20 — Forced model timeout. Same target Agent as the happy
+# path, but `runConfig.timeoutSeconds: 1` so the agent loop's wall-clock
+# deadline trips before the model returns. Expected terminal state:
+#
+#   status.phase  == 'Failed'
+#   status.error  contains a timeout / deadline-exceeded reason
+#   status.podName populated (the Job did spawn before the deadline)
+#   pilotEvidence.runConfig.timeoutSeconds == 1
+#
+# CRD note: the substrate honors `runConfig.timeoutSeconds` in
+# preference to the deprecated top-level `timeoutSeconds`. We set the
+# top-level field to a wider window deliberately to prove the
+# precedence path on Workbench's pilotEvidence.runConfig surface.
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row "Model timeout".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-forced-timeout
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: forced-timeout
+spec:
+  targetAgent: rc-pilot-summarizer
+  payload:
+    smokeTest: true
+  originalUserMessage: |
+    Write a 5000-word essay on the history of distributed systems. Take
+    your time and include detailed footnotes; this prompt is intentionally
+    expensive so the wall-clock timeout fires before completion.
+  timeoutSeconds: 600
+  runConfig:
+    timeoutSeconds: 1
+    maxIterations: 8

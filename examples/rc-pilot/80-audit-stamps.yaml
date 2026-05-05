@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 80 — Audit stamps + capability mint. Exercises every audit
+# label / annotation Workbench's `pilotEvidence.audit` projection
+# extracts (see packages/workbench-api/src/routes/tasks.ts §pilotEvidence):
+#
+#   labels.kagent.knuteson.io/tenant         → audit.tenant
+#   labels.kagent.knuteson.io/managed-by     → audit.managedBy
+#   labels.kagent.knuteson.io/parent-task-uid → audit.parentTaskUid (set
+#     here as a constant marker; in real chains the operator stamps it)
+#   labels.app.kubernetes.io/created-by      → audit.createdBy
+#   annotations starting with kagent.knuteson.io/ are surfaced verbatim.
+#
+# When `capabilities.enabled=true` on the operator chart (see runbook
+# §1), the operator's capability-issuer mints a JWT for this task and
+# stamps `status.capabilityRef` with the bundle's `<jti>`. Workbench
+# surfaces it on `pilotEvidence.capabilityRef`.
+#
+# Expected Workbench evidence:
+#   pilotEvidence.audit.tenant       == 'enterprise-pilot'
+#   pilotEvidence.audit.createdBy    == 'rc-pilot-runbook'
+#   pilotEvidence.audit.managedBy    == 'kagent-rc-pilot'
+#   pilotEvidence.audit.annotations['kagent.knuteson.io/evidence-id'] == 'rc1-audit-stamps'
+#   pilotEvidence.capabilityRef      populated when capabilities.enabled
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row "Audit stamps".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-audit-stamps
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: audit-stamps
+    # Audit projection picks these up directly:
+    kagent.knuteson.io/tenant: enterprise-pilot
+    kagent.knuteson.io/managed-by: kagent-rc-pilot
+    app.kubernetes.io/created-by: rc-pilot-runbook
+  annotations:
+    kagent.knuteson.io/evidence-id: rc1-audit-stamps
+    kagent.knuteson.io/evidence-bundle: enterprise-pilot-rc1
+    # Reviewer-facing breadcrumb. Substrate-opaque.
+    kagent.knuteson.io/notes: |
+      Audit-stamps probe row. Reviewer should confirm pilotEvidence.audit
+      mirrors every kagent.knuteson.io/* and app.kubernetes.io/created-by
+      key set on this CR, plus `tenant`, `createdBy`, `managedBy`.
+spec:
+  targetAgent: rc-pilot-summarizer
+  payload:
+    smokeTest: true
+  originalUserMessage: 'In one sentence, what is the value of audit metadata?'
+  runConfig:
+    timeoutSeconds: 120
+    maxIterations: 4

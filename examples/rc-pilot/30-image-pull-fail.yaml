@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 30 — Forced image pull / pod failure. Targets the
+# `rc-pilot-bad-image` Agent declared in 01-agents.yaml.
+#
+# CRD-LEVEL CONSTRAINT: v0.1's Agent CRD does NOT carry an `image`
+# field — the operator's job-spec builder sources the agent-pod
+# image from chart Helm values. To FORCE an ImagePullBackOff in this
+# scenario you must, at evidence-capture time, run the operator with
+# its `agentPod.image.repository` pointed at a registry path that
+# does not resolve. The README enumerates the recommended overlay
+# (a dedicated `kagent-rc-pilot-bad-image` operator install in a
+# scratch namespace), but operators uncomfortable with two operator
+# deployments may instead toggle the bad image via env override on
+# the running deployment for a single sync.
+#
+# Expected Workbench detail evidence:
+#   status.phase        == 'Failed'
+#   status.podName      populated (Pod was created but never started)
+#   detail.containerStatuses[*].state.waiting.reason in {
+#     'ImagePullBackOff', 'ErrImagePull'
+#   }
+#   pilotEvidence.audit.labels carries the rc-pilot tenant stamp.
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row "Image pull or pod failure".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-image-pull-fail
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: image-pull-fail
+spec:
+  targetAgent: rc-pilot-bad-image
+  payload:
+    smokeTest: true
+  originalUserMessage: 'This task should never reach the agent loop.'
+  runConfig:
+    timeoutSeconds: 60
+    maxIterations: 1
