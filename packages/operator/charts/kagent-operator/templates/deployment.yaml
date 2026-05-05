@@ -506,6 +506,29 @@ spec:
             - name: KAGENT_SUPERVISION_MAX_RESTARTS
               value: {{ .Values.supervision.maxRestarts.default | quote }}
             # ---------------------------------------------------------------
+            # v0.1.7-rig.2 — Substrate verifier reconciler
+            # ---------------------------------------------------------------
+            # When `verifier.enabled=true`, the operator boots the
+            # verifier reconciler (packages/operator/src/verifier.ts)
+            # alongside the existing AgentTask informer. Two dispatch
+            # paths: scriptRef (Job spawn) + llmJudgePromptRef
+            # (gateway POST). The reconciler reuses the operator's
+            # existing KAGENT_LLM_GATEWAY_BASE_URL + KAGENT_LANGFUSE_*
+            # envs, so this block only adds the verifier-specific
+            # knobs.
+            - name: KAGENT_VERIFIER_ENABLED
+              value: {{ .Values.verifier.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.verifier.enabled }}
+            {{- if .Values.verifier.defaultModel }}
+            - name: KAGENT_VERIFIER_DEFAULT_MODEL
+              value: {{ .Values.verifier.defaultModel | quote }}
+            {{- end }}
+            {{- if .Values.verifier.scriptImage }}
+            - name: KAGENT_VERIFIER_SCRIPT_IMAGE
+              value: {{ .Values.verifier.scriptImage | quote }}
+            {{- end }}
+            {{- end }}
+            # ---------------------------------------------------------------
             # Wave 2 — Workflows
             # ---------------------------------------------------------------
             # AgentWorkflow controller (per docs/SUBSTRATE-V1.md §3.3 +

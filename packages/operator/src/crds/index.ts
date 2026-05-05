@@ -40,6 +40,8 @@ export type {
   InputBinding,
   InputFrom,
   OutputRef,
+  /* v0.3.0-capabilities — Wave 2 Caps sub-team — verify_completion hook */
+  VerifyContract,
   /* v0.3.1-supervision — Wave 2 / Supervision sub-team */
   SupervisionStrategy,
   /* v0.4.0-events — Wave 3 / Events sub-team */

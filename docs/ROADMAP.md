@@ -151,6 +151,7 @@ After Phase 5.x lands, the original Phase 5 workload work resumes:
 - [ ] A2A demo: researcher → summarizer using WS-K/L/M (replaces the original "parent + child AgentTasks" wording — same outcome, now via real tools instead of hand-applied YAML)
 - [ ] Comparison rig: 5-topic workload through both substrates for one week
 - [ ] Publish comparison numbers in `docs/V0.1-COMPARISON.md`
+- [x] **v0.1.7-rig.2 — substrate verifier reconciler** (lights up the deferred `verify_completion` substrate hook from v0.3.0-capabilities; per docs/WAVES.md §6.3 deliverable 7). New `packages/operator/src/verifier.ts` boots when `KAGENT_VERIFIER_ENABLED=true`. Two dispatch paths: `scriptRef` (Job spawn with ConfigMap-mounted input.json + ownerRef) and `llmJudgePromptRef` (Langfuse fetch + gateway POST + verdict parse). Three new audit events (`verifier.started` / `verifier.completed` / `verifier.failed`) bring the catalog from 44 → 47.
 
 **Tag:** `v0.1.7-rig`
 

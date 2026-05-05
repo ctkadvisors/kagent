@@ -612,6 +612,63 @@ supervision:
     default: 3
 
 # ---------------------------------------------------------------------
+# v0.1.7-rig.2 — substrate verifier reconciler. Two dispatch paths:
+# scriptRef (Job spawn) + llmJudgePromptRef (gateway call). Default
+# OFF — same posture as `agentPod.spawnChild`, `agentPod.templates`,
+# `workflows`, etc. An install that hasn't deliberately enabled this
+# never spawns verifier Jobs and never touches the gateway with judge
+# prompts.
+#
+# When `enabled: true`, the operator boots the verifier reconciler
+# (packages/operator/src/verifier.ts) alongside the existing AgentTask
+# informer paths. On every Completed-phase event, the reconciler
+# checks `AgentTask.spec.verifyContract`; when set + idempotent, it
+# dispatches:
+#
+#   1. `scriptRef` path — operator creates a one-shot K8s Job
+#      (ownerRef → AgentTask, ConfigMap-mounted input.json carrying
+#      the parent's `result` + `payload`). Exit 0 → passed:true,
+#      non-zero → passed:false. activeDeadlineSeconds defaults to
+#      `script.timeoutSeconds` (60).
+#   2. `llmJudgePromptRef` path — operator fetches the prompt from
+#      Langfuse, renders {{outputs}} with parent.status.result, POSTs
+#      to KAGENT_LLM_GATEWAY_BASE_URL/chat/completions. Response shape
+#      `{verdict: "pass"|"fail", reason: string}` gates the result.
+#      Gateway timeout → `verifier_timeout`; non-200 →
+#      `gateway_error:<status>`; non-JSON → `verifier_returned_non_json`.
+#
+# The schema field `AgentTask.spec.verifyContract` shipped in
+# v0.3.0-capabilities (forward-compat). This release lights up the
+# reconciler-side runner per docs/WAVES.md §6.3 deliverable 7.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_VERIFIER_ENABLED=true|false
+#   KAGENT_VERIFIER_DEFAULT_MODEL=<gateway model name>
+#   KAGENT_VERIFIER_SCRIPT_IMAGE=<container image for scriptRef Jobs>
+#
+# Reuses the operator's existing KAGENT_LLM_GATEWAY_BASE_URL +
+# KAGENT_LLM_GATEWAY_API_KEY (chart's `llmGateway` block) for the
+# llmJudge path's gateway call, and KAGENT_LANGFUSE_HOST + creds
+# (chart's `langfuse` block) for the prompt fetch.
+#
+# RBAC: NO new verbs required — the verifier creates Jobs +
+# ConfigMaps + patches AgentTask status, all already covered by the
+# operator's existing ClusterRole.
+verifier:
+  enabled: false
+  # Default model used for llmJudge dispatch when the prompt template
+  # doesn't carry one in its body. Falls back to the parent Agent's
+  # model in a future revision; for v0.1.7-rig.2 this value is the
+  # operator-side default. Empty string = let the gateway pick.
+  defaultModel: 'gpt-4o-mini'
+  # Container image for scriptRef-mode Jobs. The image is responsible
+  # for reading /var/kagent/verify/input.json + KAGENT_VERIFIER_SCRIPT_NAME
+  # env, executing the substrate-stored script body, and exiting 0
+  # (pass) or non-zero (fail). Override per install when a private
+  # registry hosts the runner image.
+  scriptImage: 'ghcr.io/ctkadvisors/kagent-verifier-runner:0.1.7-rig.2'
+
+# ---------------------------------------------------------------------
 # Wave 1 — Workspace
 # ---------------------------------------------------------------------
 # Workspace primitive (per docs/SUBSTRATE-V1.md §3.4): pre-populated,

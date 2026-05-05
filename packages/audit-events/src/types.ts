@@ -100,7 +100,11 @@ export type AuditEventType =
   | 'keyrotation.gateway_rotated'
   | 'keyrotation.gateway_unsupported'
   /* Phase 5 P4 wire-up — parent-from-child re-aggregate. */
-  | 'parent.children_aggregated';
+  | 'parent.children_aggregated'
+  /* v0.1.7-rig.2 — substrate verifier reconciler. */
+  | 'verifier.started'
+  | 'verifier.completed'
+  | 'verifier.failed';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -767,6 +771,80 @@ export interface ParentChildrenAggregatedData {
 }
 
 /**
+ * v0.1.7-rig.2 — substrate verifier reconciler. Three lifecycle events
+ * frame the post-completion `verifyContract` substrate hook:
+ *
+ *   - `verifier.started` — emitted at dispatch time, when the verifier
+ *     reconciler picked a Completed AgentTask whose `spec.verifyContract`
+ *     is set and `status.verification` is unset (i.e. the gate is
+ *     about to fire). `mode` distinguishes which dispatch path was
+ *     chosen (`script` = one-shot Job spawn; `llmJudge` = gateway call).
+ *   - `verifier.completed` — terminal verdict, `passed: true`. The
+ *     substrate is OK with the AgentTask staying in `phase: Completed`.
+ *   - `verifier.failed` — terminal verdict, `passed: false`. `reason`
+ *     is the structured failure tag (mirrors the strings written into
+ *     `status.verification.reason`); `judgeRef` identifies the
+ *     verifier asset that produced the verdict (`scriptRef.image` for
+ *     the script path, `llmJudgePromptRef.name@version` for the LLM
+ *     path). `durationMs` is the wall-clock time from dispatch to
+ *     verdict.
+ *
+ * Per docs/WAVES.md §6.3 deliverable 7 — the schema field landed in
+ * v0.3.0-capabilities; this commit lights up the reconciler-side
+ * runner + the audit emission.
+ */
+export interface VerifierStartedData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string | undefined;
+  /** Which dispatch path was chosen — `script` (Job spawn) or `llmJudge` (gateway call). */
+  readonly mode: 'script' | 'llmJudge';
+  /**
+   * Identifier of the verifier asset. For `script` mode this is the
+   * resolved container image (e.g. `ghcr.io/example/verifier:1.0`);
+   * for `llmJudge` mode it's `<promptName>@<version>` (e.g.
+   * `rc-pilot-verifier-jsonshape@1`).
+   */
+  readonly judgeRef: string;
+}
+
+export interface VerifierCompletedData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string | undefined;
+  readonly mode: 'script' | 'llmJudge';
+  readonly judgeRef: string;
+  /** Wall-clock dispatch → verdict latency. */
+  readonly durationMs: number;
+}
+
+export interface VerifierFailedData {
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly agentName: string | undefined;
+  readonly mode: 'script' | 'llmJudge';
+  readonly judgeRef: string;
+  readonly durationMs: number;
+  /**
+   * Structured failure tag. One of (non-exhaustive — strings stay
+   * stable across the catalog so audit warehouses can group):
+   *   `verifier_returned_non_json`,
+   *   `verifier_timeout`,
+   *   `verifier_misconfig:both_paths_set`,
+   *   `verifier_misconfig:no_paths_set`,
+   *   `verifier_misconfig:gateway_unconfigured`,
+   *   `script_exit_<n>`,
+   *   `langfuse_fetch_failed`,
+   *   `gateway_error:<status>`,
+   *   `verdict:fail`.
+   */
+  readonly reason: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -856,7 +934,11 @@ export type AuditEventData =
   | {
       readonly type: 'parent.children_aggregated';
       readonly data: ParentChildrenAggregatedData;
-    };
+    }
+  /* v0.1.7-rig.2 — substrate verifier reconciler. */
+  | { readonly type: 'verifier.started'; readonly data: VerifierStartedData }
+  | { readonly type: 'verifier.completed'; readonly data: VerifierCompletedData }
+  | { readonly type: 'verifier.failed'; readonly data: VerifierFailedData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

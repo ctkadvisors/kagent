@@ -163,9 +163,25 @@ export const KEYROTATION_GATEWAY_UNSUPPORTED = 'keyrotation.gateway_unsupported'
  * `docs/ROADMAP.md`. */
 export const PARENT_CHILDREN_AGGREGATED = 'parent.children_aggregated' as const;
 
+/* v0.1.7-rig.2 — substrate verifier reconciler. Lifecycle events for
+ * the post-completion `verifyContract` substrate hook (per docs/WAVES.md
+ * §6.3 deliverable 7). Three events frame the gate:
+ *   - `verifier.started` — the operator's verifier reconciler picked
+ *     a Completed AgentTask with a `verifyContract` set and dispatched
+ *     the verifier (Job spawn or LLM-judge gateway call).
+ *   - `verifier.completed` — terminal verifier verdict: passed=true.
+ *   - `verifier.failed` — terminal verifier verdict: passed=false. The
+ *     payload's `reason` is the structured failure tag (
+ *     `verifier_returned_non_json`, `verifier_timeout`,
+ *     `verifier_misconfig:both_paths_set`, `script_exit_<n>`,
+ *     `langfuse_fetch_failed`, `gateway_error:<status>`, etc.). */
+export const VERIFIER_STARTED = 'verifier.started' as const;
+export const VERIFIER_COMPLETED = 'verifier.completed' as const;
+export const VERIFIER_FAILED = 'verifier.failed' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(43)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(47)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -213,4 +229,7 @@ export const ALL_EVENT_TYPES = Object.freeze([
   KEYROTATION_GATEWAY_ROTATED,
   KEYROTATION_GATEWAY_UNSUPPORTED,
   PARENT_CHILDREN_AGGREGATED,
+  VERIFIER_STARTED,
+  VERIFIER_COMPLETED,
+  VERIFIER_FAILED,
 ] as const);

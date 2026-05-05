@@ -136,6 +136,8 @@ status:
 
 **Application:** issued by trigger; consumed via `wait_for_*` tools.
 
+**v0.1.7-rig.2 — verifier as a substrate-mediated post-completion quality gate.** `AgentTask.spec.verifyContract = { scriptRef?, llmJudgePromptRef? }` is the substrate's sixth observation channel (alongside admission, capability mint/use, audit emission, supervision routing, and parent re-aggregation). It is NOT a per-task tool the agent can call from inside its loop; it is a SUBSTRATE-side verdict applied AFTER the agent-pod writes `phase: Completed`. The reconciler in `packages/operator/src/verifier.ts` picks up the Completed-with-contract event, dispatches one of the two paths (Job spawn for scripts, gateway POST for LLM judges), and patches `status.verification = { passed, mode, reason?, completedAt }`. The agent that produced the work does NOT get to review or contest the verdict — keeping the gate substrate-mediated is what lets it serve as a SOC2-grade post-condition rather than a self-attested check. Three audit events (`verifier.started/completed/failed`) frame the lifecycle for compliance warehouses.
+
 ### 3.3 AgentWorkflow — *the durable orchestrator*
 
 A long-running, replayable, side-effect-free decision function. Coordinates AgentTasks. State is rebuildable from event log; survives any pod crash. Backed by Restate (v0.3.2).
@@ -319,7 +321,7 @@ Every concrete gap raised in the audit maps to exactly one primitive or cross-cu
 | No Workspace primitive | **Workspace** | v0.2.1 |
 | No `read_artifact` tool | **Artifact** | v0.2.2 |
 | No `get_my_context` introspection | AgentTask (substrate API) | v0.1.9 |
-| No `verify_completion` hook | AgentTask + Capability | v0.3.1 |
+| No `verify_completion` hook | AgentTask + Capability | v0.3.0 schema; v0.1.7-rig.2 reconciler runner |
 | backoffLimit retry double-spawn | AgentTask + Capability (idempotency) | v0.2.0 |
 | Pod-pressure circuit breaker | Quota | v0.5.2 |
 | Multi-tenancy | (Tenant primitive) + Capability | v0.5.0 |

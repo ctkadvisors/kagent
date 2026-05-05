@@ -35,6 +35,9 @@ import {
   SUPERVISION_APPLIED,
   SUPERVISION_RESTART_LIMIT_EXCEEDED,
   TASK_ADMITTED,
+  VERIFIER_COMPLETED,
+  VERIFIER_FAILED,
+  VERIFIER_STARTED,
   makeEvent,
 } from '@kagent/audit-events';
 import { buildEventDispatcher, type EventDispatcher, type EventSubscription } from '@kagent/events';
@@ -88,6 +91,12 @@ import {
 import { IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
+import {
+  buildVerifierReconciler,
+  type FetchPromptFn,
+  type VerifierAuditHooks,
+  type VerifierReconciler,
+} from './verifier.js';
 import { loadFromEnv as loadCapCa } from './cap-ca.js';
 import {
   buildEventTriggerAgentTaskCreator,
@@ -776,6 +785,7 @@ export function buildHandler(
   deps: ReconcileDeps,
   supervisionDeps?: SupervisionHandlerDeps,
   blackboardHandler?: BlackboardHandlerDeps,
+  verifierHandler?: VerifierHandlerDeps,
 ): AgentTaskHandler {
   return {
     async onAdd(task) {
@@ -794,6 +804,16 @@ export function buildHandler(
     async onUpdate(task) {
       const result = await reconcileAgentTask(task, deps);
       logResult('update', task, result);
+      // === v0.1.7-rig.2 — Substrate verifier ===
+      // Post-completion `verifyContract` substrate hook (per
+      // docs/WAVES.md §6.3 deliverable 7). When enabled, the verifier
+      // reconciler picks Completed AgentTasks with a verifyContract
+      // and dispatches the script-Job or LLM-judge gateway call. Runs
+      // BEFORE the completion-contract enforcement so the verifier's
+      // patched `status.verification` lands in the same informer
+      // event as the contract validation (admission already passed
+      // — the verifier is a separate gate).
+      await maybeRouteVerifier(task, verifierHandler);
       // v0.2.0-typed-io — when the agent-pod's terminal write lands a
       // Completed phase, validate that all required Agent.spec.outputs
       // are present in status.outputs. Missing → force Failed +
@@ -903,6 +923,49 @@ async function maybeRouteBlackboard(
 export interface SupervisionHandlerDeps {
   readonly enabled: boolean;
   readonly router: SupervisionRouterDeps;
+}
+
+/* === v0.1.7-rig.2 — Substrate verifier ===
+ * Wired by the buildHandler factory; passed in alongside the v0.1
+ * ReconcileDeps so the handler can route Completed events through the
+ * verifier reconciler without bloating ReconcileDeps. Tests leave
+ * `verifierHandler` undefined; production wiring constructs the
+ * VerifierReconciler from the same customApi/batchApi/coreApi clients
+ * + audit publisher + Langfuse fetcher used elsewhere. */
+export interface VerifierHandlerDeps {
+  readonly enabled: boolean;
+  readonly reconciler: VerifierReconcilerLike;
+}
+
+export interface VerifierReconcilerLike {
+  onAgentTaskUpdate(
+    task: import('./crds/index.js').AgentTask,
+  ): Promise<{ readonly action: 'verified' | 'skipped' }>;
+}
+
+async function maybeRouteVerifier(
+  task: import('./crds/index.js').AgentTask,
+  verifierDeps: VerifierHandlerDeps | undefined,
+): Promise<void> {
+  if (verifierDeps === undefined) return;
+  if (!verifierDeps.enabled) return;
+  // The verifier's own gate skips non-Completed / no-contract /
+  // already-verified tasks. We don't pre-filter here — re-firing on
+  // every relist is cheap and keeps the wiring referentially
+  // transparent.
+  try {
+    const result = await verifierDeps.reconciler.onAgentTaskUpdate(task);
+    const id = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
+    if (result.action === 'verified') {
+      console.log(`[kagent-operator/verifier] ${id} verified`);
+    } else {
+      console.debug(`[kagent-operator/verifier] ${id} → skipped`);
+    }
+  } catch (err) {
+    // Verifier reconciler swallows its own errors — if one bubbles
+    // here it's a wiring bug; log + continue.
+    console.error('[kagent-operator/verifier] reconciler raised:', err);
+  }
 }
 
 async function maybeRouteSupervision(
@@ -1527,7 +1590,73 @@ async function main(): Promise<void> {
     );
   }
 
-  const handler = buildHandler(deps, supervisionHandlerDeps, blackboardHandlerDeps);
+  // === v0.1.7-rig.2 — Substrate verifier reconciler ===
+  // Default OFF; flipped on by chart's `verifier.enabled=true`. Two
+  // dispatch paths supported:
+  //   - `verifyContract.scriptRef` → spawn one-shot Job (operator-side)
+  //   - `verifyContract.llmJudgePromptRef` → gateway POST
+  // Audit hooks land via the same mutable-holder pattern used for
+  // capability-minted / supervision / parent.children_aggregated:
+  // the hooks population happens after the audit publisher's lazy
+  // connect, so events emitted before that no-op safely.
+  let verifierHandlerDeps: VerifierHandlerDeps | undefined;
+  const verifierEnabled = process.env.KAGENT_VERIFIER_ENABLED === 'true';
+  const verifierAuditHolder: { hooks?: VerifierAuditHooks } = {};
+  if (verifierEnabled) {
+    // Operator-side Langfuse fetcher — same v2 prompt API the agent-pod
+    // uses (`packages/agent-pod/src/main.ts:buildLangfusePromptFetcher`).
+    // Inlined here rather than importing the agent-pod package because
+    // the operator's runtime image does NOT bundle agent-pod's chat
+    // client (would balloon the operator container with otel /
+    // openai-compat / agent-loop deps just for a prompt GET).
+    const langfuseFetcher = buildLangfusePromptFetcherForOperator(process.env);
+
+    const verifierAuditFanout: VerifierAuditHooks = {
+      emitVerifierStarted: async (fields) => {
+        await verifierAuditHolder.hooks?.emitVerifierStarted(fields);
+      },
+      emitVerifierCompleted: async (fields) => {
+        await verifierAuditHolder.hooks?.emitVerifierCompleted(fields);
+      },
+      emitVerifierFailed: async (fields) => {
+        await verifierAuditHolder.hooks?.emitVerifierFailed(fields);
+      },
+    };
+    const verifierReconciler: VerifierReconciler = buildVerifierReconciler({
+      customApi,
+      batchApi,
+      coreApi,
+      ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
+      ...(typeof process.env.KAGENT_LLM_GATEWAY_BASE_URL === 'string' && {
+        gatewayBaseUrl: process.env.KAGENT_LLM_GATEWAY_BASE_URL,
+      }),
+      ...(typeof process.env.KAGENT_LLM_GATEWAY_API_KEY === 'string' && {
+        gatewayApiKey: process.env.KAGENT_LLM_GATEWAY_API_KEY,
+      }),
+      ...(typeof process.env.KAGENT_VERIFIER_DEFAULT_MODEL === 'string' &&
+        process.env.KAGENT_VERIFIER_DEFAULT_MODEL.length > 0 && {
+          defaultModel: process.env.KAGENT_VERIFIER_DEFAULT_MODEL,
+        }),
+      ...(typeof process.env.KAGENT_VERIFIER_SCRIPT_IMAGE === 'string' &&
+        process.env.KAGENT_VERIFIER_SCRIPT_IMAGE.length > 0 && {
+          scriptImage: process.env.KAGENT_VERIFIER_SCRIPT_IMAGE,
+        }),
+      audit: verifierAuditFanout,
+    });
+    verifierHandlerDeps = { enabled: true, reconciler: verifierReconciler };
+    console.log('[kagent-operator] verifier reconciler ENABLED (script + llmJudge)');
+  } else {
+    console.log(
+      '[kagent-operator] verifier reconciler disabled (set KAGENT_VERIFIER_ENABLED=true to enable)',
+    );
+  }
+
+  const handler = buildHandler(
+    deps,
+    supervisionHandlerDeps,
+    blackboardHandlerDeps,
+    verifierHandlerDeps,
+  );
   // Single informer-opts object reused for both the AgentTask and the
   // Job/Pod informers — keeps the namespace toggle in lockstep so a
   // misconfiguration can't scope one watch but not the other.
@@ -1734,6 +1863,64 @@ async function main(): Promise<void> {
         },
       });
       await publisher.publish(event);
+    };
+
+    // === v0.1.7-rig.2 — Substrate verifier audit ===
+    // Three-event lifecycle (started / completed / failed). Best-effort
+    // contract identical to the other audit hooks; the verifier
+    // reconciler catches synchronous throws from these closures too.
+    verifierAuditHolder.hooks = {
+      emitVerifierStarted: async (fields) => {
+        const event = makeEvent({
+          type: VERIFIER_STARTED,
+          source: auditSource,
+          subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+          data: {
+            taskUid: fields.taskUid,
+            taskNamespace: fields.taskNamespace,
+            taskName: fields.taskName,
+            agentName: fields.agentName,
+            mode: fields.mode,
+            judgeRef: fields.judgeRef,
+          },
+        });
+        await publisher.publish(event);
+      },
+      emitVerifierCompleted: async (fields) => {
+        const event = makeEvent({
+          type: VERIFIER_COMPLETED,
+          source: auditSource,
+          subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+          data: {
+            taskUid: fields.taskUid,
+            taskNamespace: fields.taskNamespace,
+            taskName: fields.taskName,
+            agentName: fields.agentName,
+            mode: fields.mode,
+            judgeRef: fields.judgeRef,
+            durationMs: fields.durationMs,
+          },
+        });
+        await publisher.publish(event);
+      },
+      emitVerifierFailed: async (fields) => {
+        const event = makeEvent({
+          type: VERIFIER_FAILED,
+          source: auditSource,
+          subject: `AgentTask/${fields.taskNamespace}/${fields.taskName}`,
+          data: {
+            taskUid: fields.taskUid,
+            taskNamespace: fields.taskNamespace,
+            taskName: fields.taskName,
+            agentName: fields.agentName,
+            mode: fields.mode,
+            judgeRef: fields.judgeRef,
+            durationMs: fields.durationMs,
+            reason: fields.reason,
+          },
+        });
+        await publisher.publish(event);
+      },
     };
   } else {
     console.log(
@@ -3273,6 +3460,70 @@ function normalizeOptionalEnv(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * v0.1.7-rig.2 — operator-side Langfuse prompt fetcher. Mirror of
+ * `packages/agent-pod/src/main.ts:buildLangfusePromptFetcher`. Inlined
+ * here rather than imported because the operator's runtime image does
+ * NOT bundle the agent-pod package (and shouldn't — a 5x size hit just
+ * for a single GET).
+ *
+ * Returns `undefined` when KAGENT_LANGFUSE_HOST or the public/secret
+ * key is unset; the verifier's llmJudge path then refuses with
+ * `verifier_misconfig:langfuse_unconfigured`.
+ *
+ * Calls Langfuse v2 prompt API:
+ *   GET {host}/api/public/v2/prompts/{name}[?version=N]
+ *   Authorization: Basic base64(public:secret)
+ *
+ * Only `type: 'text'` prompts are supported (single-string body); the
+ * agent-pod's fetcher has the same constraint.
+ */
+export function buildLangfusePromptFetcherForOperator(
+  env: Readonly<Record<string, string | undefined>>,
+): FetchPromptFn | undefined {
+  const host = env.KAGENT_LANGFUSE_HOST;
+  const publicKey = env.KAGENT_LANGFUSE_PUBLIC_KEY;
+  const secretKey = env.KAGENT_LANGFUSE_SECRET_KEY;
+  if (
+    typeof host !== 'string' ||
+    host.length === 0 ||
+    typeof publicKey !== 'string' ||
+    publicKey.length === 0 ||
+    typeof secretKey !== 'string' ||
+    secretKey.length === 0
+  ) {
+    return undefined;
+  }
+  const basicAuth = Buffer.from(`${publicKey}:${secretKey}`, 'utf8').toString('base64');
+  const baseUrl = host.replace(/\/+$/, '');
+  return async (name: string, version?: number): Promise<string> => {
+    const qs = version !== undefined ? `?version=${String(version)}` : '';
+    const url = `${baseUrl}/api/public/v2/prompts/${encodeURIComponent(name)}${qs}`;
+    const res = await fetch(url, {
+      headers: {
+        authorization: `Basic ${basicAuth}`,
+        accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Langfuse GET ${url} returned ${String(res.status)}: ${await res.text().catch(() => '<no body>')}`,
+      );
+    }
+    const body = (await res.json()) as { type?: string; prompt?: unknown };
+    if (body.type !== 'text') {
+      throw new Error(
+        `Langfuse prompt "${name}" has type="${String(body.type)}"; only text prompts are supported by the verifier`,
+      );
+    }
+    if (typeof body.prompt !== 'string') {
+      throw new Error(`Langfuse prompt "${name}" body is not a string (got ${typeof body.prompt})`);
+    }
+    return body.prompt;
+  };
 }
 
 // Only run main() when this module is the entrypoint — unit tests
