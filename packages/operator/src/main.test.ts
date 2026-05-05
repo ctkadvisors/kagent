@@ -30,6 +30,7 @@ const TOUCHED_VARS = [
   'KAGENT_AGENT_POD_OTLP_HEADERS',
   'KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_NAME',
   'KAGENT_AGENT_POD_OTLP_HEADERS_SECRET_KEY',
+  'KAGENT_AUDIT_NATS_URL',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -128,6 +129,18 @@ describe('buildJobSpecOptionsFromEnv — LLM endpoint resolution', () => {
     const env = opts.extraEnv ?? [];
     expect(findEnv(env, 'KAGENT_LITELLM_BASE_URL')).toBeUndefined();
     expect(findEnv(env, 'KAGENT_LITELLM_API_KEY')).toBeUndefined();
+  });
+});
+
+describe('buildJobSpecOptionsFromEnv — audit forwarding', () => {
+  it('forwards KAGENT_AUDIT_NATS_URL into spawned agent-pods', () => {
+    process.env.KAGENT_AUDIT_NATS_URL = 'nats://nats.kagent-system.svc.cluster.local:4222';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_AUDIT_NATS_URL')).toBe(
+      'nats://nats.kagent-system.svc.cluster.local:4222',
+    );
   });
 });
 

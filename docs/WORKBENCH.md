@@ -215,6 +215,34 @@ interface TaskSummary {
 }
 ```
 
+### 5.1 RC evidence projection
+
+The Enterprise Pilot RC evidence pack uses the same detail endpoint,
+without adding controller semantics:
+
+```text
+GET /api/tasks/:namespace/:name
+  -> TaskDetail + pilotEvidence
+```
+
+`pilotEvidence` is a Workbench API projection over already-observed CRD
+fields:
+
+- filtered audit metadata from task labels/annotations
+- target Agent policy fields (`tools`, child allowlists, concurrency caps)
+- task-graph counters and aggregate phase
+- artifact ref count
+- structural detector verdict
+- verifier result when `status.verification` exists
+- capability reference when the capability issuer has stamped one
+- run-config knobs visible on the task spec
+
+The UI renders this as the task detail page's `RC Evidence` section.
+The script [`scripts/collect-workbench-evidence.mjs`](../scripts/collect-workbench-evidence.mjs)
+captures the list/detail JSON plus a Markdown summary into an evidence
+directory for reviewer handoff. See [`GA-HARDENING.md`](./GA-HARDENING.md)
+and [`GA-EVIDENCE-CHECKLIST.md`](./GA-EVIDENCE-CHECKLIST.md).
+
 ## 6. Deployment
 
 Deploy as a separate app in `new_localai`, not as part of the operator

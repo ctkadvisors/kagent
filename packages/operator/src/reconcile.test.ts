@@ -10,8 +10,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateKeyPair, exportPKCS8, exportSPKI } from 'jose';
+import { decodeCapabilityJwtUnsafe } from '@kagent/capability-types';
 
-import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
+import { API_GROUP_VERSION, type Agent, type AgentTask, type Tenant } from './crds/index.js';
+import { loadFromMaterials } from './cap-ca.js';
 import { StubDispatcher } from './dispatcher.js';
 import {
   markAgentTaskFailedFromExternal,
@@ -34,16 +37,33 @@ interface MockBatchApi {
   readNamespacedJob: ReturnType<typeof vi.fn>;
   patchNamespacedJob: ReturnType<typeof vi.fn>;
 }
+interface MockCoreApi {
+  createNamespacedConfigMap: ReturnType<typeof vi.fn>;
+  createNamespacedSecret: ReturnType<typeof vi.fn>;
+  readNamespacedSecret: ReturnType<typeof vi.fn>;
+}
 
 function makeDeps(overrides: {
   customApi?: Partial<MockCustomApi>;
   batchApi?: Partial<MockBatchApi>;
+  coreApi?: Partial<MockCoreApi>;
   dispatcher?: StubDispatcher;
   capabilityRegistry?: ReconcileDeps['capabilityRegistry'];
+  capCa?: ReconcileDeps['capCa'];
+  capJwksUrl?: string;
+  capTtlPolicy?: ReconcileDeps['capTtlPolicy'];
+  resolveTenantForTask?: ReconcileDeps['resolveTenantForTask'];
+  emitCapabilityMinted?: ReconcileDeps['emitCapabilityMinted'];
+  emitKeyrotationCapMintedWithTtl?: ReconcileDeps['emitKeyrotationCapMintedWithTtl'];
   now?: () => Date;
   admissionControlEnabled?: boolean;
 }): ReconcileDeps & {
-  mocks: { customApi: MockCustomApi; batchApi: MockBatchApi; dispatcher: StubDispatcher };
+  mocks: {
+    customApi: MockCustomApi;
+    batchApi: MockBatchApi;
+    coreApi?: MockCoreApi;
+    dispatcher: StubDispatcher;
+  };
 } {
   const customApi: MockCustomApi = {
     getNamespacedCustomObject: vi.fn(),
@@ -63,10 +83,20 @@ function makeDeps(overrides: {
     patchNamespacedJob: vi.fn().mockResolvedValue({}),
     ...overrides.batchApi,
   };
+  const coreApi =
+    overrides.coreApi !== undefined
+      ? ({
+          createNamespacedConfigMap: vi.fn().mockResolvedValue({}),
+          createNamespacedSecret: vi.fn().mockResolvedValue({}),
+          readNamespacedSecret: vi.fn().mockRejectedValue({ code: 404 }),
+          ...overrides.coreApi,
+        } satisfies MockCoreApi)
+      : undefined;
   const dispatcher = overrides.dispatcher ?? new StubDispatcher();
   return {
     customApi: customApi as unknown as ReconcileDeps['customApi'],
     batchApi: batchApi as unknown as ReconcileDeps['batchApi'],
+    ...(coreApi !== undefined && { coreApi: coreApi as unknown as ReconcileDeps['coreApi'] }),
     dispatcher,
     ...(overrides.capabilityRegistry !== undefined && {
       capabilityRegistry: overrides.capabilityRegistry,
@@ -75,7 +105,19 @@ function makeDeps(overrides: {
     ...(overrides.admissionControlEnabled !== undefined && {
       admissionControlEnabled: overrides.admissionControlEnabled,
     }),
-    mocks: { customApi, batchApi, dispatcher },
+    ...(overrides.capCa !== undefined && { capCa: overrides.capCa }),
+    ...(overrides.capJwksUrl !== undefined && { capJwksUrl: overrides.capJwksUrl }),
+    ...(overrides.capTtlPolicy !== undefined && { capTtlPolicy: overrides.capTtlPolicy }),
+    ...(overrides.resolveTenantForTask !== undefined && {
+      resolveTenantForTask: overrides.resolveTenantForTask,
+    }),
+    ...(overrides.emitCapabilityMinted !== undefined && {
+      emitCapabilityMinted: overrides.emitCapabilityMinted,
+    }),
+    ...(overrides.emitKeyrotationCapMintedWithTtl !== undefined && {
+      emitKeyrotationCapMintedWithTtl: overrides.emitKeyrotationCapMintedWithTtl,
+    }),
+    mocks: { customApi, batchApi, ...(coreApi !== undefined && { coreApi }), dispatcher },
   };
 }
 
@@ -89,6 +131,26 @@ const validAgent: Agent = {
   metadata: { name: 'researcher', namespace: 'default', uid: 'a-uid' },
   spec: { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
 };
+
+async function makeCa() {
+  const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
+  const privatePem = await exportPKCS8(privateKey);
+  const publicPem = await exportSPKI(publicKey);
+  return await loadFromMaterials({ privatePem, publicPem, kid: 'test-kid' });
+}
+
+function makeTenant(overrides: Partial<Tenant['spec']> = {}): Tenant {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'Tenant',
+    metadata: { name: overrides.name ?? 'acme', uid: 'tenant-uid-acme' },
+    spec: {
+      name: 'acme',
+      namespaceAllowlist: ['default'],
+      ...overrides,
+    },
+  };
+}
 
 function makeTask(overrides: Partial<AgentTask> = {}): AgentTask {
   return {
@@ -247,6 +309,186 @@ describe('reconcileAgentTask — happy path (targetAgent)', () => {
     });
     await reconcileAgentTask(task, customDeps);
     expect(callOrder).toEqual(['annotate', 'unsuspend']);
+  });
+
+  it('mints a per-task capability Secret and mounts it into the Job when capCa is wired', async () => {
+    const ca = await makeCa();
+    const capAgent: Agent = {
+      ...validAgent,
+      spec: {
+        ...validAgent.spec,
+        capabilityClaims: {
+          tools: ['http_get'],
+          spawn: ['summarizer'],
+          publish: ['research.findings'],
+        },
+      },
+    };
+    const localDeps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(capAgent),
+      },
+      coreApi: {},
+      capCa: ca,
+      capJwksUrl: 'http://operator-templates.default.svc.cluster.local:8081/.well-known/jwks.json',
+    });
+
+    await reconcileAgentTask(task, localDeps);
+
+    expect(localDeps.mocks.coreApi?.createNamespacedSecret).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: 'default',
+        body: expect.objectContaining({
+          metadata: expect.objectContaining({
+            name: 'kagent-cap-task-uid-1',
+            ownerReferences: expect.arrayContaining([
+              expect.objectContaining({ kind: 'AgentTask', name: 't1', uid: 'task-uid-1' }),
+            ]),
+          }),
+          stringData: expect.objectContaining({
+            'cap.jwt': expect.stringMatching(/^[^.]+\.[^.]+\.[^.]+$/),
+          }),
+        }),
+      }),
+    );
+
+    expect(localDeps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: {
+          status: {
+            capabilityRef: expect.stringMatching(/^cap-task-uid-/),
+          },
+        },
+      }),
+      expect.anything() as unknown,
+    );
+
+    const createdJob = localDeps.mocks.batchApi.createNamespacedJob.mock.calls[0]?.[0]?.body as {
+      spec?: {
+        template?: {
+          spec?: {
+            volumes?: unknown[];
+            containers?: Array<{
+              env?: Array<{ name: string; value?: string }>;
+              volumeMounts?: unknown[];
+            }>;
+          };
+        };
+      };
+    };
+    const podSpec = createdJob.spec?.template?.spec;
+    const container = podSpec?.containers?.[0];
+    const env = new Map((container?.env ?? []).map((entry) => [entry.name, entry.value]));
+    expect(env.get('KAGENT_CAP_JWT_FILE')).toBe('/var/kagent/cap/cap.jwt');
+    expect(env.get('KAGENT_CAP_JWKS_URL')).toBe(
+      'http://operator-templates.default.svc.cluster.local:8081/.well-known/jwks.json',
+    );
+    expect(env.get('KAGENT_CAP_ISSUER')).toBe('kagent.knuteson.io/operator');
+    expect(podSpec?.volumes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'cap-jwt',
+          secret: expect.objectContaining({ secretName: 'kagent-cap-task-uid-1' }),
+        }),
+      ]),
+    );
+    expect(container?.volumeMounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'cap-jwt',
+          mountPath: '/var/kagent/cap',
+          readOnly: true,
+        }),
+      ]),
+    );
+  });
+
+  it('threads Tenant CR and keyrotation TTL policy through capability minting and audit', async () => {
+    const ca = await makeCa();
+    const tenant = makeTenant({
+      capabilityRoot: { issuer: 'kagent.knuteson.io/operator/acme' },
+    });
+    const capAgent: Agent = {
+      ...validAgent,
+      spec: {
+        ...validAgent.spec,
+        capabilityClaims: {
+          tools: ['http_get'],
+          models: ['workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'],
+          spawn: ['summarizer'],
+        },
+      },
+    };
+    const longTask = makeTask({
+      spec: {
+        ...task.spec,
+        runConfig: { timeoutSeconds: 7_200 },
+      },
+    });
+    const resolveTenantForTask = vi.fn().mockReturnValue(tenant);
+    const emitCapabilityMinted = vi.fn().mockResolvedValue(undefined);
+    const emitKeyrotationCapMintedWithTtl = vi.fn().mockResolvedValue(undefined);
+    const localDeps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(capAgent),
+      },
+      coreApi: {},
+      capCa: ca,
+      capTtlPolicy: {
+        shortTtlSeconds: 3_600,
+        longTtlGraceSeconds: 120,
+        maxTtlSeconds: 86_400,
+        longRunningThresholdSeconds: 3_600,
+      },
+      resolveTenantForTask,
+      emitCapabilityMinted,
+      emitKeyrotationCapMintedWithTtl,
+    });
+
+    await reconcileAgentTask(longTask, localDeps);
+
+    expect(resolveTenantForTask).toHaveBeenCalledWith(longTask, capAgent);
+    const secretBody = localDeps.mocks.coreApi?.createNamespacedSecret.mock.calls[0]?.[0]?.body as {
+      stringData?: Record<string, string>;
+    };
+    const jwt = secretBody.stringData?.['cap.jwt'];
+    expect(jwt).toEqual(expect.stringMatching(/^[^.]+\.[^.]+\.[^.]+$/));
+    const decoded = decodeCapabilityJwtUnsafe(jwt ?? '');
+    expect(decoded?.iss).toBe('kagent.knuteson.io/operator/acme');
+    expect(decoded?.claims.tenant).toBe('acme');
+    expect(decoded?.claims.tools).toEqual(['http_get']);
+    expect(decoded?.exp - (decoded?.iat ?? 0)).toBe(7_320);
+
+    const createdJob = localDeps.mocks.batchApi.createNamespacedJob.mock.calls[0]?.[0]?.body as {
+      spec?: {
+        template?: {
+          spec?: { containers?: Array<{ env?: Array<{ name: string; value?: string }> }> };
+        };
+      };
+    };
+    const env = new Map(
+      (createdJob.spec?.template?.spec?.containers?.[0]?.env ?? []).map((entry) => [
+        entry.name,
+        entry.value,
+      ]),
+    );
+    expect(env.get('KAGENT_CAP_ISSUER')).toBe('kagent.knuteson.io/operator/acme');
+    expect(emitCapabilityMinted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issuer: 'kagent.knuteson.io/operator/acme',
+        claims: expect.objectContaining({
+          tenant: 'acme',
+          tools: ['http_get'],
+          spawn: ['summarizer'],
+        }),
+      }),
+    );
+    expect(emitKeyrotationCapMintedWithTtl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ttlSeconds: 7_320,
+        tier: 'long-running-grace',
+      }),
+    );
   });
 
   it('publishes a DispatchedTask envelope with the originalUserMessage + payload', async () => {

@@ -390,6 +390,32 @@ cache:
   # busybox is sufficient — we need mkdir / cp / tar.
   helperImage: 'busybox:1.36'
 
+# Wave 5 / GA hardening — per-task capability JWTs. Default OFF so
+# existing installs keep the legacy Agent.spec claim shadow until the
+# operator has an explicit signing key Secret.
+capabilities:
+  enabled: false
+  # Existing Secret in the release namespace containing the capability
+  # signing keypair. Required when enabled=true. Recommended keys match
+  # kubernetes.io/tls-style Secrets (`tls.key`, `tls.crt`), but the
+  # Secret type may be Opaque.
+  signingSecretName: ''
+  signingKeyKey: 'tls.key'
+  signingPublicKeyKey: 'tls.crt'
+  # Optional previous public key in the same Secret, exposed in JWKS
+  # during a rotation grace window.
+  previousPublicKeyKey: ''
+  # Optional JOSE metadata overrides.
+  alg: 'ES256'
+  kid: ''
+  issuer: 'kagent.knuteson.io/operator'
+  # Mounted path inside each spawned agent-pod where the operator writes
+  # the per-task JWT Secret.
+  jwtFile: '/var/kagent/cap/cap.jwt'
+  # Override only when the JWKS endpoint is exposed through a different
+  # in-cluster Service. Empty uses this chart's template-server Service.
+  jwksUrl: ''
+
 # LLM gateway integration (spec §3, §3.2 admission flow). Off by default
 # — kagent works without the gateway (agents talk to backends via
 # litellmBaseUrl as today). Set enabled=true to:

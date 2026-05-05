@@ -56,6 +56,22 @@ export { route, type RouteContext, type RouteResult, type RouterDeps } from './r
 export { startServer, buildHandler, type ServerDeps, type StartedServer } from './server.js';
 export { parseEnv, type GatewayConfig } from './env.js';
 export {
+  DEFAULT_CONFORMANCE_TRACEPARENT,
+  buildChatProbeHeaders,
+  evaluateMtlsSvidFallback,
+  runGatewayConformance,
+  type GatewayConformanceCheck,
+  type GatewayConformanceCheckId,
+  type GatewayConformanceFetchFn,
+  type GatewayConformanceFetchInit,
+  type GatewayConformanceFetchResponse,
+  type GatewayConformanceHeaders,
+  type GatewayConformanceInput,
+  type GatewayConformanceReport,
+  type GatewayConformanceStatus,
+  type MtlsSvidExpectation,
+} from './conformance.js';
+export {
   authenticate,
   hashApiKey,
   type ApiKeyInfo,

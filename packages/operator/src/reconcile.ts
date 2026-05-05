@@ -52,24 +52,33 @@ import type {
   CustomObjectsApi,
   V1ConfigMap,
   V1Job,
+  V1Secret,
 } from '@kubernetes/client-node';
+import { decodeCapabilityJwtUnsafe, type CapabilityBundle } from '@kagent/capability-types';
+import type { CapTtlPolicy } from '@kagent/keyrotation-controller';
 
 import {
   API_GROUP,
+  API_GROUP_VERSION,
   API_VERSION,
   type Agent,
   type AgentTask,
   type AgentTaskCondition,
+  type Tenant,
   type OutputRef,
   isAgent,
 } from './crds/index.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
+import type { CapCa } from './cap-ca.js';
+import { CapabilityViolationError, mintCapabilityForTask } from './cap-issuer.js';
 import type { Dispatcher } from './dispatcher.js';
 import { isDispatchPublished, markJobPublished, readJob, unsuspendJob } from './job-annotator.js';
 import {
   buildAgentTaskConfigMap,
   buildJobSpec,
+  CAP_JWT_SECRET_KEY,
+  DEFAULT_CAP_JWT_FILE,
   type BuildJobSpecOptions,
   jobNameForTask,
 } from './job-spec.js';
@@ -192,6 +201,21 @@ export interface ReconcileDeps {
     agent: Agent,
     task: AgentTask,
   ) => import('@kubernetes/client-node').V1Affinity | undefined;
+
+  /* ---- v0.3.0-capabilities — per-task JWT mint + Secret mount.
+   * When `capCa` is set, the reconciler mints a capability bundle
+   * before Job creation, writes it to a per-task Secret owned by the
+   * AgentTask, and forwards that Secret into buildJobSpec as a
+   * read-only mount. */
+  readonly capCa?: CapCa;
+  readonly capJwksUrl?: string;
+  readonly capJwtFile?: string;
+  readonly capTtlPolicy?: CapTtlPolicy;
+  readonly resolveTenantForTask?: (task: AgentTask, agent: Agent) => Tenant | undefined;
+  readonly emitCapabilityMinted?: (fields: CapabilityMintedAuditFields) => Promise<void>;
+  readonly emitKeyrotationCapMintedWithTtl?: (
+    fields: KeyrotationCapMintedWithTtlAuditFields,
+  ) => Promise<void>;
 }
 
 /**
@@ -216,6 +240,30 @@ export interface TaskDedupedAuditFields {
   readonly agentName: string;
   readonly idempotencyKey: string;
   readonly originalTaskUid: string;
+}
+
+export interface CapabilityMintedAuditFields {
+  readonly capabilityId: string;
+  readonly taskUid: string;
+  readonly taskNamespace: string;
+  readonly taskName: string;
+  readonly issuer: string;
+  readonly expiresAt: string;
+  readonly claims: {
+    readonly tools?: readonly string[];
+    readonly models?: readonly string[];
+    readonly spawn?: readonly string[];
+    readonly tenant?: string;
+  };
+}
+
+export interface KeyrotationCapMintedWithTtlAuditFields {
+  readonly capabilityId: string;
+  readonly taskUid: string | undefined;
+  readonly taskNamespace: string | undefined;
+  readonly taskName: string | undefined;
+  readonly ttlSeconds: number;
+  readonly tier: 'short-running' | 'long-running-grace' | 'long-running-clamped';
 }
 
 export interface ReconcileResult {
@@ -324,6 +372,12 @@ export async function reconcileAgentTask(
     }
   }
 
+  const capabilityJwt = await mintAndPersistCapabilityIfEnabled(task, agent, deps);
+  if (capabilityJwt.kind === 'failed') {
+    await markFailed(task, capabilityJwt.reason, deps);
+    return { action: 'failed', reason: capabilityJwt.reason };
+  }
+
   // Step 3 — build + create the Job, SUSPENDED. K8s won't schedule
   // the pod until step 6 patches `spec.suspend: false`. The reconcile
   // loop forwards the operator's `jobSpecOptions` (image/env/PVC/etc)
@@ -332,6 +386,14 @@ export async function reconcileAgentTask(
   // reconcile.
   const job = buildJobSpec(agent, task, {
     ...deps.jobSpecOptions,
+    ...(capabilityJwt.kind === 'minted' && {
+      capabilityJwt: {
+        secretName: capabilityJwt.secretName,
+        filePath: deps.capJwtFile ?? DEFAULT_CAP_JWT_FILE,
+        ...(deps.capJwksUrl !== undefined && { jwksUrl: deps.capJwksUrl }),
+        issuer: capabilityJwt.issuer,
+      },
+    }),
     suspend: true,
     useConfigMap,
   });
@@ -559,6 +621,209 @@ async function createConfigMapIdempotent(cm: V1ConfigMap, coreApi: CoreV1Api): P
     if (isAlreadyExists(err)) return;
     throw err;
   }
+}
+
+type CapabilityMintOutcome =
+  | { readonly kind: 'disabled' }
+  | {
+      readonly kind: 'minted';
+      readonly secretName: string;
+      readonly jti: string;
+      readonly issuer: string;
+    }
+  | { readonly kind: 'failed'; readonly reason: string };
+
+async function mintAndPersistCapabilityIfEnabled(
+  task: AgentTask,
+  agent: Agent,
+  deps: ReconcileDeps,
+): Promise<CapabilityMintOutcome> {
+  if (deps.capCa === undefined) return { kind: 'disabled' };
+  if (deps.coreApi === undefined) {
+    return {
+      kind: 'failed',
+      reason: 'capability minting enabled but CoreV1Api is unavailable',
+    };
+  }
+
+  try {
+    const parentBundle = await loadParentCapabilityBundle(task, deps.coreApi);
+    const tenant = deps.resolveTenantForTask?.(task, agent);
+    const minted = await mintCapabilityForTask(deps.capCa, {
+      task,
+      agent,
+      ...(parentBundle !== undefined && { parentBundle }),
+      ...(tenant !== undefined && { tenant }),
+      ...(deps.capTtlPolicy !== undefined && { ttlPolicy: deps.capTtlPolicy }),
+    });
+    const secretName = capabilitySecretNameForTask(task);
+    await createSecretIdempotent(buildCapabilitySecret(task, secretName, minted.jwt), deps.coreApi);
+    await patchCapabilityRef(task, deps.customApi, minted.jti);
+    await emitCapabilityMintAudit(task, minted, deps);
+    return {
+      kind: 'minted',
+      secretName,
+      jti: minted.jti,
+      issuer: minted.issuer,
+    };
+  } catch (err) {
+    const prefix =
+      err instanceof CapabilityViolationError
+        ? 'policy_denied:capability_violation'
+        : 'capability mint failed';
+    const message = err instanceof Error ? err.message : String(err);
+    return { kind: 'failed', reason: `${prefix}: ${message}` };
+  }
+}
+
+async function emitCapabilityMintAudit(
+  task: AgentTask,
+  minted: Awaited<ReturnType<typeof mintCapabilityForTask>>,
+  deps: ReconcileDeps,
+): Promise<void> {
+  const taskUid = task.metadata.uid;
+  const taskName = task.metadata.name;
+  if (typeof taskUid !== 'string' || taskUid.length === 0) return;
+  if (typeof taskName !== 'string' || taskName.length === 0) return;
+  const taskNamespace = task.metadata.namespace ?? 'default';
+  const claims: CapabilityMintedAuditFields['claims'] = {
+    ...(minted.claims.tools !== undefined && { tools: minted.claims.tools }),
+    ...(minted.claims.models !== undefined && { models: minted.claims.models }),
+    ...(minted.claims.spawn !== undefined && { spawn: minted.claims.spawn }),
+    ...(minted.claims.tenant !== undefined && { tenant: minted.claims.tenant }),
+  };
+  try {
+    await deps.emitCapabilityMinted?.({
+      capabilityId: minted.jti,
+      taskUid,
+      taskNamespace,
+      taskName,
+      issuer: minted.issuer,
+      expiresAt: new Date(minted.expiresAt * 1000).toISOString(),
+      claims,
+    });
+    if (minted.ttlDecision !== undefined) {
+      await deps.emitKeyrotationCapMintedWithTtl?.({
+        capabilityId: minted.jti,
+        taskUid,
+        taskNamespace,
+        taskName,
+        ttlSeconds: minted.ttlDecision.ttlSeconds,
+        tier: minted.ttlDecision.tier,
+      });
+    }
+  } catch (err) {
+    console.warn('[kagent-operator] capability audit emission failed:', err);
+  }
+}
+
+function capabilitySecretNameForTask(task: AgentTask): string {
+  const uid = task.metadata.uid;
+  if (typeof uid !== 'string' || uid.length === 0) {
+    throw new Error('AgentTask is missing metadata.uid — cannot derive capability Secret name');
+  }
+  return capabilitySecretNameForTaskUid(uid);
+}
+
+function capabilitySecretNameForTaskUid(uid: string): string {
+  return `kagent-cap-${uid.slice(0, 50)}`;
+}
+
+function buildCapabilitySecret(task: AgentTask, name: string, jwt: string): V1Secret {
+  const namespace = task.metadata.namespace ?? 'default';
+  const taskName = task.metadata.name;
+  const taskUid = task.metadata.uid;
+  if (typeof taskName !== 'string' || taskName.length === 0) {
+    throw new Error('AgentTask is missing metadata.name — cannot build capability Secret');
+  }
+  if (typeof taskUid !== 'string' || taskUid.length === 0) {
+    throw new Error('AgentTask is missing metadata.uid — cannot build capability Secret');
+  }
+  return {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: {
+      name,
+      namespace,
+      labels: {
+        'kagent.knuteson.io/managed-by': 'kagent-operator',
+        'kagent.knuteson.io/task': taskName,
+      },
+      ownerReferences: [
+        {
+          apiVersion: API_GROUP_VERSION,
+          kind: 'AgentTask',
+          name: taskName,
+          uid: taskUid,
+          controller: false,
+          blockOwnerDeletion: true,
+        },
+      ],
+    },
+    type: 'Opaque',
+    stringData: { [CAP_JWT_SECRET_KEY]: jwt },
+  };
+}
+
+async function createSecretIdempotent(secret: V1Secret, coreApi: CoreV1Api): Promise<void> {
+  const namespace = secret.metadata?.namespace ?? 'default';
+  try {
+    await coreApi.createNamespacedSecret({ namespace, body: secret });
+  } catch (err) {
+    if (isAlreadyExists(err)) return;
+    throw err;
+  }
+}
+
+async function loadParentCapabilityBundle(
+  task: AgentTask,
+  coreApi: CoreV1Api,
+): Promise<CapabilityBundle | undefined> {
+  const parentUid = task.spec.parentTask;
+  if (typeof parentUid !== 'string' || parentUid.length === 0) return undefined;
+  const namespace = task.metadata.namespace ?? 'default';
+  const name = capabilitySecretNameForTaskUid(parentUid);
+  try {
+    const secret = await coreApi.readNamespacedSecret({ namespace, name });
+    const encoded = secret.data?.[CAP_JWT_SECRET_KEY];
+    if (typeof encoded !== 'string' || encoded.length === 0) {
+      throw new Error(`Secret ${namespace}/${name} is missing ${CAP_JWT_SECRET_KEY}`);
+    }
+    const jwt = Buffer.from(encoded, 'base64').toString('utf8').trim();
+    const decoded = decodeCapabilityJwtUnsafe(jwt);
+    if (decoded === undefined) {
+      throw new Error(`Secret ${namespace}/${name} contains malformed capability JWT`);
+    }
+    return decoded;
+  } catch (err) {
+    if (isNotFound(err)) {
+      throw new Error(
+        `parent capability Secret ${namespace}/${name} not found for parentTask=${parentUid}`,
+      );
+    }
+    throw err;
+  }
+}
+
+async function patchCapabilityRef(
+  task: AgentTask,
+  customApi: CustomObjectsApi,
+  jti: string,
+): Promise<void> {
+  const namespace = task.metadata.namespace ?? 'default';
+  const name = task.metadata.name;
+  if (typeof name !== 'string' || name.length === 0) return;
+  await customApi.patchNamespacedCustomObjectStatus(
+    {
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace,
+      plural: 'agenttasks',
+      name,
+      body: { status: { capabilityRef: jti } },
+    },
+    mergePatchOptions,
+  );
 }
 
 /**

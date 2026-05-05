@@ -261,6 +261,29 @@ describe('template-server', () => {
 });
 
 describe('template-server JWKS endpoint (v0.3.0-capabilities)', () => {
+  it('does not expose template instantiation when booted for JWKS only', async () => {
+    const fakeKeys = [{ kty: 'EC', kid: 'test-1', alg: 'ES256', use: 'sig' }];
+    const customApi = makeFakeCustomApi({ templates: new Map() });
+    const handler = buildInstantiateHandler({
+      customApi,
+      resolveNamespace: () => 'kagent-system',
+      templatesEnabled: false,
+      jwksProvider: () => ({ keys: fakeKeys }),
+    });
+    const { req, res, out } = makeFakeReqRes({
+      method: 'POST',
+      url: '/v1alpha1/templates/summarizer:instantiate',
+      body: { parameterValues: {}, createdByTaskUid: 'uid-task' },
+    });
+    await handler(req, res);
+    await new Promise((r) => setImmediate(r));
+    expect(out.status).toBe(404);
+    const body = JSON.parse(out.body ?? '{}') as { code?: string };
+    expect(body.code).toBe('templates_disabled');
+    expect(customApi.templateGets).toHaveLength(0);
+    expect(customApi.creates).toHaveLength(0);
+  });
+
   it('GET /.well-known/jwks.json returns the configured keys', async () => {
     const fakeKeys = [{ kty: 'EC', kid: 'test-1', alg: 'ES256', use: 'sig' }];
     const handler = buildInstantiateHandler({

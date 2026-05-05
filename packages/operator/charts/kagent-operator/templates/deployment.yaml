@@ -26,6 +26,9 @@ turns that into a clear, actionable error rather than a silent race. */}}
 {{- if ne (.Values.replicaCount | int) 1 }}
 {{- fail "kagent-operator: replicaCount must be 1 in v0.1; multi-replica requires leader election (v0.2)" }}
 {{- end }}
+{{- if and .Values.capabilities.enabled (not .Values.capabilities.signingSecretName) }}
+{{- fail "kagent-operator: capabilities.enabled=true requires capabilities.signingSecretName" }}
+{{- end }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -75,6 +78,20 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.capabilities.enabled }}
+        - name: kagent-cap-ca
+          secret:
+            secretName: {{ .Values.capabilities.signingSecretName | quote }}
+            items:
+              - key: {{ .Values.capabilities.signingKeyKey | quote }}
+                path: {{ .Values.capabilities.signingKeyKey | quote }}
+              - key: {{ .Values.capabilities.signingPublicKeyKey | quote }}
+                path: {{ .Values.capabilities.signingPublicKeyKey | quote }}
+              {{- with .Values.capabilities.previousPublicKeyKey }}
+              - key: {{ . | quote }}
+                path: {{ . | quote }}
+              {{- end }}
+        {{- end }}
         {{- if .Values.cas.enabled }}
         # Wave 1 — CAS
         # The operator's GC controller walks the CAS tree on disk to
@@ -101,6 +118,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.capabilities.enabled }}
+            - name: kagent-cap-ca
+              mountPath: /var/kagent/cap-ca
+              readOnly: true
+            {{- end }}
             {{- if .Values.cas.enabled }}
             # Wave 1 — CAS — same mountPath the operator advertises to
             # spawned Jobs via KAGENT_CAS_MOUNT_PATH so the GC walker
@@ -108,13 +130,14 @@ spec:
             - name: kagent-cas
               mountPath: {{ .Values.cas.mountPath | quote }}
             {{- end }}
-          {{- if or .Values.agentPod.templates.enabled .Values.triggers.enabled }}
+          {{- if or .Values.agentPod.templates.enabled .Values.capabilities.enabled .Values.triggers.enabled }}
           ports:
-            {{- if .Values.agentPod.templates.enabled }}
-            # WS-M template-server. Exposes
+            {{- if or .Values.agentPod.templates.enabled .Values.capabilities.enabled }}
+            # WS-M template-server / Wave 5 JWKS endpoint. Exposes
             # POST /v1alpha1/templates/{name}:instantiate to in-cluster
-            # callers (chiefly agent-pods). ClusterIP-only Service in
-            # template-service.yaml fronts this.
+            # callers when templates are enabled, plus
+            # GET /.well-known/jwks.json when capabilities are enabled.
+            # ClusterIP-only Service in template-service.yaml fronts this.
             - name: templates
               containerPort: {{ .Values.agentPod.templates.serverPort }}
               protocol: TCP
@@ -323,6 +346,36 @@ spec:
             {{- if .Values.agentPod.templates.enabled }}
             - name: KAGENT_AGENT_POD_TEMPLATE_SERVER_URL
               value: 'http://{{ include "kagent-operator.fullname" . }}-templates.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.agentPod.templates.serverPort }}'
+            {{- end }}
+            # Wave 5 / GA hardening — per-task capability JWT minting.
+            # When enabled, the operator reads the chart-mounted signing
+            # Secret, mints a Secret per AgentTask, mounts it into the
+            # spawned Job, and serves JWKS from the template-server port.
+            - name: KAGENT_CAPABILITIES_ENABLED
+              value: {{ .Values.capabilities.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.capabilities.enabled }}
+            - name: KAGENT_CAP_SIGNING_KEY_FILE
+              value: '/var/kagent/cap-ca/{{ .Values.capabilities.signingKeyKey }}'
+            - name: KAGENT_CAP_SIGNING_PUB_FILE
+              value: '/var/kagent/cap-ca/{{ .Values.capabilities.signingPublicKeyKey }}'
+            {{- with .Values.capabilities.previousPublicKeyKey }}
+            - name: KAGENT_CAP_SIGNING_PREV_PUB_FILE
+              value: '/var/kagent/cap-ca/{{ . }}'
+            {{- end }}
+            {{- with .Values.capabilities.alg }}
+            - name: KAGENT_CAP_SIGNING_ALG
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.capabilities.kid }}
+            - name: KAGENT_CAP_SIGNING_KID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: KAGENT_CAP_ISSUER
+              value: {{ .Values.capabilities.issuer | quote }}
+            - name: KAGENT_CAP_JWT_FILE
+              value: {{ .Values.capabilities.jwtFile | quote }}
+            - name: KAGENT_CAP_JWKS_URL
+              value: {{ default (printf "http://%s-templates.%s.svc.cluster.local:%v/.well-known/jwks.json" (include "kagent-operator.fullname" .) .Release.Namespace .Values.agentPod.templates.serverPort) .Values.capabilities.jwksUrl | quote }}
             {{- end }}
             # v0.1.6 — Langfuse-managed prompt fetcher. When enabled,
             # spawned agent-pods inherit KAGENT_LANGFUSE_HOST + creds
@@ -601,6 +654,7 @@ spec:
             {{- if .Values.keyRotation.gateway.enabled }}
             - name: KAGENT_KEYROTATION_GATEWAY_INTERVAL_HOURS
               value: {{ .Values.keyRotation.gateway.intervalHours | quote }}
+            {{- end }}
             {{- end }}
           {{- if and .Values.triggers.enabled .Values.triggers.secrets }}
           # Per-trigger HMAC secrets sourced from the chart-managed

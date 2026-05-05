@@ -69,6 +69,12 @@ export interface TemplateServerDeps {
   readonly customApi: CustomObjectsApi;
   /** Resolves to the namespace the agent-pod's task is in. */
   readonly resolveNamespace: (req: IncomingMessage) => string;
+  /**
+   * Enables the POST template-instantiation route. Defaults to true
+   * for existing WS-M callers; main.ts passes false when the server is
+   * booted only to serve capability JWKS.
+   */
+  readonly templatesEnabled?: boolean;
   /** Test-injectable clock; production uses Date. */
   readonly clock?: () => Date;
   /**
@@ -109,11 +115,19 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
       return;
     }
 
+    const match = url.match(ROUTE_RE);
+    if (match !== null && deps.templatesEnabled === false) {
+      writeJson(res, 404, {
+        code: 'templates_disabled',
+        message: 'AgentTemplate instantiation is disabled on this operator',
+      });
+      return;
+    }
+
     if (req.method !== 'POST') {
       writeJson(res, 405, { code: 'method_not_allowed', message: 'method must be POST' });
       return;
     }
-    const match = url.match(ROUTE_RE);
     if (match === null) {
       writeJson(res, 404, { code: 'not_found', message: 'unknown route' });
       return;

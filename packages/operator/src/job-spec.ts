@@ -269,6 +269,22 @@ export interface BuildJobSpecOptions {
     readonly mountPath?: string;
   };
   /**
+   * v0.3.0-capabilities — per-task capability JWT Secret mounted into
+   * the agent-pod. The reconciler owns minting + Secret creation; the
+   * Job spec only renders the read-only Secret volume plus the env
+   * paths the agent-pod cap consumer needs.
+   */
+  readonly capabilityJwt?: {
+    /** Secret name in the AgentTask namespace. */
+    readonly secretName: string;
+    /** JWT file path exposed to the agent-pod. */
+    readonly filePath?: string;
+    /** Operator JWKS URL used by the agent-pod verifier. */
+    readonly jwksUrl?: string;
+    /** Expected JWT issuer used by the agent-pod verifier. */
+    readonly issuer?: string;
+  };
+  /**
    * v0.4.2-cache — Wave 3 / Cache sub-team. Per-Agent persistent cache
    * plumbing. When set + the Agent declares `Agent.spec.caches[]`,
    * `buildJobSpec` calls {@link buildCacheMounts} internally to derive
@@ -372,6 +388,15 @@ export const DEFAULT_ARTIFACT_MOUNT_PATH = '/var/kagent/artifacts';
 
 /** Volume name used for the artifact PVC in the spawned pod spec. */
 export const ARTIFACT_VOLUME_NAME = 'artifacts';
+
+/** Default path for the operator-minted per-task capability JWT. */
+export const DEFAULT_CAP_JWT_FILE = '/var/kagent/cap/cap.jwt';
+
+/** Secret data key used inside per-task capability JWT Secrets. */
+export const CAP_JWT_SECRET_KEY = 'cap.jwt';
+
+/** Volume name used for the per-task capability JWT Secret. */
+export const CAP_JWT_VOLUME_NAME = 'cap-jwt';
 
 /**
  * Deterministic Job name from an AgentTask. Uses the task UID (which
@@ -500,6 +525,20 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
           { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
         ]),
     { name: 'KAGENT_TASK_DEPTH', value: String(taskDepth) },
+    ...(opts.capabilityJwt !== undefined
+      ? [
+          {
+            name: 'KAGENT_CAP_JWT_FILE',
+            value: opts.capabilityJwt.filePath ?? DEFAULT_CAP_JWT_FILE,
+          },
+          ...(opts.capabilityJwt.jwksUrl !== undefined
+            ? [{ name: 'KAGENT_CAP_JWKS_URL', value: opts.capabilityJwt.jwksUrl }]
+            : []),
+          ...(opts.capabilityJwt.issuer !== undefined
+            ? [{ name: 'KAGENT_CAP_ISSUER', value: opts.capabilityJwt.issuer }]
+            : []),
+        ]
+      : []),
     ...artifactEnv,
     ...traceparentEnv,
     ...blackboardEnv,
@@ -591,13 +630,36 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
       }
     : undefined;
 
-  const podVolumes: V1Volume[] = [artifactVolume, tmpVolume, configVolume].filter(
+  const capJwtFilePath = opts.capabilityJwt?.filePath ?? DEFAULT_CAP_JWT_FILE;
+  const capJwtMountPath = capJwtFilePath.slice(0, capJwtFilePath.lastIndexOf('/'));
+  const capJwtFileName = capJwtFilePath.slice(capJwtFilePath.lastIndexOf('/') + 1);
+  const capJwtVolume =
+    opts.capabilityJwt !== undefined
+      ? {
+          name: CAP_JWT_VOLUME_NAME,
+          secret: {
+            secretName: opts.capabilityJwt.secretName,
+            items: [{ key: CAP_JWT_SECRET_KEY, path: capJwtFileName }],
+          },
+        }
+      : undefined;
+  const capJwtVolumeMount =
+    opts.capabilityJwt !== undefined
+      ? {
+          name: CAP_JWT_VOLUME_NAME,
+          mountPath: capJwtMountPath,
+          readOnly: true,
+        }
+      : undefined;
+
+  const podVolumes: V1Volume[] = [artifactVolume, tmpVolume, configVolume, capJwtVolume].filter(
     (v): v is NonNullable<typeof v> => v !== undefined,
   );
   const containerVolumeMounts: V1VolumeMount[] = [
     artifactVolumeMount,
     tmpVolumeMount,
     configVolumeMount,
+    capJwtVolumeMount,
   ].filter((v): v is NonNullable<typeof v> => v !== undefined);
 
   // v0.4.2-cache — Wave 3 / Cache sub-team. When the operator threads
