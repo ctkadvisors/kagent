@@ -27,7 +27,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: orchestrator
 spec:
-  model: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+  model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: |
     You orchestrate child agents for an enterprise pilot. Decompose the
@@ -56,7 +56,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: summarizer
 spec:
-  model: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+  model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: 'You are a precise technical assistant. Answer in one sentence.'
   sandboxProfile: default
@@ -84,7 +84,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: artifact-producer
 spec:
-  model: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+  model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: |
     Produce a short markdown report and persist it as an artifact via
@@ -111,7 +111,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: verifier
 spec:
-  model: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+  model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: |
     Answer the user's question in valid JSON of the shape
@@ -136,7 +136,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: policy-cap
 spec:
-  model: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+  model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: 'You are constrained by an enterprise policy. Answer in one sentence.'
   tools:
@@ -184,7 +184,7 @@ metadata:
     kagent.knuteson.io/rc-pilot-note: |
       Force ImagePullBackOff via operator values overlay (see README §3).
 spec:
-  model: workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+  model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: 'This agent intentionally fails to pull its container image.'
   sandboxProfile: default
