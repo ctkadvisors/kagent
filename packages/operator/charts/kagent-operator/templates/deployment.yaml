@@ -397,8 +397,22 @@ spec:
             {{- if .Values.langfuse.enabled }}
             - name: KAGENT_AGENT_POD_LANGFUSE_HOST
               value: {{ .Values.langfuse.host | quote }}
+            # v0.1.7-rig.2 — also expose the unprefixed env names for
+            # the operator's OWN Langfuse fetcher (verifier reconciler's
+            # llmJudgePromptRef path). Without these, the verifier
+            # fail-closes with `verifier_misconfig:langfuse_unconfigured`
+            # because process.env.KAGENT_LANGFUSE_HOST is unset on the
+            # operator pod (only the AGENT_POD-prefixed forwarding
+            # vars exist).
+            - name: KAGENT_LANGFUSE_HOST
+              value: {{ .Values.langfuse.host | quote }}
             {{- if .Values.langfuse.apiKey.secretName }}
             - name: KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.langfuse.apiKey.secretName | quote }}
+                  key: {{ .Values.langfuse.apiKey.publicKeyKey | quote }}
+            - name: KAGENT_LANGFUSE_PUBLIC_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.langfuse.apiKey.secretName | quote }}
@@ -411,6 +425,11 @@ spec:
             - name: KAGENT_AGENT_POD_LANGFUSE_PUBLIC_KEY_SECRET_KEY
               value: {{ .Values.langfuse.apiKey.publicKeyKey | quote }}
             - name: KAGENT_AGENT_POD_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.langfuse.apiKey.secretName | quote }}
+                  key: {{ .Values.langfuse.apiKey.secretKeyKey | quote }}
+            - name: KAGENT_LANGFUSE_SECRET_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.langfuse.apiKey.secretName | quote }}
