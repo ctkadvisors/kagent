@@ -1679,3 +1679,334 @@ describe('reconcileParentFromChildEvent — WS-I informer-cache list', () => {
     expect(customApi.listNamespacedCustomObject).toHaveBeenCalled();
   });
 });
+
+/* =====================================================================
+ * reconcileParentFromChildEvent — Phase 5 P4 audit emission +
+ * idempotency-on-re-entry coverage.
+ *
+ * The Workstream 5 / Phase 5 wire-up emits a `parent.children_aggregated`
+ * audit event on every parent-status patch (kind === 'updated'). The
+ * audit fields carry before/after counter snapshots so audit warehouses
+ * can reconstruct the per-edge transition without joining sibling
+ * events. Idempotent no-ops MUST NOT emit (otherwise an informer
+ * resync would spam the stream with redundant events).
+ *
+ * Re-entrant calls — calling the function twice in sequence on
+ * an unchanged graph — MUST NOT double-count: the first call updates
+ * the projection, the second call sees the already-patched parent and
+ * returns `kind: 'unchanged'` with zero K8s writes + zero audit emissions.
+ * ===================================================================== */
+describe('reconcileParentFromChildEvent — Phase 5 P4 audit emission', () => {
+  it('emits parent.children_aggregated with before/after counters on the updated path', async () => {
+    const c1 = makeChild('c1', 'Completed');
+    const c2 = makeChild('c2', 'Completed');
+    // Parent BEFORE the patch had a stale projection — 1 success, 0
+    // failures, 1 in-flight (i.e. before c2 completed).
+    const parentWithBeforeProjection = makeParent({
+      status: {
+        children: [
+          { name: 'child-c1', namespace: 'default', uid: 'c1', phase: 'Completed' },
+          { name: 'child-c2', namespace: 'default', uid: 'c2', phase: 'Pending' },
+        ],
+        aggregatePhase: 'PartiallyComplete',
+        successCount: 1,
+        failureCount: 0,
+        inFlightCount: 1,
+      },
+    });
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithBeforeProjection),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1, c2] }),
+    });
+
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+      triggeredByChildUid: 'c2',
+    });
+
+    expect(action).toEqual({ kind: 'updated', aggregatePhase: 'AllComplete', childCount: 2 });
+    expect(emitParentChildrenAggregated).toHaveBeenCalledTimes(1);
+    expect(emitParentChildrenAggregated).toHaveBeenCalledWith({
+      parentTaskUid: 'parent-uid-1',
+      parentTaskNamespace: 'default',
+      parentTaskName: 'parent-task',
+      aggregatePhase: 'AllComplete',
+      before: {
+        successCount: 1,
+        failureCount: 0,
+        inFlightCount: 1,
+        childCount: 2,
+      },
+      after: {
+        successCount: 2,
+        failureCount: 0,
+        inFlightCount: 0,
+        childCount: 2,
+      },
+      triggeredBy: 'c2',
+    });
+  });
+
+  it('emits with before counters defaulted to 0 when the parent has no prior projection', async () => {
+    const c1 = makeChild('c1', 'Completed');
+    // Fresh parent — no `status` at all, so all counters default to 0.
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1] }),
+    });
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+    await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+    });
+
+    expect(emitParentChildrenAggregated).toHaveBeenCalledTimes(1);
+    const fields = emitParentChildrenAggregated.mock.calls[0][0] as {
+      before: {
+        successCount: number;
+        failureCount: number;
+        inFlightCount: number;
+        childCount: number;
+      };
+      after: {
+        successCount: number;
+        failureCount: number;
+        inFlightCount: number;
+        childCount: number;
+      };
+      triggeredBy: string | undefined;
+    };
+    expect(fields.before).toEqual({
+      successCount: 0,
+      failureCount: 0,
+      inFlightCount: 0,
+      childCount: 0,
+    });
+    expect(fields.after).toEqual({
+      successCount: 1,
+      failureCount: 0,
+      inFlightCount: 0,
+      childCount: 1,
+    });
+    expect(fields.triggeredBy).toBeUndefined();
+  });
+
+  it('does NOT emit when the projection is unchanged (idempotent no-op path)', async () => {
+    // Parent already carries the freshly-computed projection — re-firing
+    // the reconcile must be a quiet no-op including no audit emission.
+    const c1 = makeChild('c1', 'Completed');
+    const parentWithProjection = makeParent({
+      status: {
+        children: [{ name: 'child-c1', namespace: 'default', uid: 'c1', phase: 'Completed' }],
+        aggregatePhase: 'AllComplete',
+        successCount: 1,
+        failureCount: 0,
+        inFlightCount: 0,
+      },
+    });
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithProjection),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1] }),
+    });
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+    });
+    expect(action.kind).toBe('unchanged');
+    expect(emitParentChildrenAggregated).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit when the parent is missing (404 → kind=skipped)', async () => {
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockRejectedValue({ code: 404 }),
+    });
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+    });
+    expect(action).toEqual({ kind: 'skipped', reason: 'not-found' });
+    expect(emitParentChildrenAggregated).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit when a cycle is detected (skipped/cycle-detected)', async () => {
+    const parentWithCycle = makeParent({
+      spec: {
+        targetAgent: 'researcher',
+        payload: {},
+        originalUserMessage: 'cycle',
+        parentTask: 'cycle-child-uid',
+      },
+    });
+    const cycleChild = makeChild('cycle-child-uid', 'Pending');
+    const cache = new Map<string, AgentTask>([
+      ['parent-uid-1', parentWithCycle],
+      ['cycle-child-uid', cycleChild],
+    ]);
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(parentWithCycle),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [cycleChild] }),
+    });
+    // Suppress the cycle warning to keep the test output clean.
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      getTaskByUid: (uid: string) => cache.get(uid),
+      emitParentChildrenAggregated,
+    });
+
+    expect(action).toEqual({ kind: 'skipped', reason: 'cycle-detected' });
+    expect(emitParentChildrenAggregated).not.toHaveBeenCalled();
+    consoleWarnSpy.mockRestore();
+  });
+
+  it('does NOT propagate audit-hook failures (best-effort emission)', async () => {
+    const c1 = makeChild('c1', 'Completed');
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1] }),
+    });
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Hook throws — the reconcile MUST still resolve `kind: 'updated'`
+    // and the patch MUST still have landed.
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated: vi.fn().mockRejectedValue(new Error('audit nats unreachable')),
+    });
+    expect(action.kind).toBe('updated');
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+    // The hook failure surfaces as a console.warn — never re-throws.
+    expect(consoleWarnSpy).toHaveBeenCalled();
+    consoleWarnSpy.mockRestore();
+  });
+});
+
+describe('reconcileParentFromChildEvent — re-entrant idempotency (Phase 5 P4)', () => {
+  it('two sequential calls on the same graph: first PATCHes once, second is unchanged + zero writes/emissions', async () => {
+    const c1 = makeChild('c1', 'Completed');
+    const c2 = makeChild('c2', 'Completed');
+    const c3 = makeChild('c3', 'Pending');
+
+    // First call sees a fresh parent (no projection); second call sees
+    // a parent whose status was just patched. We simulate that
+    // round-trip by mutating the parent's status to mirror what the
+    // operator's PATCH would produce.
+    let parentRecord = makeParent();
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockImplementation(() => Promise.resolve(parentRecord)),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({ items: [c1, c2, c3] }),
+      patchNamespacedCustomObjectStatus: vi
+        .fn()
+        .mockImplementation((req: { body: { status: AgentTask['status'] } }) => {
+          // Apply the patch into our `parentRecord` so the second
+          // GET in the next call sees the updated state.
+          const merged: AgentTask['status'] = {
+            ...(parentRecord.status ?? {}),
+            ...(req.body.status ?? {}),
+          };
+          parentRecord = {
+            ...parentRecord,
+            status: merged,
+          };
+          return Promise.resolve({});
+        }),
+    });
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+
+    const first = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+      triggeredByChildUid: 'c2',
+    });
+    expect(first).toEqual({
+      kind: 'updated',
+      aggregatePhase: 'PartiallyComplete',
+      childCount: 3,
+    });
+    expect(emitParentChildrenAggregated).toHaveBeenCalledTimes(1);
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+
+    // Re-entrant call — same children, same parent state. MUST be a
+    // no-op: no new PATCH, no new audit emission.
+    const second = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+      triggeredByChildUid: 'c2',
+    });
+    expect(second.kind).toBe('unchanged');
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1); // unchanged
+    expect(emitParentChildrenAggregated).toHaveBeenCalledTimes(1); // unchanged
+  });
+});
+
+describe('reconcileParentFromChildEvent — end-to-end three-child fold (Phase 5 P4)', () => {
+  it('1 Completed + 1 Failed + 1 Running fold to AnyFailed with the expected counters and audit fields', async () => {
+    // The bullet from the task spec: "End-to-end-ish: a parent +
+    // 3 children sequence (one Completed, one Failed, one Running)
+    // → expected counters". The aggregate must be AnyFailed (Failed
+    // overrides), with successCount=1 / failureCount=1 / inFlightCount=1.
+    const completed = makeChild('completed-child', 'Completed');
+    const failed = makeChild('failed-child', 'Failed');
+    const running = makeChild('running-child', 'Dispatched'); // 'Running' isn't a phase; Dispatched is the in-flight terminal-equivalent.
+
+    const customApi = makeListCustomApi({
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeParent()),
+      listNamespacedCustomObject: vi.fn().mockResolvedValue({
+        items: [completed, failed, running],
+      }),
+    });
+    const emitParentChildrenAggregated = vi.fn().mockResolvedValue(undefined);
+
+    const action = await reconcileParentFromChildEvent(PARENT_REF, {
+      customApi: customApi as unknown as ReconcileDeps['customApi'],
+      emitParentChildrenAggregated,
+      triggeredByChildUid: 'failed-child',
+    });
+
+    // Aggregate verdict.
+    expect(action).toEqual({ kind: 'updated', aggregatePhase: 'AnyFailed', childCount: 3 });
+
+    // Patch body.
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledTimes(1);
+    const body = (
+      customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
+        body: { status: Record<string, unknown> };
+      }
+    ).body.status;
+    expect(body.aggregatePhase).toBe('AnyFailed');
+    expect(body.successCount).toBe(1);
+    expect(body.failureCount).toBe(1);
+    expect(body.inFlightCount).toBe(1);
+    // CRITICAL: even though aggregate is AnyFailed, the parent's own
+    // `status.phase` is NEVER overwritten by this path. Aggregate is
+    // a parallel projection.
+    expect(body).not.toHaveProperty('phase');
+
+    // Audit envelope.
+    expect(emitParentChildrenAggregated).toHaveBeenCalledTimes(1);
+    const fields = emitParentChildrenAggregated.mock.calls[0][0] as {
+      aggregatePhase: string;
+      after: {
+        successCount: number;
+        failureCount: number;
+        inFlightCount: number;
+        childCount: number;
+      };
+      triggeredBy: string | undefined;
+    };
+    expect(fields.aggregatePhase).toBe('AnyFailed');
+    expect(fields.after).toEqual({
+      successCount: 1,
+      failureCount: 1,
+      inFlightCount: 1,
+      childCount: 3,
+    });
+    expect(fields.triggeredBy).toBe('failed-child');
+  });
+});

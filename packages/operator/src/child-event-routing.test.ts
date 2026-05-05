@@ -251,6 +251,158 @@ describe('buildHandler — child-event routing', () => {
     expect(mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
   });
 
+  /* -----------------------------------------------------------------
+   * Phase 5 P4 — supervision-aware ordering. When a CHILD event
+   * carries `phase: Failed` AND supervision is enabled for the
+   * operator, supervision MUST run BEFORE the parent re-aggregate so
+   * the projection reflects post-supervision state (e.g. siblings
+   * the supervisor just `supervision_terminated`).
+   *
+   * The test asserts ordering by recording the relative timestamps of
+   * the supervision-router call and the parent-status PATCH call. The
+   * supervision call must come first (lower call-order index).
+   *
+   * When the failed task is a ROOT (no parent label), supervision
+   * still routes (it short-circuits with `no-op/no-parent`) and the
+   * parent re-aggregate doesn't run at all — neither path touches
+   * etcd, so we just confirm zero patches landed.
+   * ----------------------------------------------------------------- */
+  it('failed CHILD with supervision enabled: supervision runs BEFORE parent re-aggregate', async () => {
+    const parent = makeParentTask();
+    const { deps, mocks } = buildDeps(parent);
+
+    // Track call order across both paths via a shared counter so we
+    // can assert "supervision happened first" without relying on
+    // microtask scheduling implementation details.
+    const callOrder: string[] = [];
+    mocks.customApi.listNamespacedCustomObject = vi.fn().mockImplementation(() => {
+      callOrder.push('parent-list');
+      return Promise.resolve({ items: [] });
+    });
+    mocks.customApi.patchNamespacedCustomObjectStatus = vi.fn().mockImplementation(() => {
+      callOrder.push('parent-patch');
+      return Promise.resolve({});
+    });
+
+    // Patch routeFailureForSupervision at the module level so
+    // buildHandler's internal call routes through our spy. The spy
+    // pushes 'supervision' onto the shared `callOrder` so we can
+    // assert ordering relative to the parent-aggregate path.
+    const mod = await import('./supervision-router.js');
+    const spyRoute = vi.spyOn(mod, 'routeFailureForSupervision').mockImplementation(() => {
+      callOrder.push('supervision');
+      return Promise.resolve({ kind: 'no-op', reason: 'no-parent' });
+    });
+
+    const handler = buildHandler(deps, {
+      enabled: true,
+      router: {
+        customApi: deps.customApi,
+      } as unknown as Parameters<typeof buildHandler>[1] extends infer S
+        ? S extends { router: infer R }
+          ? R
+          : never
+        : never,
+    });
+
+    // Failed child with parent labels (this is the supervision-active
+    // path the ordering branch should take).
+    const failedChild = makeChildTask({ status: { phase: 'Failed', error: 'invalid_inputs' } });
+    await handler.onUpdate(failedChild);
+
+    // supervision-router must have been called.
+    expect(spyRoute).toHaveBeenCalled();
+
+    // The first ordering-relevant entry MUST be 'supervision' — it
+    // ran before parent re-aggregate (which manifests as a parent-list
+    // and parent-patch call, both downstream of `maybeReconcileParent`).
+    expect(callOrder.indexOf('supervision')).toBeGreaterThanOrEqual(0);
+    const supervisionIdx = callOrder.indexOf('supervision');
+    const parentListIdx = callOrder.indexOf('parent-list');
+    // parent-list happens (the parent re-aggregate ran second), and
+    // it happens AFTER supervision.
+    expect(parentListIdx).toBeGreaterThanOrEqual(0);
+    expect(supervisionIdx).toBeLessThan(parentListIdx);
+
+    spyRoute.mockRestore();
+  });
+
+  it('failed CHILD with supervision DISABLED: parent re-aggregate runs (default order, no supervision call)', async () => {
+    const parent = makeParentTask();
+    const { deps, mocks } = buildDeps(parent);
+    const mod = await import('./supervision-router.js');
+    const spyRoute = vi
+      .spyOn(mod, 'routeFailureForSupervision')
+      .mockResolvedValue({ kind: 'no-op', reason: 'no-parent' });
+
+    // supervision-router deps wired but `enabled: false` → guard in
+    // `maybeRouteSupervision` short-circuits without calling the
+    // router.
+    const handler = buildHandler(deps, {
+      enabled: false,
+      router: {
+        customApi: deps.customApi,
+      } as unknown as Parameters<typeof buildHandler>[1] extends infer S
+        ? S extends { router: infer R }
+          ? R
+          : never
+        : never,
+    });
+
+    const failedChild = makeChildTask({ status: { phase: 'Failed', error: 'invalid_inputs' } });
+    await handler.onUpdate(failedChild);
+
+    // supervision-router was NOT called (enabled=false).
+    expect(spyRoute).not.toHaveBeenCalled();
+    // Parent re-aggregate STILL ran — the default order is preserved
+    // when the supervision-deferral guard is off.
+    expect(mocks.customApi.listNamespacedCustomObject).toHaveBeenCalled();
+    expect(mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
+    spyRoute.mockRestore();
+  });
+
+  it('non-failed child events keep the default order: parent re-aggregate first, then supervision (no-op)', async () => {
+    const parent = makeParentTask();
+    const { deps, mocks } = buildDeps(parent);
+    const mod = await import('./supervision-router.js');
+    const spyRoute = vi.spyOn(mod, 'routeFailureForSupervision');
+
+    const callOrder: string[] = [];
+    mocks.customApi.listNamespacedCustomObject = vi.fn().mockImplementation(() => {
+      callOrder.push('parent-list');
+      return Promise.resolve({ items: [] });
+    });
+
+    const handler = buildHandler(deps, {
+      enabled: true,
+      router: {
+        customApi: deps.customApi,
+      } as unknown as Parameters<typeof buildHandler>[1] extends infer S
+        ? S extends { router: infer R }
+          ? R
+          : never
+        : never,
+    });
+
+    // Completed child (NOT failed) — supervision routing should
+    // short-circuit on phase != Failed; default ordering applies.
+    const completedChild = makeChildTask({ status: { phase: 'Completed' } });
+    await handler.onUpdate(completedChild);
+
+    // supervision-router call short-circuits before reaching the
+    // strategy engine (phase != Failed). It MAY still be invoked by
+    // `maybeRouteSupervision` per its current implementation — that
+    // function gates on phase=Failed BEFORE calling the router. Per
+    // current code the router is NOT called for non-failed phases.
+    expect(spyRoute).not.toHaveBeenCalled();
+
+    // Parent re-aggregate ran (the LIST call confirms the path
+    // executed); default order means it happened during the normal
+    // onUpdate sequence.
+    expect(callOrder.indexOf('parent-list')).toBeGreaterThanOrEqual(0);
+    spyRoute.mockRestore();
+  });
+
   it('a failure in the parent re-aggregate path is logged but does NOT throw', async () => {
     const parent = makeParentTask();
     const customApi: MockCustomApi = {

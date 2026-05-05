@@ -141,6 +141,15 @@ export interface ReconcileDeps {
     cycle: readonly string[],
   ) => Promise<void>;
   /**
+   * Phase 5 P4 wire-up — `parent.children_aggregated` audit hook.
+   * Forwarded by `maybeReconcileParent` into
+   * `reconcileParentFromChildEvent`'s deps. main.ts wires this
+   * against the `@kagent/audit-events` AuditPublisher when
+   * `KAGENT_AUDIT_NATS_URL` is set; left undefined the audit emission
+   * is a no-op (the existing parent re-aggregate path keeps working).
+   */
+  readonly emitParentChildrenAggregated?: (fields: ParentChildrenAggregatedFields) => Promise<void>;
+  /**
    * LLM-gateway bundle (spec §3.2) — when true, the dispatch path
    * STOPS short of un-suspending the Job. The Job stays in
    * `spec.suspend: true` after the dispatch envelope is published +
@@ -1246,6 +1255,57 @@ export interface ReconcileParentFromChildDeps {
     parent: { readonly name: string; readonly namespace: string; readonly uid: string },
     cycle: readonly string[],
   ) => Promise<void>;
+  /**
+   * Phase 5 P4 wire-up — audit-emission hook for
+   * `parent.children_aggregated`. Called exactly once per parent-status
+   * patch (i.e. only when the action verdict is `kind: 'updated'`);
+   * idempotent no-ops do NOT emit. Best-effort — failures are caught
+   * and logged but never propagated. main.ts wires this against the
+   * `@kagent/audit-events` AuditPublisher when audit.enabled=true; tests
+   * inject a vi.fn() to assert call shape.
+   *
+   * The `triggeredBy` field carries the UID of the child whose status
+   * change caused the re-aggregate (when known). Operator main.ts
+   * forwards it from the child event in `maybeReconcileParent`. When
+   * undefined (e.g. operator startup re-list, or a future caller that
+   * doesn't track the trigger), the field round-trips as undefined to
+   * downstream consumers.
+   */
+  readonly emitParentChildrenAggregated?: (fields: ParentChildrenAggregatedFields) => Promise<void>;
+  /**
+   * The triggering child's UID, forwarded into
+   * `emitParentChildrenAggregated` so audit consumers can correlate
+   * parent-status patches with the child event that caused them.
+   * Optional — when unset the audit `triggeredBy` field is undefined.
+   */
+  readonly triggeredByChildUid?: string;
+}
+
+/**
+ * Audit-fields shape consumed by the `parent.children_aggregated`
+ * emission hook. Carries before/after counter snapshots so audit
+ * warehouses can reconstruct the per-edge transition (e.g. "the
+ * 3rd child Completed" → before { successCount: 2, ... },
+ * after { successCount: 3, ... }) without joining sibling events.
+ */
+export interface ParentChildrenAggregatedFields {
+  readonly parentTaskUid: string;
+  readonly parentTaskNamespace: string;
+  readonly parentTaskName: string;
+  readonly aggregatePhase: ParentStatusProjection['aggregatePhase'];
+  readonly before: {
+    readonly successCount: number;
+    readonly failureCount: number;
+    readonly inFlightCount: number;
+    readonly childCount: number;
+  };
+  readonly after: {
+    readonly successCount: number;
+    readonly failureCount: number;
+    readonly inFlightCount: number;
+    readonly childCount: number;
+  };
+  readonly triggeredBy: string | undefined;
 }
 
 export type ReconcileParentFromChildAction =
@@ -1388,6 +1448,18 @@ export async function reconcileParentFromChildEvent(
     };
   }
 
+  // Snapshot the pre-patch counters BEFORE the PATCH lands so the
+  // audit `before` field reflects what was on etcd at GET-time. Treat
+  // missing counters as 0 — fresh parents have no projection yet, and
+  // the audit field is the most-natural "what did this transition
+  // record" identity (0 → N on the first projection patch).
+  const before = {
+    successCount: parent.status?.successCount ?? 0,
+    failureCount: parent.status?.failureCount ?? 0,
+    inFlightCount: parent.status?.inFlightCount ?? 0,
+    childCount: parent.status?.children?.length ?? 0,
+  };
+
   // Narrow patch — children/aggregatePhase only. NEVER includes `phase`.
   await patchStatus(parent, deps.customApi, {
     children: projection.children,
@@ -1396,6 +1468,37 @@ export async function reconcileParentFromChildEvent(
     failureCount: projection.failureCount,
     inFlightCount: projection.inFlightCount,
   });
+
+  // Phase 5 P4 wire-up — best-effort `parent.children_aggregated`
+  // audit emission. ONLY fires on the `updated` path (idempotent
+  // no-ops, skips, and cycle-detected paths all suppress the audit so
+  // the stream reflects actual state changes).
+  if (deps.emitParentChildrenAggregated !== undefined) {
+    try {
+      await deps.emitParentChildrenAggregated({
+        parentTaskUid: parentUid,
+        parentTaskNamespace: ref.namespace,
+        parentTaskName: ref.name,
+        aggregatePhase: projection.aggregatePhase,
+        before,
+        after: {
+          successCount: projection.successCount,
+          failureCount: projection.failureCount,
+          inFlightCount: projection.inFlightCount,
+          childCount: projection.children.length,
+        },
+        triggeredBy: deps.triggeredByChildUid,
+      });
+    } catch (err) {
+      // Best-effort — never let an audit hiccup turn a successful
+      // patch into a thrown exception that the informer would log
+      // as a watch error.
+      console.warn(
+        '[kagent-operator] reconcile: emitParentChildrenAggregated hook raised (audit dropped):',
+        err,
+      );
+    }
+  }
 
   return {
     kind: 'updated',

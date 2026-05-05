@@ -31,6 +31,7 @@ import {
   CAPABILITY_MINTED,
   INFRA_FAULT_OBSERVED,
   KEYROTATION_CAP_MINTED_WITH_TTL,
+  PARENT_CHILDREN_AGGREGATED,
   SUPERVISION_APPLIED,
   SUPERVISION_RESTART_LIMIT_EXCEEDED,
   TASK_ADMITTED,
@@ -779,22 +780,48 @@ export function buildHandler(
     async onUpdate(task) {
       const result = await reconcileAgentTask(task, deps);
       logResult('update', task, result);
-      await maybeReconcileParent('update', task, deps);
       // v0.2.0-typed-io — when the agent-pod's terminal write lands a
       // Completed phase, validate that all required Agent.spec.outputs
       // are present in status.outputs. Missing → force Failed +
       // contract.violated audit. Idempotent: re-firing on relist is
       // safe (the merge-patch with phase=Failed becomes a no-op once
-      // landed).
+      // landed). Run BEFORE supervision: a forced-Failed transition
+      // here is exactly the kind of structured failure supervision
+      // exists to act on (and re-firing supervision on relist is the
+      // mechanism that closes the loop, not this onUpdate path).
       await maybeEnforceCompletionContract(task, deps);
-      // === Wave 2 — Supervision ===
-      // v0.3.1-supervision — when the task lands in phase=Failed, run
-      // the supervision strategy engine against the parent's Agent
-      // (default `one_for_one`). Pure no-op for non-failed tasks +
-      // for root tasks without a parent label. See
-      // supervision-router.ts for the routing semantics + the
-      // `@kagent/supervision` package for the pure decision engine.
-      await maybeRouteSupervision(task, supervisionDeps);
+      // === Phase 5 P4 — supervision-aware parent re-aggregate
+      // ordering ===
+      //
+      // When a CHILD task transitions to phase=Failed AND supervision
+      // is enabled for this operator, run supervision BEFORE the
+      // parent re-aggregate so the parent's projection reflects
+      // post-supervision state (e.g. siblings the supervisor just
+      // marked `supervision_terminated`). When supervision is
+      // disabled, OR the failed task is a root (no parent), OR the
+      // child reached any non-Failed terminal phase, run the parent
+      // re-aggregate first as before. See `docs/TASK-GRAPH.md` §4
+      // and `docs/ROADMAP.md` Phase 5.
+      const isFailedChildWithSupervision =
+        task.status?.phase === 'Failed' &&
+        typeof task.metadata.labels?.[PARENT_TASK_UID_LABEL] === 'string' &&
+        (task.metadata.labels[PARENT_TASK_UID_LABEL] ?? '').length > 0 &&
+        supervisionDeps !== undefined &&
+        supervisionDeps.enabled;
+
+      if (isFailedChildWithSupervision) {
+        // Supervision FIRST: it may mark sibling tasks Failed
+        // (`supervision_terminated`), shifting the projection's
+        // failureCount before we record the snapshot.
+        await maybeRouteSupervision(task, supervisionDeps);
+        await maybeReconcileParent('update', task, deps);
+      } else {
+        // Default order — parent re-aggregate first; supervision
+        // runs second (and only fires for `phase: Failed` tasks).
+        await maybeReconcileParent('update', task, deps);
+        await maybeRouteSupervision(task, supervisionDeps);
+      }
+
       // === Wave 3 — Blackboard ===
       // GC the bucket on terminal phase transition. Re-fires safely
       // on relist (manager.destroyBucket is idempotent on
@@ -964,6 +991,15 @@ async function maybeReconcileParent(
 ): Promise<void> {
   const parentRef = parentTaskRefFromChild(task);
   if (parentRef === null) return;
+  // Phase 5 P4 — capture the triggering child's UID so the
+  // `parent.children_aggregated` audit event can correlate the
+  // parent-status patch back to the child event that caused it.
+  // Undefined when the child has no UID (defensive — apiserver always
+  // stamps one on creation).
+  const triggeredByChildUid =
+    typeof task.metadata.uid === 'string' && task.metadata.uid.length > 0
+      ? task.metadata.uid
+      : undefined;
   try {
     const action = await reconcileParentFromChildEvent(
       { namespace: parentRef.namespace, name: parentRef.name },
@@ -978,6 +1014,13 @@ async function maybeReconcileParent(
         }),
         ...(deps.getTaskByUid !== undefined && { getTaskByUid: deps.getTaskByUid }),
         ...(deps.emitCycleEvent !== undefined && { emitCycleEvent: deps.emitCycleEvent }),
+        // Phase 5 P4 — audit hook + the triggering child's UID. When
+        // the audit publisher is unconfigured the hook is undefined
+        // and `reconcileParentFromChildEvent` no-ops the emission.
+        ...(deps.emitParentChildrenAggregated !== undefined && {
+          emitParentChildrenAggregated: deps.emitParentChildrenAggregated,
+        }),
+        ...(triggeredByChildUid !== undefined && { triggeredByChildUid }),
       },
     );
     const childId = `${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'}`;
@@ -1344,6 +1387,16 @@ async function main(): Promise<void> {
     emitKeyrotationCapMintedWithTtl?: NonNullable<ReconcileDeps['emitKeyrotationCapMintedWithTtl']>;
   } = {};
 
+  // Phase 5 P4 — `parent.children_aggregated` audit hook. Same
+  // mutable-holder pattern as `capabilityAuditHolder` /
+  // `supervisionAuditHolder`: the deps object is built BEFORE the
+  // audit publisher init below, so the dispatch-time hook reads
+  // through the holder. While the publisher is unconfigured the
+  // holder's field stays undefined and the emission no-ops.
+  const parentChildrenAggregatedAuditHolder: {
+    emit?: NonNullable<ReconcileDeps['emitParentChildrenAggregated']>;
+  } = {};
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
@@ -1367,6 +1420,9 @@ async function main(): Promise<void> {
     },
     emitKeyrotationCapMintedWithTtl: async (fields) => {
       await capabilityAuditHolder.emitKeyrotationCapMintedWithTtl?.(fields);
+    },
+    emitParentChildrenAggregated: async (fields) => {
+      await parentChildrenAggregatedAuditHolder.emit?.(fields);
     },
   };
 
@@ -1640,6 +1696,28 @@ async function main(): Promise<void> {
             ? `AgentTask/${fields.taskNamespace}/${fields.taskName}`
             : `AgentTask/${fields.taskUid ?? 'unknown'}`,
         data: fields,
+      });
+      await publisher.publish(event);
+    };
+
+    // Phase 5 P4 wire-up — `parent.children_aggregated`. Same
+    // best-effort contract as the other audit hooks: publish failures
+    // are swallowed by the publisher; the reconcile path catches
+    // synchronous throws from this closure as well.
+    parentChildrenAggregatedAuditHolder.emit = async (fields) => {
+      const event = makeEvent({
+        type: PARENT_CHILDREN_AGGREGATED,
+        source: auditSource,
+        subject: `AgentTask/${fields.parentTaskNamespace}/${fields.parentTaskName}`,
+        data: {
+          parentTaskUid: fields.parentTaskUid,
+          parentTaskNamespace: fields.parentTaskNamespace,
+          parentTaskName: fields.parentTaskName,
+          aggregatePhase: fields.aggregatePhase,
+          before: fields.before,
+          after: fields.after,
+          triggeredBy: fields.triggeredBy,
+        },
       });
       await publisher.publish(event);
     };

@@ -98,7 +98,9 @@ export type AuditEventType =
   | 'keyrotation.svid_rotated'
   | 'keyrotation.cap_minted_with_ttl'
   | 'keyrotation.gateway_rotated'
-  | 'keyrotation.gateway_unsupported';
+  | 'keyrotation.gateway_unsupported'
+  /* Phase 5 P4 wire-up — parent-from-child re-aggregate. */
+  | 'parent.children_aggregated';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -717,6 +719,54 @@ export interface KeyrotationGatewayUnsupportedData {
 }
 
 /**
+ * Phase 5 P4 wire-up — `parent.children_aggregated`. Emitted by the
+ * operator each time `reconcileParentFromChildEvent` patches a parent
+ * AgentTask's child-projection slice. One emission per parent-status
+ * patch; idempotent no-ops do NOT emit.
+ *
+ * Fields:
+ *   - `parentTaskUid` / `parentTaskNamespace` / `parentTaskName` —
+ *     identify the parent task whose projection was just refreshed.
+ *   - `aggregatePhase` — the freshly-computed `AgentTask.status.aggregatePhase`
+ *     at the moment of the patch (post-image of the projection fold).
+ *   - `before` / `after` — snapshots of the four counters
+ *     (`successCount` + `failureCount` + `inFlightCount` + `childCount`)
+ *     so audit warehouses can reconstruct the per-edge transition
+ *     without joining sibling events. `before` reflects the parent's
+ *     status counters as the operator GET'd it (i.e. what was on
+ *     etcd before the patch landed); `after` is what the operator
+ *     PATCH'd in.
+ *   - `triggeredBy` — the UID of the child whose status change
+ *     caused this re-aggregate (if known; informer relists / resync
+ *     fires can produce a re-projection without a single triggering
+ *     child, in which case this is undefined).
+ */
+export interface ParentChildrenAggregatedData {
+  readonly parentTaskUid: string;
+  readonly parentTaskNamespace: string;
+  readonly parentTaskName: string;
+  readonly aggregatePhase:
+    | 'Pending'
+    | 'Dispatched'
+    | 'PartiallyComplete'
+    | 'AllComplete'
+    | 'AnyFailed';
+  readonly before: {
+    readonly successCount: number;
+    readonly failureCount: number;
+    readonly inFlightCount: number;
+    readonly childCount: number;
+  };
+  readonly after: {
+    readonly successCount: number;
+    readonly failureCount: number;
+    readonly inFlightCount: number;
+    readonly childCount: number;
+  };
+  readonly triggeredBy: string | undefined;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -801,6 +851,11 @@ export type AuditEventData =
   | {
       readonly type: 'keyrotation.gateway_unsupported';
       readonly data: KeyrotationGatewayUnsupportedData;
+    }
+  /* Phase 5 P4 wire-up — parent-from-child re-aggregate. */
+  | {
+      readonly type: 'parent.children_aggregated';
+      readonly data: ParentChildrenAggregatedData;
     };
 
 /**

@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 43 event-type strings (Wave 0-4 sum: egress + quotas + versioning + keyrotation)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(43);
+  it('exports exactly 44 event-type strings (Wave 0-4 sum + Phase 5 P4 parent.children_aggregated)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(44);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -473,6 +473,8 @@ describe('event-types catalog', () => {
       'keyrotation.cap_minted_with_ttl',
       'keyrotation.gateway_rotated',
       'keyrotation.gateway_unsupported',
+      // Phase 5 P4 wire-up — parent-from-child re-aggregate.
+      'parent.children_aggregated',
     ]);
   });
 });
