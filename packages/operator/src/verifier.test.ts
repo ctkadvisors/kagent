@@ -27,6 +27,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentTask } from './crds/index.js';
 import {
   buildVerifierReconciler,
+  extractParentOutputForJudge,
   parseVerifierJudgeReply,
   pickDispatchMode,
   renderLlmJudgePrompt,
@@ -261,6 +262,80 @@ describe('renderLlmJudgePrompt', () => {
   });
   it('substitutes multiple occurrences', () => {
     expect(renderLlmJudgePrompt('{{outputs}} and {{outputs}}', '5')).toBe('5 and 5');
+  });
+});
+
+describe('extractParentOutputForJudge', () => {
+  it('returns null for null/undefined', () => {
+    expect(extractParentOutputForJudge(null)).toBeNull();
+    expect(extractParentOutputForJudge(undefined)).toBeNull();
+  });
+
+  it('returns primitives as-is (rare; preserves shape)', () => {
+    expect(extractParentOutputForJudge('plain')).toBe('plain');
+    expect(extractParentOutputForJudge(42)).toBe(42);
+    expect(extractParentOutputForJudge(true)).toBe(true);
+  });
+
+  it('unwraps { content: <plain string> } to the string', () => {
+    expect(extractParentOutputForJudge({ content: 'k3s is great' })).toBe('k3s is great');
+  });
+
+  it('unwraps + parses { content: "<json-stringified object>" } to the parsed value', () => {
+    expect(
+      extractParentOutputForJudge({ content: '{"answer":"K stands for Kubernetes."}' }),
+    ).toEqual({ answer: 'K stands for Kubernetes.' });
+  });
+
+  it('strips a single fenced ```json``` block from content before parsing', () => {
+    expect(extractParentOutputForJudge({ content: '```json\n{"answer":"x"}\n```' })).toEqual({
+      answer: 'x',
+    });
+  });
+
+  it('strips a bare ``` fence from content before parsing', () => {
+    expect(extractParentOutputForJudge({ content: '```\n{"a":1}\n```' })).toEqual({ a: 1 });
+  });
+
+  it('returns the raw content string when JSON parse fails', () => {
+    expect(extractParentOutputForJudge({ content: 'not JSON, just prose.' })).toBe(
+      'not JSON, just prose.',
+    );
+  });
+
+  it('returns the value as-is when content is non-string (e.g. number)', () => {
+    expect(extractParentOutputForJudge({ content: 42 })).toBe(42);
+  });
+
+  it('returns the empty string as-is when content is empty/whitespace', () => {
+    expect(extractParentOutputForJudge({ content: '' })).toBe('');
+    expect(extractParentOutputForJudge({ content: '   ' })).toBe('   ');
+  });
+
+  it('does NOT unwrap when shape has fields beyond `content` (preserves data)', () => {
+    const env = { content: 'k3s is great', verdict: 'ok' };
+    expect(extractParentOutputForJudge(env)).toEqual(env);
+  });
+
+  it('returns the object as-is when it has no `content` key', () => {
+    const obj = { answer: 'direct' };
+    expect(extractParentOutputForJudge(obj)).toEqual(obj);
+  });
+
+  it('renders cleanly into the judge prompt — string answer case', () => {
+    const judgeInput = extractParentOutputForJudge({ content: 'k3s is great' });
+    expect(renderLlmJudgePrompt('Outputs: {{outputs}}', JSON.stringify(judgeInput))).toBe(
+      'Outputs: "k3s is great"',
+    );
+  });
+
+  it('renders cleanly into the judge prompt — structured answer case', () => {
+    const judgeInput = extractParentOutputForJudge({
+      content: '{"answer":"K stands for Kubernetes."}',
+    });
+    expect(renderLlmJudgePrompt('Outputs: {{outputs}}', JSON.stringify(judgeInput))).toBe(
+      'Outputs: {"answer":"K stands for Kubernetes."}',
+    );
   });
 });
 
@@ -536,6 +611,63 @@ describe('verifier — llmJudgePromptRef path', () => {
     };
     expect(callArgs.body.status.verification.passed).toBe(true);
     expect(callArgs.body.status.verification.mode).toBe('llmJudge');
+  });
+
+  it('unwraps `{ content: <json-string> }` so the judge sees the structured answer (RC pilot shape)', async () => {
+    // Reproduces the rc-pilot envelope: agent-pod wraps the structured
+    // answer the agent emitted in `{ content: ... }`. Without the
+    // unwrap fix, the judge sees `{"content":"{\"answer\":...}"}` and
+    // correctly fails. With the fix, the judge sees the raw
+    // `{"answer":"K stands for Kubernetes."}` and can evaluate the
+    // contract authored against that shape.
+    const fixture = fakeApi();
+    const audit = recordingAudit();
+    const fetchPrompt = vi.fn(() =>
+      Promise.resolve('Outputs were: {{outputs}}. Reply JSON {verdict, reason}.'),
+    );
+    const fetchSpy = vi.fn((_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string) as { messages: { content: string }[] };
+      const rendered = body.messages[0]?.content ?? '';
+      // Pre-fix this would have been the literal nested string
+      // `"content":"{\"answer\":\"K stands for Kubernetes.\"}"`.
+      // Post-fix, the judge sees the parsed structured answer directly.
+      expect(rendered).toContain('{"answer":"K stands for Kubernetes."}');
+      expect(rendered).not.toContain('"content"');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            choices: [{ message: { content: '{"verdict":"pass","reason":"shape ok"}' } }],
+          }),
+      } as unknown as Response);
+    }) as unknown as typeof fetch;
+    const task = makeTask({
+      spec: {
+        targetAgent: 'researcher',
+        verifyContract: { llmJudgePromptRef: { name: 'p' } },
+      },
+      status: {
+        phase: 'Completed' as const,
+        // Single-key envelope; matches what agent-pod actually writes.
+        result: { content: '{"answer":"K stands for Kubernetes."}' },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      audit: audit.hooks,
+      fetchPrompt,
+      fetch: fetchSpy,
+      gatewayBaseUrl: 'http://gateway/v1',
+      gatewayApiKey: 'sk-test',
+      defaultModel: 'gpt-4o-mini',
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+
+    expect(result.verdict?.passed).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('parses fail verdict → passed:false with verdict:fail reason', async () => {

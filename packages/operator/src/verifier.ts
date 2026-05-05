@@ -318,10 +318,56 @@ export function truncateReason(s: string, maxBytes = VERIFIER_REASON_MAX_BYTES):
 }
 
 /**
+ * Extract the agent's actual output from `AgentTask.status.result` for
+ * substitution into a verifier judge prompt.
+ *
+ * The agent-pod always wraps the model's final text in
+ * `{ content: <string> }` (see `packages/agent-pod/src/status.ts`
+ * `buildStatusPatch`). Verifier prompt authors write contracts
+ * against the agent's answer ("must be `{answer: ...}`"), not against
+ * the substrate's envelope, so substituting the raw envelope produces
+ * a structurally valid `verdict:fail` for every run regardless of
+ * model behavior.
+ *
+ * Unwrap policy:
+ *   - `null` / `undefined`           → `null`
+ *   - non-object primitives          → as-is (rare; preserves shape)
+ *   - `{ content: <string> }` (sole key) →
+ *       attempt to parse `content` as JSON (stripping a single
+ *       fenced ` ```json …  ``` ` codeblock if present); on success
+ *       return the parsed value, otherwise return the raw string
+ *   - `{ content: <non-string> }` (sole key) → that non-string value
+ *   - any other object shape         → the object as-is (don't drop
+ *     unfamiliar fields a future agent-pod might add — verifier
+ *     prompts can still address `.content` explicitly when needed)
+ *
+ * The return value is JSON.stringify'd by the caller, so the wire
+ * format remains "valid JSON literal" — only the *level of nesting*
+ * changes versus the pre-fix behavior.
+ */
+export function extractParentOutputForJudge(result: unknown): unknown {
+  if (result === null || result === undefined) return null;
+  if (typeof result !== 'object') return result;
+  const keys = Object.keys(result);
+  if (keys.length !== 1 || keys[0] !== 'content') return result;
+  const content = (result as { content: unknown }).content;
+  if (typeof content !== 'string') return content;
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return content;
+  const stripped = trimmed.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    return content;
+  }
+}
+
+/**
  * Render the LLM-judge prompt body. The contract is `{{outputs}}`
  * is the substituted token; we accept `{{ outputs }}` (with optional
  * whitespace) too. The dispatcher feeds the parent task's
- * `status.result` JSON-serialized.
+ * `status.result` JSON-serialized after passing it through
+ * {@link extractParentOutputForJudge}.
  */
 export function renderLlmJudgePrompt(template: string, parentResultJson: string): string {
   return template.replace(/\{\{\s*outputs\s*\}\}/g, parentResultJson);
@@ -808,8 +854,13 @@ async function runLlmJudgeVerifier(
     return failVerdict('llmJudge', 'langfuse_fetch_failed', startedAt);
   }
 
-  // 2. Render with parent outputs substituted.
-  const resultJson = JSON.stringify(task.status?.result ?? null);
+  // 2. Render with parent outputs substituted. Unwrap the agent-pod's
+  // `{ content: ... }` envelope so prompt authors see the agent's
+  // actual answer (and parsed JSON when the agent emitted structured
+  // output) instead of the substrate's wrapper. See
+  // `extractParentOutputForJudge`.
+  const judgeInput = extractParentOutputForJudge(task.status?.result);
+  const resultJson = JSON.stringify(judgeInput);
   const renderedPrompt = renderLlmJudgePrompt(template, resultJson);
 
   // 3. POST to the gateway. AbortSignal.timeout caps the round-trip.
