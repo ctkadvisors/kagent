@@ -18,6 +18,13 @@
 #   4. Disable the Phase-5 artifact PVC — the homelab default
 #      StorageClass `ai-models-storage` does not exist in kind and we
 #      don't need persistence for a smoke run.
+#   5. Disable the v0.1.15-audit-stream post-install hook — it runs
+#      `nats stream add` against `audit.natsUrl` and there is no NATS
+#      JetStream in the kind cluster. The chart default is
+#      `audit.enabled=true`; smoke installs always need it off.
+
+audit:
+  enabled: false
 
 image:
   repository: ghcr.io/ctkadvisors/kagent-operator
