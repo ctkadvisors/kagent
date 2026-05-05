@@ -642,6 +642,15 @@ interface BuildOpts {
    */
   readonly now?: () => Date;
   /**
+   * Names served by other providers in the same run (e.g. WS-K
+   * substrate `spawn_child_task`/`wait_*`, blackboard tools, events
+   * tools). When `Agent.spec.tools` lists one of these, the resolver
+   * accepts it as known and silently skips it — letting the runner's
+   * separate provider serve it. Defaults to an empty set, which
+   * preserves the strict "unknown built-in tool" guard for typos.
+   */
+  readonly externallyProvidedNames?: ReadonlySet<string>;
+  /**
    * In-pod registry — accepts ArtifactRefs as `write_artifact` produces
    * them. The runner threads ONE registry through the entire run; the
    * status patcher reads `registry.snapshot()` on every status update
@@ -948,6 +957,15 @@ function jsonContent(value: unknown): ContentBlock[] {
  *
  * `names` of zero length returns `null` so the runner can pass nothing
  * to `AgentExecutor` and the loop runs in chat-only mode.
+ *
+ * `opts.externallyProvidedNames` lists tool names that are served by
+ * OTHER providers in the same run (e.g. the WS-K substrate provider's
+ * `spawn_child_task` / `wait_*` tools, blackboard tools, events tools).
+ * Names in this set are accepted as known and silently skipped — they
+ * don't get added to this provider's tool list, but they don't trip
+ * the "unknown built-in" guard either. The runner is responsible for
+ * appending the matching providers; missing those is a wiring bug,
+ * not an Agent.spec.tools validation bug.
  */
 export function resolveBuiltinTools(
   names: readonly string[] | undefined,
@@ -955,12 +973,14 @@ export function resolveBuiltinTools(
 ): ToolProvider | null {
   if (names === undefined || names.length === 0) return null;
   const registry = buildBuiltinToolRegistry(opts);
-  const known = Array.from(registry.keys()).sort();
+  const externallyProvided = opts.externallyProvidedNames ?? new Set<string>();
+  const known = [...Array.from(registry.keys()), ...Array.from(externallyProvided)].sort();
   const definitions: InProcessToolDefinition[] = [];
   const seen = new Set<string>();
   for (const name of names) {
     if (seen.has(name)) continue;
     seen.add(name);
+    if (externallyProvided.has(name)) continue;
     const def = registry.get(name);
     if (!def) {
       throw new Error(
@@ -971,6 +991,7 @@ export function resolveBuiltinTools(
     }
     definitions.push(def);
   }
+  if (definitions.length === 0) return null;
   return new InProcessToolProvider({ id: 'builtin', tools: definitions });
 }
 

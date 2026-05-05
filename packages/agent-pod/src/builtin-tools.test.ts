@@ -774,6 +774,54 @@ describe('resolveBuiltinTools', () => {
     );
     expect(() => resolveBuiltinTools(['nope'])).toThrow(/known built-ins:/);
   });
+
+  it('accepts externally-provided tool names without throwing or including them', () => {
+    // WS-K substrate tools (spawn_child_task, wait_*) are served by a
+    // SEPARATE provider built in main.ts. resolveBuiltinTools must
+    // accept those names as known when the runner indicates they're
+    // wired elsewhere — otherwise an Agent listing `spawn_child_task`
+    // in spec.tools dies at boot even though the runner serves it.
+    const provider = resolveBuiltinTools(['http_get', 'spawn_child_task'], {
+      externallyProvidedNames: new Set(['spawn_child_task', 'wait_for_child_task']),
+    });
+    expect(provider).not.toBeNull();
+    const names = (provider!.describeTools() as { name: string }[]).map((d) => d.name);
+    // Substrate names are served externally; this provider only exposes http_get.
+    expect(names).toEqual(['http_get']);
+  });
+
+  it('returns null when every requested name is externally-provided', () => {
+    // All substrate names → builtin provider has nothing to serve, so
+    // it returns null and the runner appends ONLY the external providers.
+    const provider = resolveBuiltinTools(['spawn_child_task', 'wait_for_children_all'], {
+      externallyProvidedNames: new Set(['spawn_child_task', 'wait_for_children_all']),
+    });
+    expect(provider).toBeNull();
+  });
+
+  it('still throws on names that are neither built-in nor externally-provided', () => {
+    expect(() =>
+      resolveBuiltinTools(['spawn_child_task', 'shell_exec'], {
+        externallyProvidedNames: new Set(['spawn_child_task']),
+      }),
+    ).toThrow(/unknown built-in tool "shell_exec"/);
+  });
+
+  it('lists externally-provided names alongside built-ins in error message', () => {
+    let captured = '';
+    try {
+      resolveBuiltinTools(['typo'], {
+        externallyProvidedNames: new Set(['spawn_child_task']),
+      });
+    } catch (err) {
+      captured = (err as Error).message;
+    }
+    // Error message should help operators see ALL recognized names
+    // including substrate ones, so they realize the typo isn't a
+    // missing-feature gripe.
+    expect(captured).toContain('spawn_child_task');
+    expect(captured).toContain('http_get');
+  });
 });
 
 /* =====================================================================

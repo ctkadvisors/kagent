@@ -531,10 +531,30 @@ export function resolveToolProviders(
 ): readonly ToolProvider[] {
   if (deps.toolProviders !== undefined) return deps.toolProviders;
   const out: ToolProvider[] = [];
+
+  // Collect tool names served by the substrate / blackboard / events
+  // providers so resolveBuiltinTools accepts them as known when an
+  // Agent.spec.tools entry references them. Without this, an Agent
+  // that lists `spawn_child_task` in its tools dies at boot with
+  // "unknown built-in tool" even though spawnTools serves the call.
+  // describeTools() can be async on the ToolProvider union, but the
+  // in-process providers we wire here are all synchronous; the cast
+  // mirrors the pattern in builtin-tools.test.ts where tests narrow
+  // the same way.
+  const externallyProvidedNames = new Set<string>();
+  for (const provider of [deps.spawnTools, deps.blackboardTools, deps.eventsTools]) {
+    if (provider === undefined) continue;
+    const descriptors = provider.describeTools() as readonly { name: string }[];
+    for (const descriptor of descriptors) {
+      externallyProvidedNames.add(descriptor.name);
+    }
+  }
+
   const builtin = resolveBuiltinTools(config.agentSpec.tools, {
     ...(options.artifactRegistry !== undefined && {
       artifactRegistry: options.artifactRegistry,
     }),
+    externallyProvidedNames,
   });
   if (builtin !== null) out.push(builtin);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
