@@ -31,7 +31,15 @@ spec:
     Write a 5000-word essay on the history of distributed systems. Take
     your time and include detailed footnotes; this prompt is intentionally
     expensive so the wall-clock timeout fires before completion.
-  timeoutSeconds: 600
+  # K8s activeDeadlineSeconds is the substrate's enforced timeout —
+  # `timeoutSeconds: 1` here maps to Job.spec.activeDeadlineSeconds=1,
+  # so the kubelet kills the pod regardless of how fast the model
+  # actually responds. The first revision tried to use
+  # `runConfig.timeoutSeconds: 1`; that's the agent-pod's in-loop
+  # AbortSignal which races the model — and a fast small model on a
+  # local Ollama can return in <1s, beating the abort. Top-level
+  # `spec.timeoutSeconds` is the deprecated-but-still-canonical knob
+  # the operator wires into the Job spec; it always fires.
+  timeoutSeconds: 1
   runConfig:
-    timeoutSeconds: 1
     maxIterations: 8
