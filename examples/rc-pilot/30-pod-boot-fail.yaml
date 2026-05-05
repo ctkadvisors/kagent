@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 30 — Forced pod-boot failure. Targets the
+# `rc-pilot-bad-tool` Agent declared in 01-agents.yaml.
+#
+# WHY NOT IMAGEPULLBACKOFF: v0.1's Agent CRD does not carry an
+# `image` field — the operator's job-spec builder sources the
+# agent-pod image from chart Helm values, so we cannot force
+# `ImagePullBackOff` from a scenario manifest alone. The rc-pilot
+# bundle exercises the broader "platform failure visible in
+# container terminated reason" checklist row instead, by configuring
+# the Agent with a tool name that the agent-pod's
+# `resolveBuiltinTools` validator rejects at boot with a clear
+# "unknown built-in tool" error. The pod's container transitions to
+# terminal Error/Failed state and the operator patches the AgentTask
+# to Failed with a readable reason — same evidence row, different
+# trigger.
+#
+# To exercise the original `ImagePullBackOff` path, see README §3
+# "Forcing the image-pull failure" — that requires temporary
+# operator-chart values overlay (out of scope for the scenario
+# manifest itself, since v0.1 has no per-Agent image override).
+#
+# Expected Workbench detail evidence:
+#   status.phase        == 'Failed'
+#   status.podName      populated
+#   detail.containerStatuses[*].state.terminated.exitCode != 0
+#   status.error contains "unknown built-in tool"
+#   pilotEvidence.audit.labels carries the rc-pilot tenant stamp.
+#
+# Maps to docs/GA-EVIDENCE-CHECKLIST.md row
+# "Image pull or pod failure".
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-pilot-pod-boot-fail
+  labels:
+    kagent.knuteson.io/role: rc-pilot
+    kagent.knuteson.io/scenario: pod-boot-fail
+spec:
+  targetAgent: rc-pilot-bad-tool
+  payload:
+    smokeTest: true
+  originalUserMessage: 'This task should never reach the agent loop.'
+  runConfig:
+    timeoutSeconds: 60
+    maxIterations: 1

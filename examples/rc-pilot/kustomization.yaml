@@ -39,7 +39,7 @@ resources:
   - 01-agents.yaml
   - 10-happy-path.yaml
   - 20-forced-timeout.yaml
-  - 30-image-pull-fail.yaml
+  - 30-pod-boot-fail.yaml
   - 40-delegation.yaml
   - 50-artifact-producer.yaml
   - 60-verifier.yaml

@@ -5,9 +5,12 @@
 # bakes the agent-pod image (ghcr.io/ctkadvisors/kagent-agent-pod) into
 # spawned Jobs via the Helm values pipeline, so these Agents do NOT
 # carry a `spec.image` field — they let the operator's job-spec builder
-# pick up the chart-configured default. Only the bad-image scenario
-# (30-image-pull-fail.yaml) uses an `Agent` whose targeted Job-spec
-# image is overridden by an annotation hook (see that file's comments).
+# pick up the chart-configured default. The pod-boot-fail scenario
+# (30-pod-boot-fail.yaml) targets `rc-pilot-bad-tool`, an Agent that
+# fails fast at agent-pod boot via an unknown built-in tool name —
+# producing the same "platform failure" evidence row without needing
+# a per-Agent image override. To exercise the original
+# `ImagePullBackOff` trigger instead, see README §3.
 #
 # Every Agent declares its model with the LiteLLM provider prefix per
 # CLAUDE.md (Cloudflare AI Gateway is the homelab default endpoint).
@@ -153,47 +156,41 @@ spec:
     maxTokens: 256
 ---
 # ---------------------------------------------------------------------
-# rc-pilot-bad-image — Agent for the image-pull-fail scenario. v0.1
-# Agent.spec does NOT carry an `image` field; per docs/SUBSTRATE-V1.md
-# the operator's job-spec builder sources the agent-pod image from
-# Helm values (`agentPod.image.repository:tag`).
+# rc-pilot-bad-tool — Agent for the pod-boot-fail scenario. The
+# agent-pod's `resolveBuiltinTools` validator rejects unknown tool
+# names at boot; the pod transitions to terminal Error and the
+# operator patches the AgentTask to Failed with a readable
+# `unknown built-in tool` message. This is what the evidence
+# checklist's "platform failure visible in container terminated
+# reason" row actually captures.
 #
-# OPEN QUESTION (see README.md §"Open questions"): there is no
-# CRD-level `Agent.spec.image` override in v0.1, so the canonical way
-# to force an ImagePullBackOff is to set the AgentTask's image via a
-# kustomize JSON-patch on the spawned Job, OR to deploy the operator
-# with `agentPod.image.repository=ghcr.io/ctkadvisors/kagent-agent-pod-DOES-NOT-EXIST`
-# in a dedicated test namespace overlay. The README enumerates both
-# paths. The Agent CR below is just the address — the failure is
-# induced via the values overlay enumerated in the runbook.
+# Why this Agent does NOT carry `spec.image`: v0.1's Agent CRD has no
+# image field — the operator sources the agent-pod image from chart
+# Helm values (`agentPod.image.repository:tag`) per
+# `docs/SUBSTRATE-V1.md`. To exercise the original `ImagePullBackOff`
+# trigger instead of the boot-time tool reject, see README §3
+# "Forcing the image-pull failure" (operator-chart values overlay or
+# scratch-deployment env edit).
 # ---------------------------------------------------------------------
 apiVersion: kagent.knuteson.io/v1alpha1
 kind: Agent
 metadata:
-  name: rc-pilot-bad-image
+  name: rc-pilot-bad-tool
   labels:
     kagent.knuteson.io/role: rc-pilot
-    kagent.knuteson.io/scenario: image-pull-fail
+    kagent.knuteson.io/scenario: pod-boot-fail
   annotations:
-    # Documentation-only — the operator does NOT consume this. The
-    # README explains how to force ImagePullBackOff via Helm values
-    # overlay. Reviewers who want to confirm the failure mode without
-    # touching Helm should temporarily edit the operator deployment's
-    # `KAGENT_AGENT_POD_IMAGE_REPOSITORY` env var (set by the chart
-    # from `agentPod.image.repository`) to a non-existent image.
     kagent.knuteson.io/rc-pilot-note: |
-      Force ImagePullBackOff via operator values overlay (see README §3).
+      Pod-boot fail via unknown tool name. README §3 documents the
+      Helm-values path for exercising true ImagePullBackOff.
 spec:
   model: nemotron-3-nano:4b
   version: 0.1.0
   systemPrompt: 'This agent intentionally fails at startup.'
   sandboxProfile: default
-  # v0.1.7-rig.1: force a real platform failure visible in container
-  # terminated reason. The agent-pod's resolveBuiltinTools rejects
-  # unknown names at boot; status.error contains "unknown built-in
-  # tool" and the pod transitions to terminal Error. This is what
-  # the evidence checklist's "platform failure visible in container
-  # terminated reason" row actually wants to capture, regardless of
-  # whether ImagePullBackOff is the trigger or a config-time refusal.
+  # The agent-pod's resolveBuiltinTools rejects unknown names at boot;
+  # the resulting status.error contains "unknown built-in tool" and the
+  # pod's container is terminal-Failed — same checklist row as
+  # ImagePullBackOff without the per-Agent image override v0.1 lacks.
   tools:
     - nonexistent_tool_for_testing

@@ -16,7 +16,8 @@ examples/rc-pilot/
   01-agents.yaml             # reusable Agent CRs
   10-happy-path.yaml         # AgentTask → Completed, clean detector
   20-forced-timeout.yaml     # AgentTask → Failed/timeout
-  30-image-pull-fail.yaml    # Agent + AgentTask → ImagePullBackOff
+  30-pod-boot-fail.yaml      # AgentTask → Failed at agent-pod boot
+                             # (proxy for ImagePullBackOff; see §3)
   40-delegation.yaml         # parent AgentTask spawning 2-3 children
   50-artifact-producer.yaml  # AgentTask → status.artifacts populated
   60-verifier.yaml           # AgentTask with verifyContract (pass + fail)
@@ -100,10 +101,10 @@ kubectl apply -k examples/rc-pilot/
 #   agent.kagent.knuteson.io/rc-pilot-artifact-writer created
 #   agent.kagent.knuteson.io/rc-pilot-verifier-gated created
 #   agent.kagent.knuteson.io/rc-pilot-policy-capped created
-#   agent.kagent.knuteson.io/rc-pilot-bad-image created
+#   agent.kagent.knuteson.io/rc-pilot-bad-tool created
 #   agenttask.kagent.knuteson.io/rc-pilot-happy-path created
 #   agenttask.kagent.knuteson.io/rc-pilot-forced-timeout created
-#   agenttask.kagent.knuteson.io/rc-pilot-image-pull-fail created
+#   agenttask.kagent.knuteson.io/rc-pilot-pod-boot-fail created
 #   agenttask.kagent.knuteson.io/rc-pilot-delegation created
 #   agenttask.kagent.knuteson.io/rc-pilot-artifact-producer created
 #   agenttask.kagent.knuteson.io/rc-pilot-verifier-pass created
@@ -119,11 +120,12 @@ kubectl get agenttask -n kagent-rc-pilot -w
 ```
 
 Most scenarios reach terminal in under 2 minutes. The forced-timeout
-scenario should fail within ~5 seconds. The image-pull-fail scenario
-hangs in `Pending`/`Dispatched` — you may force-timeout it from
-the workbench UI or simply capture mid-flight; the
-`containerStatuses` projection still carries the
-`ImagePullBackOff`/`ErrImagePull` reason.
+scenario should fail within ~5 seconds. The pod-boot-fail scenario
+fails fast — the agent-pod's `resolveBuiltinTools` validator rejects
+the unknown tool name at boot, so the container terminates and
+the operator patches the AgentTask to `Failed` with `status.error`
+matching `unknown built-in tool …`. To exercise the original
+`ImagePullBackOff`/`ErrImagePull` waiting-state path instead, see §3.
 
 If any task is still in `Pending` after 10 minutes that you did NOT
 expect to be slow, dump the operator logs for that AgentTask UID
@@ -135,26 +137,35 @@ kubectl get agenttask -n kagent-rc-pilot rc-pilot-happy-path -o yaml
 kubectl logs -n kagent-system deploy/kagent-operator | grep <task-uid>
 ```
 
-## 3. Forcing the image-pull failure
+## 3. Scenario 30 — pod-boot-fail vs. image-pull-fail
 
-The v0.1 Agent CRD does not expose `spec.image` (the operator's
-job-spec builder sources the agent-pod image from chart Helm values).
-To make scenario 30 reach `ImagePullBackOff` cleanly, follow ONE of
-these options at evidence-capture time:
+By default, scenario 30 (`30-pod-boot-fail.yaml`) configures the
+`rc-pilot-bad-tool` Agent with an unknown built-in tool name; the
+agent-pod's `resolveBuiltinTools` validator rejects the configuration
+at boot and the container terminates with `unknown built-in tool …`
+in `status.error`. This satisfies the checklist's "platform failure
+visible in container terminated reason" row without any per-Agent
+image override (which v0.1's CRD does not provide).
+
+If you specifically want the original `ImagePullBackOff`/`ErrImagePull`
+**waiting**-state evidence shape, the v0.1 Agent CRD does not expose
+`spec.image` (the operator's job-spec builder sources the agent-pod
+image from chart Helm values), so follow ONE of these options at
+evidence-capture time:
 
 **Option A — values overlay on a scratch operator (recommended):**
 
 ```yaml
-# values-rc-pilot-bad-image.yaml
+# values-rc-pilot-image-pull-overlay.yaml
 agentPod:
   image:
     repository: ghcr.io/ctkadvisors/kagent-agent-pod-DOES-NOT-EXIST
-    tag: rc-pilot-bad-image
+    tag: rc-pilot-image-pull-overlay
     pullPolicy: Always
 watchNamespace: kagent-rc-pilot
 ```
 
-Install in a scratch namespace (`kagent-rc-pilot-bad-image`) for the
+Install in a scratch namespace (`kagent-rc-pilot-image-pull-overlay`) for the
 duration of the capture, then teardown.
 
 **Option B — temporary deployment env edit:**
@@ -162,7 +173,7 @@ duration of the capture, then teardown.
 ```bash
 kubectl -n kagent-system set env deploy/kagent-operator \
   KAGENT_AGENT_POD_IMAGE_REPOSITORY=ghcr.io/ctkadvisors/kagent-agent-pod-DOES-NOT-EXIST \
-  KAGENT_AGENT_POD_IMAGE_TAG=rc-pilot-bad-image
+  KAGENT_AGENT_POD_IMAGE_TAG=rc-pilot-image-pull-overlay
 # capture evidence, then revert:
 kubectl -n kagent-system set env deploy/kagent-operator \
   KAGENT_AGENT_POD_IMAGE_REPOSITORY- KAGENT_AGENT_POD_IMAGE_TAG-
@@ -236,7 +247,7 @@ ships two rows (pass / fail case).
 | --- | --- | --- | --- |
 | `10-happy-path.yaml` | `AgentTask/rc-pilot-happy-path` | Happy path | `phase=Completed`, `structuralVerdict.suspicious=[]`, `runConfig.timeoutSeconds`, non-empty `result` |
 | `20-forced-timeout.yaml` | `AgentTask/rc-pilot-forced-timeout` | Model timeout | `phase=Failed`, terminal `error` mentions timeout/deadline, `runConfig.timeoutSeconds=1` |
-| `30-image-pull-fail.yaml` | `AgentTask/rc-pilot-image-pull-fail` | Image pull or pod failure | `containerStatuses[*].state.waiting.reason ∈ {ImagePullBackOff, ErrImagePull}` |
+| `30-pod-boot-fail.yaml` | `AgentTask/rc-pilot-pod-boot-fail` | Image pull or pod failure | default: `phase=Failed`, `containerStatuses[*].state.terminated.exitCode != 0`, `error` matches `unknown built-in tool …`. With §3 overlay: `containerStatuses[*].state.waiting.reason ∈ {ImagePullBackOff, ErrImagePull}` |
 | `40-delegation.yaml` | `AgentTask/rc-pilot-delegation` | Parent/child delegation | `taskGraph.childCount > 0`, counters sum, `aggregatePhase` populated |
 | `50-artifact-producer.yaml` | `AgentTask/rc-pilot-artifact-producer` | Artifact producer | `artifacts.count > 0`, status.artifacts[0].uri starts with `pvc://kagent-artifacts/` |
 | `60-verifier.yaml` (pass) | `AgentTask/rc-pilot-verifier-pass` | Contract verifier (pass) | `verification.passed=true`, `verification.mode=llmJudge` |
