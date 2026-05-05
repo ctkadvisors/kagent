@@ -33,29 +33,62 @@ WORKDIR /repo
 # Workspace manifests first so the install layer survives source edits.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/agent-loop/package.json packages/agent-loop/
-COPY packages/openai-compat/package.json packages/openai-compat/
-COPY packages/in-process-tool-provider/package.json packages/in-process-tool-provider/
-COPY packages/mcp-tool-provider/package.json packages/mcp-tool-provider/
-COPY packages/http-tool-provider/package.json packages/http-tool-provider/
-COPY packages/trace-sinks/package.json packages/trace-sinks/
-COPY packages/operator/package.json packages/operator/
 COPY packages/agent-pod/package.json packages/agent-pod/
+COPY packages/agent-workflow-runtime/package.json packages/agent-workflow-runtime/
+COPY packages/audit-events/package.json packages/audit-events/
+COPY packages/blackboard/package.json packages/blackboard/
+COPY packages/cache-controller/package.json packages/cache-controller/
+COPY packages/capability-types/package.json packages/capability-types/
+COPY packages/cli/package.json packages/cli/
 COPY packages/dto/package.json packages/dto/
+COPY packages/egress-controller/package.json packages/egress-controller/
+COPY packages/events/package.json packages/events/
+COPY packages/http-tool-provider/package.json packages/http-tool-provider/
+COPY packages/in-process-tool-provider/package.json packages/in-process-tool-provider/
+COPY packages/keyrotation-controller/package.json packages/keyrotation-controller/
+COPY packages/llm-gateway/package.json packages/llm-gateway/
+COPY packages/locality-controller/package.json packages/locality-controller/
+COPY packages/mcp-tool-provider/package.json packages/mcp-tool-provider/
+COPY packages/openai-compat/package.json packages/openai-compat/
+COPY packages/operator/package.json packages/operator/
+COPY packages/quota-controller/package.json packages/quota-controller/
+COPY packages/supervision/package.json packages/supervision/
+COPY packages/trace-sinks/package.json packages/trace-sinks/
+COPY packages/triggers/package.json packages/triggers/
+COPY packages/versioning-controller/package.json packages/versioning-controller/
 COPY packages/workbench-api/package.json packages/workbench-api/
 COPY packages/workbench-ui/package.json packages/workbench-ui/
 
 RUN pnpm install --frozen-lockfile --prod=false
 
 # Source after install so the node_modules layer survives source edits.
+# Every workspace package's source is copied so
+# `pnpm --filter @kagent/agent-pod... build` resolves every transitive
+# @kagent/* import — Wave 4 added several controllers (audit-events,
+# capability-types, etc.) that agent-pod imports directly.
 COPY tsconfig.base.json ./
 COPY scripts ./scripts
 COPY packages/agent-loop packages/agent-loop
-COPY packages/openai-compat packages/openai-compat
-COPY packages/in-process-tool-provider packages/in-process-tool-provider
-COPY packages/mcp-tool-provider packages/mcp-tool-provider
-COPY packages/http-tool-provider packages/http-tool-provider
-COPY packages/trace-sinks packages/trace-sinks
 COPY packages/agent-pod packages/agent-pod
+COPY packages/agent-workflow-runtime packages/agent-workflow-runtime
+COPY packages/audit-events packages/audit-events
+COPY packages/blackboard packages/blackboard
+COPY packages/cache-controller packages/cache-controller
+COPY packages/capability-types packages/capability-types
+COPY packages/dto packages/dto
+COPY packages/egress-controller packages/egress-controller
+COPY packages/events packages/events
+COPY packages/http-tool-provider packages/http-tool-provider
+COPY packages/in-process-tool-provider packages/in-process-tool-provider
+COPY packages/keyrotation-controller packages/keyrotation-controller
+COPY packages/locality-controller packages/locality-controller
+COPY packages/mcp-tool-provider packages/mcp-tool-provider
+COPY packages/openai-compat packages/openai-compat
+COPY packages/quota-controller packages/quota-controller
+COPY packages/supervision packages/supervision
+COPY packages/trace-sinks packages/trace-sinks
+COPY packages/triggers packages/triggers
+COPY packages/versioning-controller packages/versioning-controller
 
 # Compile @kagent/agent-pod and every workspace package it depends on.
 RUN pnpm --filter @kagent/agent-pod... build

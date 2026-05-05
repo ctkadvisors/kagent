@@ -34,15 +34,28 @@ WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/agent-loop/package.json packages/agent-loop/
 COPY packages/agent-pod/package.json packages/agent-pod/
+COPY packages/agent-workflow-runtime/package.json packages/agent-workflow-runtime/
+COPY packages/audit-events/package.json packages/audit-events/
+COPY packages/blackboard/package.json packages/blackboard/
+COPY packages/cache-controller/package.json packages/cache-controller/
+COPY packages/capability-types/package.json packages/capability-types/
 COPY packages/cli/package.json packages/cli/
 COPY packages/dto/package.json packages/dto/
+COPY packages/egress-controller/package.json packages/egress-controller/
+COPY packages/events/package.json packages/events/
 COPY packages/http-tool-provider/package.json packages/http-tool-provider/
 COPY packages/in-process-tool-provider/package.json packages/in-process-tool-provider/
+COPY packages/keyrotation-controller/package.json packages/keyrotation-controller/
 COPY packages/llm-gateway/package.json packages/llm-gateway/
+COPY packages/locality-controller/package.json packages/locality-controller/
 COPY packages/mcp-tool-provider/package.json packages/mcp-tool-provider/
 COPY packages/openai-compat/package.json packages/openai-compat/
 COPY packages/operator/package.json packages/operator/
+COPY packages/quota-controller/package.json packages/quota-controller/
+COPY packages/supervision/package.json packages/supervision/
 COPY packages/trace-sinks/package.json packages/trace-sinks/
+COPY packages/triggers/package.json packages/triggers/
+COPY packages/versioning-controller/package.json packages/versioning-controller/
 COPY packages/workbench-api/package.json packages/workbench-api/
 COPY packages/workbench-ui/package.json packages/workbench-ui/
 
