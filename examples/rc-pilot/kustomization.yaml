@@ -72,3 +72,11 @@ patches:
       - op: add
         path: /metadata/annotations/argocd.argoproj.io~1sync-options
         value: Replace=true
+      # Bump per RC cycle to force a spec-level diff Argo can act on.
+      # The CRD prunes unknown fields, so an annotation diff alone is
+      # not enough to trigger Replace's delete+recreate semantic.
+      # `idempotencyKey` IS in the schema, so the diff survives
+      # pruning and Argo replaces the resource cleanly.
+      - op: add
+        path: /spec/idempotencyKey
+        value: rc2-llama-4-scout
