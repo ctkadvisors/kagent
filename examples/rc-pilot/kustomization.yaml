@@ -33,6 +33,12 @@ labels:
 
 commonAnnotations:
   kagent.knuteson.io/evidence-bundle: enterprise-pilot-rc1
+  # Bump this string to force Argo to re-create every CR in this
+  # bundle (combined with the Replace=true sync option on AgentTasks
+  # below — the annotation diff is what actually triggers Replace's
+  # delete+recreate semantics, since AgentTask.spec rarely changes
+  # between cycles). One bump = one fresh RC run + new evidence pack.
+  kagent.knuteson.io/rc-run: rc2-llama-4-scout
 
 resources:
   - 00-namespace.yaml
