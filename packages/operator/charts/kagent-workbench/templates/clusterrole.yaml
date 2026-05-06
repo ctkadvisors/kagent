@@ -32,6 +32,12 @@ rules:
       - agents
       - agenttasks
       - agentcapabilities
+      # ModelEndpoint reads back the Gateway page's "ModelEndpoint
+      # cards" panel — the workbench-api joins gateway /admin/capacity
+      # with the CR's metadata.{name,namespace} so the UI can PATCH
+      # the right CR. Read-only here; mutation lives in the actions
+      # ClusterRole (split by design — read works without writes).
+      - modelendpoints
     verbs: ['get', 'list', 'watch']
   # Status subresources (operator updates these; UI shows them)
   - apiGroups: ['kagent.knuteson.io']

@@ -20,8 +20,10 @@ import type { CustomObjectsApi } from '@kubernetes/client-node';
 
 import { buildAuthMiddleware } from './auth.js';
 import type { SnapshotCache } from './cache.js';
+import type { GatewayClient } from './gateway-client.js';
 import type { SseBroker } from './sse.js';
 import { agentsRoute } from './routes/agents.js';
+import { gatewayRoute } from './routes/gateway.js';
 import { healthzRoute } from './routes/healthz.js';
 import { streamRoute } from './routes/stream.js';
 import { tasksRoute } from './routes/tasks.js';
@@ -70,6 +72,26 @@ export interface RouterDeps {
    * the workbench-api's release namespace (typically `kagent-system`).
    */
   readonly defaultNamespace?: string;
+  /**
+   * Live HTTP client to the kagent LLM gateway's `/admin/*` surface.
+   * When omitted, `/api/gateway/capacity` and `/api/gateway/usage`
+   * return 503 — same opt-in posture as `customApi` for POST.
+   */
+  readonly gatewayClient?: GatewayClient;
+  /**
+   * Always-available read-side K8s client. The Gateway page uses it to
+   * enrich capacity rows with the underlying ModelEndpoint CR's
+   * `metadata.{name,namespace}`. Distinct from the write-gated
+   * `customApi` field — present in any in-cluster boot, omitted in
+   * KAGENT_NO_INFORMER mode.
+   */
+  readonly readCustomApi?: CustomObjectsApi;
+  /**
+   * Gates the PATCH /api/modelendpoints/* route. Mirrors the
+   * `WORKBENCH_ACTIONS_ENABLED` env knob already used for POST
+   * /api/tasks. Default false → PATCH 503s.
+   */
+  readonly writesEnabled?: boolean;
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
@@ -99,6 +121,20 @@ export function buildRouter(deps: RouterDeps): Hono {
   );
   app.route('/', agentsRoute({ cache: deps.cache }));
   app.route('/', streamRoute({ broker: deps.broker }));
+  app.route(
+    '/',
+    gatewayRoute({
+      ...(deps.gatewayClient !== undefined && { gatewayClient: deps.gatewayClient }),
+      // Prefer the always-on read client; fall back to the gated
+      // customApi for tests / older harnesses that only thread the
+      // write-side. Either client can do the read, since
+      // listClusterCustomObject doesn't require RBAC for write verbs.
+      ...((deps.readCustomApi ?? deps.customApi) !== undefined && {
+        customApi: deps.readCustomApi ?? deps.customApi,
+      }),
+      writesEnabled: deps.writesEnabled === true && deps.customApi !== undefined,
+    }),
+  );
 
   // Reserve the API namespace before the SPA proxy catches unmatched
   // GETs. Without this, `/api/typo` can return the UI's index.html

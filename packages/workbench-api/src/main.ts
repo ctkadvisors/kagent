@@ -50,6 +50,7 @@ import {
 
 import { resolveAuthRequired } from './auth.js';
 import { SnapshotCache } from './cache.js';
+import { createGatewayClient, type GatewayClient } from './gateway-client.js';
 import { createInformerSet, type InformerSet } from './informer.js';
 import { buildRouter } from './router.js';
 import { startServer } from './server.js';
@@ -67,7 +68,9 @@ async function main(): Promise<void> {
 
   let ready = skipInformer; // in skip mode, we're "ready" immediately
   let informers: InformerSet | undefined;
+  let readCustomApi: CustomObjectsApi | undefined;
   let writeCustomApi: CustomObjectsApi | undefined;
+  let writesEnabled = false;
   let kubeConfig: KubeConfig | undefined;
 
   if (!skipInformer) {
@@ -77,6 +80,11 @@ async function main(): Promise<void> {
     const customApi = kc.makeApiClient(CustomObjectsApi);
     const coreApi = kc.makeApiClient(CoreV1Api);
     const batchApi = kc.makeApiClient(BatchV1Api);
+    // Always-available read-side handle. Used by the Gateway page's
+    // ModelEndpoint join (read-only list); the WS-J POST + ModelEndpoint
+    // PATCH paths gate on `writesEnabled` separately so a
+    // chart install with `actions.create=false` stays write-proof.
+    readCustomApi = customApi;
 
     const listJobs = async (): Promise<KubernetesListObject<V1Job>> => {
       return await batchApi.listJobForAllNamespaces({ labelSelector: MANAGED_BY });
@@ -92,7 +100,10 @@ async function main(): Promise<void> {
     const actionsEnabled = process.env.WORKBENCH_ACTIONS_ENABLED === 'true';
     if (actionsEnabled) {
       writeCustomApi = customApi;
-      console.log('[workbench-api] write surface ENABLED (POST /api/tasks)');
+      writesEnabled = true;
+      console.log(
+        '[workbench-api] write surface ENABLED (POST /api/tasks + PATCH /api/modelendpoints/*)',
+      );
     } else {
       console.log(
         '[workbench-api] write surface disabled (set WORKBENCH_ACTIONS_ENABLED=true to enable)',
@@ -103,6 +114,30 @@ async function main(): Promise<void> {
   const uiUpstream = process.env.WORKBENCH_UI_UPSTREAM;
   const langfuseBaseUrl = process.env.LANGFUSE_BASE_URL;
   const authRequired = resolveAuthRequired();
+
+  // Gateway admin client — drives `/api/gateway/capacity` + `/api/gateway/usage`.
+  // Both env vars must be set; if either is empty the routes return 503
+  // and the workbench-ui's Gateway page renders an "unconfigured" empty
+  // state rather than crashing.
+  const gatewayBaseUrl = process.env.WORKBENCH_GATEWAY_BASE_URL;
+  const gatewayAdminToken = process.env.WORKBENCH_GATEWAY_ADMIN_TOKEN;
+  let gatewayClient: GatewayClient | undefined;
+  if (
+    typeof gatewayBaseUrl === 'string' &&
+    gatewayBaseUrl.length > 0 &&
+    typeof gatewayAdminToken === 'string' &&
+    gatewayAdminToken.length > 0
+  ) {
+    gatewayClient = createGatewayClient({
+      baseUrl: gatewayBaseUrl,
+      adminToken: gatewayAdminToken,
+    });
+    console.log(`[workbench-api] gateway client configured → ${gatewayBaseUrl}`);
+  } else {
+    console.log(
+      '[workbench-api] gateway client NOT configured (set WORKBENCH_GATEWAY_BASE_URL + WORKBENCH_GATEWAY_ADMIN_TOKEN). /api/gateway/* routes will 503.',
+    );
+  }
   if (!authRequired) {
     console.warn(
       '[workbench-api] WORKBENCH_AUTH_REQUIRED=false — auth is DISABLED. ' +
@@ -129,6 +164,9 @@ async function main(): Promise<void> {
     ...(writeCustomApi !== undefined && { customApi: writeCustomApi }),
     ...(typeof defaultNamespace === 'string' &&
       defaultNamespace.length > 0 && { defaultNamespace }),
+    ...(gatewayClient !== undefined && { gatewayClient }),
+    ...(readCustomApi !== undefined && { readCustomApi }),
+    writesEnabled,
   });
   const handle = startServer(app, { port, hostname });
 

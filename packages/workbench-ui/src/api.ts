@@ -15,6 +15,9 @@ import type {
   CreateTaskError,
   CreateTaskRequest,
   CreateTaskResponse,
+  GatewayCapacityResponse,
+  GatewayUsageResponse,
+  PatchInFlightRequest,
   TaskDetail,
   TaskSummary,
 } from './types.js';
@@ -134,5 +137,87 @@ export class CreateTaskApiError extends Error {
   }
   get error(): string {
     return this.message;
+  }
+}
+
+/* =====================================================================
+ * Gateway page surface — proxies the workbench-api's `/api/gateway/*`
+ * endpoints (which themselves proxy the LLM gateway's /admin/*).
+ *
+ * Empty / unconfigured gateway → 503 from the API → here we throw an
+ * Error with the body's message so the UI can render an explanatory
+ * empty state. 502 (gateway-unreachable) → same path, distinct message.
+ * ===================================================================== */
+
+export async function fetchGatewayCapacity(signal?: AbortSignal): Promise<GatewayCapacityResponse> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/gateway/capacity', init);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new GatewayApiError(
+      res.status,
+      body.message ?? body.error ?? `gateway capacity: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as GatewayCapacityResponse;
+}
+
+export async function fetchGatewayUsage(
+  params: { readonly limit?: number; readonly model?: string; readonly taskUid?: string } = {},
+  signal?: AbortSignal,
+): Promise<GatewayUsageResponse> {
+  const qs = new URLSearchParams();
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  if (params.model !== undefined) qs.set('model', params.model);
+  if (params.taskUid !== undefined) qs.set('taskUid', params.taskUid);
+  const url =
+    qs.toString().length > 0 ? `/api/gateway/usage?${qs.toString()}` : '/api/gateway/usage';
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new GatewayApiError(
+      res.status,
+      body.message ?? body.error ?? `gateway usage: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as GatewayUsageResponse;
+}
+
+/**
+ * PATCH a ModelEndpoint's inflight bounds. Returns a normalized result
+ * shape; throws `GatewayApiError` on any non-2xx so the UI can show
+ * "could not save" + the API's reason.
+ */
+export async function patchModelEndpointInFlight(
+  namespace: string,
+  name: string,
+  body: PatchInFlightRequest,
+): Promise<void> {
+  const res = await fetch(
+    `/api/modelendpoints/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new GatewayApiError(
+      res.status,
+      errBody.message ??
+        errBody.error ??
+        `patch modelendpoint: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+}
+
+export class GatewayApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'GatewayApiError';
+    this.status = status;
   }
 }

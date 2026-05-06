@@ -53,6 +53,26 @@ api:
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
   langfuseBaseUrl: ''
+  # Optional — wires the Gateway page (`#/gateway` in the UI) to the
+  # kagent LLM gateway's /admin/* surface. When unset, the page renders
+  # an empty "gateway not configured" state.
+  #
+  # `baseUrl` is the in-cluster URL of the gateway pod's HTTP listener.
+  # `admin.secretName` / `admin.secretKey` reference a Secret in the
+  # release namespace whose value is the gateway's own admin bearer
+  # token (from the gateway chart's `kagent-llm-gateway-token` Secret).
+  # The workbench-api reads this token at boot, threads it through into
+  # outbound /admin/capacity + /admin/usage calls.
+  #
+  # Homelab posture: same Secret as the gateway's adminApiToken (the
+  # gateway issues the token; the workbench-api consumes it). Cross-
+  # cluster operators wanting a separate token can mint one and use
+  # /admin/keys to register it (out of scope for v0.1).
+  gatewayAdmin:
+    baseUrl: ''
+    admin:
+      secretName: ''
+      secretKey: 'token'
   # Header-trust auth gate. The workbench-api requires every non-probe
   # request to carry an `X-Forwarded-User` header (set upstream by
   # Traefik forward-auth or oauth2-proxy). The default is `true` —

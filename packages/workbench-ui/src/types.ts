@@ -214,3 +214,61 @@ export interface CreateTaskError {
     readonly detail?: string;
   }>;
 }
+
+/* =====================================================================
+ * Gateway page — `/api/gateway/*` and ModelEndpoint mutation surface.
+ * Mirrors `packages/workbench-api/src/gateway-client.ts` shapes; declared
+ * here so the UI stays leaf-deps-only.
+ * ===================================================================== */
+
+export interface GatewayCapacityRow {
+  readonly model: string;
+  readonly endpoint: string;
+  readonly backendKind: string;
+  readonly inFlight: number;
+  readonly currentCap: number;
+  readonly seed: number;
+  readonly max: number;
+  readonly minSafe: number;
+  readonly recentP50Ms: number | null;
+  /**
+   * The underlying ModelEndpoint CR's metadata.name. Workbench-api
+   * joins this from the K8s API; absent when the join failed (RBAC,
+   * missing CR, etc.) — UI hides the slider in that case.
+   */
+  readonly crName?: string;
+  readonly crNamespace?: string;
+}
+
+export interface GatewayCapacityResponse {
+  readonly rows: readonly GatewayCapacityRow[];
+  readonly fetchedAt: string;
+}
+
+export interface GatewayUsageRow {
+  readonly id?: number | string;
+  readonly requestId: string;
+  readonly model: string;
+  readonly backend: string;
+  readonly backendUrl: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly latencyMs: number;
+  readonly statusCode: number;
+  readonly streaming: boolean;
+  readonly taskUid?: string;
+  readonly agentName?: string;
+  readonly errorMessage?: string;
+  readonly recordedAt?: string;
+}
+
+export interface GatewayUsageResponse {
+  readonly rows: readonly GatewayUsageRow[];
+  readonly fetchedAt: string;
+}
+
+export interface PatchInFlightRequest {
+  readonly seed?: number;
+  readonly max?: number;
+  readonly minSafe?: number;
+}

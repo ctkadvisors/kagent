@@ -128,6 +128,25 @@ spec:
               value: {{ and .Values.rbac.create .Values.rbac.actions.create | ternary "true" "false" | quote }}
             - name: WORKBENCH_DEFAULT_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            # Gateway page wiring — only emitted when the chart values
+            # supply both the gateway URL and the admin-token Secret
+            # reference. The workbench-api treats either env var being
+            # absent / empty as "gateway page disabled" and the
+            # /api/gateway/* routes 503 — UI degrades to an empty
+            # state instead of crashing.
+            {{- with .Values.api.gatewayAdmin }}
+            {{- if .baseUrl }}
+            - name: WORKBENCH_GATEWAY_BASE_URL
+              value: {{ .baseUrl | quote }}
+            {{- end }}
+            {{- if .admin.secretName }}
+            - name: WORKBENCH_GATEWAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .admin.secretName | quote }}
+                  key: {{ .admin.secretKey | quote }}
+            {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.api.healthPath }}

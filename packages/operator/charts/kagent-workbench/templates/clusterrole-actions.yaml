@@ -32,4 +32,12 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks']
     verbs: ['create']
+  # ModelEndpoint mutation — drives the Gateway page's
+  # "save bounds" button. Patches `spec.inFlight.{seed,max,minSafe}`
+  # via JSON merge-patch. Verbs are `patch` (mutation) + `update`
+  # (the K8s API may downgrade certain server-side patches to
+  # update internally) — explicit list prevents accidental over-grant.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['modelendpoints']
+    verbs: ['patch', 'update']
 {{- end }}
