@@ -30,6 +30,22 @@ describe('trace — pure fns', () => {
     expect(truncated).toContain('[truncated 500 chars]');
   });
 
+  it('truncateForStorage tolerates non-string input — trace recording must never crash the run loop', () => {
+    // Defense-in-depth: even if a backend leaks a non-string into the trace
+    // boundary (e.g. an upstream mapper that misses an Anthropic-shape array
+    // content envelope), the trace fan-out must keep the run loop alive.
+    expect(() => truncateForStorage(undefined as unknown as string)).not.toThrow();
+    expect(() => truncateForStorage(null as unknown as string)).not.toThrow();
+    expect(() =>
+      truncateForStorage({ type: 'text', text: 'hi' } as unknown as string),
+    ).not.toThrow();
+    expect(() => truncateForStorage(12345 as unknown as string)).not.toThrow();
+    expect(typeof truncateForStorage(undefined as unknown as string)).toBe('string');
+    expect(typeof truncateForStorage({ type: 'text', text: 'hi' } as unknown as string)).toBe(
+      'string',
+    );
+  });
+
   it('SC6.3: truncateMessages — empty array returns "[]"; populated array returns JSON with truncated content', () => {
     expect(truncateMessages([])).toBe('[]');
     const messages: ChatMessage[] = [

@@ -153,13 +153,28 @@ export function estimateTokens(text: string): number {
  * the last 200 characters. Default `maxChars = 700` matches the source
  * repo's pattern; consumers can override per-call.
  *
- * Verbatim port from the source repo's tracing module.
+ * Coerces non-string input to a string at the boundary — trace recording
+ * MUST NOT crash the run loop (mirrors the "sinks SHOULD NOT throw"
+ * invariant on `TraceSink.emit`). Upstream type contracts (`ChatResult.content`
+ * is `string`) can be violated by a misbehaving backend or adapter; this
+ * helper degrades gracefully via `JSON.stringify` so traces stay structured
+ * and the executor keeps running.
  */
 export function truncateForStorage(text: string, maxChars = 700): string {
-  if (text.length <= maxChars) return text;
-  const head = text.slice(0, 500);
-  const tail = text.slice(-200);
-  return `${head}\n...[truncated ${text.length - 700} chars]...\n${tail}`;
+  const s = typeof text === 'string' ? text : safeStringify(text);
+  if (s.length <= maxChars) return s;
+  const head = s.slice(0, 500);
+  const tail = s.slice(-200);
+  return `${head}\n...[truncated ${s.length - 700} chars]...\n${tail}`;
+}
+
+function safeStringify(value: unknown): string {
+  if (value == null) return '';
+  try {
+    return JSON.stringify(value) ?? '[unserializable]';
+  } catch {
+    return '[unserializable]';
+  }
 }
 
 /**
