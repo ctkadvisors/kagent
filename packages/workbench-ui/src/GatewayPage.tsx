@@ -238,7 +238,7 @@ function UsageTable({
         {rows.map((r, i) => (
           <tr key={r.requestId !== '' ? r.requestId : `${String(r.id ?? '')}-${String(i)}`}>
             <td className={styles.mono}>
-              {r.recordedAt !== undefined ? new Date(r.recordedAt).toISOString().slice(11, 19) : '—'}
+              {r.occurredAt !== undefined ? new Date(r.occurredAt).toISOString().slice(11, 19) : '—'}
             </td>
             <td className={styles.mono}>{r.model}</td>
             <td>{r.backend}</td>
@@ -250,10 +250,10 @@ function UsageTable({
                 : '—'}
             </td>
             <td className={styles.mono}>
-              {r.taskUid !== undefined && r.taskUid !== '' ? r.taskUid.slice(0, 8) : '—'}
+              {r.taskUid != null && r.taskUid !== '' ? r.taskUid.slice(0, 8) : '—'}
             </td>
             <td className={styles.errorCell} title={r.errorMessage ?? ''}>
-              {r.errorMessage !== undefined && r.errorMessage !== ''
+              {r.errorMessage != null && r.errorMessage !== ''
                 ? r.errorMessage.slice(0, 60)
                 : ''}
             </td>

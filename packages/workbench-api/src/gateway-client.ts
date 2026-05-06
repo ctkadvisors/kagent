@@ -61,10 +61,13 @@ export interface GatewayUsageRow {
   readonly latencyMs: number;
   readonly statusCode: number;
   readonly streaming: boolean;
-  readonly taskUid?: string;
-  readonly agentName?: string;
-  readonly errorMessage?: string;
-  readonly recordedAt?: string;
+  // Nullable string fields: the gateway projects SQL NULLs through as JSON
+  // null (NOT undefined / missing). UI must guard with `!= null`, not
+  // `!== undefined`, or `null.slice` will throw at render time.
+  readonly taskUid?: string | null;
+  readonly agentName?: string | null;
+  readonly errorMessage?: string | null;
+  readonly occurredAt?: string;
 }
 
 export interface GatewayClient {
