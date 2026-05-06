@@ -12,6 +12,7 @@
 import type {
   AgentSummaryRow,
   CacheChangeEvent,
+  ClusterSnapshot,
   CreateTaskError,
   CreateTaskRequest,
   CreateTaskResponse,
@@ -220,4 +221,20 @@ export class GatewayApiError extends Error {
     this.name = 'GatewayApiError';
     this.status = status;
   }
+}
+
+/* =====================================================================
+ * Cluster page — substrate visibility surface.
+ * ===================================================================== */
+
+export async function fetchClusterSnapshot(signal?: AbortSignal): Promise<ClusterSnapshot> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/cluster/snapshot', init);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new Error(
+      body.message ?? body.error ?? `cluster snapshot: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as ClusterSnapshot;
 }

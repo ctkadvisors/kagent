@@ -55,6 +55,13 @@ rules:
   - apiGroups: ['']
     resources: ['pods']
     verbs: ['get', 'list', 'watch']
+  # Cluster page — node listing for the substrate visibility
+  # dashboard. Read-only, cluster-scoped (nodes are cluster-scoped
+  # by design). The workbench-ui's #/cluster surface renders these
+  # as one card per node with capacity + Ready status.
+  - apiGroups: ['']
+    resources: ['nodes']
+    verbs: ['get', 'list', 'watch']
   # Pod logs for the task-detail panel. Opt-in surface in the API code.
   - apiGroups: ['']
     resources: ['pods/log']

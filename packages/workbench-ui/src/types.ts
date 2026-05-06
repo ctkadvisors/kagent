@@ -272,3 +272,68 @@ export interface PatchInFlightRequest {
   readonly max?: number;
   readonly minSafe?: number;
 }
+
+/* =====================================================================
+ * Cluster page — `/api/cluster/*`. Mirrors workbench-api/routes/cluster.ts
+ * shapes; UI stays leaf-deps-only.
+ * ===================================================================== */
+
+export interface ClusterNodeRow {
+  readonly name: string;
+  readonly role: string;
+  readonly kubeletVersion: string;
+  readonly osImage: string;
+  readonly containerRuntime: string;
+  readonly ready: 'True' | 'False' | 'Unknown';
+  readonly conditions: ReadonlyArray<{
+    readonly type: string;
+    readonly status: string;
+    readonly reason?: string;
+  }>;
+  readonly capacity: Readonly<Record<string, string>>;
+  readonly managedPodCount: number;
+  readonly lastHeartbeatAt?: string;
+}
+
+export interface ClusterPodRow {
+  readonly namespace: string;
+  readonly name: string;
+  readonly node: string | null;
+  readonly phase: string;
+  readonly taskUid?: string;
+  readonly taskName?: string;
+  readonly agentName?: string;
+}
+
+export interface ClusterTaskRow {
+  readonly namespace: string;
+  readonly name: string;
+  readonly uid: string;
+  readonly phase: string;
+  readonly targetAgent?: string;
+  readonly model?: string;
+  readonly podName?: string;
+  readonly nodeName?: string;
+  readonly createdAt?: string;
+  readonly startedAt?: string;
+  readonly completedAt?: string;
+  readonly parentTaskUid?: string;
+  readonly childCount: number;
+  readonly errorMessage?: string;
+  readonly lastResultPreview?: string;
+}
+
+export interface ClusterSnapshot {
+  readonly fetchedAt: string;
+  readonly nodes: readonly ClusterNodeRow[];
+  readonly pods: readonly ClusterPodRow[];
+  readonly activeTasks: readonly ClusterTaskRow[];
+  readonly recentTasks: readonly ClusterTaskRow[];
+  readonly counts: {
+    readonly nodes: number;
+    readonly managedPods: number;
+    readonly active: number;
+    readonly recent: number;
+    readonly agents: number;
+  };
+}

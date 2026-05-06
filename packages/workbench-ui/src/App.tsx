@@ -20,6 +20,7 @@
 
 import { useEffect, useState } from 'react';
 
+import { ClusterPage } from './ClusterPage.js';
 import { GatewayPage } from './GatewayPage.js';
 import { TaskDetail } from './TaskDetail.js';
 import { TaskList } from './TaskList.js';
@@ -38,13 +39,18 @@ interface GatewayRoute {
   readonly kind: 'gateway';
 }
 
-type Route = DetailRoute | ListRoute | GatewayRoute;
+interface ClusterRoute {
+  readonly kind: 'cluster';
+}
+
+type Route = DetailRoute | ListRoute | GatewayRoute | ClusterRoute;
 
 function parseHash(hash: string): Route {
   // Strip leading `#` and any leading `/`. Tolerate trailing slashes.
   const clean = hash.replace(/^#\/?/, '').replace(/\/$/, '');
   if (clean === '') return { kind: 'list' };
   if (clean === 'gateway') return { kind: 'gateway' };
+  if (clean === 'cluster') return { kind: 'cluster' };
   const parts = clean.split('/');
   if (parts.length === 3 && parts[0] === 'tasks') {
     const ns = parts[1];
@@ -92,6 +98,15 @@ export function App(): React.JSX.Element {
   if (route.kind === 'gateway') {
     return (
       <GatewayPage
+        onBack={() => {
+          window.location.hash = '#/';
+        }}
+      />
+    );
+  }
+  if (route.kind === 'cluster') {
+    return (
+      <ClusterPage
         onBack={() => {
           window.location.hash = '#/';
         }}

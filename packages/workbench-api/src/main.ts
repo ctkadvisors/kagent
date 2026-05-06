@@ -70,6 +70,7 @@ async function main(): Promise<void> {
   let informers: InformerSet | undefined;
   let readCustomApi: CustomObjectsApi | undefined;
   let writeCustomApi: CustomObjectsApi | undefined;
+  let readCoreApi: CoreV1Api | undefined;
   let writesEnabled = false;
   let kubeConfig: KubeConfig | undefined;
 
@@ -85,6 +86,7 @@ async function main(): Promise<void> {
     // PATCH paths gate on `writesEnabled` separately so a
     // chart install with `actions.create=false` stays write-proof.
     readCustomApi = customApi;
+    readCoreApi = coreApi;
 
     const listJobs = async (): Promise<KubernetesListObject<V1Job>> => {
       return await batchApi.listJobForAllNamespaces({ labelSelector: MANAGED_BY });
@@ -166,6 +168,7 @@ async function main(): Promise<void> {
       defaultNamespace.length > 0 && { defaultNamespace }),
     ...(gatewayClient !== undefined && { gatewayClient }),
     ...(readCustomApi !== undefined && { readCustomApi }),
+    ...(readCoreApi !== undefined && { coreApi: readCoreApi }),
     writesEnabled,
   });
   const handle = startServer(app, { port, hostname });

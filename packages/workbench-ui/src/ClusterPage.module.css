@@ -1,0 +1,440 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ */
+
+.wrapper {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  padding: 1.5rem;
+  color: #1a202c;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  gap: 1rem;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.backButton {
+  background: transparent;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  color: #374151;
+}
+
+.backButton:hover {
+  background: #f3f4f6;
+}
+
+.fetchedAt {
+  font-size: 0.75rem;
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.streamPill {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.streamLive {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.streamOff {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.errorBanner {
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: #92400e;
+  margin-bottom: 1rem;
+}
+
+.countsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.count {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.countVal {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #111827;
+}
+
+.countLbl {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  margin-top: 0.125rem;
+}
+
+.section {
+  margin-bottom: 1.75rem;
+}
+
+.sectionTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4b5563;
+}
+
+.empty {
+  background: #f9fafb;
+  border: 1px dashed #d1d5db;
+  border-radius: 0.375rem;
+  padding: 1.5rem;
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.twoColumns {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .twoColumns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== Node grid ===== */
+
+.nodeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.nodeCard {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid transparent;
+}
+
+.nodeReady {
+  border-left-color: #10b981;
+}
+
+.nodeUnready {
+  border-left-color: #ef4444;
+}
+
+.nodeUnknown {
+  border-left-color: #f59e0b;
+}
+
+.nodeHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.nodeName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #111827;
+}
+
+.nodeMeta {
+  font-size: 0.6875rem;
+  color: #6b7280;
+  margin-top: 0.125rem;
+}
+
+.nodeStatus {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4b5563;
+}
+
+.nodeStats {
+  display: flex;
+  gap: 1.25rem;
+  margin: 0.5rem 0;
+}
+
+.nodeStat {
+  display: flex;
+  flex-direction: column;
+}
+
+.nodeStatVal {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.nodeStatLbl {
+  font-size: 0.625rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+}
+
+.nodeFooter {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.6875rem;
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-top: 0.25rem;
+}
+
+.nodeOs {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14rem;
+}
+
+.nodeHb {
+  flex-shrink: 0;
+}
+
+/* ===== Activity feed ===== */
+
+.activityList {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+  max-height: 28rem;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+}
+
+.activityRow {
+  display: grid;
+  grid-template-columns: auto auto auto auto 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.125rem 0.25rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.activityRow:last-child {
+  border-bottom: none;
+}
+
+.activityTime {
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.activityDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: #9ca3af;
+}
+
+.evTask {
+  background: #2563eb;
+}
+
+.evAgent {
+  background: #7c3aed;
+}
+
+.evJob {
+  background: #ea580c;
+}
+
+.evPod {
+  background: #059669;
+}
+
+.activityKind {
+  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 0.625rem;
+  color: #4b5563;
+  width: 3rem;
+}
+
+.activityOp {
+  font-size: 0.625rem;
+  color: #6b7280;
+}
+
+.activityKey {
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== Task tree ===== */
+
+.taskTree {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  max-height: 28rem;
+  overflow-y: auto;
+}
+
+.treeRow {
+  display: grid;
+  grid-template-columns: 1fr 6rem 8rem 7rem 5rem 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.375rem 0.5rem;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 0.8125rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.treeRow:last-child {
+  border-bottom: none;
+}
+
+.treeRow:hover {
+  background: #f9fafb;
+}
+
+.treeBranch {
+  color: #9ca3af;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.625rem;
+  margin-right: 0.25rem;
+}
+
+.treeName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+  color: #1d4ed8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treePhase {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  text-align: center;
+}
+
+.phaseCompleted {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.phaseFailed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.phaseRunning {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.phasePending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.treeAgent,
+.treeNode {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  color: #4b5563;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treeAge {
+  font-size: 0.6875rem;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.treeErr {
+  font-size: 0.6875rem;
+  color: #b91c1c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.treeResult {
+  font-size: 0.6875rem;
+  color: #6b7280;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

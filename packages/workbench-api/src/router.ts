@@ -18,11 +18,14 @@
 import { Hono } from 'hono';
 import type { CustomObjectsApi } from '@kubernetes/client-node';
 
+import type { CoreV1Api } from '@kubernetes/client-node';
+
 import { buildAuthMiddleware } from './auth.js';
 import type { SnapshotCache } from './cache.js';
 import type { GatewayClient } from './gateway-client.js';
 import type { SseBroker } from './sse.js';
 import { agentsRoute } from './routes/agents.js';
+import { clusterRoute } from './routes/cluster.js';
 import { gatewayRoute } from './routes/gateway.js';
 import { healthzRoute } from './routes/healthz.js';
 import { streamRoute } from './routes/stream.js';
@@ -92,6 +95,12 @@ export interface RouterDeps {
    * /api/tasks. Default false → PATCH 503s.
    */
   readonly writesEnabled?: boolean;
+  /**
+   * CoreV1 client for the Cluster page's node listing. Reads only;
+   * uses the same kubeconfig as the informers. When omitted (test
+   * mode / KAGENT_NO_INFORMER), `/api/cluster/*` routes 503.
+   */
+  readonly coreApi?: CoreV1Api;
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
@@ -133,6 +142,13 @@ export function buildRouter(deps: RouterDeps): Hono {
         customApi: deps.readCustomApi ?? deps.customApi,
       }),
       writesEnabled: deps.writesEnabled === true && deps.customApi !== undefined,
+    }),
+  );
+  app.route(
+    '/',
+    clusterRoute({
+      cache: deps.cache,
+      ...(deps.coreApi !== undefined && { coreApi: deps.coreApi }),
     }),
   );
 

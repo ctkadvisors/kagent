@@ -168,6 +168,16 @@ export class SnapshotCache {
     return undefined;
   }
 
+  /** All operator-managed pods cached by the informer. */
+  listPods(): readonly V1Pod[] {
+    return Array.from(this.pods.values());
+  }
+
+  /** All operator-managed Jobs cached by the informer. */
+  listJobs(): readonly V1Job[] {
+    return Array.from(this.jobs.values());
+  }
+
   /* ----- Listeners ----- */
 
   /** Subscribe to mutation events; returns an unsubscribe handle. */
