@@ -77,6 +77,29 @@ export interface TraceEntry {
   stop_reason?: string;
   /** JSON-stringified array of tool names available for this call. */
   tools_available?: string;
+  /**
+   * 0-indexed retry attempt for the current LLM call.
+   *
+   * Populated on `llm_call` entries when the executor's 429-retry policy
+   * issues more than one underlying `LLMClient.chat()` call for a single
+   * loop iteration. `0` is the first attempt; `1`, `2`, ... are retries.
+   *
+   * Omitted (undefined) when the call did NOT trigger a retry — keeps the
+   * existing single-attempt trace shape unchanged for the common path.
+   * Failed-then-succeeded sequences emit one entry per attempt: each carries
+   * the same `iteration` (via the surrounding `iteration_boundary`), but
+   * monotonically increasing `sequence` and `retry_attempt`.
+   */
+  retry_attempt?: number;
+  /**
+   * Backoff delay in milliseconds the executor slept BEFORE this attempt.
+   *
+   * Populated only when `retry_attempt > 0`. Records what the executor
+   * actually waited (post-Retry-After parse, post-default-schedule pick),
+   * so observers can correlate retry pacing with downstream pressure
+   * without re-deriving from timestamps.
+   */
+  retry_backoff_ms?: number;
 
   // ─── tool_call fields ──────────────────────────────────────────────
   /** Tool name dispatched. */

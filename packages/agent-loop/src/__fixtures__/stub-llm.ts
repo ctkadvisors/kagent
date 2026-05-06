@@ -26,6 +26,15 @@ import type {
 export interface StubLLMOptions {
   /** Pre-canned ChatResult sequence; one consumed per `chat()` call. */
   scriptedResponses?: ChatResult[];
+  /**
+   * Pre-canned sequence of `ChatResult` OR `Error` instances; one consumed per `chat()` call.
+   *
+   * When set, supersedes `scriptedResponses` — entries that are `Error` instances
+   * cause `chat()` to throw the value (used to script 429-retry scenarios).
+   * Entries that are `ChatResult` shapes return normally. The same call counter
+   * advances across both kinds.
+   */
+  scriptedChat?: Array<ChatResult | Error>;
   /** Pre-canned delta arrays; one inner array consumed per `chatStream()` call. */
   scriptedDeltas?: ChatDelta[][];
   /** Override the default countTokens (default: chars/4 ceiling matching estimateTokens). */
@@ -59,6 +68,14 @@ export function makeStubLLM(opts: StubLLMOptions = {}): LLMClient {
       }
       if (opts.throwOnChat) {
         throw opts.throwOnChat;
+      }
+      // `scriptedChat` (mixed ChatResult | Error) takes priority over the
+      // ChatResult-only `scriptedResponses` so retry tests can script
+      // "Throw 429, Throw 429, Return success" without a second stub.
+      if (opts.scriptedChat && opts.scriptedChat.length > 0) {
+        const next = opts.scriptedChat[chatIdx++];
+        if (next instanceof Error) throw next;
+        return next ?? { content: '' };
       }
       const next = opts.scriptedResponses?.[chatIdx++];
       return next ?? { content: '' };

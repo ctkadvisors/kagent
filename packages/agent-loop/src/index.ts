@@ -166,6 +166,7 @@ export type {
   ExecutionResult,
   RunInput,
   AgentExecutorOptions,
+  RetryPolicy,
 } from './executor.js';
 
 // =====================================================================

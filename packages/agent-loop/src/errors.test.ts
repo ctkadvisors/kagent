@@ -172,8 +172,17 @@ describe('LLMClient error family (Phase 4 — D-16)', () => {
     expect(err.status).toBe(500);
     expect(err.body).toBeUndefined();
     expect(err.requestId).toBeUndefined();
+    expect(err.retryAfterSec).toBeUndefined();
     // exactOptionalPropertyTypes verification: the property either isn't set or is undefined
     expect('body' in err ? err.body : undefined).toBeUndefined();
+  });
+
+  it('LLMClientHttpError — retryAfterSec round-trips when supplied (gateway 429 + Retry-After)', () => {
+    const err = new LLMClientHttpError(429, 'at capacity', 'req-1', 2);
+    expect(err.status).toBe(429);
+    expect(err.retryAfterSec).toBe(2);
+    expect(err.body).toBe('at capacity');
+    expect(err.requestId).toBe('req-1');
   });
 
   it('LLMClientProtocolError — instanceof chain; .raw round-trips arbitrary unknown', () => {

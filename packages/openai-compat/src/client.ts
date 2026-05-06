@@ -68,6 +68,34 @@ import { mapOpenAIResponseToChatResult } from './response-mapper.js';
 import { parseSSEStream } from './sse-parser.js';
 
 /**
+ * Parse `Retry-After` response header into delta-seconds.
+ *
+ * RFC 7231 §7.1.3 allows two forms:
+ *   1. `Retry-After: 120` (delta-seconds, non-negative integer)
+ *   2. `Retry-After: Wed, 21 Oct 2026 07:28:00 GMT` (HTTP-date)
+ *
+ * We only handle form (1) — the kagent llm-gateway emits `String(retryAfterSec)`
+ * (an integer) at `server.ts:289`, and most upstream LLM backends (OpenAI,
+ * vLLM, Anthropic) do the same. Form (2) returns `undefined` so the consumer
+ * falls back to its default backoff schedule rather than us guessing.
+ *
+ * Returns `undefined` on absent / unparseable / non-finite / negative values.
+ */
+function parseRetryAfterSeconds(headers: Headers): number | undefined {
+  const raw = headers.get('retry-after');
+  if (raw === null) return undefined;
+  // Trim — some proxies pad the value.
+  const trimmed = raw.trim();
+  if (trimmed === '') return undefined;
+  // Strict integer parse — reject "2.5", "Wed, 21 Oct...", "" cleanly.
+  // /^\d+$/ matches the delta-seconds form per RFC 7231.
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
+/**
  * Constructor options for `OpenAICompatibleLLMClient` (D-08).
  *
  * `baseUrl` and `model` are required; everything else is optional. The
@@ -167,7 +195,8 @@ export class OpenAICompatibleLLMClient implements LLMClient {
       }
       const truncated = truncateForStorage(bodyText);
       const requestId = response.headers.get('x-request-id') ?? undefined;
-      throw new LLMClientHttpError(response.status, truncated, requestId);
+      const retryAfterSec = parseRetryAfterSeconds(response.headers);
+      throw new LLMClientHttpError(response.status, truncated, requestId, retryAfterSec);
     }
 
     let json: unknown;
@@ -245,7 +274,8 @@ export class OpenAICompatibleLLMClient implements LLMClient {
         }
         const truncated = truncateForStorage(bodyText);
         const requestId = response.headers.get('x-request-id') ?? undefined;
-        throw new LLMClientHttpError(response.status, truncated, requestId);
+        const retryAfterSec = parseRetryAfterSeconds(response.headers);
+        throw new LLMClientHttpError(response.status, truncated, requestId, retryAfterSec);
       }
 
       if (!response.body) {

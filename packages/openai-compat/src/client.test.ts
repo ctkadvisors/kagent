@@ -154,6 +154,57 @@ describe('OpenAICompatibleLLMClient.chat() — error classification (VALIDATION 
     }
   });
 
+  it('Retry-After header (delta-seconds) parsed into LLMClientHttpError.retryAfterSec on 429', async () => {
+    const fetch = makeMockFetch({
+      body: RATE_LIMITED_RESPONSE,
+      status: 429,
+      headers: {
+        'content-type': 'application/json',
+        'retry-after': '2',
+      },
+    });
+    const client = new OpenAICompatibleLLMClient({ baseUrl: 'http://test/v1', model: 'm', fetch });
+    try {
+      await client.chat({ messages: [] }, ctx());
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as LLMClientHttpError).retryAfterSec).toBe(2);
+    }
+  });
+
+  it('Retry-After absent → retryAfterSec is undefined (no default invented)', async () => {
+    const fetch = makeMockFetch({
+      body: RATE_LIMITED_RESPONSE,
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+    });
+    const client = new OpenAICompatibleLLMClient({ baseUrl: 'http://test/v1', model: 'm', fetch });
+    try {
+      await client.chat({ messages: [] }, ctx());
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as LLMClientHttpError).retryAfterSec).toBeUndefined();
+    }
+  });
+
+  it('Retry-After unparseable (HTTP-date form) → retryAfterSec undefined; consumer falls back to default backoff', async () => {
+    const fetch = makeMockFetch({
+      body: RATE_LIMITED_RESPONSE,
+      status: 429,
+      headers: {
+        'content-type': 'application/json',
+        'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT',
+      },
+    });
+    const client = new OpenAICompatibleLLMClient({ baseUrl: 'http://test/v1', model: 'm', fetch });
+    try {
+      await client.chat({ messages: [] }, ctx());
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as LLMClientHttpError).retryAfterSec).toBeUndefined();
+    }
+  });
+
   it('VALIDATION.17: protocol error — malformed JSON response throws LLMClientProtocolError', async () => {
     const fetch = makeMockFetch({ body: 'this is not json', status: 200 });
     const client = new OpenAICompatibleLLMClient({ baseUrl: 'http://test/v1', model: 'm', fetch });

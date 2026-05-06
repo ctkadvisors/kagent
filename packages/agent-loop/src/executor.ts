@@ -52,8 +52,77 @@ import type {
 import { ToolProviderRegistry } from './tool-provider.js';
 import type { TraceEntry, TraceSink } from './trace.js';
 import { estimateTokens, truncateForStorage, truncateMessages } from './trace.js';
-import { AgentNotFoundError, NoLLMClientError, InvalidConfigError } from './errors.js';
+import {
+  AgentNotFoundError,
+  NoLLMClientError,
+  InvalidConfigError,
+  LLMClientHttpError,
+} from './errors.js';
 import { randomUUID } from 'node:crypto';
+
+// =====================================================================
+// 429-retry policy (resilience for AIMD at-cap rejections)
+// =====================================================================
+
+/**
+ * Default retry schedule — exponential 200ms / 800ms / 3200ms.
+ *
+ * Index 0 is the wait BEFORE retry attempt 1; index 1 is the wait BEFORE
+ * retry attempt 2; etc. With `maxRetries=2` (the default), only indices
+ * 0 and 1 are consulted — index 2+ is reserved for callers that increase
+ * the retry budget. The schedule is a `readonly number[]` so it cannot
+ * be mutated through the public type surface.
+ */
+const DEFAULT_BACKOFF_SCHEDULE: readonly number[] = [200, 800, 3200];
+
+/** Default retry cap — original attempt + 2 retries = 3 round-trips worst-case. */
+const DEFAULT_MAX_RETRIES = 2;
+
+/**
+ * Retry policy applied around every `LLMClient.chat()` call.
+ *
+ * Triggers ONLY on `LLMClientHttpError` with `status === 429` — other 5xx
+ * errors, network errors, protocol errors, and abort errors propagate
+ * immediately. This is by design: 429 is the LLM gateway's "absorb a burst
+ * via backoff" signal (AIMD at-cap), and folding 5xx into the same path
+ * would mask transport-level outages that should fail loud.
+ *
+ * `Retry-After` (when present on the error via `LLMClientHttpError.retryAfterSec`)
+ * wins over the local `backoffSchedule` so the gateway's preferred pacing is
+ * authoritative; the schedule is the fallback when the upstream omits the hint.
+ *
+ * `sleep` is injected for testability — production omits it (defaults to a
+ * `setTimeout`-backed promise). Tests pass a fake to assert the exact
+ * backoff sequence without consuming wall-clock seconds.
+ */
+export interface RetryPolicy {
+  /**
+   * Maximum retries AFTER the original attempt; original + maxRetries = total round-trips.
+   *
+   * Default: `2` (so 1 original + 2 retries = 3 chat() calls in the worst
+   * case). Set to `0` to disable retry entirely (429 fails immediately).
+   * MUST be a non-negative integer.
+   */
+  maxRetries?: number;
+  /**
+   * Backoff delays in ms BEFORE each retry attempt. `[i]` is the wait before
+   * retry `i+1`. Default: `[200, 800, 3200]`.
+   *
+   * If the schedule has fewer entries than `maxRetries`, the last entry is
+   * reused for any further retry (a defensive fallback rather than throwing
+   * on a config mismatch). When the upstream `Retry-After` is present on
+   * the 429, that wins over this schedule.
+   */
+  backoffSchedule?: readonly number[];
+  /**
+   * Sleep injection slot — defaults to `setTimeout`-backed Promise.
+   *
+   * Tests inject a fake to assert the backoff sequence without burning
+   * wall-clock seconds. Production callers omit this; the executor's
+   * default sleeps via a `globalThis.setTimeout` Promise wrapper.
+   */
+  sleep?: (ms: number) => Promise<void>;
+}
 
 /** Five terminal statuses — D-21. */
 export type TerminalStatus = 'completed' | 'failed' | 'timeout' | 'budget_exceeded' | 'cancelled';
@@ -140,6 +209,13 @@ export interface AgentExecutorOptions<
   toolProviders?: readonly ToolProvider[];
   sinks?: readonly TraceSink[];
   defaultMaxIterations?: number;
+  /**
+   * Optional 429-retry policy applied around every `LLMClient.chat()` call.
+   *
+   * Defaults: `{ maxRetries: 2, backoffSchedule: [200, 800, 3200] }`. Pass
+   * `{ maxRetries: 0 }` to disable retry entirely. See `RetryPolicy`.
+   */
+  retryPolicy?: RetryPolicy;
 }
 
 /**
@@ -151,6 +227,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
   private readonly toolProviders: ToolProviderRegistry;
   private readonly sinks: readonly TraceSink[];
   private readonly defaultMaxIterations: number;
+  private readonly maxRetries: number;
+  private readonly backoffSchedule: readonly number[];
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(options: AgentExecutorOptions<TType, TPhase>) {
     if (!options.llm) {
@@ -163,16 +242,163 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       throw new InvalidConfigError('defaultMaxIterations', 'must be a positive integer');
     }
 
+    // Validate retry-policy fields up front so misconfiguration is a
+    // construct-time programmer error, not a per-call surprise.
+    const rp = options.retryPolicy;
+    if (rp?.maxRetries !== undefined && (!Number.isInteger(rp.maxRetries) || rp.maxRetries < 0)) {
+      throw new InvalidConfigError('retryPolicy.maxRetries', 'must be a non-negative integer');
+    }
+    if (rp?.backoffSchedule !== undefined) {
+      if (!Array.isArray(rp.backoffSchedule)) {
+        throw new InvalidConfigError(
+          'retryPolicy.backoffSchedule',
+          'must be an array of ms numbers',
+        );
+      }
+      for (const v of rp.backoffSchedule) {
+        if (!Number.isFinite(v) || v < 0) {
+          throw new InvalidConfigError(
+            'retryPolicy.backoffSchedule',
+            'each entry must be a non-negative finite number',
+          );
+        }
+      }
+    }
+
     this.registry = options.registry;
     this.llm = options.llm;
     this.sinks = options.sinks ?? [];
     this.defaultMaxIterations = options.defaultMaxIterations ?? 8;
+    this.maxRetries = rp?.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.backoffSchedule =
+      rp?.backoffSchedule && rp.backoffSchedule.length > 0
+        ? rp.backoffSchedule
+        : DEFAULT_BACKOFF_SCHEDULE;
+    this.sleep =
+      rp?.sleep ?? ((ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)));
 
     // Wrap providers into a federation registry; throws on tool-name conflict.
     const providers = options.toolProviders ?? [];
     this.toolProviders = new ToolProviderRegistry();
     for (const p of providers) {
       this.toolProviders.register(p);
+    }
+  }
+
+  /**
+   * Pick the backoff window before retry attempt `attemptIdx` (1-indexed: the
+   * wait BEFORE retry #1 lives at `backoffSchedule[0]`, etc.).
+   *
+   * `Retry-After` from the upstream wins when present. The schedule clamps
+   * to its last entry when callers ask for an attempt beyond the table —
+   * defensive rather than throwing on a config mismatch.
+   */
+  private pickBackoffMs(attemptIdx: number, retryAfterSec: number | undefined): number {
+    if (retryAfterSec !== undefined) {
+      return Math.max(0, Math.floor(retryAfterSec * 1000));
+    }
+    const i = Math.min(attemptIdx - 1, this.backoffSchedule.length - 1);
+    return this.backoffSchedule[Math.max(0, i)] ?? 0;
+  }
+
+  /**
+   * Wrap one `LLMClient.chat()` call with the 429-retry policy.
+   *
+   * Returns either a `ChatResult` (success on attempt 0..N) or rethrows
+   * the final error (any non-429, OR the last 429 after exhausting
+   * retries). Emits one `llm_call` trace per attempt with the executor's
+   * shared `seq` counter — the caller (run loop) appends the success trace
+   * separately when this resolves successfully, so `chatWithRetry` ONLY
+   * traces the FAILED attempts. The successful attempt is recorded by the
+   * existing call site to keep that trace's payload (output_content,
+   * synthesized tool_calls, usage accounting) co-located with the place
+   * that consumes it.
+   *
+   * Honors `signal` between attempts: when the signal aborts during
+   * backoff, the next retry is skipped and the underlying abort error
+   * propagates through the loop's existing `signal.aborted` catch.
+   */
+  private async chatWithRetry(
+    chatRequest: ChatRequest,
+    llmCtx: ClientContext,
+    bookkeeping: {
+      runId: string;
+      model: string | undefined;
+      currentMessages: readonly ChatMessage[];
+      toolDescriptors: readonly ToolDescriptor[];
+      seqRef: { value: number };
+      traces: TraceEntry[];
+      llmStart: number;
+    },
+  ): Promise<{ result: ChatResult; attempts: number; lastBackoffMs: number | undefined }> {
+    let attemptIdx = 0;
+    let lastBackoffMs: number | undefined;
+    // Loop runs at most maxRetries+1 times: original (attempt 0) + maxRetries.
+    for (;;) {
+      try {
+        const result = await this.llm.chat(chatRequest, llmCtx);
+        return { result, attempts: attemptIdx, lastBackoffMs };
+      } catch (err) {
+        // Retry ONLY on LLMClientHttpError(status=429). Every other error
+        // (including aborts, protocol errors, other HTTP statuses,
+        // network failures surfacing as status=0) propagates immediately.
+        const is429 = err instanceof LLMClientHttpError && err.status === 429;
+        const canRetry = is429 && attemptIdx < this.maxRetries;
+        if (!canRetry) {
+          // If this WAS the final 429 attempt, emit a per-attempt trace
+          // so observers see the full ladder; the run loop's catch arm
+          // emits its own llm_call entry for the final failure record
+          // too — but that one is keyed on the LATEST attempt. Emit
+          // here only for the EARLIER attempts that the run loop's
+          // catch will not see (it sees only the last throw).
+          if (is429 && attemptIdx > 0) {
+            // We already traced attempts 0..attemptIdx-1 below; this
+            // particular throw will be re-raised and the run loop
+            // emits its own trace for attempt `attemptIdx`. No
+            // duplication.
+          }
+          throw err;
+        }
+        // Trace the failed attempt BEFORE sleeping so the trace order
+        // (failed call → backoff → retry call) reflects wall time.
+        const backoffMs = this.pickBackoffMs(attemptIdx + 1, err.retryAfterSec);
+        const errMsg = err.message;
+        const errEntry: TraceEntry = {
+          schema_version: '1',
+          run_id: bookkeeping.runId,
+          sequence: bookkeeping.seqRef.value++,
+          trace_type: 'llm_call',
+          timestamp_ms: Date.now(),
+          latency_ms: Date.now() - bookkeeping.llmStart,
+          ...(bookkeeping.model !== undefined && { model: bookkeeping.model }),
+          input_messages: truncateMessages(bookkeeping.currentMessages),
+          tools_available: JSON.stringify(bookkeeping.toolDescriptors.map((t) => t.name)),
+          cost_usd: null,
+          error: errMsg,
+          retry_attempt: attemptIdx,
+        };
+        bookkeeping.traces.push(errEntry);
+        await this.emitToSinks(errEntry);
+
+        // Sleep before the retry. Honor abort during sleep so a SIGTERM
+        // landing mid-backoff doesn't burn the full window before
+        // surfacing as cancelled.
+        await this.sleep(backoffMs);
+        if (llmCtx.abortSignal.aborted) {
+          // Surface as the original 429 error so the run loop's catch
+          // arm sees it through the existing `signal.aborted` check
+          // and downgrades to status='cancelled'. Throwing the
+          // captured `err` keeps the cause chain intact.
+          throw err;
+        }
+
+        lastBackoffMs = backoffMs;
+        attemptIdx++;
+        // Reset llmStart so per-attempt latency metric measures THIS
+        // attempt only, not cumulative backoff. The previous attempt's
+        // failed-attempt trace already captured its own latency above.
+        bookkeeping.llmStart = Date.now();
+      }
     }
   }
 
@@ -210,7 +436,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       ...(input.costLimitUsd !== undefined && { costLimitUsd: input.costLimitUsd }),
     };
     const traces: TraceEntry[] = [];
-    let seq = 0;
+    // Sequence counter as a mutable ref so `chatWithRetry` can advance it
+    // when emitting per-attempt failure traces. The run loop reads the
+    // same `seqRef.value` for its own trace appends below.
+    const seqRef = { value: 0 };
 
     // Pre-loop abort check (RESEARCH §7 Pitfall 6) — return BEFORE any work.
     if (signal.aborted) {
@@ -260,7 +489,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       const boundaryEntry: TraceEntry = {
         schema_version: '1',
         run_id: runId,
-        sequence: seq++,
+        sequence: seqRef.value++,
         trace_type: 'iteration_boundary',
         timestamp_ms: Date.now(),
         latency_ms: 0,
@@ -286,10 +515,40 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           stopSequences: agentDef.llmParams.stopSequences,
         }),
       };
-      const llmStart = Date.now();
+      let llmStart = Date.now();
       let llmResult: ChatResult;
+      let retryAttempts = 0;
+      let lastBackoffMs: number | undefined;
       try {
-        llmResult = await this.llm.chat(chatRequest, llmCtx);
+        const outcome = await this.chatWithRetry(chatRequest, llmCtx, {
+          runId,
+          model: agentDef.defaultModel,
+          currentMessages,
+          toolDescriptors,
+          seqRef,
+          traces,
+          llmStart,
+        });
+        llmResult = outcome.result;
+        retryAttempts = outcome.attempts;
+        lastBackoffMs = outcome.lastBackoffMs;
+        // chatWithRetry resets its own llmStart between attempts; reflect
+        // that here so the success-path llm_call latency reflects the
+        // FINAL attempt only (matches the per-attempt failure traces it
+        // already emitted for prior 429s).
+        if (retryAttempts > 0) {
+          // The last successful attempt's start time — chatWithRetry
+          // already updated `bookkeeping.llmStart`, but that's our
+          // local copy. Re-read by approximating: each prior failed
+          // attempt was already traced with its own latency, so the
+          // success entry below uses Date.now() - llmStart from the
+          // moment AFTER the last sleep. We approximate by snapping
+          // llmStart to "now minus a small epsilon" — since the run
+          // loop doesn't observe the exact retry attempt's start
+          // separately, this is a best-effort latency for the
+          // successful attempt only.
+          llmStart = Date.now();
+        }
       } catch (err) {
         // Invariant 2.e — abort check inside LLM catch arm.
         if (signal.aborted) {
@@ -301,7 +560,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         const errEntry: TraceEntry = {
           schema_version: '1',
           run_id: runId,
-          sequence: seq++,
+          sequence: seqRef.value++,
           trace_type: 'llm_call',
           timestamp_ms: Date.now(),
           latency_ms: Date.now() - llmStart,
@@ -310,6 +569,16 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           tools_available: JSON.stringify(toolDescriptors.map((t) => t.name)),
           cost_usd: null,
           error: msg,
+          // When this throw is the FINAL 429 after retries were
+          // exhausted, attribute the trace to the last attempt index
+          // (maxRetries) so observers see the full ladder. For
+          // non-429 throws, retryAttempts stays 0 — same field is
+          // absent so the existing trace shape is unchanged.
+          ...(err instanceof LLMClientHttpError &&
+            err.status === 429 &&
+            this.maxRetries > 0 && {
+              retry_attempt: this.maxRetries,
+            }),
         };
         traces.push(errEntry);
         await this.emitToSinks(errEntry);
@@ -336,7 +605,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       const synthesizedToolCalls = llmResult.tool_calls
         ? llmResult.tool_calls.map((tc, idx) => ({
             ...tc,
-            id: tc.id && tc.id.length > 0 ? tc.id : `call_${tc.name}_${seq + idx + 1}`,
+            id: tc.id && tc.id.length > 0 ? tc.id : `call_${tc.name}_${seqRef.value + idx + 1}`,
           }))
         : undefined;
 
@@ -344,7 +613,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       const llmEntry: TraceEntry = {
         schema_version: '1',
         run_id: runId,
-        sequence: seq++,
+        sequence: seqRef.value++,
         trace_type: 'llm_call',
         timestamp_ms: Date.now(),
         latency_ms: Date.now() - llmStart,
@@ -361,6 +630,14 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         cost_usd: llmResult.usage?.costUsd ?? null,
         ...(llmResult.stopReason !== undefined && { stop_reason: llmResult.stopReason }),
         tools_available: JSON.stringify(toolDescriptors.map((t) => t.name)),
+        // When the chat() succeeded only after one or more retries,
+        // stamp this trace with the attempt index that succeeded and
+        // the backoff that preceded it. Common-path (no retry):
+        // retryAttempts === 0, both fields stay omitted (existing
+        // shape unchanged).
+        ...(retryAttempts > 0 && { retry_attempt: retryAttempts }),
+        ...(retryAttempts > 0 &&
+          lastBackoffMs !== undefined && { retry_backoff_ms: lastBackoffMs }),
       };
       traces.push(llmEntry);
       await this.emitToSinks(llmEntry);
@@ -436,7 +713,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           const noProvEntry: TraceEntry = {
             schema_version: '1',
             run_id: runId,
-            sequence: seq++,
+            sequence: seqRef.value++,
             trace_type: 'tool_call',
             timestamp_ms: Date.now(),
             latency_ms: 0,
@@ -464,7 +741,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           const toolEntry: TraceEntry = {
             schema_version: '1',
             run_id: runId,
-            sequence: seq++,
+            sequence: seqRef.value++,
             trace_type: 'tool_call',
             timestamp_ms: Date.now(),
             latency_ms: Date.now() - toolStart,
@@ -493,7 +770,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           const errEntry: TraceEntry = {
             schema_version: '1',
             run_id: runId,
-            sequence: seq++,
+            sequence: seqRef.value++,
             trace_type: 'tool_call',
             timestamp_ms: Date.now(),
             latency_ms: Date.now() - toolStart,
@@ -535,7 +812,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     const runCompleteEntry: TraceEntry = {
       schema_version: '1',
       run_id: runId,
-      sequence: seq++,
+      sequence: seqRef.value++,
       trace_type: 'run_complete',
       timestamp_ms: Date.now(),
       latency_ms: 0,

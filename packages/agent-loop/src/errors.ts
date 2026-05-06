@@ -271,13 +271,30 @@ export class LLMClientHttpError extends LLMClientError {
   public readonly body?: string;
   /** Upstream's `x-request-id` response header when present (OpenAI direct, vLLM). */
   public readonly requestId?: string;
+  /**
+   * Parsed `Retry-After` response-header seconds when present (RFC 7231 §7.1.3).
+   *
+   * Populated by the adapter call site when the backend returns a
+   * `Retry-After` header. The `@kagent/llm-gateway` AIMD limiter emits this
+   * with status 429 (`server.ts:289`); upstream rate-limited backends
+   * (OpenAI, Anthropic, vLLM) emit it with 429 / 503 too. Consumers of
+   * `chat()` (notably `AgentExecutor`'s 429-retry policy) honor this hint
+   * over the default exponential backoff schedule.
+   *
+   * Only delta-seconds form is parsed — the HTTP-date variant (`Retry-After:
+   * Wed, 21 Oct 2026 07:28:00 GMT`) is left to the adapter to translate.
+   * Adapters that can't parse the value omit the field entirely; consumers
+   * fall back to default backoff.
+   */
+  public readonly retryAfterSec?: number;
 
-  constructor(status: number, body?: string, requestId?: string) {
+  constructor(status: number, body?: string, requestId?: string, retryAfterSec?: number) {
     super(`LLM backend returned HTTP ${status}`);
     this.status = status;
     // exactOptionalPropertyTypes: never assign `undefined` to optional fields.
     if (body !== undefined) this.body = body;
     if (requestId !== undefined) this.requestId = requestId;
+    if (retryAfterSec !== undefined) this.retryAfterSec = retryAfterSec;
   }
 }
 
