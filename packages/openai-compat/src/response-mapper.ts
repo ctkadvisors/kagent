@@ -26,6 +26,20 @@ import { LLMClientProtocolError } from '@kagent/agent-loop';
 import { mapFinishReason } from './stop-reason-map.js';
 import { fromOpenAIToolCalls, type OpenAIToolCallWire } from './tool-mapper.js';
 
+/**
+ * Anthropic-style content block (single text/tool_use entry).
+ *
+ * NON-STANDARD shape that some OpenAI-compat backends (Cloudflare Workers AI's
+ * Llama 4 Scout via LiteLLM, the Anthropic-via-LiteLLM passthrough) leak into
+ * `message.content` instead of normalizing to a flat string. The mapper coerces
+ * these to a string at the boundary so the kernel `ChatResult.content: string`
+ * contract is honored.
+ */
+export type AnthropicContentBlock =
+  | { type: 'text'; text?: unknown }
+  | { type: 'tool_use'; id?: unknown; name?: unknown; input?: unknown }
+  | { type: string; [k: string]: unknown };
+
 /** OpenAI Chat Completion response shape — internal to the adapter. */
 export interface OpenAIChatCompletion {
   id?: string;
@@ -36,7 +50,15 @@ export interface OpenAIChatCompletion {
     index?: number;
     message: {
       role: string;
-      content: string | null;
+      /**
+       * Wire-format reality: most backends emit `string | null`. Cloudflare
+       * Workers AI's Llama 4 Scout (via LiteLLM workers-ai provider) emits an
+       * array of Anthropic-style content blocks; the Anthropic-via-LiteLLM
+       * passthrough does the same. The mapper normalizes all four shapes
+       * (`null` / `string` / `AnthropicContentBlock` / `AnthropicContentBlock[]`)
+       * into a flat string before populating `ChatResult.content`.
+       */
+      content: string | null | AnthropicContentBlock | AnthropicContentBlock[];
       tool_calls?: OpenAIToolCallWire[];
       /**
        * NON-STANDARD reasoning-model extension (Ollama Nemotron, Qwen-QwQ,
@@ -90,7 +112,7 @@ export function mapOpenAIResponseToChatResult(raw: unknown): ChatResult {
   // `message.reasoning`. Surface that as content SO LONG AS there are no
   // tool_calls — an assistant-with-tool_calls turn must keep empty content
   // to preserve wire-format semantics on the next turn.
-  const content = choice.message.content ?? '';
+  const content = normalizeContent(choice.message.content);
   const reasoning = choice.message.reasoning;
   const reasoningFallback =
     content === '' && toolCalls === undefined && typeof reasoning === 'string' && reasoning !== ''
@@ -110,6 +132,37 @@ export function mapOpenAIResponseToChatResult(raw: unknown): ChatResult {
   if (stopReason !== undefined) result.stopReason = stopReason;
 
   return result;
+}
+
+/**
+ * Coerce wire-format `message.content` into a flat string.
+ *
+ * Handles four shapes the mapper has observed in the wild:
+ * - `string` → returned as-is
+ * - `null` / `undefined` → `''`
+ * - single `{type:'text', text:string}` block → that text
+ * - array of blocks → concatenated `text` from `{type:'text'}` entries (other
+ *   block types like `tool_use` are dropped — they are surfaced separately via
+ *   `message.tool_calls` by the Anthropic-via-LiteLLM passthrough)
+ *
+ * Anything else (numbers, foreign objects, blocks with non-string `text`) is
+ * dropped rather than coerced — the kernel's `ChatResult.content: string`
+ * contract demands a real string, and silent string-coercion of objects
+ * (`"[object Object]"`) would corrupt traces and downstream prompts.
+ */
+function extractBlockText(block: unknown): string {
+  if (!block || typeof block !== 'object') return '';
+  const b = block as { type?: unknown; text?: unknown };
+  if (b.type !== 'text') return '';
+  return typeof b.text === 'string' ? b.text : '';
+}
+
+function normalizeContent(content: unknown): string {
+  if (content == null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map(extractBlockText).join('');
+  if (typeof content === 'object') return extractBlockText(content);
+  return '';
 }
 
 /**

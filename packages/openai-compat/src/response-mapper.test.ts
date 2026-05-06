@@ -183,6 +183,122 @@ describe('mapOpenAIResponseToChatResult (VALIDATION row 9)', () => {
       expect(mapOpenAIResponseToChatResult(raw).content).toBe('');
     });
   });
+
+  describe('content-array normalization (Anthropic-shape multimodal — Llama 4 Scout via workers-ai)', () => {
+    // Cloudflare Workers AI's Llama 4 Scout returns Anthropic-style content
+    // arrays even through LiteLLM's OpenAI-compat path. The mapper must coerce
+    // these to a flat string so downstream `truncateForStorage(content)` does
+    // not break when called with a non-string.
+    it('content as array of text blocks joins their text fields', () => {
+      const raw = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'first sentence. ' },
+                { type: 'text', text: 'second sentence.' },
+              ],
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      };
+      const result = mapOpenAIResponseToChatResult(raw);
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toBe('first sentence. second sentence.');
+    });
+
+    it('content as array with mixed text + tool_use blocks keeps only text', () => {
+      const raw = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'I will check the time.' },
+                { type: 'tool_use', id: 'tu_1', name: 'get_time', input: { tz: 'UTC' } },
+              ],
+              tool_calls: [
+                {
+                  id: 'tu_1',
+                  type: 'function',
+                  function: { name: 'get_time', arguments: '{"tz":"UTC"}' },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      };
+      const result = mapOpenAIResponseToChatResult(raw);
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toBe('I will check the time.');
+    });
+
+    it('content as array with only non-text blocks normalizes to empty string', () => {
+      const raw = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: [{ type: 'tool_use', id: 'tu_1', name: 'get_time', input: { tz: 'UTC' } }],
+              tool_calls: [
+                {
+                  id: 'tu_1',
+                  type: 'function',
+                  function: { name: 'get_time', arguments: '{"tz":"UTC"}' },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      };
+      const result = mapOpenAIResponseToChatResult(raw);
+      expect(result.content).toBe('');
+    });
+
+    it('content as a single text-block object normalizes to its text', () => {
+      const raw = {
+        choices: [
+          {
+            message: { role: 'assistant', content: { type: 'text', text: 'just one block' } },
+            finish_reason: 'stop',
+          },
+        ],
+      };
+      const result = mapOpenAIResponseToChatResult(raw);
+      expect(typeof result.content).toBe('string');
+      expect(result.content).toBe('just one block');
+    });
+
+    it('content as empty array normalizes to empty string', () => {
+      const raw = {
+        choices: [{ message: { role: 'assistant', content: [] }, finish_reason: 'stop' }],
+      };
+      expect(mapOpenAIResponseToChatResult(raw).content).toBe('');
+    });
+
+    it('content as array with non-string text fields drops those blocks', () => {
+      const raw = {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'good' },
+                { type: 'text', text: 12345 },
+                { type: 'text' },
+              ],
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      };
+      expect(mapOpenAIResponseToChatResult(raw).content).toBe('good');
+    });
+  });
 });
 
 describe('mapUsage (VALIDATION row 9)', () => {
