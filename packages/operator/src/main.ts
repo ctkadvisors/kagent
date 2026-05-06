@@ -71,6 +71,7 @@ import {
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import type { BuildJobSpecOptions, EnvVarSpec } from './job-spec.js';
+import type { ModelClassMap } from './model-class-resolver.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
 import { NatsDispatcher } from './nats-dispatcher.js';
@@ -165,6 +166,60 @@ function pushSensitiveEnv(
   if (typeof resolvedValue === 'string' && resolvedValue.length > 0) {
     extraEnv.push({ name: targetName, value: resolvedValue });
   }
+}
+
+/**
+ * Phase-2 modelClass — parse the operator's
+ * `KAGENT_AGENT_MODEL_CLASSES_JSON` env into a {@link ModelClassMap}.
+ *
+ * Sourced from Helm `agent.modelClasses` (chart's deployment.yaml
+ * projects the YAML map into the env via `toJson | quote`). Called
+ * once at operator boot — the parsed map is then threaded through
+ * every reconcile via `BuildJobSpecOptions.modelClassMap`.
+ *
+ * Contract per docs/MODEL-ROUTING.md §4 + Phase-2 brief:
+ *   - Empty / unset → `{}` (chart default; legacy Agents with literal
+ *     `spec.model` resolve via the override path).
+ *   - Non-JSON OR top-level-non-object → throw. The operator's main()
+ *     catches at boot and exits non-zero; the deployment CrashLoops so
+ *     the misconfiguration is impossible to miss.
+ *   - JSON object with non-string entries → drop those entries with a
+ *     warn-log; keep the well-formed string-valued entries (partial-
+ *     working chart preserves the operational surface for the entries
+ *     that are correct; bad entries surface in the audit trail).
+ *
+ * Exported for the unit-test suite (`main.test.ts`); production code
+ * paths consult it through `buildJobSpecOptionsFromEnv()`.
+ */
+export function parseModelClassesEnv(raw: string | undefined): ModelClassMap {
+  if (typeof raw !== 'string' || raw.length === 0) return {};
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `KAGENT_AGENT_MODEL_CLASSES_JSON is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `KAGENT_AGENT_MODEL_CLASSES_JSON must decode to a JSON object (got ${parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed})`,
+    );
+  }
+
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof v === 'string') {
+      out[k] = v;
+    } else {
+      console.warn(
+        `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has non-string value (${v === null ? 'null' : typeof v}); dropping`,
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -442,6 +497,14 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
           strict: typeof runtimeClassStrict === 'string' ? runtimeClassStrict : '',
         }
       : undefined;
+
+  // Phase-2 modelClass — parse the cluster-supplied logical-class →
+  // physical-model map. `parseModelClassesEnv` throws on malformed JSON
+  // / non-object shapes (operator boot fails loud, intentional —
+  // CrashLoop visibility beats a silent fall-back). Empty / unset env
+  // → `{}`, which makes legacy Agents with literal `spec.model` work
+  // unchanged (resolver hits the override path).
+  const modelClassMap = parseModelClassesEnv(env.KAGENT_AGENT_MODEL_CLASSES_JSON);
   return {
     ...(typeof env.KAGENT_AGENT_POD_IMAGE === 'string' &&
       env.KAGENT_AGENT_POD_IMAGE.length > 0 && {
@@ -471,6 +534,12 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
     ...(containerSecurityContext !== undefined && { containerSecurityContext }),
     ...(runtimeClassesMap !== undefined && { runtimeClasses: runtimeClassesMap }),
     ...(extraEnv.length > 0 && { extraEnv }),
+    // Phase-2 modelClass — always thread through, even when empty. The
+    // resolver in job-spec.ts treats `{}` identically to an absent map
+    // (legacy `spec.model` path); explicitly threading it keeps the
+    // call signature uniform across reconciles + makes the value
+    // visible in any future dump-the-options test/diagnostic.
+    modelClassMap,
   };
 }
 

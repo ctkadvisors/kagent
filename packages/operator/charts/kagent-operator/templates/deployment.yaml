@@ -251,6 +251,23 @@ spec:
               value: {{ int64 . | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.agent.modelClasses }}
+            # Phase-2 modelClass — substrate-level model routing.
+            # `Agent.spec.modelClass` (logical capability tier) →
+            # physical model id resolution map. The operator parses
+            # this JSON once at boot via `parseModelClassesEnv` and
+            # threads the map onto every BuildJobSpecOptions; the
+            # in-spec `resolveAgentModel` translates `spec.modelClass`
+            # to a physical model id at AgentTask materialization. See
+            # docs/MODEL-ROUTING.md.
+            #
+            # Omitted entirely when `agent.modelClasses` is empty/unset
+            # so the operator's parser sees `undefined` (treated as
+            # `{}`) instead of choking on a JSON literal `{}` that the
+            # chart would otherwise render unconditionally.
+            - name: KAGENT_AGENT_MODEL_CLASSES_JSON
+              value: {{ .Values.agent.modelClasses | toJson | quote }}
+            {{- end }}
             {{- if .Values.cas.enabled }}
             # Wave 1 — CAS
             # v0.2.2-cas content-addressed storage. The operator runs

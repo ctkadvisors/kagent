@@ -27,6 +27,7 @@ import * as cacheController from '@kagent/cache-controller';
 
 import type { Agent, AgentTask, InputDecl } from './crds/index.js';
 import { isFromWorkspace } from './crds/agent-task.js';
+import { resolveAgentModel, type ModelClassMap } from './model-class-resolver.js';
 
 const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
 
@@ -369,6 +370,25 @@ export interface BuildJobSpecOptions {
    * just renders the volume + volumeMount that points at it.
    */
   readonly useConfigMap?: boolean;
+  /**
+   * Phase-2 modelClass — cluster-supplied logical-class → physical-
+   * model id map. Threaded through from
+   * `KAGENT_AGENT_MODEL_CLASSES_JSON` (set by Helm
+   * `agent.modelClasses` per docs/MODEL-ROUTING.md §4).
+   *
+   * Consumed by the in-function {@link resolveAgentModel} call:
+   *   - Agent.spec.model set      → escape-hatch; map ignored.
+   *   - Agent.spec.modelClass set → looked up here.
+   *
+   * Default `{}` (empty map). Test/legacy callers may omit; legacy
+   * Agents with a literal `spec.model` resolve via the override
+   * path so an absent map remains backward-compatible. An Agent
+   * declaring `modelClass` whose key isn't present (or whose value is
+   * empty) raises a build-time error so the operator's reconciler
+   * surfaces it onto AgentTask `status.error` rather than silently
+   * stamping an empty `KAGENT_AGENT_MODEL` env.
+   */
+  readonly modelClassMap?: ModelClassMap;
 }
 
 /** Default pod security context applied when caller doesn't override. */
@@ -532,6 +552,37 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   // env-JSON fallback path).
   const useConfigMap = opts.useConfigMap !== false;
 
+  // Phase-2 modelClass — resolve the Agent's effective physical model
+  // id. `spec.model` (escape-hatch) wins; `spec.modelClass` is looked
+  // up against the operator-supplied class map. An Agent that declares
+  // a modelClass not present in the map (or maps to an empty value)
+  // throws here — the reconciler's catch surfaces this onto AgentTask
+  // `status.error` per docs/MODEL-ROUTING.md §3.1.
+  const classMap: ModelClassMap = opts.modelClassMap ?? {};
+  const modelResolution = resolveAgentModel({
+    agentSpec: agent.spec,
+    classMap,
+  });
+  if (modelResolution.kind === 'unresolvable') {
+    const ns = agent.metadata.namespace ?? 'default';
+    const name = agent.metadata.name ?? '?';
+    throw new Error(`unresolvable_model_class: ${modelResolution.reason} (Agent ${ns}/${name})`);
+  }
+  const resolvedModel = modelResolution.model;
+  if (modelResolution.source === 'class') {
+    const ns = agent.metadata.namespace ?? 'default';
+    const name = agent.metadata.name ?? '?';
+    // Audit log — one line per source=class resolution. Mirrors the
+    // existing `[kagent-operator] ...` prefix convention used elsewhere
+    // in the operator + matches the [operator/job-spec] subsystem
+    // tag for grep-ability across the unified log stream.
+    // Source=override is intentionally silent (legacy path, every
+    // pre-Phase-1 Agent CR hits it).
+    console.log(
+      `[operator/job-spec] resolved modelClass='${agent.spec.modelClass ?? ''}' → model='${resolvedModel}' for Agent ${ns}/${name}`,
+    );
+  }
+
   const env: RenderedEnv[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
@@ -540,16 +591,12 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     // Always emit the model as a tiny env var — admission consults
     // this without reading the ConfigMap (hot path).
     //
-    // Phase-1 modelClass note: `agent.spec.model` is now optional at
-    // the type level (Agents may declare `modelClass` instead). Every
-    // Agent that reaches this codepath today still has `model` set —
-    // Phase 2 wires the operator-side resolver that translates
-    // `modelClass` → physical model id BEFORE job-spec runs, at which
-    // point this site reads the resolved model. For now, `?? ''`
-    // preserves the existing string-typed env contract; an Agent that
-    // somehow reached here without a model would have been rejected
-    // by admission's at-least-one rule earlier.
-    { name: 'KAGENT_AGENT_MODEL', value: agent.spec.model ?? '' },
+    // Phase-2 modelClass: this is the resolved physical model id from
+    // the operator-side resolver above, which honors `spec.model`
+    // (escape-hatch) over `spec.modelClass` (cluster-routed). Empty
+    // strings cannot reach here — `resolveAgentModel` raises on the
+    // unresolvable case before this assembly runs.
+    { name: 'KAGENT_AGENT_MODEL', value: resolvedModel },
     // Back-compat path: when useConfigMap is explicitly false (tests +
     // pre-v0.2.0 agent-pod images), the full JSON env entries stay.
     ...(useConfigMap
@@ -1238,12 +1285,17 @@ export function buildCacheMounts(opts: BuildCacheMountsOptions): BuildCacheMount
   // Stage 1 — derive keys + probe each slot. Done via the
   // pure-functional `lookupCacheEntries` helper from
   // `@kagent/cache-controller`.
-  // Phase-1 modelClass note: see KAGENT_AGENT_MODEL site above. The
-  // cache-controller's `AgentLike` shape still requires `model: string`
-  // (its type bumps with the Phase-2 resolver). `?? ''` preserves the
-  // pre-modelClass contract until Phase 2 threads resolved-model here.
+  // Phase-2 modelClass: the cache-controller's `AgentLike` shape still
+  // requires `model: string` (its type bumps when cache-controller
+  // grows modelClass awareness). Until then, derive the cache key
+  // against either the literal `spec.model` (escape-hatch path) or
+  // `spec.modelClass` (substrate-routed path). Using the class string
+  // here keeps the cache key stable when a cluster operator swaps
+  // physical models inside a class — that's the v0.1.8 invariant
+  // (a class swap is one chart edit, not a cache-bust).
+  const cacheModelKey = opts.agent.spec.model ?? opts.agent.spec.modelClass ?? '';
   const lookups = cacheController.lookupCacheEntries({
-    agent: { spec: { model: opts.agent.spec.model ?? '', caches: slots } },
+    agent: { spec: { model: cacheModelKey, caches: slots } },
     task: {
       spec: { ...(opts.task.spec.inputs !== undefined && { inputs: opts.task.spec.inputs }) },
     },

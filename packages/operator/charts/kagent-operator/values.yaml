@@ -298,6 +298,52 @@ agentPod:
     # execution.
     accessMode: 'ReadWriteMany'
 
+# ---------------------------------------------------------------------
+# Phase-2 modelClass — substrate-level model routing
+# ---------------------------------------------------------------------
+# `Agent.spec.modelClass` is a logical capability tier (e.g.
+# `tool-caller-default`) that decouples Agent definitions from physical
+# model availability. The operator resolves the class to a physical
+# model id at AgentTask materialization time using the map below;
+# swapping a tier across all Agents is one chart-values edit, not N
+# manifest edits.
+#
+# Default: `{}` (empty map). Ship the chart unopinionated — the
+# cluster overlay (`new_localai/`) provides the actual mapping. With
+# an empty map, only Agents that declare `spec.model` (the literal
+# escape-hatch) resolve; Agents declaring only `spec.modelClass`
+# fail loud at AgentTask materialization with
+# `unresolvable_model_class: <class> not in cluster config`.
+#
+# Plumbed env (deployment.yaml):
+#   KAGENT_AGENT_MODEL_CLASSES_JSON=<json-encoded map>
+#
+# When the map is empty, the env var is omitted entirely so the
+# operator's parser sees `undefined` and treats it as `{}` (no
+# CrashLoop on a fresh install).
+#
+# Naming convention `<role>-<tier>` per docs/MODEL-ROUTING.md §5:
+#   - role  = what the agent does in tool-shape terms
+#             (tool-caller, text-generator, reasoner, ...)
+#   - tier  = what the cluster operator paid for
+#             (default, cheap, fast, strict)
+#
+# Example overlay value (homelab — workers-ai for tool-callers, local
+# Ollama for text generation):
+#
+#   agent:
+#     modelClasses:
+#       tool-caller-default: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+#       text-generator-default: 'ollama/nemotron-3-nano:4b'
+#       reasoner-default: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+agent:
+  # Map of `Agent.spec.modelClass` → physical model id (the same string
+  # the LLM gateway resolves via `ModelEndpoint.spec.model`). When an
+  # Agent CR uses `spec.modelClass`, the operator looks up the physical
+  # model here at AgentTask materialization and populates the agent-pod's
+  # KAGENT_AGENT_MODEL env. See docs/MODEL-ROUTING.md.
+  modelClasses: {}
+
 # Wave 1 — CAS
 # Content-addressed storage (v0.2.2-cas; docs/SUBSTRATE-V1.md §3.5,
 # docs/WAVES.md §3.3). Off by default — flip on once a shared RWX PVC

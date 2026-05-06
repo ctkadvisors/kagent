@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildJobSpecOptionsFromEnv } from './main.js';
+import { buildJobSpecOptionsFromEnv, parseModelClassesEnv } from './main.js';
 
 /**
  * Snapshot/restore the env vars this suite mutates so tests stay
@@ -35,6 +35,8 @@ const TOUCHED_VARS = [
   'KAGENT_ARTIFACT_PVC_NAME',
   'KAGENT_ARTIFACT_MOUNT_PATH',
   'KAGENT_ARTIFACT_MAX_BYTES',
+  // Phase-2 modelClass — chart-supplied logical→physical model map.
+  'KAGENT_AGENT_MODEL_CLASSES_JSON',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -342,5 +344,72 @@ describe('buildJobSpecOptionsFromEnv — artifactPvc plumbing (P3)', () => {
       const opts = buildJobSpecOptionsFromEnv();
       expect((opts.artifactPvc as { maxBytes?: unknown }).maxBytes).toBeUndefined();
     }
+  });
+});
+
+/* =====================================================================
+ * Phase-2 modelClass — KAGENT_AGENT_MODEL_CLASSES_JSON parser.
+ *
+ * The chart's deployment.yaml projects `agent.modelClasses` (a YAML
+ * map) into the operator pod via `toJson | quote`. main.ts parses
+ * once at boot and threads the parsed map into BuildJobSpecOptions.
+ *
+ * Contract per docs/MODEL-ROUTING.md + brief:
+ *   - Empty / unset env → empty map (`{}`).
+ *   - Non-JSON → throw (operator boot fail-loud, CrashLoop visible).
+ *   - JSON with non-string values → drop those entries (warn-log;
+ *     keep the well-formed ones).
+ * ===================================================================== */
+
+describe('parseModelClassesEnv — Phase-2 modelClass map parser', () => {
+  it('returns an empty map when the env var is unset', () => {
+    expect(parseModelClassesEnv(undefined)).toEqual({});
+  });
+
+  it('returns an empty map when the env var is the empty string', () => {
+    expect(parseModelClassesEnv('')).toEqual({});
+  });
+
+  it('parses a well-formed JSON object with string values verbatim', () => {
+    const raw = JSON.stringify({
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      'text-generator-default': 'ollama/nemotron-3-nano:4b',
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      'text-generator-default': 'ollama/nemotron-3-nano:4b',
+    });
+  });
+
+  it('throws on non-JSON input (operator boot fail-loud)', () => {
+    expect(() => parseModelClassesEnv('this is not json')).toThrow(
+      /KAGENT_AGENT_MODEL_CLASSES_JSON/,
+    );
+  });
+
+  it('throws on JSON that is not an object (top-level array, string, number)', () => {
+    expect(() => parseModelClassesEnv('[]')).toThrow(/KAGENT_AGENT_MODEL_CLASSES_JSON/);
+    expect(() => parseModelClassesEnv('"foo"')).toThrow(/KAGENT_AGENT_MODEL_CLASSES_JSON/);
+    expect(() => parseModelClassesEnv('42')).toThrow(/KAGENT_AGENT_MODEL_CLASSES_JSON/);
+    expect(() => parseModelClassesEnv('null')).toThrow(/KAGENT_AGENT_MODEL_CLASSES_JSON/);
+  });
+
+  it('drops entries whose values are not strings; keeps the well-formed ones', () => {
+    const raw = JSON.stringify({
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout',
+      'broken-num': 42,
+      'broken-obj': { model: 'nested' },
+      'text-generator-default': 'ollama/nemotron-3-nano:4b',
+      'broken-null': null,
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout',
+      'text-generator-default': 'ollama/nemotron-3-nano:4b',
+    });
+  });
+
+  it('returns an empty map when JSON object has no string-valued entries', () => {
+    const raw = JSON.stringify({ 'broken-num': 42, 'broken-null': null });
+    expect(parseModelClassesEnv(raw)).toEqual({});
   });
 });

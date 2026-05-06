@@ -787,6 +787,85 @@ describe('buildJobSpec', () => {
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
     expect(env.find((e) => e.name === 'OTEL_TRACEPARENT')).toBeUndefined();
   });
+
+  /* =====================================================================
+   * Phase-2 modelClass — operator-side resolver injection.
+   *
+   * `buildJobSpec` accepts a `modelClassMap` opt that the in-function
+   * resolver consults BEFORE emitting `KAGENT_AGENT_MODEL`. Behavior:
+   *   - Agent.spec.model set → unchanged (resolver returns 'override').
+   *   - Agent.spec.modelClass set + key in map → emit mapped physical
+   *     model id; log the resolution.
+   *   - Agent.spec.modelClass set + key absent → throw (operator's
+   *     reconcile-error path surfaces this onto AgentTask.status.error).
+   * See docs/MODEL-ROUTING.md §3 + model-class-resolver.test.ts.
+   * ===================================================================== */
+
+  it('Phase-2 modelClass: resolves Agent.spec.modelClass through modelClassMap into KAGENT_AGENT_MODEL', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        // model omitted — modelClass is the only source.
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const job = buildJobSpec(classedAgent, sampleTask, {
+      modelClassMap: {
+        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe(
+      'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    );
+  });
+
+  it('Phase-2 modelClass: spec.model wins over spec.modelClass (escape-hatch precedence)', () => {
+    const overrideAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        ...sampleAgent.spec,
+        model: 'anthropic/claude-3-7-sonnet-20250219',
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const job = buildJobSpec(overrideAgent, sampleTask, {
+      modelClassMap: {
+        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe('anthropic/claude-3-7-sonnet-20250219');
+  });
+
+  it('Phase-2 modelClass: throws when modelClass is set but absent from the map', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-strict',
+      },
+    };
+    expect(() =>
+      buildJobSpec(classedAgent, sampleTask, {
+        modelClassMap: {
+          'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        },
+      }),
+    ).toThrow(/tool-caller-strict/);
+  });
+
+  it('Phase-2 modelClass: legacy Agent.spec.model still works without a modelClassMap (back-compat)', () => {
+    // Existing v0.1 manifest fleet — every Agent has spec.model set.
+    // Operator boot may not have a class map at all; build must succeed.
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe(sampleAgent.spec.model);
+  });
 });
 
 /* =====================================================================
