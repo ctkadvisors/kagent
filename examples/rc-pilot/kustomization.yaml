@@ -45,3 +45,24 @@ resources:
   - 60-verifier.yaml
   - 70-policy-cap.yaml
   - 80-audit-stamps.yaml
+
+# AgentTask CRs are run-once: once they reach a terminal phase
+# (Completed / Failed) the operator does not re-spawn the underlying
+# Job, even if `spec` changes. To make this RC bundle reproducible
+# under ArgoCD — i.e. every git-commit triggers a fresh re-run of all
+# scenarios — stamp every AgentTask with
+# `argocd.argoproj.io/sync-options: Replace=true`. On the next sync
+# Argo deletes the existing terminal CR and recreates it, the
+# operator observes the new CR, and a fresh agent-pod Job spawns.
+#
+# Patch is scoped to AgentTask only (Agent CRs are stable specs that
+# patch in place fine). Without this, model-bumps or prompt-tweaks
+# in 01-agents.yaml stay visible only in newly-created tasks; the
+# previously-completed AgentTasks remain frozen on the old model.
+patches:
+  - target:
+      kind: AgentTask
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1sync-options
+        value: Replace=true
