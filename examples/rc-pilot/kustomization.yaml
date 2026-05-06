@@ -38,7 +38,7 @@ commonAnnotations:
   # below — the annotation diff is what actually triggers Replace's
   # delete+recreate semantics, since AgentTask.spec rarely changes
   # between cycles). One bump = one fresh RC run + new evidence pack.
-  kagent.knuteson.io/rc-run: rc3-prefix-restored
+  kagent.knuteson.io/rc-run: rc4-content-array-fix
 
 resources:
   - 00-namespace.yaml
