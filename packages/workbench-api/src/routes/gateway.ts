@@ -31,10 +31,21 @@
  * design.
  */
 
-import type { CustomObjectsApi } from '@kubernetes/client-node';
+import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
 import { Hono } from 'hono';
 
 import type { GatewayClient, GatewayCapacityRow, GatewayUsageRow } from '../gateway-client.js';
+
+/**
+ * `@kubernetes/client-node` v1.x's generated `patchNamespacedCustomObject`
+ * defaults to `Content-Type: application/json-patch+json` (RFC 6902 ops
+ * array). Our PATCH body is a merge-shaped object (`{spec:{inFlight:...}}`)
+ * so K8s rejects it with `error decoding patch: cannot unmarshal object
+ * into []handlers.jsonPatchOp`. Override the header per-call to switch
+ * to RFC 7396 merge-patch semantics — same idiom job-annotator.ts uses
+ * elsewhere in the operator codebase.
+ */
+const MERGE_PATCH_OPTIONS = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 /**
  * Capacity row enriched with the CR's `metadata.{name,namespace}`.
@@ -338,14 +349,17 @@ export function gatewayRoute(deps: GatewayRouteDeps): Hono {
       // Use JSON merge-patch (Content-Type: application/merge-patch+json).
       // Strategic merge patch isn't defined on CRDs in v1, so the K8s
       // client's default MERGE_PATCH path is the right idiom.
-      await deps.customApi.patchNamespacedCustomObject({
-        group: KAGENT_GROUP,
-        version: KAGENT_VERSION,
-        namespace,
-        plural: MODEL_ENDPOINT_PLURAL,
-        name,
-        body: mergePatch,
-      });
+      await deps.customApi.patchNamespacedCustomObject(
+        {
+          group: KAGENT_GROUP,
+          version: KAGENT_VERSION,
+          namespace,
+          plural: MODEL_ENDPOINT_PLURAL,
+          name,
+          body: mergePatch,
+        },
+        MERGE_PATCH_OPTIONS,
+      );
       return c.json({
         ok: true,
         namespace,
