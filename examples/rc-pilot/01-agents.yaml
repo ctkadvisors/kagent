@@ -30,7 +30,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: orchestrator
 spec:
-  model: '@cf/meta/llama-4-scout-17b-16e-instruct'
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
   version: 0.1.0
   systemPrompt: |
     You orchestrate child agents for an enterprise pilot. Decompose the
@@ -59,7 +59,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: summarizer
 spec:
-  model: '@cf/meta/llama-4-scout-17b-16e-instruct'
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
   version: 0.1.0
   systemPrompt: 'You are a precise technical assistant. Answer in one sentence.'
   sandboxProfile: default
@@ -87,7 +87,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: artifact-producer
 spec:
-  model: '@cf/meta/llama-4-scout-17b-16e-instruct'
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
   version: 0.1.0
   systemPrompt: |
     Produce a short markdown report and persist it as an artifact via
@@ -114,7 +114,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: verifier
 spec:
-  model: '@cf/meta/llama-4-scout-17b-16e-instruct'
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
   version: 0.1.0
   systemPrompt: |
     Answer the user's question in valid JSON of the shape
@@ -139,7 +139,7 @@ metadata:
     kagent.knuteson.io/role: rc-pilot
     kagent.knuteson.io/scenario: policy-cap
 spec:
-  model: '@cf/meta/llama-4-scout-17b-16e-instruct'
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
   version: 0.1.0
   systemPrompt: 'You are constrained by an enterprise policy. Answer in one sentence.'
   tools:
@@ -184,7 +184,7 @@ metadata:
       Pod-boot fail via unknown tool name. README §3 documents the
       Helm-values path for exercising true ImagePullBackOff.
 spec:
-  model: '@cf/meta/llama-4-scout-17b-16e-instruct'
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
   version: 0.1.0
   systemPrompt: 'This agent intentionally fails at startup.'
   sandboxProfile: default

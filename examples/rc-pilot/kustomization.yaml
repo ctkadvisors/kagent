@@ -69,14 +69,23 @@ patches:
   - target:
       kind: AgentTask
     patch: |-
+      # Sync-hook pattern: each Argo sync (triggered by ANY git commit
+      # to this repo's main branch) deletes the existing AgentTasks
+      # then recreates them as part of the sync. Operator observes
+      # fresh CRs and dispatches new agent-pod Jobs against the
+      # current Agent.spec.model. This is the same pattern the
+      # operator chart's smoke test uses; documented in
+      # docs/HARNESS-LESSONS.md as the reliable RC-rerun trigger
+      # under ArgoCD.
+      #
+      # Replaces the prior `Replace=true` + `idempotencyKey` hack
+      # which (1) silently degraded to patch-mode in Argo when no
+      # spec diff existed, and (2) tripped the operator's
+      # cross-task idempotency check when the same key landed on
+      # multiple AgentTasks in this bundle.
       - op: add
-        path: /metadata/annotations/argocd.argoproj.io~1sync-options
-        value: Replace=true
-      # Bump per RC cycle to force a spec-level diff Argo can act on.
-      # The CRD prunes unknown fields, so an annotation diff alone is
-      # not enough to trigger Replace's delete+recreate semantic.
-      # `idempotencyKey` IS in the schema, so the diff survives
-      # pruning and Argo replaces the resource cleanly.
+        path: /metadata/annotations/argocd.argoproj.io~1hook
+        value: Sync
       - op: add
-        path: /spec/idempotencyKey
-        value: rc2-llama-4-scout
+        path: /metadata/annotations/argocd.argoproj.io~1hook-delete-policy
+        value: BeforeHookCreation
