@@ -75,6 +75,21 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+    {{- if .Values.api.gatewayAdmin.baseUrl }}
+    # Gateway page — permits egress to the kagent LLM gateway's
+    # /admin/* endpoints. Scoped to pods labelled
+    # `app.kubernetes.io/name: llm-gateway` on the gateway's
+    # standard port. Auto-emitted when `api.gatewayAdmin.baseUrl`
+    # is configured so the chart consumer doesn't have to remember
+    # to also flip extraEgress.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: llm-gateway
+      ports:
+        - port: 4000
+          protocol: TCP
+    {{- end }}
     {{- with .Values.networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
