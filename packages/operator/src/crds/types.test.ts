@@ -84,20 +84,108 @@ describe('isAgent', () => {
     spec: { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
   };
 
-  it('accepts a well-formed Agent', () => {
+  it('accepts a well-formed Agent (model only — legacy path)', () => {
     expect(isAgent(valid)).toBe(true);
   });
 
-  it('rejects empty model', () => {
+  it('rejects empty model when modelClass is also absent', () => {
     expect(isAgent({ ...valid, spec: { model: '' } })).toBe(false);
   });
 
-  it('rejects missing model field', () => {
+  it('rejects missing model field when modelClass is also absent', () => {
     expect(isAgent({ ...valid, spec: {} })).toBe(false);
   });
 
-  it('rejects non-string model', () => {
+  it('rejects non-string model when modelClass is also absent', () => {
     expect(isAgent({ ...valid, spec: { model: 42 } })).toBe(false);
+  });
+
+  /* ---- modelClass — substrate primitive: a logical capability tier
+   * (e.g. tool-caller-default, text-generator-default) the operator
+   * resolves to a physical model centrally. At least one of `model` or
+   * `modelClass` must be a non-empty string; both is admissible (the
+   * operator's resolver lets `model` win as an explicit override).
+   */
+
+  it('accepts an Agent with modelClass only (no model)', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: { modelClass: 'tool-caller-default' },
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts an Agent with both model and modelClass set (override pattern — model wins resolution-side)', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: {
+          model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          modelClass: 'tool-caller-default',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects an Agent with neither model nor modelClass set', () => {
+    expect(isAgent({ ...valid, spec: {} })).toBe(false);
+  });
+
+  it('rejects an Agent with empty-string modelClass and no model', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: { modelClass: '' },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects an Agent with non-string modelClass and no model', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: { modelClass: 42 },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects an Agent with non-string modelClass even when model is also absent (defensive: sentinel typing)', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: { modelClass: { tier: 'tool-caller' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('accepts modelClass when model is empty string (modelClass carries the validity)', () => {
+    // Empty model + non-empty modelClass — at-least-one rule satisfied
+    // by modelClass. The operator's resolver treats empty-string model
+    // as "fall through to modelClass" rather than as an override.
+    expect(
+      isAgent({
+        ...valid,
+        spec: { model: '', modelClass: 'reasoner-default' },
+      }),
+    ).toBe(true);
+  });
+
+  it('round-trips an AgentSpec carrying modelClass at the type level', () => {
+    const spec: import('./types.js').AgentSpec = {
+      modelClass: 'tool-caller-default',
+    };
+    expect(spec.modelClass).toBe('tool-caller-default');
+    expect(spec.model).toBeUndefined();
+  });
+
+  it('round-trips an AgentSpec carrying both model and modelClass', () => {
+    const spec: import('./types.js').AgentSpec = {
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      modelClass: 'tool-caller-default',
+    };
+    expect(spec.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(spec.modelClass).toBe('tool-caller-default');
   });
 });
 

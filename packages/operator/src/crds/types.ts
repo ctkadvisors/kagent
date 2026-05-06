@@ -63,8 +63,39 @@ export interface AgentSpec {
    * MUST include the provider prefix per docs/CLAUDE.md (e.g.
    * `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`,
    * `aws-bedrock/au.anthropic.claude-sonnet-4-6`).
+   *
+   * Optional since the substrate's `modelClass` primitive landed: an
+   * Agent may declare a logical capability tier (`modelClass`) instead
+   * of a hard-coded physical model id, and the operator's resolver
+   * translates the class to a model centrally via chart values.
+   *
+   * AT LEAST ONE of `model` or `modelClass` MUST be a non-empty
+   * string — admission rejects otherwise. When both are set, `model`
+   * is the explicit override (escape-hatch for one-off agents that
+   * need a physical model the cluster's classes don't cover); the
+   * operator-side resolver prefers `model` and ignores `modelClass`
+   * in that case. The validator just accepts both.
    */
-  readonly model: string;
+  readonly model?: string;
+
+  /**
+   * Logical model-capability tier (e.g. `tool-caller-default`,
+   * `text-generator-default`, `reasoner-default`). The operator's
+   * resolver maps this to a physical model id at job-spec build time
+   * via chart-supplied class→model values, so an Agent definition is
+   * decoupled from physical model availability — switching backends
+   * for an entire tier is a single chart-values edit, not N manifest
+   * edits.
+   *
+   * Mutually inclusive with `model` per the at-least-one rule on
+   * `AgentSpec.model`. When both are set, `model` wins resolution-side
+   * (the validator just accepts both — see `isAgent`).
+   *
+   * Phase 1 (this commit) ships the schema + validator only. Phase 2+
+   * wires the operator-side resolver, the chart class→model map, and
+   * the manifest migration.
+   */
+  readonly modelClass?: string;
 
   /* ---- v0.5.3-versioning — Wave 4 / Versioning sub-team.
    * See docs/WAVES.md §6.4 + §6.6. Each (metadata.name, spec.version)
@@ -1193,9 +1224,25 @@ export function isAgent(obj: unknown): obj is Agent {
   const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
   if (o.apiVersion !== API_GROUP_VERSION) return false;
   if (o.kind !== 'Agent') return false;
-  const spec = o.spec as { model?: unknown } | null;
+  const spec = o.spec as { model?: unknown; modelClass?: unknown } | null;
   if (typeof spec !== 'object' || spec === null) return false;
-  if (typeof spec.model !== 'string' || spec.model.length === 0) return false;
+
+  /* At-least-one rule: a non-empty `model` OR a non-empty `modelClass`
+   * MUST be present. Both is admissible (operator-side resolver lets
+   * `model` win as an explicit override; the validator just accepts).
+   *
+   * Each present field MUST type-check independently — a non-string
+   * `modelClass` is a sentinel/typo and is rejected even when `model`
+   * carries the validity. Same for a non-string `model`.
+   */
+  const hasValidModel = typeof spec.model === 'string' && spec.model.length > 0;
+  const hasValidModelClass = typeof spec.modelClass === 'string' && spec.modelClass.length > 0;
+
+  // Defensive type-check: when a field is present-but-malformed, refuse.
+  if (spec.model !== undefined && typeof spec.model !== 'string') return false;
+  if (spec.modelClass !== undefined && typeof spec.modelClass !== 'string') return false;
+
+  if (!hasValidModel && !hasValidModelClass) return false;
   return true;
 }
 

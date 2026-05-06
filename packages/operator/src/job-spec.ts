@@ -539,7 +539,17 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     // Always emit the model as a tiny env var — admission consults
     // this without reading the ConfigMap (hot path).
-    { name: 'KAGENT_AGENT_MODEL', value: agent.spec.model },
+    //
+    // Phase-1 modelClass note: `agent.spec.model` is now optional at
+    // the type level (Agents may declare `modelClass` instead). Every
+    // Agent that reaches this codepath today still has `model` set —
+    // Phase 2 wires the operator-side resolver that translates
+    // `modelClass` → physical model id BEFORE job-spec runs, at which
+    // point this site reads the resolved model. For now, `?? ''`
+    // preserves the existing string-typed env contract; an Agent that
+    // somehow reached here without a model would have been rejected
+    // by admission's at-least-one rule earlier.
+    { name: 'KAGENT_AGENT_MODEL', value: agent.spec.model ?? '' },
     // Back-compat path: when useConfigMap is explicitly false (tests +
     // pre-v0.2.0 agent-pod images), the full JSON env entries stay.
     ...(useConfigMap
@@ -1228,8 +1238,12 @@ export function buildCacheMounts(opts: BuildCacheMountsOptions): BuildCacheMount
   // Stage 1 — derive keys + probe each slot. Done via the
   // pure-functional `lookupCacheEntries` helper from
   // `@kagent/cache-controller`.
+  // Phase-1 modelClass note: see KAGENT_AGENT_MODEL site above. The
+  // cache-controller's `AgentLike` shape still requires `model: string`
+  // (its type bumps with the Phase-2 resolver). `?? ''` preserves the
+  // pre-modelClass contract until Phase 2 threads resolved-model here.
   const lookups = cacheController.lookupCacheEntries({
-    agent: { spec: { model: opts.agent.spec.model, caches: slots } },
+    agent: { spec: { model: opts.agent.spec.model ?? '', caches: slots } },
     task: {
       spec: { ...(opts.task.spec.inputs !== undefined && { inputs: opts.task.spec.inputs }) },
     },

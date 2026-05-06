@@ -232,9 +232,17 @@ const expectations: readonly CRDExpectation[] = [
     file: 'agent.yaml',
     kind: 'Agent',
     plural: 'agents',
-    specRequired: ['model'],
+    // `model` is no longer required at the schema level — the substrate's
+    // modelClass primitive makes EITHER `model` OR `modelClass` admissible
+    // (at-least-one rule, enforced via x-kubernetes-validations CEL on the
+    // CRD + by the operator's `isAgent` predicate). Phase 1 ships the
+    // schema + validator only; Phase 2+ wires the operator-side resolver.
+    specRequired: [],
     specProperties: [
       'model',
+      // modelClass — substrate logical capability tier; resolves to a
+      // physical model id via chart values in Phase 2.
+      'modelClass',
       'systemPrompt',
       'tools',
       'capabilities',

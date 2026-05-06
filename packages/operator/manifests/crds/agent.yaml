@@ -29,13 +29,48 @@ spec:
           properties:
             spec:
               type: object
-              required:
-                - model
+              # `model` was previously required; the modelClass primitive
+              # makes it optional at the schema level. The at-least-one
+              # invariant (model OR modelClass) is enforced via
+              # x-kubernetes-validations (CEL) below + by the operator's
+              # `isAgent` predicate (defense-in-depth — old API servers
+              # without CEL still fail-closed at the operator).
+              x-kubernetes-validations:
+                - rule: 'has(self.model) || has(self.modelClass)'
+                  message: 'spec must declare at least one of `model` or `modelClass` (the substrate at-least-one rule)'
               properties:
                 model:
                   type: string
                   minLength: 1
-                  description: 'LiteLLM model id WITH provider prefix (e.g. workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct).'
+                  description: |
+                    LiteLLM model id WITH provider prefix (e.g.
+                    workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct).
+                    Optional since the modelClass primitive landed: an
+                    Agent may declare `modelClass` instead, and the
+                    operator's resolver translates the class to a
+                    physical model id via chart values. AT LEAST ONE of
+                    `model` or `modelClass` MUST be set; both is
+                    admissible — `model` then wins resolution-side as
+                    an explicit per-Agent override (escape-hatch for
+                    one-off agents that need a model the cluster's
+                    classes don't cover).
+                modelClass:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Logical model-capability tier (e.g.
+                    `tool-caller-default`, `text-generator-default`,
+                    `reasoner-default`). The operator's resolver maps
+                    this to a physical model id at job-spec build time
+                    via chart-supplied class→model values, so an Agent
+                    definition is decoupled from physical model
+                    availability — switching backends for an entire
+                    tier is a single chart-values edit, not N manifest
+                    edits. Mutually inclusive with `model` per the at-
+                    least-one rule above; when both are set, `model`
+                    wins resolution-side. Phase 1 ships the schema +
+                    validator only; Phase 2+ wires the resolver, the
+                    chart class→model map, and the manifest migration.
                 version:
                   type: string
                   description: |
