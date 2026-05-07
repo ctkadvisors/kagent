@@ -17,6 +17,13 @@ README.md
 CLAUDE.md
 LICENSE
 
+# Audit + RC evidence packs are locked artifacts — markdown reports
+# generated during reviews and JSON/markdown captured by the workbench
+# evidence collector. Prettier reformatting churns column-aligned tables
+# and breaks reproducibility against captured snapshots. Same treatment
+# as docs/.
+evidence/
+
 # Helm templates — Go templating syntax ({{- ... -}}) is not valid YAML
 # and prettier's YAML parser fails on it. The chart README + values.yaml
 # remain prettier-managed; only templates/ is exempt.
