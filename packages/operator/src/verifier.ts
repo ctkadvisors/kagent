@@ -130,6 +130,26 @@ export const VERIFIER_JOB_LABEL = 'kagent.knuteson.io/verifier' as const;
  */
 export const VERIFIER_JOB_NAME_SUFFIX = '-verify';
 
+/**
+ * True iff the Job carries `kagent.knuteson.io/verifier=true`. Used by
+ * the operator's job-watch handler to skip verifier-spawned Jobs so
+ * that a verifier Job's failed verdict does NOT route back through
+ * `surfaceFailure` and append `JobFailedAfterComplete` to the parent
+ * AgentTask. (Verifier verdicts are written via the verifier's own
+ * `status.verification` patch path; the parent's terminal phase is set
+ * by the agent-pod, not by job-watch.)
+ *
+ * Pure predicate — accepts the minimal V1Job-shape needed to read the
+ * label so tests don't have to construct full Jobs.
+ */
+export function isVerifierJob(job: {
+  metadata?: { labels?: Record<string, string> } | undefined;
+}): boolean {
+  const labels = job.metadata?.labels;
+  if (labels === undefined) return false;
+  return labels[VERIFIER_JOB_LABEL] === 'true';
+}
+
 /* =====================================================================
  * Types
  * ===================================================================== */

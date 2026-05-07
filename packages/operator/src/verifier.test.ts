@@ -28,6 +28,7 @@ import type { AgentTask } from './crds/index.js';
 import {
   buildVerifierReconciler,
   extractParentOutputForJudge,
+  isVerifierJob,
   parseVerifierJudgeReply,
   pickDispatchMode,
   renderLlmJudgePrompt,
@@ -250,6 +251,28 @@ describe('truncateReason', () => {
     const out = truncateReason(long, 100);
     expect(out.length).toBeLessThanOrEqual(120);
     expect(out.endsWith('(truncated)')).toBe(true);
+  });
+});
+
+describe('isVerifierJob', () => {
+  it('returns true when the verifier label is set to "true"', () => {
+    expect(isVerifierJob({ metadata: { labels: { [VERIFIER_JOB_LABEL]: 'true' } } })).toBe(true);
+  });
+  it('returns false when the verifier label is set to anything else', () => {
+    expect(isVerifierJob({ metadata: { labels: { [VERIFIER_JOB_LABEL]: 'false' } } })).toBe(false);
+    expect(isVerifierJob({ metadata: { labels: { [VERIFIER_JOB_LABEL]: '' } } })).toBe(false);
+  });
+  it('returns false for ordinary dispatch Jobs (verifier label absent)', () => {
+    expect(
+      isVerifierJob({
+        metadata: { labels: { 'kagent.knuteson.io/managed-by': 'kagent-operator' } },
+      }),
+    ).toBe(false);
+  });
+  it('returns false for Jobs with no metadata or no labels', () => {
+    expect(isVerifierJob({})).toBe(false);
+    expect(isVerifierJob({ metadata: {} })).toBe(false);
+    expect(isVerifierJob({ metadata: { labels: {} } })).toBe(false);
   });
 });
 

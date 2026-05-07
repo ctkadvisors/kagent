@@ -94,6 +94,7 @@ import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
 import {
   buildVerifierReconciler,
+  isVerifierJob,
   type FetchPromptFn,
   type VerifierAuditHooks,
   type VerifierReconciler,
@@ -910,6 +911,42 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
     },
     reconciler,
   };
+}
+
+/**
+ * Route a Job watch event into `surfaceFailure` after applying the
+ * verifier-Job guard.
+ *
+ * Audit Rev2 BLOCKER B3: verifier Jobs carry both
+ * `kagent.knuteson.io/managed-by=kagent-operator` (so they pass the
+ * job-watch label selector) AND `kagent.knuteson.io/task=<parent>` (so
+ * `parentTaskRef` resolves to the parent AgentTask). Without this
+ * guard, a verifier Job that exits non-zero (a "fail" verdict) would
+ * route through `markAgentTaskFailedFromExternal` and append a
+ * `JobFailedAfterComplete` condition to the parent AgentTask, even
+ * though the parent already terminated successfully and the verdict
+ * lives on `status.verification`, not on the parent's phase.
+ *
+ * The fix is one early `return` keyed on `VERIFIER_JOB_LABEL=true`. The
+ * verifier reconciler patches `status.verification` directly; job-watch
+ * has no business observing those Jobs.
+ *
+ * Exported for unit testing — see `job-route.test.ts`.
+ */
+export async function routeJobEventToFailureSurface(
+  job: V1Job,
+  surfaceFailure: (
+    ref: { namespace: string; name: string },
+    failure: { reason: string; message: string; source: 'job' | 'pod' },
+  ) => Promise<void>,
+): Promise<void> {
+  // B3 guard: verifier Jobs are not in scope for job-watch's failure
+  // surfacing. Their verdicts flow through `status.verification`.
+  if (isVerifierJob(job)) return;
+  const ref = parentTaskRef(job);
+  if (ref === null) return;
+  const verdict = detectJobFailure(job);
+  if (verdict !== null) await surfaceFailure(ref, verdict);
 }
 
 /**
@@ -1857,10 +1894,7 @@ async function main(): Promise<void> {
     jobListFn,
     {
       async onJob(job: V1Job): Promise<void> {
-        const ref = parentTaskRef(job);
-        if (ref === null) return;
-        const verdict = detectJobFailure(job);
-        if (verdict !== null) await surfaceFailure(ref, verdict);
+        await routeJobEventToFailureSurface(job, surfaceFailure);
       },
       async onPod(pod: V1Pod): Promise<void> {
         const ref = parentTaskRef(pod);
