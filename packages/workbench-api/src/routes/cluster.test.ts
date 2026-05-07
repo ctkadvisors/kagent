@@ -124,6 +124,90 @@ describe('cluster.ts — M14 listNode cache', () => {
   });
 });
 
+describe('cluster.ts — L13 lastResultPreview secret scrub', () => {
+  // Audit-rev2 L13 — task `result.content` is unconstrained agent
+  // output. The 200-char preview is a triage convenience, NOT an
+  // attestable channel; it must run the same secret-scrub regex set
+  // that workbench-api applies to `usage_records.errorMessage`.
+  it('scrubs sk- API keys out of lastResultPreview before serving the row', async () => {
+    const cache = new SnapshotCache();
+    // Build a Completed task with a leaked OpenAI-shape key in its
+    // result.content. The dashboard renders this row in the
+    // "recently completed" panel of /api/cluster/snapshot.
+    const taskWithSecret = {
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTask',
+      metadata: {
+        namespace: 'kagent-system',
+        name: 'leaky-task',
+        uid: 'uid-leaky',
+        creationTimestamp: '2026-05-01T15:00:00Z',
+      },
+      spec: { targetAgent: 'smoke-test', originalUserMessage: 'hi' },
+      status: {
+        phase: 'Completed',
+        completedAt: '2026-05-01T15:01:00Z',
+        result: {
+          content:
+            'helpfully echoing my upstream key: sk-proj-abcdefghijklmnop1234567890qrstu — please rotate.',
+        },
+      },
+    } as unknown as Parameters<typeof cache.upsertTask>[0];
+    cache.upsertTask(taskWithSecret);
+
+    const listNode = vi.fn(() => Promise.resolve({ items: [] }));
+    const app = clusterRoute({ cache, coreApi: fakeCoreApi(listNode), nodeListTtlMs: 0 });
+    const res = await app.request(makeReq('/api/cluster/snapshot'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      recentTasks: ReadonlyArray<{ name: string; lastResultPreview?: string }>;
+    };
+    const row = body.recentTasks.find((r) => r.name === 'leaky-task');
+    expect(row).toBeDefined();
+    // The preview is present (the dashboard still gets at-a-glance copy)…
+    expect(row?.lastResultPreview).toBeDefined();
+    // …but the secret patterns from error-scrub are redacted.
+    expect(row?.lastResultPreview).not.toMatch(/sk-[A-Za-z0-9_-]{16,}/);
+    expect(row?.lastResultPreview).not.toMatch(/sk-proj-[A-Za-z0-9_-]+/);
+    expect(row?.lastResultPreview).toContain('[REDACTED]');
+    // The 200-char cap is preserved post-scrub.
+    expect(row?.lastResultPreview?.length ?? 0).toBeLessThanOrEqual(200);
+  });
+
+  it('passes through ordinary content unchanged (no false-positive redaction)', async () => {
+    const cache = new SnapshotCache();
+    const benignTask = {
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTask',
+      metadata: {
+        namespace: 'kagent-system',
+        name: 'benign-task',
+        uid: 'uid-benign',
+        creationTimestamp: '2026-05-01T15:00:00Z',
+      },
+      spec: { targetAgent: 'smoke-test', originalUserMessage: 'hi' },
+      status: {
+        phase: 'Completed',
+        completedAt: '2026-05-01T15:01:00Z',
+        result: { content: 'etcd is a distributed key-value store used by Kubernetes.' },
+      },
+    } as unknown as Parameters<typeof cache.upsertTask>[0];
+    cache.upsertTask(benignTask);
+    const listNode = vi.fn(() => Promise.resolve({ items: [] }));
+    const app = clusterRoute({ cache, coreApi: fakeCoreApi(listNode), nodeListTtlMs: 0 });
+    const res = await app.request(makeReq('/api/cluster/snapshot'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      recentTasks: ReadonlyArray<{ name: string; lastResultPreview?: string }>;
+    };
+    const row = body.recentTasks.find((r) => r.name === 'benign-task');
+    expect(row?.lastResultPreview).toBe(
+      'etcd is a distributed key-value store used by Kubernetes.',
+    );
+    expect(row?.lastResultPreview).not.toContain('[REDACTED]');
+  });
+});
+
 describe('cluster.ts — NEW-M2 single-snapshot pod read', () => {
   it('snapshot uses ONE listPods() snapshot — no cross-contamination when cache mutates mid-handler', async () => {
     // We can't easily detect duplicate listPods() calls without

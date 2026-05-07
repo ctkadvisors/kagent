@@ -30,6 +30,7 @@ import { Hono } from 'hono';
 
 import type { AgentTask } from '@kagent/dto';
 import type { SnapshotCache } from '../cache.js';
+import { scrubSecrets } from '../error-scrub.js';
 
 /**
  * One row per cluster Node. Trims the `V1Node` shape to fields the
@@ -307,9 +308,20 @@ function taskRow(
     }),
     childCount,
     ...(errorMessage !== undefined && { errorMessage }),
+    // Audit-rev2 L13 — `lastResult.content` is unconstrained agent
+    // output; loosely-prompted LLMs can echo any token they have
+    // seen in-context, including secrets in tool results, capability
+    // bundles, or backend error bodies. Surface a 200-char preview
+    // for at-a-glance triage in the dashboard, but run the same
+    // secret-scrub regex set we apply to `usage_records.errorMessage`
+    // (M15 / H15) so an authenticated viewer can't pull, e.g., a
+    // leaked sk- key out of a task's `result.content` via this
+    // route. Scrub THEN slice — slicing a long secret in half could
+    // leak the prefix below the 16-char regex floor; scrubbing
+    // first guarantees the full match window is covered.
     ...(typeof lastResult === 'string' &&
       lastResult.length > 0 && {
-        lastResultPreview: lastResult.slice(0, 200),
+        lastResultPreview: scrubSecrets(lastResult).slice(0, 200),
       }),
   };
 }
