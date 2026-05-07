@@ -5,7 +5,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildJobSpecOptionsFromEnv, parseModelClassesEnv } from './main.js';
+import type { AgentTask } from './crds/index.js';
+import {
+  buildJobSpecOptionsFromEnv,
+  parseModelClassesEnv,
+  seedIdempotencyCacheFromInformer,
+} from './main.js';
+import { IdempotencyCache } from './task-admission.js';
 
 /**
  * Snapshot/restore the env vars this suite mutates so tests stay
@@ -753,5 +759,101 @@ describe('parseModelClassesEnv — Phase-2 modelClass map parser', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+/* =====================================================================
+ * M4 — IdempotencyCache seeded from informer first-sync
+ * ===================================================================== */
+
+describe('seedIdempotencyCacheFromInformer (M4)', () => {
+  function makeCompletedTask(opts: {
+    name: string;
+    uid: string;
+    idempotencyKey?: string;
+    targetAgent?: string;
+    outputs?: { name: string; ref: string }[];
+  }): AgentTask {
+    return {
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTask',
+      metadata: { name: opts.name, namespace: 'default', uid: opts.uid },
+      spec: {
+        ...(opts.targetAgent !== undefined && { targetAgent: opts.targetAgent }),
+        ...(opts.idempotencyKey !== undefined && { idempotencyKey: opts.idempotencyKey }),
+        payload: { topic: 'k3s' },
+      },
+      status: {
+        phase: 'Completed',
+        outputs: opts.outputs ?? [],
+      },
+    } as unknown as AgentTask;
+  }
+
+  it('seeds Completed tasks with idempotencyKey + targetAgent', () => {
+    const cache = new IdempotencyCache();
+    const tasks = [
+      makeCompletedTask({
+        name: 't-completed-keyed',
+        uid: 'u1',
+        idempotencyKey: 'idem-1',
+        targetAgent: 'researcher',
+        outputs: [{ name: 'summary', ref: 'cas://abcd' }],
+      }),
+    ];
+    const stats = seedIdempotencyCacheFromInformer(cache, tasks);
+    expect(stats.seeded).toBe(1);
+    expect(stats.skipped).toBe(0);
+    expect(cache.size()).toBe(1);
+  });
+
+  it('skips Completed tasks without idempotencyKey', () => {
+    const cache = new IdempotencyCache();
+    const tasks = [makeCompletedTask({ name: 't', uid: 'u', targetAgent: 'r' })];
+    const stats = seedIdempotencyCacheFromInformer(cache, tasks);
+    expect(stats.seeded).toBe(0);
+    expect(stats.skipped).toBe(1);
+  });
+
+  it('skips capability-only tasks (no targetAgent on spec)', () => {
+    const cache = new IdempotencyCache();
+    const tasks = [makeCompletedTask({ name: 't-cap', uid: 'u-cap', idempotencyKey: 'k1' })];
+    const stats = seedIdempotencyCacheFromInformer(cache, tasks);
+    expect(stats.seeded).toBe(0);
+    expect(stats.skipped).toBe(1);
+  });
+
+  it('skips non-Completed phases', () => {
+    const cache = new IdempotencyCache();
+    const pending = makeCompletedTask({
+      name: 't-pending',
+      uid: 'u-pending',
+      idempotencyKey: 'k1',
+      targetAgent: 'r',
+    });
+    (pending.status as { phase?: string }).phase = 'Pending';
+    const stats = seedIdempotencyCacheFromInformer(cache, [pending]);
+    expect(stats.seeded).toBe(0);
+    expect(stats.skipped).toBe(1);
+  });
+
+  it('idempotent: re-seeding the same first-sync snapshot does not clobber live entries', () => {
+    const cache = new IdempotencyCache();
+    const t = makeCompletedTask({
+      name: 't',
+      uid: 'u-original',
+      idempotencyKey: 'k1',
+      targetAgent: 'r',
+      outputs: [{ name: 'orig', ref: 'cas://orig' }],
+    });
+    const first = seedIdempotencyCacheFromInformer(cache, [t]);
+    expect(first.seeded).toBe(1);
+    // Simulate live activity: update the entry via the regular path.
+    cache.recordOutputs({ namespace: 'default', agentName: 'r', idempotencyKey: 'k1' }, [
+      { name: 'live', ref: 'cas://live' },
+    ]);
+    const second = seedIdempotencyCacheFromInformer(cache, [t]);
+    expect(second.seeded).toBe(0);
+    // The live `recordOutputs` value is preserved.
   });
 });

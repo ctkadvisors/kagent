@@ -89,7 +89,7 @@ import {
   type SupervisionRouterDeps,
   type InfraFaultFields,
 } from './supervision-router.js';
-import { IdempotencyCache } from './task-admission.js';
+import { deriveIdempotencyKey, hashTaskInputs, IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
 import {
@@ -1404,6 +1404,79 @@ function logResult(
   console.log(`[kagent-operator] ${verb} ${id} → ${result.action}${tail}${why}`);
 }
 
+/**
+ * M4 — re-populate `IdempotencyCache` from informer first-sync.
+ *
+ * Walks every AgentTask the informer cache holds and seeds an entry for
+ * each one whose status is terminal-Completed AND whose
+ * `spec.idempotencyKey` is set. The seeded entry uses the cluster-side
+ * `task.metadata.uid` as the originatingTask + the task's recorded
+ * outputs.
+ *
+ * Idempotent — re-runs on every primary-informer start are safe (the
+ * cache's `seed()` method is a no-op when an entry already exists).
+ *
+ * Tasks targeted by `spec.targetCapability` (capability-only, no
+ * `spec.targetAgent` resolved on the spec) are skipped: we don't have
+ * the resolver in the seed path. The first replay attempt for those
+ * tasks falls back to a `miss` and the regular reconcile path runs;
+ * downstream protection comes from the JetStream `Nats-Msg-Id`
+ * deduplication on dispatch.
+ */
+export function seedIdempotencyCacheFromInformer(
+  cache: IdempotencyCache,
+  tasks: readonly import('./crds/index.js').AgentTask[],
+): { seeded: number; skipped: number } {
+  let seeded = 0;
+  let skipped = 0;
+  for (const task of tasks) {
+    if (task.status?.phase !== 'Completed') {
+      skipped++;
+      continue;
+    }
+    const k = task.spec.idempotencyKey;
+    if (typeof k !== 'string' || k.length === 0) {
+      skipped++;
+      continue;
+    }
+    // Capability-only tasks are skipped — we don't have the registry
+    // resolver here. The substrate's regular reconcile re-resolves on
+    // any replay.
+    const agentName = task.spec.targetAgent;
+    if (typeof agentName !== 'string' || agentName.length === 0) {
+      skipped++;
+      continue;
+    }
+    const key = deriveIdempotencyKey(task, agentName);
+    if (key === null) {
+      skipped++;
+      continue;
+    }
+    try {
+      const inputHash = hashTaskInputs(task);
+      const fresh = cache.seed(key, inputHash, task.metadata.uid ?? '', task.status.outputs ?? []);
+      if (fresh) {
+        seeded++;
+      } else {
+        skipped++;
+      }
+    } catch (err) {
+      // Defensive — a malformed task in the cache (e.g. inputs that
+      // can't be hashed) must not block boot. Log + skip.
+      console.warn(
+        `[kagent-operator] M4 seed: failed to hash inputs for ${task.metadata.namespace ?? '?'}/${task.metadata.name ?? '?'}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      skipped++;
+    }
+  }
+  if (seeded > 0 || skipped > 0) {
+    console.log(
+      `[kagent-operator] M4 idempotency cache seeded from informer first-sync: seeded=${seeded.toString()} skipped=${skipped.toString()}`,
+    );
+  }
+  return { seeded, skipped };
+}
+
 async function main(): Promise<void> {
   const kc = loadKubeConfig();
   const customApi = makeCustomObjectsApi(kc);
@@ -2268,6 +2341,14 @@ async function main(): Promise<void> {
     if (primaryInformersStarted) return;
     console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
     await informer.start();
+    // M4 — seed the IdempotencyCache from the informer's first-sync
+    // snapshot. Walk every Completed AgentTask in the cache, derive the
+    // (namespace, agentName, idempotencyKey) tuple, and `seed()` the
+    // entry with the recorded outputs. Closes the operator-restart race
+    // where a Completed task's idempotency entry was lost; the next
+    // reconcile of a same-key task lands as `replay` instead of
+    // re-dispatching the agent.
+    seedIdempotencyCacheFromInformer(idempotencyCache, informerRef.current?.list() ?? []);
     await jobPodInformer.start();
     if (admissionWiring !== undefined) {
       await admissionWiring.start();

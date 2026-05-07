@@ -297,6 +297,31 @@ describe('IdempotencyCache', () => {
     cache.recordOutputs(sampleKey, [{ name: 'x', ref: 'y' }]);
     expect(cache.size()).toBe(0);
   });
+
+  it('seed() pre-populates an entry observable as replay (M4)', () => {
+    const cache = new IdempotencyCache();
+    cache.seed(sampleKey, 'h1', 'task-uid-1', [{ name: 'out', ref: 'cas://abcd' }]);
+    const decision = cache.checkAndStore(sampleKey, 'h1', 'task-uid-2');
+    expect(decision.kind).toBe('replay');
+    if (decision.kind === 'replay') {
+      expect(decision.originalTaskUid).toBe('task-uid-1');
+      expect(decision.outputs).toEqual([{ name: 'out', ref: 'cas://abcd' }]);
+    }
+  });
+
+  it('seed() does not overwrite an already-live entry (M4)', () => {
+    const cache = new IdempotencyCache();
+    cache.checkAndStore(sampleKey, 'h-live', 'live-uid');
+    cache.recordOutputs(sampleKey, [{ name: 'real', ref: 'cas://real' }]);
+    // Try to seed an older snapshot — must NOT clobber the live entry.
+    cache.seed(sampleKey, 'h-stale', 'stale-uid', [{ name: 'stale', ref: 'cas://stale' }]);
+    const decision = cache.checkAndStore(sampleKey, 'h-live', 'next-uid');
+    expect(decision.kind).toBe('replay');
+    if (decision.kind === 'replay') {
+      expect(decision.originalTaskUid).toBe('live-uid');
+      expect(decision.outputs).toEqual([{ name: 'real', ref: 'cas://real' }]);
+    }
+  });
 });
 
 /* =====================================================================

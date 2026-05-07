@@ -277,6 +277,23 @@ export interface IdempotencyCacheOptions {
   readonly now?: () => number;
 }
 
+/**
+ * **Persistence — process-local only.** The cache lives in the
+ * operator's heap and is NOT serialized to disk or etcd. Operator pod
+ * restart loses every entry; the next replay attempt within 24h of the
+ * original Completed write would re-execute the agent if the cache had
+ * not been re-seeded.
+ *
+ * Audit-rev2 M4 mitigates the most common restart race by seeding from
+ * the AgentTask informer's first-sync snapshot via {@link IdempotencyCache.seed}
+ * — Completed AgentTasks already in apiserver re-populate the map
+ * before the watch's `onAdd` events start firing reconcile. This DOES
+ * NOT close the gap for tasks whose Completed write hadn't reached
+ * apiserver before the restart, nor for the multi-replica case (the
+ * substrate is single-leader for now). A v0.3+ migration to an
+ * etcd-backed implementation behind the same interface is the long-term
+ * answer; see WAVES.md §3.1 + the M4 commit message.
+ */
 export class IdempotencyCache {
   private readonly entries = new Map<string, IdempotencyEntry>();
   private readonly ttlMs: number;
@@ -355,6 +372,37 @@ export class IdempotencyCache {
   /** Test surface: clear all entries (e.g. between vitest cases). */
   reset(): void {
     this.entries.clear();
+  }
+
+  /**
+   * M4 — pre-populate an entry from informer first-sync. Used by the
+   * operator's boot path to seed completed-task entries discovered in
+   * the AgentTask cache so a restart-mid-Pending double-dispatch lands
+   * as `replay` rather than `miss`. Idempotent: an existing entry with
+   * the same key is left untouched (the live cache is authoritative)
+   * — returns `false` in that case so the caller can count fresh-seed
+   * vs no-op decisions.
+   *
+   * NOTE — process restart still loses the cache; this method only
+   * mitigates the first-sync window where Completed AgentTasks are
+   * already in apiserver but the operator's Map is empty. The doc on
+   * `IdempotencyCache` explicitly calls out the persistence gap.
+   */
+  seed(
+    key: IdempotencyKey,
+    inputHash: string,
+    originalTaskUid: string,
+    outputs: readonly OutputRef[],
+  ): boolean {
+    const k = this.keyOf(key);
+    if (this.entries.has(k)) return false;
+    this.entries.set(k, {
+      inputHash,
+      originalTaskUid,
+      outputs,
+      insertedAtMs: this.now(),
+    });
+    return true;
   }
 
   private keyOf(key: IdempotencyKey): string {
