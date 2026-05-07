@@ -26,6 +26,7 @@ state, which it rebuilds from the API server on restart. Bump
 replicaCount once you care about brief restart-window blips during
 rollouts.
 */}}
+{{- include "kagent-workbench.validateValues" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

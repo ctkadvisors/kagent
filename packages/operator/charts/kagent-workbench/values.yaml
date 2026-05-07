@@ -291,3 +291,31 @@ containerSecurityContext:
 # Optional name + fullname overrides — standard Helm idiom.
 nameOverride: ''
 fullnameOverride: ''
+
+# ---------------------------------------------------------------------
+# Audit B6 trapdoor acknowledgement.
+#
+# When the chart renders a vanilla `networking.k8s.io/v1 Ingress`
+# (i.e. `ingress.enabled=true` AND `ingress.authMiddleware` is empty)
+# AND the workbench-api keeps its default `api.authRequired='true'`
+# header-trust posture, the cluster-side defense against
+# X-Forwarded-User SPOOFING is the NetworkPolicy that restricts
+# ingress to the ingress-controller pods. K3s with the default
+# flannel CNI does NOT enforce NetworkPolicies, so on a default
+# K3s cluster ANY in-cluster pod can forge X-Forwarded-User and
+# walk past the auth gate.
+#
+# `_helpers.tpl` `kagent-workbench.validateValues` REJECTS this
+# combination at `helm install`/`helm template` time unless this
+# flag is set to true. Acknowledging the trapdoor is the operator
+# saying "I have a NetworkPolicy-enforcing CNI deployed" or "I am
+# running on a private network where in-cluster pod spoofing is
+# not in my threat model."
+#
+# The recommended remediation is `ingress.authMiddleware` pointing
+# at a Traefik Middleware that authenticates the request (basicAuth
+# / forwardAuth / oauth2-proxy). With auth at the IngressRoute
+# layer, the trapdoor closes naturally — see
+# docs/AGENT-SELF-SERVICE.md §3.5 and evidence/audit-rev2/C3.md.
+# ---------------------------------------------------------------------
+acknowledgeUnauthenticated: false
