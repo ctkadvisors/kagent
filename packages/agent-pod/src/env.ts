@@ -289,6 +289,20 @@ export interface PodConfig {
    * pieces degrade to no-op.
    */
   readonly contextWindowTokens?: number;
+  /**
+   * Audit C2 H12 — provenance of agent.spec + task.spec. `'configmap'`
+   * when both came from the operator-mounted files at
+   * `/var/kagent/config/`; `'env-json'` when either fell back to the
+   * v0.1 KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC env-JSON path; `'mixed'`
+   * if the rare case of one ConfigMap + one env-JSON arose (defensive
+   * — should never happen in practice since the operator emits both
+   * paths atomically).
+   *
+   * Stamped onto OTel attributes (`kagent.spec.source`) and the boot
+   * line so on-call can confirm "which path did this pod take?" from
+   * trace data alone.
+   */
+  readonly specSource: SpecSource | 'mixed';
 }
 
 /**
@@ -326,8 +340,23 @@ export function parseEnv(
   const taskNamespace = requireEnv(env, 'KAGENT_TASK_NAMESPACE');
   const agentName = requireEnv(env, 'KAGENT_AGENT_NAME');
 
-  const agentSpec = loadAgentSpec(env, readFile);
-  const taskSpec = loadTaskSpec(env, readFile);
+  // Audit C2 H12 — enforce the env-JSON spec payload cap BEFORE we try
+  // to parse. When both env-JSONs are absent (ConfigMap path takes
+  // over), the cap is a no-op (sum=0 ≤ cap). When either is set, the
+  // sum gates pre-parse so a pathological env produces a structured
+  // CrashLoop reason instead of the generic ARG_MAX exec failure.
+  assertEnvJsonSpecBudget(env);
+
+  const agentLoad = loadAgentSpec(env, readFile);
+  const taskLoad = loadTaskSpec(env, readFile);
+  const agentSpec = agentLoad.spec;
+  const taskSpec = taskLoad.spec;
+  // Mixed source is defensive: the operator emits both paths
+  // atomically, but a partial-mount edge case (e.g., ConfigMap volume
+  // mount succeeded for one file but not the other) would surface
+  // here rather than silently picking one path.
+  const specSource: SpecSource | 'mixed' =
+    agentLoad.source === taskLoad.source ? agentLoad.source : 'mixed';
 
   if (typeof agentSpec.model !== 'string' || agentSpec.model.length === 0) {
     throw new Error(
@@ -377,7 +406,13 @@ export function parseEnv(
     identity,
     ...(rootTaskUid !== undefined && { rootTaskUid }),
     ...(contextWindowTokens !== undefined && { contextWindowTokens }),
+    specSource,
   };
+  // Audit C2 H12 — boot-line stamp so logs reveal which path the pod
+  // took. Distinct from KAGENT_SPEC_SOURCE env (which downstream
+  // tooling can read from process.env without re-deriving) — this
+  // line is the human-grep target.
+  console.log(`[kagent-agent-pod] spec source: ${specSource}`);
   return config;
 }
 
@@ -510,32 +545,109 @@ function parseJson<T>(raw: string, key: string): T {
 }
 
 /**
+ * Audit C2 H12 (2026-05-06) — combined env-JSON spec payload cap.
+ *
+ * The env-JSON path (`KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC`) is the
+ * v0.1 back-compat fallback. It is bounded by Linux `ARG_MAX` (~128
+ * KiB on most distros, but unevenly enforced — can OOM a pod's argv
+ * load before parseEnv runs) and by etcd's per-object size cap.
+ *
+ * 256 KiB is an intentionally-loose ceiling — well above any realistic
+ * Agent.spec + AgentTask.spec footprint, well below the smallest
+ * ARG_MAX a hardened kernel might enforce. The check runs at parse
+ * time so a pathological env produces a structured CrashLoop reason
+ * instead of a generic exec failure with no operator-visible signal.
+ *
+ * The cap applies to the env-JSON path ONLY. ConfigMap-mounted files
+ * have a separate operator-side cap (W3-Operator scope, follow-up to
+ * `packages/operator/src/job-spec.ts:666-671`).
+ *
+ * Exported so tests can drive the boundary without re-deriving it.
+ */
+export const ENV_JSON_SPEC_PAYLOAD_MAX_BYTES = 262_144; // 256 KiB
+
+/**
+ * Audit C2 H12 — provenance of agent.spec + task.spec for trace
+ * metadata + grep-able pod logs. Stamped onto the OTel attribute
+ * `kagent.spec.source` (per docs/SUBSTRATE-V1.md §4.1) and
+ * stringified into the boot-line log so an on-call can answer
+ * "which path did this pod take?" without reaching for kubectl
+ * describe.
+ */
+export type SpecSource = 'configmap' | 'env-json';
+
+/**
  * v0.2.0-typed-io — read agent.spec from the mounted ConfigMap when
  * the file exists, falling back to the v0.1 KAGENT_AGENT_SPEC env JSON
  * for one release of back-compat. Either path must yield a valid
  * AgentSpecEnv with `model` set; parseEnv enforces that downstream.
+ *
+ * Audit C2 H12 — when the env-JSON path is taken, enforces the
+ * `ENV_JSON_SPEC_PAYLOAD_MAX_BYTES` combined cap and returns the
+ * source so parseEnv can stamp `KAGENT_SPEC_SOURCE` on PodConfig.
  */
 function loadAgentSpec(
   env: Readonly<Record<string, string | undefined>>,
   readFile: (path: string) => string | undefined,
-): AgentSpecEnv {
+): { spec: AgentSpecEnv; source: SpecSource } {
   const fileBody = readFile(CONFIG_AGENT_SPEC_PATH);
   if (fileBody !== undefined) {
-    return parseJson<AgentSpecEnv>(fileBody, CONFIG_AGENT_SPEC_PATH);
+    return {
+      spec: parseJson<AgentSpecEnv>(fileBody, CONFIG_AGENT_SPEC_PATH),
+      source: 'configmap',
+    };
   }
-  // Back-compat env-JSON path.
-  return parseJson<AgentSpecEnv>(requireEnv(env, 'KAGENT_AGENT_SPEC'), 'KAGENT_AGENT_SPEC');
+  // Back-compat env-JSON path. The combined cap with KAGENT_TASK_SPEC
+  // is enforced in `parseEnv` (it has visibility into both raw env
+  // values); this loader only verifies the var is present.
+  return {
+    spec: parseJson<AgentSpecEnv>(requireEnv(env, 'KAGENT_AGENT_SPEC'), 'KAGENT_AGENT_SPEC'),
+    source: 'env-json',
+  };
 }
 
 function loadTaskSpec(
   env: Readonly<Record<string, string | undefined>>,
   readFile: (path: string) => string | undefined,
-): TaskSpecEnv {
+): { spec: TaskSpecEnv; source: SpecSource } {
   const fileBody = readFile(CONFIG_TASK_SPEC_PATH);
   if (fileBody !== undefined) {
-    return parseJson<TaskSpecEnv>(fileBody, CONFIG_TASK_SPEC_PATH);
+    return {
+      spec: parseJson<TaskSpecEnv>(fileBody, CONFIG_TASK_SPEC_PATH),
+      source: 'configmap',
+    };
   }
-  return parseJson<TaskSpecEnv>(requireEnv(env, 'KAGENT_TASK_SPEC'), 'KAGENT_TASK_SPEC');
+  return {
+    spec: parseJson<TaskSpecEnv>(requireEnv(env, 'KAGENT_TASK_SPEC'), 'KAGENT_TASK_SPEC'),
+    source: 'env-json',
+  };
+}
+
+/**
+ * Audit C2 H12 — pre-parse cap on the env-JSON spec payload. Sums the
+ * UTF-8 byte length of `KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC` and
+ * throws a structured error when the sum exceeds
+ * `ENV_JSON_SPEC_PAYLOAD_MAX_BYTES`. Runs ONLY when at least one of
+ * the env-JSON inputs is the source — a pod taking the ConfigMap
+ * path bypasses the cap entirely (operator-side bound applies there).
+ *
+ * Exported for the unit-test suite.
+ */
+export function assertEnvJsonSpecBudget(env: Readonly<Record<string, string | undefined>>): void {
+  const agentRaw = env.KAGENT_AGENT_SPEC ?? '';
+  const taskRaw = env.KAGENT_TASK_SPEC ?? '';
+  const agentBytes = Buffer.byteLength(agentRaw, 'utf8');
+  const taskBytes = Buffer.byteLength(taskRaw, 'utf8');
+  const total = agentBytes + taskBytes;
+  if (total > ENV_JSON_SPEC_PAYLOAD_MAX_BYTES) {
+    throw new Error(
+      `env_json_spec_too_large: KAGENT_AGENT_SPEC (${String(agentBytes)} bytes) + ` +
+        `KAGENT_TASK_SPEC (${String(taskBytes)} bytes) = ${String(total)} bytes ` +
+        `exceeds ${String(ENV_JSON_SPEC_PAYLOAD_MAX_BYTES)} byte cap. ` +
+        `Migrate to ConfigMap-mounted spec at /var/kagent/config/{agent,task}.spec.json ` +
+        `(operator default since v0.2.0-typed-io).`,
+    );
+  }
 }
 
 /**

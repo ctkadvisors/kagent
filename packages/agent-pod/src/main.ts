@@ -109,9 +109,18 @@ export function buildCancelledResult(config: PodConfig, signalName: NodeJS.Signa
 
 async function main(): Promise<void> {
   const config = parseEnv(process.env);
+  // Audit C2 H12 — propagate the resolved spec-source onto the live
+  // process env so any downstream code (trace sinks, debug helpers,
+  // child Job spec builders) can read `KAGENT_SPEC_SOURCE` without
+  // re-deriving the source from filesystem state. Defensive: only set
+  // if not already present so a parent-injected value (rare) wins.
+  if (process.env.KAGENT_SPEC_SOURCE === undefined) {
+    process.env.KAGENT_SPEC_SOURCE = config.specSource;
+  }
   console.log(
     `[kagent-agent-pod] boot ${config.taskNamespace}/${config.taskName} ` +
-      `agent=${config.agentName} model=${config.agentSpec.model}`,
+      `agent=${config.agentName} model=${config.agentSpec.model} ` +
+      `specSource=${config.specSource}`,
   );
 
   // Audit C2.1 BLOCKER #1 — capability mount is required-by-default.

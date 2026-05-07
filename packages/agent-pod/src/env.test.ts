@@ -5,7 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { parseEnv } from './env.js';
+import { assertEnvJsonSpecBudget, ENV_JSON_SPEC_PAYLOAD_MAX_BYTES, parseEnv } from './env.js';
 
 const baseEnv: Record<string, string> = {
   KAGENT_TASK_ID: 'task-uid-1',
@@ -334,5 +334,173 @@ describe('parseEnv', () => {
         warnSpy.mockRestore();
       }
     });
+  });
+});
+
+/* =====================================================================
+ * Audit C2 H12 — env-JSON spec payload cap + KAGENT_SPEC_SOURCE
+ * annotation.
+ *
+ * The env-JSON path (`KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC`) is the
+ * v0.1 back-compat fallback. ARG_MAX bounds it to ~128 KiB on most
+ * Linux distros, but enforcement is uneven — a pathological env can
+ * fail with a generic exec error before parseEnv runs. Fix: pre-parse
+ * 256 KiB combined cap throws structured `env_json_spec_too_large` so
+ * CrashLoop has a clear operator-visible reason.
+ * ===================================================================== */
+
+describe('assertEnvJsonSpecBudget (H12)', () => {
+  it('passes when both env-JSONs are absent (ConfigMap path)', () => {
+    expect(() => assertEnvJsonSpecBudget({})).not.toThrow();
+  });
+
+  it('passes for typical real-world spec sizes (a few hundred bytes)', () => {
+    expect(() =>
+      assertEnvJsonSpecBudget({
+        KAGENT_AGENT_SPEC: JSON.stringify({ model: 'gpt-4o', systemPrompt: 'tiny' }),
+        KAGENT_TASK_SPEC: JSON.stringify({ payload: { topic: 'ok' } }),
+      }),
+    ).not.toThrow();
+  });
+
+  it('passes at exactly the cap', () => {
+    // Pad both vars to total exactly the cap.
+    const halfCap = ENV_JSON_SPEC_PAYLOAD_MAX_BYTES / 2;
+    const padding = 'x'.repeat(halfCap - 2); // -2 for the surrounding quotes
+    expect(() =>
+      assertEnvJsonSpecBudget({
+        KAGENT_AGENT_SPEC: `"${padding}"`,
+        KAGENT_TASK_SPEC: `"${padding}"`,
+      }),
+    ).not.toThrow();
+  });
+
+  it('throws structured env_json_spec_too_large when combined size exceeds cap', () => {
+    // Each var slightly over half-cap so the total is just over.
+    const overHalf = Math.ceil(ENV_JSON_SPEC_PAYLOAD_MAX_BYTES / 2) + 100;
+    const padding = 'x'.repeat(overHalf - 2);
+    expect(() =>
+      assertEnvJsonSpecBudget({
+        KAGENT_AGENT_SPEC: `"${padding}"`,
+        KAGENT_TASK_SPEC: `"${padding}"`,
+      }),
+    ).toThrow(/env_json_spec_too_large/);
+  });
+
+  it('error message names both env vars and their byte counts', () => {
+    const padding = 'x'.repeat(200_000);
+    let caught: Error | undefined;
+    try {
+      assertEnvJsonSpecBudget({
+        KAGENT_AGENT_SPEC: `"${padding}"`,
+        KAGENT_TASK_SPEC: `"${padding}"`,
+      });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught?.message).toContain('KAGENT_AGENT_SPEC');
+    expect(caught?.message).toContain('KAGENT_TASK_SPEC');
+    expect(caught?.message).toContain(String(ENV_JSON_SPEC_PAYLOAD_MAX_BYTES));
+    expect(caught?.message).toContain('Migrate to ConfigMap');
+  });
+
+  it('counts UTF-8 bytes (not code points) — multibyte chars contribute correctly', () => {
+    // A 4-byte UTF-8 char (emoji) at half-cap-of-bytes.
+    const halfBytes = Math.floor(ENV_JSON_SPEC_PAYLOAD_MAX_BYTES / 2);
+    // 4-byte emoji repeated; total bytes ≈ halfBytes per var.
+    const emoji = '\u{1F600}'; // 😀
+    const repeats = Math.floor(halfBytes / 4);
+    const big = emoji.repeat(repeats);
+    // String length is `repeats` (UTF-16 code units count would be 2x
+    // due to surrogate pairs, but Buffer.byteLength counts bytes).
+    expect(() =>
+      assertEnvJsonSpecBudget({
+        KAGENT_AGENT_SPEC: big,
+        KAGENT_TASK_SPEC: big,
+      }),
+    ).not.toThrow(); // exactly at cap
+    // Push slightly over with one more emoji.
+    expect(() =>
+      assertEnvJsonSpecBudget({
+        KAGENT_AGENT_SPEC: big + emoji.repeat(2),
+        KAGENT_TASK_SPEC: big,
+      }),
+    ).toThrow(/env_json_spec_too_large/);
+  });
+});
+
+describe('parseEnv H12 — env-JSON cap + specSource annotation', () => {
+  it('stamps specSource=env-json on PodConfig when env-JSON path is taken', () => {
+    const cfg = parseEnv(baseEnv);
+    expect(cfg.specSource).toBe('env-json');
+  });
+
+  it('stamps specSource=configmap when both files are present', () => {
+    const reader = vi.fn<(p: string) => string | undefined>((p) => {
+      if (p === '/var/kagent/config/agent.spec.json') {
+        return JSON.stringify({ model: 'gpt-4o' });
+      }
+      if (p === '/var/kagent/config/task.spec.json') {
+        return JSON.stringify({ payload: {} });
+      }
+      return undefined;
+    });
+    const cfg = parseEnv(baseEnv, reader);
+    expect(cfg.specSource).toBe('configmap');
+  });
+
+  it('stamps specSource=mixed when one file is present and the other falls back to env', () => {
+    // Defensive case — partial-mount edge.
+    const reader = vi.fn<(p: string) => string | undefined>((p) => {
+      if (p === '/var/kagent/config/agent.spec.json') {
+        return JSON.stringify({ model: 'gpt-4o' });
+      }
+      // task.spec.json missing → falls back to KAGENT_TASK_SPEC env.
+      return undefined;
+    });
+    const cfg = parseEnv(baseEnv, reader);
+    expect(cfg.specSource).toBe('mixed');
+  });
+
+  it('refuses with structured error when env-JSON exceeds 256 KiB combined cap', () => {
+    const padding = 'x'.repeat(200_000);
+    expect(() =>
+      parseEnv({
+        ...baseEnv,
+        KAGENT_AGENT_SPEC: `{"model":"gpt-4o","systemPrompt":"${padding}"}`,
+        KAGENT_TASK_SPEC: `{"payload":{"topic":"${padding}"}}`,
+      }),
+    ).toThrow(/env_json_spec_too_large/);
+  });
+
+  it('cap does NOT trip when ConfigMap path is taken (no env-JSON)', () => {
+    // Even a hypothetical 1 MB ConfigMap file should not be rejected
+    // by the env-JSON cap — operator-side cap (job-spec.ts) is a
+    // separate concern (W3-Operator scope).
+    const reader = vi.fn<(p: string) => string | undefined>((p) => {
+      if (p === '/var/kagent/config/agent.spec.json') {
+        return JSON.stringify({ model: 'gpt-4o', systemPrompt: 'x'.repeat(500_000) });
+      }
+      if (p === '/var/kagent/config/task.spec.json') {
+        return JSON.stringify({ payload: {} });
+      }
+      return undefined;
+    });
+    // Even with NO env-JSON, the cap check sees sum=0 and passes.
+    const envWithoutJson = { ...baseEnv };
+    delete envWithoutJson.KAGENT_AGENT_SPEC;
+    delete envWithoutJson.KAGENT_TASK_SPEC;
+    expect(() => parseEnv(envWithoutJson, reader)).not.toThrow();
+  });
+
+  it('boot log mentions specSource (operator on-call grep target)', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      parseEnv(baseEnv);
+      const messages = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('spec source: env-json');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
