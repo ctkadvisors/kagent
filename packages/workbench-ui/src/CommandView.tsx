@@ -50,6 +50,16 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const layoutRef = useRef<LayoutResult | null>(null);
   const rafRef = useRef<number | null>(null);
 
+  // Per-key first-seen wallclock — drives the RTS-style build-out
+  // animation in the canvas renderer. Keys are agent `${ns}/${name}`
+  // plus the literal `gateway` for the HQ. Initial mount stamps with
+  // a faction-staggered offset so structures rise in waves; agents
+  // observed AFTER mount stamp `now` directly (single-structure
+  // construction in real time).
+  const firstSeenRef = useRef<Map<string, number>>(new Map());
+  const mountAtRef = useRef<number>(Date.now());
+  const initialStaggerDoneRef = useRef<boolean>(false);
+
   // Build a stable list of AgentNodes from agents + tasks (so ad-hoc
   // tasks targeting agents we don't have a CR for still render their
   // "structure"). Task fallback is targetAgent + namespace.
@@ -111,7 +121,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       return { w, h };
     };
 
-    const tick = (nowMs: number): void => {
+    const tick = (): void => {
       const { w, h } = fitCanvas();
       const boundsKey = `${String(w)}x${String(h)}`;
       const nodeKey = agentNodes
@@ -129,11 +139,60 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       }
       const layout = layoutRef.current;
 
+      // Stamp build-out start times for any newly-observed structures.
+      // Initial-mount path: stagger by faction + within-faction index
+      // so agents rise in visible waves rather than all at once.
+      // Post-mount path: stamp `now` directly so a real new agent
+      // (e.g. operator just admitted an Agent CR) builds on its own.
+      const now = Date.now();
+      const fs = firstSeenRef.current;
+      if (!fs.has('gateway')) fs.set('gateway', now);
+
+      if (!initialStaggerDoneRef.current && agentNodes.length > 0) {
+        // Group nodes by faction for staggered build-out. Faction
+        // alphabetical → faction index; within faction by name → in-
+        // faction index. Stagger constants picked to fit total wave
+        // under ~3.5s for the typical homelab agent count (~15-25).
+        const FACTION_STEP_MS = 700;
+        const NODE_STEP_MS = 140;
+        const groupedByFaction = new Map<string, AgentNode[]>();
+        for (const n of agentNodes) {
+          const list = groupedByFaction.get(n.namespace);
+          if (list === undefined) groupedByFaction.set(n.namespace, [n]);
+          else list.push(n);
+        }
+        const factionOrder = Array.from(groupedByFaction.keys()).sort((a, b) =>
+          a.localeCompare(b),
+        );
+        const base = mountAtRef.current + 250; // small lead-in after the gateway stamp
+        for (let fi = 0; fi < factionOrder.length; fi++) {
+          const ns = factionOrder[fi];
+          if (ns === undefined) continue;
+          const list = (groupedByFaction.get(ns) ?? [])
+            .slice()
+            .sort((a, b) => a.name.localeCompare(b.name));
+          for (let ni = 0; ni < list.length; ni++) {
+            const node = list[ni];
+            if (node === undefined) continue;
+            if (!fs.has(node.key)) {
+              fs.set(node.key, base + fi * FACTION_STEP_MS + ni * NODE_STEP_MS);
+            }
+          }
+        }
+        initialStaggerDoneRef.current = true;
+      } else {
+        // Post-initial-stagger: any node not in firstSeen stamps now.
+        for (const n of agentNodes) {
+          if (!fs.has(n.key)) fs.set(n.key, now);
+        }
+      }
+
       hitMapRef.current = drawScene(ctx, {
         snapshot,
         layout,
         selection,
-        nowMs,
+        nowMs: now,
+        firstSeen: fs,
       });
       rafRef.current = requestAnimationFrame(tick);
     };

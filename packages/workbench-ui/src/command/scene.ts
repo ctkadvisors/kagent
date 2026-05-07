@@ -52,6 +52,7 @@ const COLOR_GATEWAY = '#fbbf24';
 const COLOR_GATEWAY_FILL = '#1e293b';
 const COLOR_BELT = 'rgba(148, 163, 184, 0.18)';
 const COLOR_BELT_HOT = 'rgba(251, 191, 36, 0.45)';
+const COLOR_BELT_BUILDING = 'rgba(34, 211, 238, 0.5)';
 const COLOR_AGENT_FILL = '#0f1f3a';
 const COLOR_AGENT_BORDER = '#3b82f6';
 const COLOR_AGENT_BORDER_BUSY = '#fbbf24';
@@ -65,21 +66,41 @@ const COLOR_TASK_COMPLETED = '#34d399';
 const COLOR_TASK_FAILED = '#f87171';
 const COLOR_SELECT_RING = '#22d3ee';
 
+// Construction-phase palette — the WC3/TA "building rises" feel.
+// Cyan + teal so it reads visually distinct from the steady-state
+// blue/amber/red border colors.
+const COLOR_BUILD_BORDER = '#22d3ee';
+const COLOR_BUILD_FILL = 'rgba(15, 31, 58, 0.35)';
+const COLOR_BUILD_SCANLINE = 'rgba(34, 211, 238, 0.85)';
+const COLOR_BUILD_GRID = 'rgba(34, 211, 238, 0.18)';
+const COLOR_BUILD_FLASH = 'rgba(255, 255, 255, 0.95)';
+
 const AGENT_W = 140;
 const AGENT_H = 56;
 const GATEWAY_R = 48;
 const TASK_R = 5;
+
+/** Build-out animation duration for an agent structure. */
+const BUILD_MS = 1500;
+/** Gateway gets a longer dramatic build-in (HQ structure). */
+const GATEWAY_BUILD_MS = 2200;
 
 interface SceneInputs {
   readonly snapshot: CommandSnapshot;
   readonly layout: LayoutResult;
   readonly selection: SelectionRef;
   readonly nowMs: number;
+  /**
+   * Per-key first-seen wallclock. Drives the build-out animation —
+   * `progress = (nowMs - firstSeen) / BUILD_MS`. Keys are agent
+   * `${ns}/${name}` plus the literal `gateway` for the HQ.
+   */
+  readonly firstSeen: ReadonlyMap<string, number>;
 }
 
 export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): HitMap {
   const { width, height } = ctx.canvas;
-  const { snapshot, layout, selection, nowMs } = inputs;
+  const { snapshot, layout, selection, nowMs, firstSeen } = inputs;
 
   // Background + grid.
   ctx.fillStyle = COLOR_BG;
@@ -90,9 +111,15 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
   drawFactionTints(ctx, layout);
 
   // Belts (gateway → each agent), drawn first so structures sit on top.
+  // Belts adopt the construction palette while either endpoint is still
+  // building, so the line "extends" visually before the destination
+  // structure rises.
+  const gatewayProgress = buildProgress(firstSeen.get('gateway'), nowMs, GATEWAY_BUILD_MS);
   for (const pos of layout.agents.values()) {
     const inFlight = countInFlightFor(snapshot, pos.key);
-    drawBelt(ctx, layout.gateway, pos, inFlight);
+    const agentProgress = buildProgress(firstSeen.get(pos.key), nowMs, BUILD_MS);
+    const beltProgress = Math.min(gatewayProgress, agentProgress);
+    drawBelt(ctx, layout.gateway, pos, inFlight, beltProgress);
   }
 
   // Agent structures.
@@ -101,6 +128,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     const a = snapshot.agents.get(pos.key);
     const inFlight = countInFlightFor(snapshot, pos.key);
     const failed = countFailedRecentFor(snapshot, pos.key, nowMs);
+    const progress = buildProgress(firstSeen.get(pos.key), nowMs, BUILD_MS);
     const rect = drawAgentBuilding(
       ctx,
       pos,
@@ -109,6 +137,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
       inFlight,
       failed,
       selection.kind === 'agent' && selection.key === pos.key,
+      progress,
+      nowMs,
     );
     agentRects.set(pos.key, rect);
   }
@@ -120,6 +150,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     snapshot.gatewayCapacity.length,
     nowMs,
     selection.kind === 'gateway',
+    gatewayProgress,
   );
 
   // Task units travel on belts.
@@ -194,7 +225,24 @@ function drawBelt(
   from: { x: number; y: number },
   to: { x: number; y: number },
   inFlight: number,
+  buildProg: number,
 ): void {
+  if (buildProg < 1) {
+    // Belt is "extending" — drawn from gateway outward up to the
+    // current build progress. Dashed cyan in the construction palette.
+    const eased = easeOutCubic(buildProg);
+    const ex = from.x + (to.x - from.x) * eased;
+    const ey = from.y + (to.y - from.y) * eased;
+    ctx.strokeStyle = COLOR_BELT_BUILDING;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    return;
+  }
   ctx.strokeStyle = inFlight > 0 ? COLOR_BELT_HOT : COLOR_BELT;
   ctx.lineWidth = inFlight > 0 ? 2 : 1;
   ctx.beginPath();
@@ -218,9 +266,19 @@ function drawAgentBuilding(
   inFlight: number,
   failed: number,
   selected: boolean,
+  buildProg: number,
+  nowMs: number,
 ): AgentRect {
   const rx = pos.x - AGENT_W / 2;
   const ry = pos.y - AGENT_H / 2;
+
+  // ───────── Construction phase: outline + scanline-sweep + grid ─────────
+  if (buildProg < 1) {
+    drawAgentConstruction(ctx, rx, ry, name, modelLabel, buildProg, nowMs);
+    return { x: rx, y: ry, w: AGENT_W, h: AGENT_H };
+  }
+
+  // ───────── Steady-state render (build complete) ─────────
 
   // Drop shadow plate.
   ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
@@ -240,6 +298,24 @@ function drawAgentBuilding(
   ctx.lineWidth = selected ? 3 : 2;
   roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
   ctx.stroke();
+
+  // Brief white-flash at the end of construction (~280ms after
+  // buildProg crosses 1.0). nowMs - (firstSeen + BUILD_MS) ∈ [0, FLASH_MS]
+  // is the flash window. We can't access firstSeen here but `buildProg`
+  // saturates at 1; we synthesize a "just-completed" check by rendering
+  // an extra glow when buildProg is exactly 1 AND a global RAF tick
+  // catches it within the flash window. Since drawScene clamps progress
+  // at 1, we use a separate `flashRemaining` channel computed below.
+  // To keep the function signature simple, we render a faint
+  // brightness boost based on a stored last-completion marker passed
+  // by the caller via a side-channel. Here we approximate with a
+  // border-glow when (now mod 5000) is close to (firstSeen + BUILD_MS).
+  // Caller-side: drawScene supplies a fresh nowMs each frame, so a
+  // structure that *just* completed will have buildProg == 1 the very
+  // first frame after completion; we detect that by checking if
+  // 1 - prevBuildProg was > 0 — but we don't track prevBuildProg here.
+  // Pragmatic compromise: skip the per-structure flash here; the
+  // construction overlay fades to clean steady-state on its own.
 
   // Selection ring.
   if (selected) {
@@ -278,14 +354,237 @@ function drawAgentBuilding(
   return { x: rx, y: ry, w: AGENT_W, h: AGENT_H };
 }
 
+/**
+ * RTS-style "building rises" rendering. Phases:
+ *
+ *   p < 0.08  — placement marker only (corner brackets, ground stub).
+ *   0.08–0.92 — bottom-up scanline sweep; lower portion solid, upper
+ *               wireframe with cyan grid; sweep line pulses.
+ *   0.92–1.0  — flash transition; brightness boost; converges to the
+ *               steady-state palette.
+ */
+function drawAgentConstruction(
+  ctx: CanvasRenderingContext2D,
+  rx: number,
+  ry: number,
+  name: string,
+  modelLabel: string,
+  p: number,
+  nowMs: number,
+): void {
+  const pe = easeOutCubic(p);
+
+  // ── Phase 1: placement-marker corner brackets (always visible during build).
+  ctx.strokeStyle = COLOR_BUILD_BORDER;
+  ctx.lineWidth = 1.5;
+  const bracket = 10;
+  drawCornerBrackets(ctx, rx, ry, AGENT_W, AGENT_H, bracket);
+
+  if (p < 0.08) {
+    // Tiny pulsing ground stub at the center of where the building will rise.
+    const pulse = (Math.sin(nowMs / 120) + 1) / 2;
+    ctx.fillStyle = `rgba(34, 211, 238, ${String(0.4 + pulse * 0.4)})`;
+    ctx.beginPath();
+    ctx.arc(rx + AGENT_W / 2, ry + AGENT_H / 2, 3 + pulse * 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+
+  // ── Phase 2: bottom-up fill sweep.
+  const fillH = AGENT_H * pe; // height of "completed" portion from bottom
+  const fillY = ry + (AGENT_H - fillH);
+
+  // Faint full-body backplate so we can read the building shape even
+  // before fill rises.
+  ctx.fillStyle = COLOR_BUILD_FILL;
+  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
+  ctx.fill();
+
+  // Solid filled portion (bottom-up).
+  ctx.save();
+  ctx.beginPath();
+  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
+  ctx.clip();
+  ctx.fillStyle = COLOR_AGENT_FILL;
+  ctx.fillRect(rx, fillY, AGENT_W, fillH);
+  ctx.restore();
+
+  // Construction grid: faint horizontal lines every 8px in the
+  // unfilled portion. Reads as "wireframe under construction."
+  ctx.strokeStyle = COLOR_BUILD_GRID;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let y = ry + 4; y < fillY; y += 8) {
+    ctx.moveTo(rx + 4, y);
+    ctx.lineTo(rx + AGENT_W - 4, y);
+  }
+  ctx.stroke();
+
+  // Scanline at the fill front — bright, slightly pulsing.
+  if (p > 0.05 && p < 0.97) {
+    const pulse = (Math.sin(nowMs / 90) + 1) / 2;
+    ctx.strokeStyle = COLOR_BUILD_SCANLINE;
+    ctx.shadowColor = COLOR_BUILD_SCANLINE;
+    ctx.shadowBlur = 6 + pulse * 4;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(rx + 2, fillY);
+    ctx.lineTo(rx + AGENT_W - 2, fillY);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // Outer construction border. Solid below the scanline, dashed above.
+  ctx.strokeStyle = COLOR_BUILD_BORDER;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([3, 3]);
+  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Phase 3: terminal flash near completion.
+  if (p > 0.92) {
+    const flashStrength = (p - 0.92) / 0.08; // [0, 1]
+    ctx.strokeStyle = COLOR_BUILD_FLASH;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = COLOR_BUILD_FLASH;
+    ctx.shadowBlur = 8 * flashStrength;
+    roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // Construction-phase labels — name (faded), model, and progress %.
+  // Name only renders once enough fill is up to read it.
+  if (p > 0.4) {
+    const nameAlpha = Math.min(1, (p - 0.4) / 0.3);
+    ctx.fillStyle = `rgba(226, 232, 240, ${String(nameAlpha)})`;
+    ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(truncate(name, 18), rx + 10, ry + 8);
+  }
+  if (p > 0.6) {
+    const modelAlpha = Math.min(1, (p - 0.6) / 0.3);
+    ctx.fillStyle = `rgba(148, 163, 184, ${String(modelAlpha)})`;
+    ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText(truncate(shortenModel(modelLabel), 22), rx + 10, ry + 26);
+  }
+
+  // Progress label below the structure.
+  ctx.fillStyle = COLOR_BUILD_BORDER;
+  ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`▣ ${String(Math.round(p * 100))}%`, rx + AGENT_W / 2, ry + AGENT_H + 4);
+}
+
+function drawCornerBrackets(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  size: number,
+): void {
+  ctx.beginPath();
+  // Top-left
+  ctx.moveTo(x, y + size);
+  ctx.lineTo(x, y);
+  ctx.lineTo(x + size, y);
+  // Top-right
+  ctx.moveTo(x + w - size, y);
+  ctx.lineTo(x + w, y);
+  ctx.lineTo(x + w, y + size);
+  // Bottom-right
+  ctx.moveTo(x + w, y + h - size);
+  ctx.lineTo(x + w, y + h);
+  ctx.lineTo(x + w - size, y + h);
+  // Bottom-left
+  ctx.moveTo(x + size, y + h);
+  ctx.lineTo(x, y + h);
+  ctx.lineTo(x, y + h - size);
+  ctx.stroke();
+}
+
 function drawGateway(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   modelCount: number,
   nowMs: number,
   selected: boolean,
+  buildProg: number,
 ): void {
   const r = GATEWAY_R;
+
+  // ─────────── Construction phase: hex rises from center ───────────
+  if (buildProg < 1) {
+    const pe = easeOutCubic(buildProg);
+
+    // Sweeping cyan circle expanding outward to where the hex will be.
+    ctx.strokeStyle = COLOR_BUILD_BORDER;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, r + 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Hexagon outline grows with progress (radius scaled by pe).
+    const rNow = Math.max(6, r * pe);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+      const px = center.x + Math.cos(a) * rNow;
+      const py = center.y + Math.sin(a) * rNow;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = COLOR_BUILD_FILL;
+    ctx.fill();
+    ctx.strokeStyle = COLOR_BUILD_BORDER;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = COLOR_BUILD_BORDER;
+    ctx.shadowBlur = 12 * pe;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Construction grid inside the hex (faint cyan scanlines).
+    if (buildProg > 0.2) {
+      ctx.save();
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+        const px = center.x + Math.cos(a) * rNow;
+        const py = center.y + Math.sin(a) * rNow;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.clip();
+      ctx.strokeStyle = COLOR_BUILD_GRID;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let y = center.y - rNow; y < center.y + rNow; y += 6) {
+        ctx.moveTo(center.x - rNow, y);
+        ctx.lineTo(center.x + rNow, y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Build label.
+    ctx.fillStyle = COLOR_BUILD_BORDER;
+    ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`▣ HQ ${String(Math.round(buildProg * 100))}%`, center.x, center.y + r + 12);
+    return;
+  }
+
+  // ─────────── Steady-state render ───────────
+
   // Pulsing accent ring.
   const pulse = (Math.sin(nowMs / 600) + 1) / 2;
   ctx.strokeStyle = `rgba(251, 191, 36, ${String(0.15 + pulse * 0.25)})`;
@@ -323,6 +622,19 @@ function drawGateway(
     center.x,
     center.y + 10,
   );
+}
+
+/**
+ * Compute build progress in [0, 1]. Clamps if `firstSeen` is missing
+ * (defensive — return 1 so a structure that somehow lacks a first-seen
+ * stamp still renders cleanly rather than getting stuck mid-build).
+ */
+function buildProgress(firstSeen: number | undefined, nowMs: number, durationMs: number): number {
+  if (firstSeen === undefined) return 1;
+  const elapsed = nowMs - firstSeen;
+  if (elapsed >= durationMs) return 1;
+  if (elapsed <= 0) return 0;
+  return elapsed / durationMs;
 }
 
 function drawTaskUnits(
