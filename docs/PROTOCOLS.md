@@ -17,7 +17,7 @@ The audit (R1, R2) found that kagent's competitive position is NOT novelty — t
 The strategic shift implied:
 
 - **Stop:** marketing kagent as "the only X."
-- **Start:** marketing kagent as "the substrate that speaks A2A v1.2 + MCP server + MCP client + OTel GenAI semconv + GATEWAY-CONTRACT + SPIFFE + CloudEvents — out of the box, on K3s."
+- **Start:** marketing kagent as "the substrate that speaks A2A v1.0 + MCP server + MCP client + OTel GenAI semconv + GATEWAY-CONTRACT + SPIFFE + CloudEvents — out of the box, on K3s."
 
 Every protocol slate that follows from this doc earns its keep on **a single test:** does adopting it make kagent compatible with a real production-deployed system that today requires a custom adapter? If yes, ship. If no, defer.
 
@@ -127,7 +127,7 @@ This is the layer most people mean by "agent communication." It is also where ka
 
 | Protocol | Status | kagent posture |
 |---|---|---|
-| **A2A v1.2** — Linux Foundation (Agentic AI Foundation), GA, signed agent cards, task lifecycle, 150+ orgs in production via Vertex / AgentCore / Foundry | **The dominant standard.** | ❌ **Not on the wire.** kagent's NATS subjects are an ad-hoc envelope shape; an agent on Vertex / Foundry / AgentCore cannot trade tasks with a kagent agent without a custom adapter. **#1 gap by leverage.** |
+| **A2A v1.0** — Linux Foundation (Agentic AI Foundation), GA [March 12 2026](https://a2a-protocol.org/latest/announcing-1.0/), signed agent cards, task lifecycle, [150+ orgs in production](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations) via Vertex / AgentCore / Foundry as of the LF anniversary (April 9 2026). Version sequence v0.3 → v1.0 (no v1.1 / v1.2 has shipped). Hosted by the Linux Foundation under the [Agentic AI Foundation (AAIF)](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation), formed Dec 9 2025. | **The dominant standard.** | ❌ **Not on the wire.** kagent's NATS subjects are an ad-hoc envelope shape; an agent on Vertex / Foundry / AgentCore cannot trade tasks with a kagent agent without a custom adapter. **#1 gap by leverage.** |
 | **AGNTCY** (Cisco-led "Internet of Agents") | Aspirational; smaller production footprint | ❌ Watch but don't bet on. |
 | **ANP (Agent Network Protocol)** | Open identity + messaging proposal | ❌ Not adopted. Possibly redundant with A2A + SPIFFE. |
 | **ACP (Agent Communication Protocol)** | IBM Research adjacent | ❌ Not adopted. |
@@ -143,7 +143,7 @@ This is the layer most people mean by "agent communication." It is also where ka
 
 ### 5.3 The handoff envelope (the substrate-shaped gap)
 
-There is **no broadly-adopted standard** for "expiring agent passes references to the artifacts/blackboard-keys/NATS-subjects/cap-JTI/parent-task-uid that its successor needs to resume." OpenAI Agents JS has handoffs as a class concept; CrewAI has tasks; Mastra has workflows; A2A v1.2 has task lifecycle but not a *content* envelope.
+There is **no broadly-adopted standard** for "expiring agent passes references to the artifacts/blackboard-keys/NATS-subjects/cap-JTI/parent-task-uid that its successor needs to resume." OpenAI Agents JS has handoffs as a class concept; CrewAI has tasks; Mastra has workflows; A2A v1.0 has task lifecycle but not a *content* envelope.
 
 This is the gap to fill — and the user's framing in the design conversation that prompted this doc is the right one: **the handoff envelope carries references, not content**. See §6.
 
@@ -249,12 +249,12 @@ Identity + auth between kagent and external services.
 
 Each slate has the same shape: small, file-scoped, additive, single-PR-shippable.
 
-### Slate 1 — A2A v1.2 wire format on the Event primitive (`v0.2.3-a2a-wire`)
+### Slate 1 — A2A v1.0 wire format on the Event primitive (`v0.2.3-a2a-wire`)
 
-**Why first:** highest interop leverage. Today kagent agents are an island; with this slate they trade tasks with 150+ production deployments using A2A.
+**Why first:** highest interop leverage. Today kagent agents are an island; with this slate they trade tasks with [150+ production deployments using A2A](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations) (LF anniversary count, April 9 2026).
 
 **What lands:**
-- New `@kagent/a2a` package — A2A v1.2 envelope encoder/decoder (typed, zod-validated).
+- New `@kagent/a2a` package — [A2A v1.0](https://a2a-protocol.org/latest/announcing-1.0/) envelope encoder/decoder (typed, zod-validated).
 - New `Agent.spec.a2aCard` field — the signed agent card per the A2A spec.
 - `publish_event` and `subscribe_event` tool wiring extended to optionally accept/emit A2A-shaped envelopes (gated by an env flag for back-compat).
 - Operator emits the agent card on Agent CR admission; serves it at a well-known URL via the workbench-api.
@@ -314,7 +314,7 @@ The shift from "kagent is the only X" to "kagent is the substrate that speaks Y,
 - **kagent does NOT become a registry/discovery service.** A2A clients discover kagent agents via the workbench-api's well-known agent-card URL, not via a kagent-hosted directory.
 - **kagent does NOT become an OAuth provider.** External auth integrations stay on the consumer side (oauth2-proxy in front of workbench-api remains the recommended path).
 - **kagent does NOT add a memory primitive separate from artifacts/workspace/blackboard.** The three existing persistence primitives + the handoff envelope (slate 3) cover the cross-task / cross-handoff state story. If a real consumer demands a fourth shape (e.g., per-Agent-identity time-keyed memory), revisit then.
-- **kagent does NOT speak ANP / ACP / AGNTCY in the substrate.** Those can be application-layer adapters if a real consumer needs them. A2A v1.2 is the bet.
+- **kagent does NOT speak ANP / ACP / AGNTCY in the substrate.** Those can be application-layer adapters if a real consumer needs them. A2A v1.0 is the bet.
 - **kagent does NOT add an MCP-server-IN beyond what `@kagent/mcp-tool-provider` already does.** That layer is shipped.
 
 ---
