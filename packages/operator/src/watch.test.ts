@@ -206,6 +206,59 @@ describe('createAgentTaskInformer — H6 safeRestart', () => {
     expect(onError).toHaveBeenCalled();
   });
 
+  it('C1-NEW-H1 — resets the failure counter on successful add/update so transient flaps recover', async () => {
+    const onError = vi.fn();
+    const handler: AgentTaskHandler = { ...noopHandler, onError };
+    const fakeTimer = makeFakeTimer();
+    createAgentTaskInformer(fakeKc, makeCustomApi(), handler, {
+      restartOpts: {
+        initialDelayMs: 1,
+        backoffFactor: 2,
+        maxDelayMs: 1_000,
+        // Cap at 3 consecutive failures — without reset(), 4 lifetime
+        // flaps would wedge the informer permanently.
+        maxConsecutiveFailures: 3,
+      },
+      restartTimer: fakeTimer,
+    });
+    const informer = captureLastInformer();
+    informer.start.mockRejectedValue(new Error('apiserver flap'));
+
+    // Flap series #1 — drive 2 consecutive rejections.
+    informer.__fire('error', new Error('flap-1'));
+    expect(fakeTimer.scheduled.length).toBe(1);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fakeTimer.scheduled.length).toBe(1);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    // attempt #3 pending — backoff has escalated past initial.
+    expect(fakeTimer.scheduled[0]?.delayMs).toBe(4);
+
+    // Watch recovers — drain the pending retry; this time start() resolves.
+    informer.start.mockResolvedValueOnce(undefined);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Successful add event arrives → reset() must zero the counter.
+    informer.__fire('add', {
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTask',
+      metadata: { uid: 't1', name: 't1', namespace: 'ns' },
+      spec: { targetAgent: 'a', payload: {} },
+    });
+
+    // Flap series #2 — first scheduled retry must be at the *initial*
+    // delay, proving attempts was reset to 0. If reset() had not fired,
+    // computeBackoffMs would already be at the post-#3 step (8 ms).
+    informer.start.mockRejectedValue(new Error('second flap series'));
+    informer.__fire('error', new Error('flap-A'));
+    expect(fakeTimer.scheduled.length).toBe(1);
+    expect(fakeTimer.scheduled[0]?.delayMs).toBe(1);
+  });
+
   it('treats a second error mid-pending retry as a no-op (no double-schedule)', () => {
     const handler: AgentTaskHandler = { ...noopHandler, onError: vi.fn() };
     const fakeTimer = makeFakeTimer();

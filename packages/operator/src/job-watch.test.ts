@@ -185,6 +185,72 @@ describe('createJobPodInformer — H6 safeRestart (per-informer)', () => {
     expect(fakeTimer.scheduled[0]?.delayMs).toBe(1);
   });
 
+  it('C1-NEW-H1 — Job/Pod failure counters reset on successful add/update so transient flaps recover', async () => {
+    const onError = vi.fn();
+    const handler: JobPodHandler = { ...noopHandler, onError };
+    const fakeTimer = makeFakeTimer();
+    createJobPodInformer(fakeKc, makeCoreApi(), batchListFn, handler, {
+      restartOpts: {
+        initialDelayMs: 1,
+        backoffFactor: 2,
+        maxDelayMs: 1_000,
+        maxConsecutiveFailures: 3,
+      },
+      restartTimer: fakeTimer,
+    });
+    const jobInformer = makeInformerMock.mock.calls[0]?.at(-1) as TestInformer;
+    const podInformer = makeInformerMock.mock.calls[1]?.at(-1) as TestInformer;
+
+    // Drive Job into 2 consecutive rejections.
+    jobInformer.start.mockRejectedValue(new Error('apiserver flap'));
+    jobInformer.__fire('error', new Error('flap-1'));
+    expect(fakeTimer.scheduled.length).toBe(1);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fakeTimer.scheduled.length).toBe(1);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    // attempt #3 pending; backoff escalated.
+    expect(fakeTimer.scheduled[0]?.delayMs).toBe(4);
+
+    // Recover the watch — successful add fires reset().
+    jobInformer.start.mockResolvedValueOnce(undefined);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    jobInformer.__fire('add', { metadata: { name: 'j1', namespace: 'ns' } });
+
+    // Second flap series — first scheduled retry must be at the *initial*
+    // delay, proving attempts was reset to 0.
+    jobInformer.start.mockRejectedValue(new Error('second flap'));
+    jobInformer.__fire('error', new Error('flap-A'));
+    expect(fakeTimer.scheduled[0]?.delayMs).toBe(1);
+
+    // Pod independence: drive Pod into 2 rejections separately, then
+    // recover via update event, then flap again — same reset behavior.
+    fakeTimer.scheduled.length = 0;
+    podInformer.start.mockRejectedValue(new Error('pod flap'));
+    podInformer.__fire('error', new Error('pod-flap-1'));
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fakeTimer.scheduled[0]?.delayMs).toBe(4);
+    podInformer.start.mockResolvedValueOnce(undefined);
+    fakeTimer.flushNext();
+    await Promise.resolve();
+    await Promise.resolve();
+    podInformer.__fire('update', { metadata: { name: 'p1', namespace: 'ns' } });
+    fakeTimer.scheduled.length = 0;
+    podInformer.start.mockRejectedValue(new Error('pod second flap'));
+    podInformer.__fire('error', new Error('pod-flap-A'));
+    expect(fakeTimer.scheduled[0]?.delayMs).toBe(1);
+  });
+
   it('a second error mid-pending Job retry is a no-op (no double-schedule)', () => {
     const handler: JobPodHandler = { ...noopHandler, onError: vi.fn() };
     const fakeTimer = makeFakeTimer();

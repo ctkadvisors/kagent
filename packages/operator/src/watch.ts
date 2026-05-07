@@ -106,24 +106,6 @@ export function createAgentTaskInformer(
       : CLUSTER_WATCH_PATH;
   const informer = makeInformer<AgentTask>(kc, watchPath, listFn);
 
-  informer.on('add', (obj) => {
-    if (!isAgentTask(obj)) return;
-    void Promise.resolve(handler.onAdd(obj)).catch((err: unknown) => {
-      handler.onError?.(err);
-    });
-  });
-  informer.on('update', (obj) => {
-    if (!isAgentTask(obj)) return;
-    void Promise.resolve(handler.onUpdate(obj)).catch((err: unknown) => {
-      handler.onError?.(err);
-    });
-  });
-  informer.on('delete', (obj) => {
-    if (!isAgentTask(obj)) return;
-    void Promise.resolve(handler.onDelete(obj)).catch((err: unknown) => {
-      handler.onError?.(err);
-    });
-  });
   // H6 — use safeRestart with exponential backoff + cap on consecutive
   // failures instead of `setTimeout(() => void informer.start(), 5000)`.
   // The bare `void` discarded `start()` rejections (apiserver 401/404,
@@ -160,6 +142,34 @@ export function createAgentTaskInformer(
     opts.restartOpts ?? {},
     opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
   );
+
+  // C1-NEW-H1 — call `restarter.reset()` from each successful add/update
+  // event so the consecutive-failure counter zeroes out when the watch
+  // recovers. Without this, `attempts` monotonically climbs for the
+  // operator lifetime; 12 transient flaps spread over hours/days
+  // permanently wedge the informer (the cap is `maxConsecutiveFailures`
+  // by name but `maxTotalNonConcurrentErrors` by behavior). Any
+  // successful event implies the watch is alive.
+  informer.on('add', (obj) => {
+    restarter.reset();
+    if (!isAgentTask(obj)) return;
+    void Promise.resolve(handler.onAdd(obj)).catch((err: unknown) => {
+      handler.onError?.(err);
+    });
+  });
+  informer.on('update', (obj) => {
+    restarter.reset();
+    if (!isAgentTask(obj)) return;
+    void Promise.resolve(handler.onUpdate(obj)).catch((err: unknown) => {
+      handler.onError?.(err);
+    });
+  });
+  informer.on('delete', (obj) => {
+    if (!isAgentTask(obj)) return;
+    void Promise.resolve(handler.onDelete(obj)).catch((err: unknown) => {
+      handler.onError?.(err);
+    });
+  });
   informer.on('error', (err) => {
     handler.onError?.(err);
     restarter.safeRestart(err);

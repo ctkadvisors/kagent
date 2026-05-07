@@ -125,16 +125,6 @@ export function createJobPodInformer(
 
   const podInformer: Informer<V1Pod> = makeInformer<V1Pod>(kc, podWatchPath, podListWrapper);
 
-  // Wire add + update through the same handler — failure verdicts are
-  // idempotent (markFailed skips terminal AgentTasks), so re-firing on
-  // every relist is safe. Delete is a no-op since the AgentTask owner
-  // GC takes care of cleanup.
-  jobInformer.on('add', (j) => {
-    void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
-  });
-  jobInformer.on('update', (j) => {
-    void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
-  });
   // H6 — use safeRestart with exponential backoff + cap on consecutive
   // failures instead of `setTimeout(() => void <informer>.start(), 5000)`.
   // Job + Pod each get their own restarter — they fail independently
@@ -163,17 +153,29 @@ export function createJobPodInformer(
     opts.restartOpts ?? {},
     opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
   );
+
+  // Wire add + update through the same handler — failure verdicts are
+  // idempotent (markFailed skips terminal AgentTasks), so re-firing on
+  // every relist is safe. Delete is a no-op since the AgentTask owner
+  // GC takes care of cleanup.
+  //
+  // C1-NEW-H1 — `jobRestarter.reset()` from each successful add/update
+  // so the consecutive-failure counter zeroes when the watch recovers.
+  // Without this, transient flaps accumulate across the operator
+  // lifetime and eventually wedge the informer.
+  jobInformer.on('add', (j) => {
+    jobRestarter.reset();
+    void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
+  });
+  jobInformer.on('update', (j) => {
+    jobRestarter.reset();
+    void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
+  });
   jobInformer.on('error', (err) => {
     handler.onError?.(err);
     jobRestarter.safeRestart(err);
   });
 
-  podInformer.on('add', (p) => {
-    void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
-  });
-  podInformer.on('update', (p) => {
-    void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
-  });
   const podRestartLogger: InformerRestartLogger = {
     onStartRejected(err, attempt, nextDelayMs): void {
       handler.onError?.(err);
@@ -196,6 +198,18 @@ export function createJobPodInformer(
     opts.restartOpts ?? {},
     opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
   );
+
+  // C1-NEW-H1 — `podRestarter.reset()` from each successful add/update
+  // (matches the jobInformer wiring above). Pod restart counter is
+  // independent from the Job counter so reset() must also be per-informer.
+  podInformer.on('add', (p) => {
+    podRestarter.reset();
+    void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
+  });
+  podInformer.on('update', (p) => {
+    podRestarter.reset();
+    void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
+  });
   podInformer.on('error', (err) => {
     handler.onError?.(err);
     podRestarter.safeRestart(err);
