@@ -13,11 +13,19 @@ export default defineConfig({
       reporter: ['text', 'html', 'json'],
       include: ['src/**/*.ts', 'scripts/**/*.ts'],
       exclude: ['src/**/*.test.ts', 'src/**/*.d.ts', 'scripts/**/*.test.ts'],
+      // Coverage discipline floor (H5). CLAUDE.md targets ≥85% on the
+      // operator reconciler and ≥75% on glue code; the package-level
+      // floor below is the CI-enforceable minimum that catches regression
+      // without per-file routing. Today's package-level coverage may
+      // fall short of these floors on hot files (notably main.ts and
+      // some controllers); raising coverage to clear the floor is the
+      // follow-up work tracked alongside H5. Do NOT lower these numbers
+      // to accommodate today's gaps — add tests instead.
       thresholds: {
-        lines: 0,
-        functions: 0,
-        branches: 0,
-        statements: 0,
+        lines: 80,
+        functions: 80,
+        branches: 70,
+        statements: 80,
       },
     },
   },
