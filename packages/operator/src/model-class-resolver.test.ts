@@ -5,7 +5,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { resolveAgentModel, type ModelClassMap } from './model-class-resolver.js';
+import {
+  applyResolvedModel,
+  resolveAgentModel,
+  type ModelClassMap,
+} from './model-class-resolver.js';
 
 describe('resolveAgentModel', () => {
   const emptyMap: ModelClassMap = {};
@@ -172,5 +176,66 @@ describe('resolveAgentModel', () => {
       classMap: localMap,
     });
     expect(localMap).toEqual(snapshot);
+  });
+});
+
+/* =====================================================================
+ * applyResolvedModel — fix v0.1.8-modelclass.1.
+ *
+ * The pod's `parseEnv` reads `agent.spec.json` from the per-Job
+ * ConfigMap and bails when `agentSpec.model` is empty. Phase 2 only
+ * populated the resolved model into the `KAGENT_AGENT_MODEL` env, NOT
+ * onto `agent.spec.json`. This helper rewrites `spec.model` to the
+ * resolved physical model id so the pod sees a fully-resolved spec.
+ * `modelClass` stays for traceability.
+ * ===================================================================== */
+
+describe('applyResolvedModel', () => {
+  it('writes the resolved model id onto spec.model when only modelClass is set', () => {
+    const spec = { modelClass: 'tool-caller-default' };
+    const result = applyResolvedModel(spec, 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(result.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+  });
+
+  it('preserves the modelClass field for traceability/debugging', () => {
+    const spec = { modelClass: 'tool-caller-default' };
+    const result = applyResolvedModel(spec, 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(result.modelClass).toBe('tool-caller-default');
+  });
+
+  it('overwrites any prior spec.model with the supplied resolved id', () => {
+    // The escape-hatch case (model already set) is the caller's
+    // domain — but if a caller passes the override-resolved value
+    // back through, the field round-trips identically.
+    const spec = { model: 'anthropic/claude-3-7-sonnet-20250219' };
+    const result = applyResolvedModel(spec, 'anthropic/claude-3-7-sonnet-20250219');
+    expect(result.model).toBe('anthropic/claude-3-7-sonnet-20250219');
+  });
+
+  it('does not mutate the supplied spec object (returns a new one)', () => {
+    const spec = { modelClass: 'tool-caller-default' };
+    const snapshot = { ...spec };
+    const result = applyResolvedModel(spec, 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(spec).toEqual(snapshot);
+    expect(result).not.toBe(spec);
+  });
+
+  it('preserves arbitrary unrelated fields on the spec (generic over T)', () => {
+    interface Extra {
+      readonly model?: string;
+      readonly modelClass?: string;
+      readonly systemPrompt: string;
+      readonly tools: readonly string[];
+    }
+    const spec: Extra = {
+      modelClass: 'tool-caller-default',
+      systemPrompt: 'You are an agent.',
+      tools: ['fetch_url', 'web_search'],
+    };
+    const result = applyResolvedModel(spec, 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(result.systemPrompt).toBe('You are an agent.');
+    expect(result.tools).toEqual(['fetch_url', 'web_search']);
+    expect(result.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(result.modelClass).toBe('tool-caller-default');
   });
 });

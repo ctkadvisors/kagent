@@ -27,7 +27,11 @@ import * as cacheController from '@kagent/cache-controller';
 
 import type { Agent, AgentTask, InputDecl } from './crds/index.js';
 import { isFromWorkspace } from './crds/agent-task.js';
-import { resolveAgentModel, type ModelClassMap } from './model-class-resolver.js';
+import {
+  applyResolvedModel,
+  resolveAgentModel,
+  type ModelClassMap,
+} from './model-class-resolver.js';
 
 const DEFAULT_IMAGE = 'ghcr.io/ctkadvisors/kagent-agent-pod:v0.0.1-phase2-stub';
 
@@ -80,15 +84,63 @@ export function configMapNameForTask(task: AgentTask): string {
 }
 
 /**
+ * Resolve an Agent's effective physical model id and emit the audit
+ * log line on `source: 'class'`. Centralized here so both
+ * `buildAgentTaskConfigMap` and `buildJobSpec` share one source of
+ * truth — the operator MUST surface the same physical model id on the
+ * `KAGENT_AGENT_MODEL` env (admission's hot path) AND on the
+ * `agent.spec.json` mounted from the per-Job ConfigMap (the agent-pod's
+ * `parseEnv` consumer).
+ *
+ * Throws on the unresolvable case so callers' catch surfaces the
+ * structured error onto AgentTask `status.error` per
+ * docs/MODEL-ROUTING.md §3.1.
+ */
+function resolveModelOrThrow(agent: Agent, classMap: ModelClassMap): string {
+  const modelResolution = resolveAgentModel({
+    agentSpec: agent.spec,
+    classMap,
+  });
+  if (modelResolution.kind === 'unresolvable') {
+    const ns = agent.metadata.namespace ?? 'default';
+    const name = agent.metadata.name ?? '?';
+    throw new Error(`unresolvable_model_class: ${modelResolution.reason} (Agent ${ns}/${name})`);
+  }
+  return modelResolution.model;
+}
+
+/**
  * Build the per-Job ConfigMap carrying `agent.spec.json` +
  * `task.spec.json`. OwnerReferences point at the AgentTask so
  * cascading delete reaps the ConfigMap when the task is deleted.
  *
  * v0.2.0 — replaces the `KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC` env
  * transport. See `buildJobSpec` for the corresponding mount.
+ *
+ * v0.1.8-modelclass.1 — accepts the cluster's logical-class →
+ * physical-model id map and rewrites `spec.model` to the resolved
+ * value BEFORE serializing. The pod's `parseEnv` REQUIRES
+ * `agentSpec.model` to be a non-empty string; without this rewrite,
+ * pods spawned for `modelClass`-only Agent CRs (the Phase 1 migration
+ * fleet) fatal-exit on boot. The `modelClass` field is preserved on
+ * the serialized spec for traceability — the pod stays naive about it.
+ *
+ * `classMap` is optional + defaults to `{}` for back-compat with
+ * legacy callers that hand in a literal `spec.model` (the resolver's
+ * escape-hatch path returns the override unchanged regardless of the
+ * map). An Agent declaring a `modelClass` not present in the map
+ * throws with the same `unresolvable_model_class:` shape `buildJobSpec`
+ * raises — the reconciler's catch surfaces it onto AgentTask
+ * `status.error`.
  */
-export function buildAgentTaskConfigMap(agent: Agent, task: AgentTask): V1ConfigMap {
+export function buildAgentTaskConfigMap(
+  agent: Agent,
+  task: AgentTask,
+  classMap: ModelClassMap = {},
+): V1ConfigMap {
   const namespace = task.metadata.namespace ?? 'default';
+  const resolvedModel = resolveModelOrThrow(agent, classMap);
+  const resolvedSpec = applyResolvedModel(agent.spec, resolvedModel);
   return {
     apiVersion: 'v1',
     kind: 'ConfigMap',
@@ -115,7 +167,7 @@ export function buildAgentTaskConfigMap(agent: Agent, task: AgentTask): V1Config
       ],
     },
     data: {
-      [CONFIG_AGENT_SPEC_KEY]: JSON.stringify(agent.spec),
+      [CONFIG_AGENT_SPEC_KEY]: JSON.stringify(resolvedSpec),
       [CONFIG_TASK_SPEC_KEY]: JSON.stringify(task.spec),
     },
   };
@@ -582,6 +634,14 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
       `[operator/job-spec] resolved modelClass='${agent.spec.modelClass ?? ''}' → model='${resolvedModel}' for Agent ${ns}/${name}`,
     );
   }
+  // v0.1.8-modelclass.1 — rewrite spec.model with the resolved id so
+  // the env-JSON fallback path (useConfigMap: false) serializes a
+  // pod-consumable spec. Preserves modelClass for traceability — the
+  // pod stays naive about it. The ConfigMap path applies the same
+  // rewrite via `buildAgentTaskConfigMap` independently; both paths
+  // MUST present a fully-resolved `spec.model` to the agent-pod's
+  // `parseEnv`. See docs/MODEL-ROUTING.md §3.1.
+  const resolvedAgentSpec = applyResolvedModel(agent.spec, resolvedModel);
 
   const env: RenderedEnv[] = [
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
@@ -599,10 +659,14 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_AGENT_MODEL', value: resolvedModel },
     // Back-compat path: when useConfigMap is explicitly false (tests +
     // pre-v0.2.0 agent-pod images), the full JSON env entries stay.
+    // v0.1.8-modelclass.1 — the serialized spec carries the resolved
+    // physical model id (NOT the raw agent.spec) so the agent-pod's
+    // env-JSON fallback path consumes a pod-ready spec, mirroring the
+    // ConfigMap path. See docs/MODEL-ROUTING.md §3.1.
     ...(useConfigMap
       ? []
       : [
-          { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agent.spec) },
+          { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(resolvedAgentSpec) },
           { name: 'KAGENT_TASK_SPEC', value: JSON.stringify(task.spec) },
         ]),
     { name: 'KAGENT_TASK_DEPTH', value: String(taskDepth) },

@@ -121,3 +121,38 @@ export function resolveAgentModel(input: ResolveModelInput): ResolveModelResult 
     reason: 'neither model nor modelClass set',
   };
 }
+
+/**
+ * Apply the resolved physical model id back onto an Agent spec.
+ *
+ * Returns a NEW spec object with `model` populated from the resolution
+ * result, leaving every other field (including `modelClass` for
+ * traceability) untouched. The caller is responsible for passing only
+ * `'resolved'` (non-unresolvable) results — passing an empty string
+ * here would defeat the whole reason this helper exists, but the
+ * function does not validate (callers always have an upstream
+ * resolution they're propagating).
+ *
+ * Generic over `T` so the helper works with both the full
+ * `AgentSpec` type and any narrower structural variant the operator
+ * holds at the call site (e.g. the Phase 2 `buildJobSpec` resolver
+ * passes only the two fields it consults). Excess fields on `T` are
+ * preserved verbatim; only `model` is overwritten.
+ *
+ * Pure-functional: never throws (modulo a runtime error if the input
+ * isn't an object — TypeScript's structural typing guards against
+ * that), never mutates the input.
+ *
+ * Fix v0.1.8-modelclass.1: Phase 2 only populated the resolved model
+ * onto the `KAGENT_AGENT_MODEL` env var, NOT onto `agent.spec.json`
+ * mounted via the per-Job ConfigMap. The agent-pod's `parseEnv` reads
+ * the JSON and bails on `model: undefined` for migrated CRs that
+ * declare `modelClass` only. This helper is the operator-side
+ * rewrite that closes that gap — see `job-spec.ts` callers.
+ */
+export function applyResolvedModel<T extends { model?: string; modelClass?: string }>(
+  spec: T,
+  resolvedModel: string,
+): T {
+  return { ...spec, model: resolvedModel };
+}

@@ -924,6 +924,119 @@ describe('buildAgentTaskConfigMap', () => {
     expect(owner?.controller).toBe(true);
     expect(owner?.blockOwnerDeletion).toBe(true);
   });
+
+  /* =====================================================================
+   * Phase-2 modelClass — ConfigMap projection (v0.1.8-modelclass.1 fix).
+   *
+   * The pod's `parseEnv` reads `agent.spec.json` from the ConfigMap and
+   * REQUIRES `agentSpec.model` to be a non-empty string. The operator
+   * MUST resolve modelClass → physical model id and rewrite spec.model
+   * BEFORE serializing the JSON, otherwise pods spawned for migrated
+   * (modelClass-only) agents fatal-exit on boot.
+   *
+   * The `modelClass` field is preserved in the serialized spec for
+   * traceability — the pod stays naive about it.
+   * ===================================================================== */
+
+  it('Phase-2 modelClass: writes resolved physical model id onto agent.spec.json when only modelClass is set', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        // model omitted — modelClass is the only source.
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const cm = buildAgentTaskConfigMap(classedAgent, sampleTask, {
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    });
+    expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    });
+  });
+
+  it('Phase-2 modelClass: spec.model wins over modelClass in the serialized agent.spec.json (escape-hatch precedence)', () => {
+    const overrideAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        ...sampleAgent.spec,
+        model: 'anthropic/claude-3-7-sonnet-20250219',
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const cm = buildAgentTaskConfigMap(overrideAgent, sampleTask, {
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    });
+    expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
+      model: 'anthropic/claude-3-7-sonnet-20250219',
+    });
+  });
+
+  it('Phase-2 modelClass: preserves modelClass field on the serialized agent.spec.json (informational, not stripped)', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const cm = buildAgentTaskConfigMap(classedAgent, sampleTask, {
+      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    });
+    expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
+      modelClass: 'tool-caller-default',
+    });
+  });
+
+  it('Phase-2 modelClass: legacy Agent.spec.model still works without a classMap argument (back-compat)', () => {
+    // Existing v0.1 callers (tests, pre-Phase-2 fleets) — agent has
+    // spec.model set; classMap omitted entirely. ConfigMap must
+    // serialize the literal model unchanged.
+    const cm = buildAgentTaskConfigMap(sampleAgent, sampleTask);
+    expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
+      model: sampleAgent.spec.model,
+    });
+  });
+
+  it('Phase-2 modelClass: throws when modelClass is set but absent from the classMap', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-strict',
+      },
+    };
+    expect(() =>
+      buildAgentTaskConfigMap(classedAgent, sampleTask, {
+        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      }),
+    ).toThrow(/tool-caller-strict/);
+  });
+});
+
+describe('buildJobSpec — env-JSON fallback path (useConfigMap: false) modelClass resolution', () => {
+  it('Phase-2 modelClass: KAGENT_AGENT_SPEC env JSON has resolved spec.model when only modelClass is set', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const job = buildJobSpec(classedAgent, sampleTask, {
+      useConfigMap: false,
+      modelClassMap: {
+        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const specEntry = env.find((e) => e.name === 'KAGENT_AGENT_SPEC');
+    expect(specEntry?.value).toBeDefined();
+    expect(JSON.parse(specEntry?.value ?? '{}')).toMatchObject({
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      modelClass: 'tool-caller-default',
+    });
+  });
 });
 
 describe('buildJobSpec — ConfigMap mount (v0.2.0 default)', () => {

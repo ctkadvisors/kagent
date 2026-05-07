@@ -372,7 +372,17 @@ export async function reconcileAgentTask(
   const useConfigMap = deps.coreApi !== undefined;
   if (deps.coreApi !== undefined) {
     try {
-      await createConfigMapIdempotent(buildAgentTaskConfigMap(agent, task), deps.coreApi);
+      // v0.1.8-modelclass.1 — thread the same `modelClassMap` Phase 2
+      // wired through `BuildJobSpecOptions` so the ConfigMap-projected
+      // `agent.spec.json` carries a fully-resolved `spec.model`. The
+      // pod's `parseEnv` requires a non-empty `agentSpec.model`;
+      // without this, `modelClass`-only Agent CRs spawn pods that
+      // fatal-exit on boot. Same source of truth — both env + JSON
+      // mounts see the SAME resolved physical model id.
+      await createConfigMapIdempotent(
+        buildAgentTaskConfigMap(agent, task, deps.jobSpecOptions?.modelClassMap ?? {}),
+        deps.coreApi,
+      );
     } catch (err) {
       const reason =
         err instanceof Error ? `config-map creation failed: ${err.message}` : String(err);
