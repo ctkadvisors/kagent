@@ -38,6 +38,11 @@ import {
   VERIFIER_COMPLETED,
   VERIFIER_FAILED,
   VERIFIER_STARTED,
+  WORKFLOW_COMPLETED,
+  WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
+  WORKFLOW_FAILED,
+  WORKFLOW_STARTED,
+  WORKFLOW_STEP_COMPLETED,
   makeEvent,
 } from '@kagent/audit-events';
 import { buildEventDispatcher, type EventDispatcher, type EventSubscription } from '@kagent/events';
@@ -1825,6 +1830,17 @@ async function main(): Promise<void> {
     emit?: NonNullable<ReconcileDeps['emitParentChildrenAggregated']>;
   } = {};
 
+  // WBD-OP-1 (W3-Operator) — AgentWorkflow controller's `auditEmit`
+  // dep was declared optional and the production callsite at
+  // `buildAgentWorkflowController({...})` did not pass it. Tests
+  // injected it; production silently no-op'd `workflow.started` /
+  // `workflow.event_subscription_pending`. Same mutable-holder
+  // pattern as the other audit fan-outs — the closure threaded into
+  // `buildAgentWorkflowController` reads through the holder, which
+  // the audit-publisher init populates once NATS is reachable.
+  const workflowAuditHolder: { emit?: import('./agent-workflow-controller.js').WorkflowAuditEmit } =
+    {};
+
   const deps: ReconcileDeps = {
     customApi,
     batchApi,
@@ -2304,6 +2320,121 @@ async function main(): Promise<void> {
         await publisher.publish(event);
       },
     };
+
+    // WBD-OP-1 — AgentWorkflow controller's audit emit. The controller
+    // (`agent-workflow-controller.ts:517,519`) calls `deps.auditEmit?.('started', ...)`
+    // and `deps.auditEmit?.('event_subscription_pending', ...)` but the
+    // production callsite at `buildAgentWorkflowController({...})` did
+    // not pass the dep — so both events silently no-op'd. The closure
+    // below maps the controller's loose `(type, payload)` signature
+    // onto the typed CloudEvents union published on `audit.workflow.*`.
+    //
+    // Some catalog fields (invocationId, handler, stepCount, etc.) are
+    // Restate-runtime concepts the operator-side controller does not
+    // have at deployment-creation time — those are stamped as empty
+    // strings / 0. Wave 3 Workflows lights the runtime-side emissions
+    // (with full data) up; this wiring only covers the operator-side
+    // events.
+    workflowAuditHolder.emit = (type, payload): void => {
+      const wfName =
+        typeof payload.workflow === 'string'
+          ? payload.workflow
+          : typeof payload.workflowName === 'string'
+            ? payload.workflowName
+            : '';
+      const wfNamespace =
+        typeof payload.workflowNamespace === 'string'
+          ? payload.workflowNamespace
+          : (watchNamespace ?? 'default');
+      const subject = `AgentWorkflow/${wfNamespace}/${wfName}`;
+      const invocationId = typeof payload.invocationId === 'string' ? payload.invocationId : '';
+      try {
+        if (type === 'started') {
+          const event = makeEvent({
+            type: WORKFLOW_STARTED,
+            source: auditSource,
+            subject,
+            data: {
+              workflowName: wfName,
+              workflowNamespace: wfNamespace,
+              invocationId,
+              handler: typeof payload.handler === 'string' ? payload.handler : '',
+              capabilityId:
+                typeof payload.capabilityId === 'string' ? payload.capabilityId : undefined,
+            },
+          });
+          void publisher.publish(event);
+          return;
+        }
+        if (type === 'event_subscription_pending') {
+          const topic = typeof payload.topic === 'string' ? payload.topic : '';
+          const event = makeEvent({
+            type: WORKFLOW_EVENT_SUBSCRIPTION_PENDING,
+            source: auditSource,
+            subject,
+            data: {
+              workflowName: wfName,
+              workflowNamespace: wfNamespace,
+              topic,
+            },
+          });
+          void publisher.publish(event);
+          return;
+        }
+        if (type === 'step.completed') {
+          const event = makeEvent({
+            type: WORKFLOW_STEP_COMPLETED,
+            source: auditSource,
+            subject,
+            data: {
+              workflowName: wfName,
+              workflowNamespace: wfNamespace,
+              invocationId,
+              stepName: typeof payload.stepName === 'string' ? payload.stepName : '',
+              stepKind: typeof payload.stepKind === 'string' ? payload.stepKind : '',
+              taskUid: typeof payload.taskUid === 'string' ? payload.taskUid : undefined,
+            },
+          });
+          void publisher.publish(event);
+          return;
+        }
+        if (type === 'completed') {
+          const event = makeEvent({
+            type: WORKFLOW_COMPLETED,
+            source: auditSource,
+            subject,
+            data: {
+              workflowName: wfName,
+              workflowNamespace: wfNamespace,
+              invocationId,
+              stepCount: typeof payload.stepCount === 'number' ? payload.stepCount : 0,
+            },
+          });
+          void publisher.publish(event);
+          return;
+        }
+        if (type === 'failed') {
+          const event = makeEvent({
+            type: WORKFLOW_FAILED,
+            source: auditSource,
+            subject,
+            data: {
+              workflowName: wfName,
+              workflowNamespace: wfNamespace,
+              invocationId,
+              reason: typeof payload.reason === 'string' ? payload.reason : '',
+              message: typeof payload.message === 'string' ? payload.message : '',
+            },
+          });
+          void publisher.publish(event);
+        }
+      } catch (err) {
+        console.warn(
+          `[kagent-operator] workflowAudit emit raised for type=${type}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    };
   } else {
     console.log(
       '[kagent-operator] no KAGENT_AUDIT_NATS_URL set — audit emission disabled (set audit.enabled=true in chart values)',
@@ -2706,6 +2837,13 @@ async function main(): Promise<void> {
       options: {
         defaultRestateAddress: restateAddress,
         ...(restateAdminAddress !== undefined && { restateAdminAddress }),
+      },
+      // WBD-OP-1 — wire `auditEmit` from the workflowAuditHolder so the
+      // controller's `workflow.started` / `event_subscription_pending`
+      // emissions actually publish. Same audit-best-effort pattern as
+      // the capability / supervision / verifier audit holders.
+      auditEmit: (type, payload) => {
+        workflowAuditHolder.emit?.(type, payload);
       },
     });
     await wfController.start();

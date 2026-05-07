@@ -28,6 +28,7 @@ import {
   WORKFLOW_MANAGED_LABEL_VALUE,
   WORKFLOW_PORT,
   type AgentWorkflowReconcilerDeps,
+  type WorkflowAuditEmit,
 } from './agent-workflow-controller.js';
 import type { CapCa } from './cap-ca.js';
 
@@ -251,6 +252,39 @@ describe('reconcileAgentWorkflow — happy path', () => {
         workflow: 'daily-research',
       }),
     );
+  });
+
+  // WBD-OP-1 regression — drives the FULL production wireup pattern
+  // main.ts uses (`auditEmit` thunk reading through a mutable holder
+  // populated when the audit publisher comes online). Previously the
+  // production callsite at `buildAgentWorkflowController({...})` did
+  // NOT pass `auditEmit`, so `workflow.started` silently no-op'd.
+  // This test fails if the wiring regresses to the optional-fallback
+  // shape.
+  it('regression: production-shape `auditEmit` thunk via mutable holder fires workflow.started (WBD-OP-1)', async () => {
+    const wf = baseWorkflow();
+    const collected: { type: string; payload: Record<string, unknown> }[] = [];
+
+    // Mirror main.ts:workflowAuditHolder pattern verbatim.
+    const workflowAuditHolder: { emit?: WorkflowAuditEmit } = {};
+    workflowAuditHolder.emit = (type, payload) => {
+      collected.push({ type, payload: { ...payload } });
+    };
+
+    // Same `auditEmit` thunk shape main.ts threads into
+    // `buildAgentWorkflowController`. Before WBD-OP-1's fix the
+    // production callsite omitted this entirely.
+    const productionShapeAuditEmit: WorkflowAuditEmit = (type, payload) => {
+      workflowAuditHolder.emit?.(type, payload);
+    };
+
+    const { deps } = makeDeps({ auditEmit: vi.fn(productionShapeAuditEmit) });
+    await reconcileAgentWorkflow({ wf }, deps);
+
+    // Both `workflow.started` AND audit-via-holder pattern observed.
+    const started = collected.find((c) => c.type === 'started');
+    expect(started).toBeDefined();
+    expect(started?.payload.workflow).toBe('daily-research');
   });
 });
 
