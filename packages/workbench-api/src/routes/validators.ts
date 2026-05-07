@@ -28,7 +28,13 @@ export type ValidationError =
       readonly min: number;
       readonly max: number;
     }
-  | { readonly code: 'invalid-name'; readonly field: string };
+  | { readonly code: 'invalid-name'; readonly field: string }
+  | {
+      readonly code: 'payload-too-large';
+      readonly field: 'payload';
+      readonly maxBytes: number;
+      readonly actualBytes: number;
+    };
 
 export interface ValidationResult {
   readonly valid: boolean;
@@ -38,6 +44,19 @@ export interface ValidationResult {
 
 /** Per AgentTask CRD: originalUserMessage cap. */
 const MAX_MESSAGE_BYTES = 32_768;
+
+/**
+ * H16 — `payload` byte cap. The `payload` field is a structurally
+ * opaque JSON blob that flows directly into the AgentTask CR's
+ * `spec.payload`. Without a size cap a single POST can request a
+ * 2 MB CR write that subsequently fails apiserver admission with a
+ * 413 *after* hitting the apiserver, wasting the round-trip and
+ * potentially OOMing the agent-pod that loads the spec. The 64 KiB
+ * cap mirrors the LLM gateway's `MAX_BODY_BYTES` and gives ample room
+ * for any task-shaped payload while keeping the worst-case
+ * apiserver write small.
+ */
+export const MAX_PAYLOAD_BYTES = 65_536;
 
 /** K8s name regex (RFC 1123 label subset; lowercase alphanumerics + dashes). */
 const K8S_NAME_RE = /^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$/;
@@ -193,8 +212,32 @@ export function validateCreateTaskBody(raw: unknown): ValidationResult {
     }
   }
 
-  // payload — opaque; allow any non-null object/value
+  // payload — opaque; allow any non-null object/value, capped by
+  // serialised JSON byte size (H16). The cap runs ahead of the
+  // overall errors-empty check so a too-large payload short-circuits
+  // before we hand the manifest to the K8s apiserver.
   const payload = body.payload;
+  if (payload !== undefined) {
+    let serialised: string;
+    try {
+      serialised = JSON.stringify(payload);
+    } catch {
+      // JSON.stringify throws on a circular structure — refuse the
+      // request with a clear error rather than letting the K8s client
+      // surface a less-actionable 500.
+      errors.push({ code: 'wrong-type', field: 'payload', expected: 'JSON-serialisable value' });
+      return { valid: false, errors };
+    }
+    const actualBytes = Buffer.byteLength(serialised, 'utf8');
+    if (actualBytes > MAX_PAYLOAD_BYTES) {
+      errors.push({
+        code: 'payload-too-large',
+        field: 'payload',
+        maxBytes: MAX_PAYLOAD_BYTES,
+        actualBytes,
+      });
+    }
+  }
 
   if (errors.length > 0) return { valid: false, errors };
 

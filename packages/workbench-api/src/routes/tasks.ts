@@ -163,7 +163,8 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
         error: 'request body failed validation',
         fields: result.errors.map(formatFieldError),
       };
-      // 400 for any malformed input (missing/empty/wrong-type/invalid-name);
+      // 400 for any malformed input (missing/empty/wrong-type/
+      // invalid-name/too-long/payload-too-large);
       // 422 reserved for "shape correct, semantically out-of-range".
       const has400 = result.errors.some(
         (e) =>
@@ -171,7 +172,8 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
           e.code === 'empty' ||
           e.code === 'wrong-type' ||
           e.code === 'invalid-name' ||
-          e.code === 'too-long',
+          e.code === 'too-long' ||
+          e.code === 'payload-too-large',
       );
       return c.json(body, has400 ? 400 : 422);
     }
@@ -380,6 +382,12 @@ function formatFieldError(e: ValidationError): {
       return { field: e.field, code: e.code, detail: `range=[${String(e.min)},${String(e.max)}]` };
     case 'invalid-name':
       return { field: e.field, code: e.code };
+    case 'payload-too-large':
+      return {
+        field: e.field,
+        code: e.code,
+        detail: `maxBytes=${String(e.maxBytes)} actualBytes=${String(e.actualBytes)}`,
+      };
   }
 }
 
