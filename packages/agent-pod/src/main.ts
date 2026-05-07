@@ -412,11 +412,18 @@ async function main(): Promise<void> {
   // === Wave 3 — Events ===
   // `publish_event` built-in tool. Wired only when the operator
   // threaded `KAGENT_EVENTS_NATS_URL` AND the Agent declares at
-  // least one `publishes[]` entry. The cap-claim gate (publishClaims)
-  // is sourced from the Agent spec's `capabilityClaims.publish` —
-  // mirrors the design where the Wave 2 cap-issuer wiring is the
-  // long-term path but the Agent spec carries the shadow until
-  // every pod has a verified bundle mounted.
+  // least one `publishes[]` entry.
+  //
+  // SECURITY (audit 2026-05-06 C2.2 HIGH #2): the cap-claim gate
+  // threaded into `EventPublisher` + `definePublishEvent` is sourced
+  // EXCLUSIVELY from the operator-minted, JWKS-verified
+  // `CapabilityBundle` loaded by `cap-consumer.loadCapabilityFromEnv`.
+  // We DO NOT fall back to synthesizing a bundle from the Agent CRD's
+  // `spec.capabilityClaims.publish` field — that field is mutable by
+  // anyone with `agents/edit` RBAC, so trusting it would let a
+  // developer publish on any topic without ever obtaining an operator-
+  // signed JWT. When no JWT is mounted, `definePublishEvent` correctly
+  // refuses every emission with `policy_denied:no_capability`.
   let eventsTools: ToolProvider | undefined;
   const eventsNatsUrl = process.env.KAGENT_EVENTS_NATS_URL;
   const declaredPublishes = config.agentSpec.publishes ?? [];
@@ -430,19 +437,15 @@ async function main(): Promise<void> {
     const claims = config.agentSpec.capabilityClaims as
       | { readonly publish?: readonly string[] }
       | undefined;
-    const publishClaims = claims?.publish;
-    const publishCapabilityBundle: CapabilityBundle | undefined =
-      capabilityBundle ??
-      (publishClaims !== undefined
-        ? {
-            iss: 'kagent.knuteson.io/operator',
-            sub: `task-uid:${config.taskId}`,
-            aud: ['kagent-substrate'],
-            exp: Math.floor(Date.now() / 1000) + 3600,
-            jti: `pod-${config.taskId.slice(0, 8)}`,
-            claims: { publish: publishClaims },
-          }
-        : undefined);
+    const publishCapabilityBundle = selectPublishCapabilityBundle(
+      capabilityBundle,
+      claims?.publish,
+    );
+    if (publishCapabilityBundle === undefined) {
+      console.warn(
+        '[kagent-agent-pod] publish_event wired WITHOUT a verified capability bundle — every emission will refuse with policy_denied:no_capability (set KAGENT_CAP_JWT_FILE to enable publishing)',
+      );
+    }
     const publisher = new eventsModule.EventPublisher({
       source: `kagent.knuteson.io/agent-pod/${config.agentName}/${config.taskId}`,
       ...(publishCapabilityBundle?.claims.publish !== undefined && {
@@ -566,6 +569,28 @@ if (isDirectInvocation) {
     console.error('[kagent-agent-pod] fatal:', err);
     process.exit(1);
   });
+}
+
+/**
+ * Audit C2.2 HIGH #2 — single decision point for which (if any)
+ * `CapabilityBundle` is threaded into the publish-event wiring.
+ *
+ * Trust rule: ONLY the operator-minted, JWKS-verified bundle counts.
+ * The Agent CRD's `spec.capabilityClaims.publish` is mutable by anyone
+ * with `agents/edit` RBAC; trusting it would let a developer publish on
+ * any topic without ever obtaining an operator-signed JWT. We therefore
+ * NEVER synthesize a bundle from the agent-spec field. The
+ * `_agentSpecPublishClaims` parameter is kept in the signature solely
+ * so callers + reviewers see the rejected input — it is intentionally
+ * unused.
+ *
+ * Pure function — exported for the unit test suite.
+ */
+export function selectPublishCapabilityBundle(
+  operatorBundle: CapabilityBundle | undefined,
+  _agentSpecPublishClaims: readonly string[] | undefined,
+): CapabilityBundle | undefined {
+  return operatorBundle;
 }
 
 /**
