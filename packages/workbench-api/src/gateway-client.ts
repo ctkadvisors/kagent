@@ -43,6 +43,8 @@ export interface GatewayCapacityRow {
   readonly recentP50Ms: number | null;
 }
 
+import { scrubErrorMessage } from './error-scrub.js';
+
 /**
  * One row per logged request. Mirrors the gateway's `usage` table shape
  * after the admin handler's projection. Field set is what the gateway's
@@ -155,7 +157,22 @@ export function createGatewayClient(cfg: GatewayClientConfig): GatewayClient {
       const path = q.length > 0 ? `/admin/usage?${q}` : '/admin/usage';
       const body = (await get(path)) as { rows?: unknown };
       if (!Array.isArray(body.rows)) return [];
-      return body.rows as readonly GatewayUsageRow[];
+      // M15 — second-line scrub on `errorMessage` before the projection
+      // leaves the workbench-api. H15 covers the gateway's own write
+      // path; this catches legacy rows persisted before H15 landed and
+      // any future bypasses of the gateway recorder.
+      return (body.rows as readonly GatewayUsageRow[]).map(scrubUsageRow);
     },
   };
+}
+
+/**
+ * M15 — apply `scrubErrorMessage` to a usage row's nullable
+ * `errorMessage`. Other columns pass through unchanged. Pure for tests.
+ */
+export function scrubUsageRow(row: GatewayUsageRow): GatewayUsageRow {
+  if (row.errorMessage === undefined || row.errorMessage === null) return row;
+  const scrubbed = scrubErrorMessage(row.errorMessage);
+  if (scrubbed === row.errorMessage) return row;
+  return { ...row, errorMessage: scrubbed };
 }

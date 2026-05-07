@@ -148,5 +148,94 @@ describe('createGatewayClient', () => {
       });
       expect(await client.usage({})).toEqual([]);
     });
+
+    /* =====================================================================
+     * M15 — workbench projection scrubs secrets from `errorMessage` before
+     * the row leaves workbench-api on the wire. Defense-in-depth: H15
+     * already scrubs at the gateway recorder; this catches legacy rows
+     * persisted before H15 landed and any reader path that bypasses the
+     * gateway recorder.
+     * ===================================================================== */
+
+    it('scrubs sk- API keys from errorMessage in usage rows (M15)', async () => {
+      const fetchSpy = fakeFetch(() =>
+        jsonResponse(200, {
+          rows: [
+            {
+              requestId: 'r-1',
+              model: 'm',
+              backend: 'openai',
+              backendUrl: 'https://api.openai.com',
+              inputTokens: 0,
+              outputTokens: 0,
+              latencyMs: 10,
+              statusCode: 401,
+              streaming: false,
+              errorMessage: 'Incorrect API key provided: sk-abcdefghijklmnop1234',
+            },
+          ],
+        }),
+      );
+      const client = createGatewayClient({
+        baseUrl: 'http://gw:4000',
+        adminToken: 't',
+        fetch: fetchSpy,
+      });
+      const rows = await client.usage({});
+      expect(rows[0]?.errorMessage).toBeDefined();
+      expect(rows[0]?.errorMessage).toContain('[REDACTED]');
+      expect(rows[0]?.errorMessage).not.toMatch(/sk-[A-Za-z0-9_-]{16,}/);
+    });
+
+    it('preserves null errorMessage unchanged (M15)', async () => {
+      const fetchSpy = fakeFetch(() =>
+        jsonResponse(200, {
+          rows: [
+            {
+              requestId: 'r-1',
+              model: 'm',
+              backend: 'mock',
+              backendUrl: 'http://x',
+              inputTokens: 0,
+              outputTokens: 0,
+              latencyMs: 1,
+              statusCode: 200,
+              streaming: false,
+              errorMessage: null,
+            },
+          ],
+        }),
+      );
+      const client = createGatewayClient({
+        baseUrl: 'http://gw:4000',
+        adminToken: 't',
+        fetch: fetchSpy,
+      });
+      const rows = await client.usage({});
+      expect(rows[0]?.errorMessage).toBe(null);
+    });
+
+    it('does not allocate a new row when errorMessage is unchanged (M15 fast-path)', async () => {
+      const original = {
+        requestId: 'r-1',
+        model: 'm',
+        backend: 'mock',
+        backendUrl: 'http://x',
+        inputTokens: 0,
+        outputTokens: 0,
+        latencyMs: 1,
+        statusCode: 200,
+        streaming: false,
+        errorMessage: 'just a timeout, no secret here',
+      };
+      const fetchSpy = fakeFetch(() => jsonResponse(200, { rows: [original] }));
+      const client = createGatewayClient({
+        baseUrl: 'http://gw:4000',
+        adminToken: 't',
+        fetch: fetchSpy,
+      });
+      const rows = await client.usage({});
+      expect(rows[0]?.errorMessage).toBe('just a timeout, no secret here');
+    });
   });
 });
