@@ -407,6 +407,16 @@ spec:
             - name: KAGENT_CAP_JWKS_URL
               value: {{ default (printf "http://%s-templates.%s.svc.cluster.local:%v/.well-known/jwks.json" (include "kagent-operator.fullname" .) .Release.Namespace .Values.agentPod.templates.serverPort) .Values.capabilities.jwksUrl | quote }}
             {{- end }}
+            # Audit C2.1 BLOCKER #1 (docs/AUDIT-2026-05-06.md) —
+            # capability mount required-by-default. Projected onto the
+            # operator and forwarded onto every spawned agent-pod via
+            # `buildJobSpecOptionsFromEnv` so the agent-pod's
+            # `loadCapabilityOptional` reads the same source of truth.
+            # Default `false` (loud-fail when KAGENT_CAP_JWT_FILE is
+            # set + the file is missing); `true` is the documented
+            # opt-out and surfaces a runtime WARN on the agent-pod.
+            - name: KAGENT_CAPABILITY_ALLOW_MISSING
+              value: {{ .Values.agentPod.capability.allowMissing | ternary "true" "false" | quote }}
             # v0.1.6 — Langfuse-managed prompt fetcher. When enabled,
             # spawned agent-pods inherit KAGENT_LANGFUSE_HOST + creds
             # (forwarded by job-spec.ts via this same set of env vars)

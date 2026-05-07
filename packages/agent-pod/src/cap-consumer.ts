@@ -135,27 +135,63 @@ export async function loadCapabilityFromEnv(
 }
 
 /**
- * Best-effort capability loader. Wraps `loadCapabilityFromEnv` with a
- * fail-open posture for deploys where the JWT mount is absent (legacy
- * Agents without `capabilityClaims`). Returns `undefined` when the
- * mount is absent; throws when the mount is PRESENT but verification
- * fails — a tampered or expired JWT MUST refuse the loop start.
+ * Capability loader with three explicit modes (audit C2.1 BLOCKER #1
+ * remediation, docs/AUDIT-2026-05-06.md):
  *
- * The runner uses this; production wiring also logs a one-line warn
- * when the mount is absent so observability can spot pods that
- * haven't migrated.
+ *   1. `KAGENT_CAP_JWT_FILE` env UNSET — legacy / pre-v0.3.0 deploy.
+ *      The chart's per-task cap-Secret hasn't shipped yet; return
+ *      `undefined` without touching the filesystem so the runner falls
+ *      through to the legacy `Agent.spec.allowedChildAgents` path.
+ *      Caller logs a one-liner so observability can spot un-migrated
+ *      pods.
+ *
+ *   2. `KAGENT_CAP_JWT_FILE` env SET, file MISSING (ENOENT):
+ *        - Default: throw a descriptive error. The pod boot is
+ *          aborted by main.ts, the AgentTask is patched Failed, and
+ *          the upgrade error is impossible to miss. This is the
+ *          fail-LOUD default that closes the audit's silent-fail-open
+ *          attack surface (a missing Secret silently disabled every
+ *          cap-gated guardrail in the substrate).
+ *        - When `KAGENT_CAPABILITY_ALLOW_MISSING=true` is set on the
+ *          pod env, return `undefined` AND log a loud WARN that names
+ *          the flag and states that capability enforcement is DISABLED
+ *          for this pod. Trace metadata then carries the opt-out.
+ *
+ *   3. `KAGENT_CAP_JWT_FILE` env SET, file PRESENT — verify normally
+ *      via `loadCapabilityFromEnv`; throws on signature/issuer/expiry
+ *      failure (a tampered or expired JWT MUST refuse the loop start).
+ *
+ * An empty file with the env set is treated as "no claims": return
+ * `undefined`. This matches the historical legacy-pod path for pods
+ * mounted with a zero-byte Secret key during a misconfigured upgrade.
  */
 export async function loadCapabilityOptional(
   input: LoadCapabilityInput,
 ): Promise<LoadCapabilityResult | undefined> {
-  const path = input.env.KAGENT_CAP_JWT_FILE ?? DEFAULT_CAP_JWT_FILE;
+  const envPath = input.env.KAGENT_CAP_JWT_FILE;
+  if (envPath === undefined || envPath.length === 0) {
+    // Mode 1 — env unset → legacy pre-v0.3.0 deploy. Don't even attempt
+    // to read; the chart hasn't been upgraded to mount the cap Secret.
+    return undefined;
+  }
   const reader = input.readFile ?? defaultReadFile;
   let body: string;
   try {
-    body = reader(path);
+    body = reader(envPath);
   } catch (err) {
     if (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT') {
-      // No mount — legacy / pre-v0.3.0 pod. Caller logs.
+      // Mode 2 — env set, file missing.
+      const allowMissing = input.env.KAGENT_CAPABILITY_ALLOW_MISSING === 'true';
+      if (!allowMissing) {
+        throw new Error(
+          `cap-consumer: capability JWT file missing at ${envPath}; ` +
+            `set KAGENT_CAPABILITY_ALLOW_MISSING=true to opt out of capability enforcement`,
+        );
+      }
+      console.warn(
+        `[kagent-agent-pod] WARNING: KAGENT_CAPABILITY_ALLOW_MISSING=true — ` +
+          `capability enforcement DISABLED. This pod accepts any agent's claims at face value.`,
+      );
       return undefined;
     }
     throw err;
@@ -163,6 +199,9 @@ export async function loadCapabilityOptional(
   if (body.trim().length === 0) {
     return undefined;
   }
+  // Mode 3 — file present; verify. (Pass through whatever path the
+  // caller originally specified by deferring to `loadCapabilityFromEnv`,
+  // which honors the same `KAGENT_CAP_JWT_FILE` env we just read.)
   return await loadCapabilityFromEnv(input);
 }
 

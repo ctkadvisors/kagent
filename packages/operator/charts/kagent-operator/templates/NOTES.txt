@@ -114,6 +114,26 @@ written into etcd or any pod spec).
 ║       secretKey: token                                            ║
 ╚══════════════════════════════════════════════════════════════════╝
 {{- end }}
+{{- if .Values.agentPod.capability.allowMissing }}
+
+╔══════════════════════════════════════════════════════════════════╗
+║ WARNING (audit C2.1 BLOCKER #1):                                  ║
+║   agentPod.capability.allowMissing=true                           ║
+║                                                                   ║
+║ Capability enforcement is OPT-OUT for every agent-pod this        ║
+║ operator spawns. When the per-task cap-Secret mount is missing    ║
+║ at KAGENT_CAP_JWT_FILE, the pod will boot WITHOUT a verified      ║
+║ capability bundle and fall through to the legacy claim path —     ║
+║ defeating the substrate-level authority root.                     ║
+║                                                                   ║
+║ This flag exists ONLY as a temporary remediation door for         ║
+║ broken cap-Secret mounts during an upgrade. Restore               ║
+║ `agentPod.capability.allowMissing: false` (the chart default)     ║
+║ as soon as the mount is fixed. The agent-pod logs a loud WARN     ║
+║ at boot when it takes the opt-out so trace metadata records the   ║
+║ degraded posture.                                                 ║
+╚══════════════════════════════════════════════════════════════════╝
+{{- end }}
 {{- if $hasPlaintextSecret }}
 
 After migration, validate the spawned-Job env spec contains zero

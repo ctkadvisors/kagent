@@ -423,6 +423,23 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_AUDIT_NATS_URL,
     });
   }
+  // Audit C2.1 BLOCKER #1 — capability mount required-by-default.
+  // Helm value `agentPod.capability.allowMissing` (default `false`) is
+  // projected as KAGENT_CAPABILITY_ALLOW_MISSING on the operator and
+  // forwarded verbatim onto every spawned agent-pod's env. The agent-
+  // pod's `loadCapabilityOptional` reads this exact name. Default
+  // posture is loud-fail when the chart's per-task cap-Secret mount is
+  // missing; explicit "true" is the documented opt-out (NOT for
+  // production use) and surfaces a runtime WARN.
+  if (
+    typeof env.KAGENT_CAPABILITY_ALLOW_MISSING === 'string' &&
+    env.KAGENT_CAPABILITY_ALLOW_MISSING.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_CAPABILITY_ALLOW_MISSING',
+      value: env.KAGENT_CAPABILITY_ALLOW_MISSING,
+    });
+  }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
   // template-server is enabled on the operator side; the chart binds

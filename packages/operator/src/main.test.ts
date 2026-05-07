@@ -37,6 +37,9 @@ const TOUCHED_VARS = [
   'KAGENT_ARTIFACT_MAX_BYTES',
   // Phase-2 modelClass — chart-supplied logical→physical model map.
   'KAGENT_AGENT_MODEL_CLASSES_JSON',
+  // Audit BLOCKER #1 (C2.1) — capability mount required-by-default
+  // opt-out flag forwarded from operator chart into spawned agent-pods.
+  'KAGENT_CAPABILITY_ALLOW_MISSING',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -147,6 +150,34 @@ describe('buildJobSpecOptionsFromEnv — audit forwarding', () => {
     expect(findEnv(env, 'KAGENT_AUDIT_NATS_URL')).toBe(
       'nats://nats.kagent-system.svc.cluster.local:4222',
     );
+  });
+});
+
+/* =====================================================================
+ * Audit BLOCKER #1 (C2.1, docs/AUDIT-2026-05-06.md) — capability mount
+ * is required-by-default. The chart's `agentPod.capability.allowMissing`
+ * value is projected onto the operator deployment as
+ * KAGENT_CAPABILITY_ALLOW_MISSING; the operator MUST forward it onto
+ * every spawned agent-pod's env so the agent-pod's `loadCapabilityOptional`
+ * sees the same source of truth at boot. Default is "false" (loud-fail
+ * when the JWT mount is missing); chart override of "true" is the
+ * fail-open opt-out and surfaces a runtime WARN in the agent-pod.
+ * ===================================================================== */
+describe('buildJobSpecOptionsFromEnv — capability allow-missing forwarding (audit C2.1 BLOCKER #1)', () => {
+  it('forwards KAGENT_CAPABILITY_ALLOW_MISSING=true into spawned agent-pods when set on the operator', () => {
+    process.env.KAGENT_CAPABILITY_ALLOW_MISSING = 'true';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CAPABILITY_ALLOW_MISSING')).toBe('true');
+  });
+
+  it('forwards KAGENT_CAPABILITY_ALLOW_MISSING=false into spawned agent-pods (default chart posture)', () => {
+    process.env.KAGENT_CAPABILITY_ALLOW_MISSING = 'false';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CAPABILITY_ALLOW_MISSING')).toBe('false');
   });
 });
 

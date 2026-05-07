@@ -222,6 +222,37 @@ agentPod:
   # 1000s of pods before the operator notices.
   maxDepth: 4
 
+  # Audit C2.1 BLOCKER #1 (docs/AUDIT-2026-05-06.md) — capability JWT
+  # mount is required-by-default. The chart projects this value as
+  # KAGENT_CAPABILITY_ALLOW_MISSING onto the operator deployment; the
+  # operator forwards the same env onto every spawned agent-pod. The
+  # agent-pod's `loadCapabilityOptional` then enforces:
+  #
+  #   - `KAGENT_CAP_JWT_FILE` env unset (legacy / pre-v0.3.0 deploys
+  #     where the chart hasn't yet shipped the per-task cap-Secret
+  #     mount): the agent-pod returns `undefined` and runs the legacy
+  #     `Agent.spec.allowedChildAgents` claim path. Back-compat door.
+  #
+  #   - `KAGENT_CAP_JWT_FILE` env set, file MISSING, `allowMissing=false`
+  #     (DEFAULT): the agent-pod throws at boot, patches AgentTask
+  #     `Failed`, and exits non-zero. Catches the audit's silent
+  #     fail-open attack surface where a missing Secret would have
+  #     disabled every cap-gated guardrail in the substrate without
+  #     any operator-visible signal beyond a single log line.
+  #
+  #   - `KAGENT_CAP_JWT_FILE` env set, file MISSING, `allowMissing=true`:
+  #     fail-OPEN opt-out. The agent-pod logs a loud WARN that names
+  #     the flag and states capability enforcement is DISABLED, then
+  #     returns `undefined`. ONLY use as a temporary remediation path
+  #     while migrating a cluster off broken cap-Secret mounts.
+  #
+  # Recommendation: leave at `false`. Flip to `true` only as a
+  # deliberate, time-boxed escape hatch when an upgrade has broken
+  # the cap-Secret mount and you need pods to keep running while you
+  # debug the chart-side issue.
+  capability:
+    allowMissing: false
+
   # WS-M — AgentTemplate substrate. When enabled:
   #   - the operator boots the template-server on `serverPort`
   #   - the operator-fullname-templates Service exposes it ClusterIP

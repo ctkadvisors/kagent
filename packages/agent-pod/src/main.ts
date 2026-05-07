@@ -114,7 +114,39 @@ async function main(): Promise<void> {
       `agent=${config.agentName} model=${config.agentSpec.model}`,
   );
 
-  const loadedCapability = await loadCapabilityOptional({ env: process.env });
+  // Audit C2.1 BLOCKER #1 — capability mount is required-by-default.
+  // `loadCapabilityOptional` throws when KAGENT_CAP_JWT_FILE is set
+  // and the file is missing without `KAGENT_CAPABILITY_ALLOW_MISSING=true`.
+  // Catch here so the pod fails fast with a `Failed` status patch
+  // instead of CrashLoopBackOff with no operator-visible signal (the
+  // audit's "JWT mount absence silently disables every cap-gated
+  // guardrail" finding — fail-LOUD beats fail-OPEN).
+  let loadedCapability: Awaited<ReturnType<typeof loadCapabilityOptional>>;
+  try {
+    loadedCapability = await loadCapabilityOptional({ env: process.env });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[kagent-agent-pod] capability load failed:', message);
+    try {
+      const api = makeCustomObjectsApi();
+      await writeStatus(
+        config,
+        {
+          phase: 'Failed',
+          error: `capability load failed: ${message}`,
+          completedAt: new Date().toISOString(),
+          structuralVerdict: { suspicious: [] },
+        },
+        api,
+      );
+    } catch (patchErr) {
+      console.error(
+        '[kagent-agent-pod] additionally failed to patch AgentTask Failed status:',
+        patchErr instanceof Error ? patchErr.message : String(patchErr),
+      );
+    }
+    process.exit(1);
+  }
   const capabilityBundle = loadedCapability?.bundle;
   if (capabilityBundle !== undefined) {
     console.log(

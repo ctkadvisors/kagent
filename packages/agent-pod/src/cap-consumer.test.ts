@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildCapabilityJwt,
   createLocalJWKSet,
@@ -121,33 +121,106 @@ describe('loadCapabilityFromEnv', () => {
 });
 
 describe('loadCapabilityOptional', () => {
-  it('returns undefined when JWT file is missing (ENOENT)', async () => {
-    const enoent: NodeJS.ErrnoException = Object.assign(new Error('ENOENT'), {
-      code: 'ENOENT',
+  // === Audit BLOCKER #1 (C2.1) — capability mount required-by-default ===
+  // Four cells of the env × file-present matrix:
+  //   A: KAGENT_CAP_JWT_FILE unset                   → return undefined (legacy)
+  //   B: env set, file missing, allowMissing != true → throw (fail-loud)
+  //   C: env set, file missing, allowMissing == true → return undefined + WARN
+  //   D: env set, file present                       → verify (existing path)
+
+  it('cell A — KAGENT_CAP_JWT_FILE unset returns undefined (legacy / pre-v0.3.0 path)', async () => {
+    // No KAGENT_CAP_JWT_FILE in env → legacy pre-v0.3.0 deploy. Must
+    // return undefined WITHOUT touching the filesystem (the chart hasn't
+    // been upgraded to mount the cap Secret yet; this is the back-compat
+    // door, not the fail-open opt-out).
+    const readFile = vi.fn<(p: string) => string>(() => {
+      throw new Error('readFile must not be called when env is unset');
     });
     const result = await loadCapabilityOptional({
       env: {},
-      readFile: () => {
-        throw enoent;
-      },
+      readFile,
       fetchJwks: () => Promise.resolve({ keys: [] }),
     });
     expect(result).toBeUndefined();
+    expect(readFile).not.toHaveBeenCalled();
   });
 
-  it('returns undefined when file is empty (legacy pod)', async () => {
+  it('cell B — KAGENT_CAP_JWT_FILE set + file missing + allowMissing!=true → throws clearly', async () => {
+    const enoent: NodeJS.ErrnoException = Object.assign(new Error('ENOENT'), {
+      code: 'ENOENT',
+    });
+    await expect(
+      loadCapabilityOptional({
+        env: { KAGENT_CAP_JWT_FILE: '/var/kagent/cap/cap.jwt' },
+        readFile: () => {
+          throw enoent;
+        },
+        fetchJwks: () => Promise.resolve({ keys: [] }),
+      }),
+    ).rejects.toThrow(/capability JWT file missing.*KAGENT_CAPABILITY_ALLOW_MISSING=true/);
+  });
+
+  it('cell C — KAGENT_CAP_JWT_FILE set + file missing + allowMissing=true → undefined + loud WARN', async () => {
+    const enoent: NodeJS.ErrnoException = Object.assign(new Error('ENOENT'), {
+      code: 'ENOENT',
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await loadCapabilityOptional({
+        env: {
+          KAGENT_CAP_JWT_FILE: '/var/kagent/cap/cap.jwt',
+          KAGENT_CAPABILITY_ALLOW_MISSING: 'true',
+        },
+        readFile: () => {
+          throw enoent;
+        },
+        fetchJwks: () => Promise.resolve({ keys: [] }),
+      });
+      expect(result).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalled();
+      // Loud WARN must mention KAGENT_CAPABILITY_ALLOW_MISSING and that
+      // capability enforcement is DISABLED so trace metadata makes the
+      // opt-out visible.
+      const msg = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(msg).toContain('KAGENT_CAPABILITY_ALLOW_MISSING');
+      expect(msg).toMatch(/DISABLED/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('cell D — file present verifies normally (existing path preserved)', async () => {
+    const { jwt, jwks } = await makeKeysAndJwt({
+      jti: 'cap-d',
+      claims: { tools: ['http_get'] },
+    });
     const result = await loadCapabilityOptional({
-      env: {},
+      env: { KAGENT_CAP_JWT_FILE: '/cap.jwt' },
+      readFile: (p) => (p === '/cap.jwt' ? jwt : ''),
+      fetchJwks: () => Promise.resolve(jwks),
+    });
+    expect(result).toBeDefined();
+    expect(result?.bundle.jti).toBe('cap-d');
+  });
+
+  it('returns undefined when file is empty (legacy zero-byte mount)', async () => {
+    // Empty file with the env set — treat the mount as a no-op (the
+    // chart minted a Secret with an empty key during a misconfigured
+    // upgrade); this is functionally identical to "no claims" and
+    // returns undefined so the runner falls through. Distinct from
+    // ENOENT which trips the require-by-default gate.
+    const result = await loadCapabilityOptional({
+      env: { KAGENT_CAP_JWT_FILE: '/cap.jwt' },
       readFile: () => '',
       fetchJwks: () => Promise.resolve({ keys: [] }),
     });
     expect(result).toBeUndefined();
   });
 
-  it('throws when file is present but verification fails', async () => {
+  it('throws when file is present but verification fails (env set)', async () => {
     await expect(
       loadCapabilityOptional({
-        env: {},
+        env: { KAGENT_CAP_JWT_FILE: '/cap.jwt' },
         readFile: () => 'malformed.jwt.body',
         fetchJwks: () => Promise.resolve({ keys: [] }),
       }),
