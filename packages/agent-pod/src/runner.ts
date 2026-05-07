@@ -45,7 +45,8 @@ import {
   type ArtifactRegistry,
 } from './artifacts.js';
 import { resolveBuiltinTools } from './builtin-tools.js';
-import type { PodConfig } from './env.js';
+import type { AgentSpecEnv, PodConfig } from './env.js';
+import { agentHasArtifactInputOrOutput } from './env.js';
 import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
 
 /**
@@ -512,6 +513,17 @@ export function pickUserMessage(config: PodConfig): string {
  * Per AGENT-SELF-SERVICE.md §11 Q5: default-OFF in WS-K, opt-in via
  * Helm value once the demo flow needs it.
  *
+ * Audit C2.2 HIGH #1 (punchlist H7): substrate / blackboard / events
+ * providers are NOT auto-trusted. Every tool name they expose must be
+ * either listed in `Agent.spec.tools` OR satisfy an
+ * `assertSubstrateToolAdmitted` predicate (see that helper for the
+ * full implicit-when-X policy). Failing the cross-check is fail-FAST
+ * at boot, matching the existing "unknown built-in tool" precedent in
+ * `builtin-tools.ts:986`. The Audit found that an Agent without
+ * `spawn_child_task` in its spec could nonetheless reach the global
+ * federation lookup once the env-flag fired the substrate provider on;
+ * this gate closes that gap.
+ *
  * Exported for the runner test suite; production callers go through
  * `runAgentTask`.
  *
@@ -550,6 +562,14 @@ export function resolveToolProviders(
     }
   }
 
+  // Audit C2.2 HIGH #1 — cross-check substrate-provider tool names vs
+  // Agent.spec.tools BEFORE we wire them in. Throws fail-FAST with a
+  // single message naming every offender so the operator can fix the
+  // manifest in one pass. Run BEFORE resolveBuiltinTools because both
+  // gates are config-time errors and operators should see the
+  // higher-impact one first.
+  assertSubstrateToolsAdmitted(config.agentSpec, externallyProvidedNames);
+
   const builtin = resolveBuiltinTools(config.agentSpec.tools, {
     ...(options.artifactRegistry !== undefined && {
       artifactRegistry: options.artifactRegistry,
@@ -563,6 +583,174 @@ export function resolveToolProviders(
   // v0.4.0-events
   if (deps.eventsTools !== undefined) out.push(deps.eventsTools);
   return out;
+}
+
+/* =====================================================================
+ * Substrate-tool allowlist cross-check.
+ *
+ * Audit C2.2 HIGH #1 / punchlist H7 — every tool name a substrate /
+ * blackboard / events provider exposes must be admitted by ONE of:
+ *
+ *   1. Explicit listing in `Agent.spec.tools` (same allowlist semantics
+ *      that gate `resolveBuiltinTools` — fail-FAST on a typo).
+ *   2. An "implicit-when-X" predicate proving the Agent declared the
+ *      matching schema-level intent. Current predicates:
+ *
+ *        spawn_child_task            ← allowedChildAgents.length>0 OR
+ *        wait_for_child_task             allowedChildTemplates.length>0
+ *        wait_for_children_all
+ *        ensure_agent_from_template
+ *
+ *        publish_event               ← publishes[].length>0 OR
+ *                                      capabilityClaims.publish.length>0
+ *
+ *        read_artifact               ← inputs|outputs[].kind=='artifact'
+ *        write_artifact                  (delegates to env.ts predicate)
+ *
+ *        read_blackboard             ← any task-graph intent (spawn or
+ *        write_blackboard                publishes) — blackboard is
+ *        list_blackboard                 useful only in multi-agent
+ *        append_blackboard               flows; chat-only Agents that
+ *                                        want it must list explicitly.
+ *
+ *        get_my_context              ← UNIVERSAL (introspection-only;
+ *                                      no authority widens via this
+ *                                      tool).
+ *
+ * Names not in the registry above (anything an out-of-tree provider
+ * happens to expose) fall through to the strict default — must be in
+ * `Agent.spec.tools`. This preserves the contract that an Agent's
+ * declared tool surface is authoritative.
+ * ===================================================================== */
+
+/** Tools admitted implicitly when the Agent declared spawn intent. */
+const SPAWN_INTENT_TOOLS: ReadonlySet<string> = new Set([
+  'spawn_child_task',
+  'wait_for_child_task',
+  'wait_for_children_all',
+  'ensure_agent_from_template',
+]);
+
+/** Tools admitted implicitly when the Agent declared publish intent. */
+const PUBLISH_INTENT_TOOLS: ReadonlySet<string> = new Set(['publish_event']);
+
+/** Tools admitted implicitly when the Agent declared artifact I/O. */
+const ARTIFACT_INTENT_TOOLS: ReadonlySet<string> = new Set(['read_artifact', 'write_artifact']);
+
+/** Tools admitted implicitly when the Agent has any task-graph intent. */
+const BLACKBOARD_TOOLS: ReadonlySet<string> = new Set([
+  'read_blackboard',
+  'write_blackboard',
+  'list_blackboard',
+  'append_blackboard',
+]);
+
+/** Universally-admitted introspection tools. */
+const UNIVERSAL_TOOLS: ReadonlySet<string> = new Set(['get_my_context']);
+
+function hasSpawnIntent(spec: AgentSpecEnv): boolean {
+  const allowedAgents = spec.allowedChildAgents ?? [];
+  const allowedTemplates = spec.allowedChildTemplates ?? [];
+  return allowedAgents.length > 0 || allowedTemplates.length > 0;
+}
+
+function hasPublishIntent(spec: AgentSpecEnv): boolean {
+  const publishes = spec.publishes;
+  if (publishes !== undefined && publishes.length > 0) return true;
+  // capabilityClaims is `Readonly<Record<string, unknown>>` at the env
+  // layer — narrow defensively. The cap-issuer / shadow path uses
+  // `claims.publish: string[]` (see main.ts:430-444).
+  const claims = spec.capabilityClaims as { readonly publish?: unknown } | undefined;
+  const publishClaim = claims?.publish;
+  if (Array.isArray(publishClaim) && publishClaim.length > 0) return true;
+  return false;
+}
+
+/**
+ * Decide whether a single substrate tool name is admitted on this
+ * Agent. Returns `null` on admit, or a human-readable reason string on
+ * reject (the caller assembles the multi-offender error message).
+ */
+function reasonToRejectSubstrateTool(name: string, spec: AgentSpecEnv): string | null {
+  // Explicit allowlist always wins — covers any tool name the operator
+  // listed by hand, including names that have no implicit-when-X path.
+  if (spec.tools !== undefined && spec.tools.includes(name)) return null;
+
+  if (UNIVERSAL_TOOLS.has(name)) return null;
+
+  if (SPAWN_INTENT_TOOLS.has(name)) {
+    if (hasSpawnIntent(spec)) return null;
+    return (
+      `requires either explicit listing in Agent.spec.tools OR a non-empty ` +
+      `Agent.spec.allowedChildAgents / allowedChildTemplates declaring spawn intent`
+    );
+  }
+
+  if (PUBLISH_INTENT_TOOLS.has(name)) {
+    if (hasPublishIntent(spec)) return null;
+    return (
+      `requires either explicit listing in Agent.spec.tools OR a non-empty ` +
+      `Agent.spec.publishes[] / capabilityClaims.publish declaring publish intent`
+    );
+  }
+
+  if (ARTIFACT_INTENT_TOOLS.has(name)) {
+    if (agentHasArtifactInputOrOutput(spec)) return null;
+    return (
+      `requires either explicit listing in Agent.spec.tools OR an ` +
+      `Agent.spec.inputs[] / outputs[] entry of kind:'artifact'`
+    );
+  }
+
+  if (BLACKBOARD_TOOLS.has(name)) {
+    if (hasSpawnIntent(spec) || hasPublishIntent(spec)) return null;
+    return (
+      `requires either explicit listing in Agent.spec.tools OR an ` +
+      `Agent task-graph intent (allowedChildAgents/Templates or publishes[])`
+    );
+  }
+
+  // Strict default for any unknown out-of-tree substrate tool name —
+  // must be listed in Agent.spec.tools.
+  return `must be listed in Agent.spec.tools (no implicit-when-X predicate matched)`;
+}
+
+/**
+ * Throw fail-FAST at boot if any substrate-provider tool name is not
+ * admitted on the current Agent spec. Mirrors the
+ * `resolveBuiltinTools`-style "unknown built-in tool" error: one
+ * message, every offender named, allowed list rendered for the
+ * operator.
+ *
+ * Exported for direct unit testing (the runner test file in
+ * `tool-allowlist.test.ts` drives this both through
+ * `resolveToolProviders` and — implicitly — by asserting the same
+ * messages at the boot path).
+ */
+export function assertSubstrateToolsAdmitted(
+  spec: AgentSpecEnv,
+  externallyProvidedNames: ReadonlySet<string>,
+): void {
+  if (externallyProvidedNames.size === 0) return;
+  const rejected: { readonly name: string; readonly reason: string }[] = [];
+  for (const name of externallyProvidedNames) {
+    const reason = reasonToRejectSubstrateTool(name, spec);
+    if (reason !== null) rejected.push({ name, reason });
+  }
+  if (rejected.length === 0) return;
+
+  const allowed = spec.tools !== undefined ? [...spec.tools].sort() : [];
+  const offenderList = rejected.map(({ name, reason }) => `  - "${name}": ${reason}`).join('\n');
+  throw new Error(
+    `substrate tool registration rejected: the following tool name(s) ` +
+      `attempted to register but are not in Agent.spec.tools and no ` +
+      `implicit-when-X predicate matched:\n${offenderList}\n` +
+      `Agent.spec.tools (allowed): [${allowed.join(', ')}]. ` +
+      `Edit Agent.spec.tools to admit explicitly, OR declare matching ` +
+      `intent on the Agent spec (allowedChildAgents/Templates for spawn, ` +
+      `publishes[]/capabilityClaims.publish for publish_event, ` +
+      `inputs|outputs[].kind='artifact' for read/write_artifact).`,
+  );
 }
 
 /**
