@@ -500,9 +500,33 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       budget: RunBudget;
       contextSafetyThreshold: number;
     },
-  ): Promise<{ result: ChatResult; attempts: number; lastBackoffMs: number | undefined }> {
+  ): Promise<{
+    result: ChatResult;
+    attempts: number;
+    lastBackoffMs: number | undefined;
+    /**
+     * L14 (audit-rev2 C2 §1) — wall-clock at the start of the
+     * successful attempt's `llm.chat()` call (the value the run-loop
+     * should use as the success-trace's `llmStart` baseline so
+     * `latency_ms = Date.now() - successAttemptStart` reflects the
+     * winning attempt's actual time-to-response, not "now minus a
+     * small epsilon"). On attempt 0 success this equals the
+     * `bookkeeping.llmStart` the caller passed in; after retries it
+     * reflects the post-sleep timestamp of the FINAL attempt.
+     */
+    successAttemptStart: number;
+  }> {
     let attemptIdx = 0;
     let lastBackoffMs: number | undefined;
+    // L14 (audit-rev2 C2 §1) — capture each attempt's wall-clock
+    // start so the success path returns the WINNING attempt's start
+    // (used by the run-loop's success-trace `latency_ms` calc). The
+    // first attempt inherits `bookkeeping.llmStart` from the caller;
+    // each retry resets this to `Date.now()` AFTER the post-sleep
+    // re-entry so the value matches the moment the next
+    // `llm.chat()` call begins (not pre-sleep, not pre-pre-call
+    // safety-net check).
+    let attemptStart = bookkeeping.llmStart;
     // Loop runs at most maxRetries+1 times: original (attempt 0) + maxRetries.
     for (;;) {
       try {
@@ -543,7 +567,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           }
         }
         const result = await this.llm.chat(chatRequest, llmCtx);
-        return { result, attempts: attemptIdx, lastBackoffMs };
+        return { result, attempts: attemptIdx, lastBackoffMs, successAttemptStart: attemptStart };
       } catch (err) {
         // Retry ONLY on LLMClientHttpError(status=429). Every other error
         // (including aborts, protocol errors, other HTTP statuses,
@@ -614,10 +638,18 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
         lastBackoffMs = backoffMs;
         attemptIdx++;
-        // Reset llmStart so per-attempt latency metric measures THIS
-        // attempt only, not cumulative backoff. The previous attempt's
-        // failed-attempt trace already captured its own latency above.
-        bookkeeping.llmStart = Date.now();
+        // Reset both the bookkeeping mirror (still the basis of the
+        // FAILED-attempt trace's latency at line 578 — which now
+        // measures only THIS attempt's pre-sleep failure window,
+        // not cumulative backoff) AND the local `attemptStart`
+        // tracker that drives the success-path `successAttemptStart`
+        // return value (L14 / audit-rev2 C2 §1). The two stay
+        // synchronized post-sleep so the failed-attempt trace's
+        // latency baseline matches what the success path would
+        // observe if THIS retry succeeds.
+        const now = Date.now();
+        bookkeeping.llmStart = now;
+        attemptStart = now;
       }
     }
   }
@@ -805,23 +837,18 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         llmResult = outcome.result;
         retryAttempts = outcome.attempts;
         lastBackoffMs = outcome.lastBackoffMs;
-        // chatWithRetry resets its own llmStart between attempts; reflect
-        // that here so the success-path llm_call latency reflects the
-        // FINAL attempt only (matches the per-attempt failure traces it
-        // already emitted for prior 429s).
-        if (retryAttempts > 0) {
-          // The last successful attempt's start time — chatWithRetry
-          // already updated `bookkeeping.llmStart`, but that's our
-          // local copy. Re-read by approximating: each prior failed
-          // attempt was already traced with its own latency, so the
-          // success entry below uses Date.now() - llmStart from the
-          // moment AFTER the last sleep. We approximate by snapping
-          // llmStart to "now minus a small epsilon" — since the run
-          // loop doesn't observe the exact retry attempt's start
-          // separately, this is a best-effort latency for the
-          // successful attempt only.
-          llmStart = Date.now();
-        }
+        // L14 (audit-rev2 C2 §1) — chatWithRetry now returns the
+        // ACTUAL wall-clock start of the successful attempt, not a
+        // best-effort approximation. The success-trace's
+        // `latency_ms = Date.now() - llmStart` below now reflects
+        // exactly the winning attempt's time-to-response (matching
+        // the per-attempt failure traces' shape: they're all keyed
+        // off their respective attempt-start timestamps). Previously
+        // this was rewritten to `Date.now()` on retry so latency
+        // collapsed to ~0 in the success-trace; that produced
+        // misleading per-attempt latency in Langfuse for any retry
+        // that succeeded.
+        llmStart = outcome.successAttemptStart;
       } catch (err) {
         // Invariant 2.e — abort check inside LLM catch arm.
         if (signal.aborted) {
