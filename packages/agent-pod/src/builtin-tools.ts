@@ -1107,13 +1107,6 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       const tokenLimit = podConfig.taskSpec.runConfig?.tokenLimit;
       const secondsRemaining = deps.remainingBudgetSeconds?.();
       const parentUid = podConfig.taskSpec.parentTask;
-      const budget: { tokensRemaining?: number; secondsRemaining?: number } = {};
-      if (typeof tokenLimit === 'number' && tokenLimit > 0) {
-        budget.tokensRemaining = tokenLimit;
-      }
-      if (typeof secondsRemaining === 'number' && Number.isFinite(secondsRemaining)) {
-        budget.secondsRemaining = secondsRemaining;
-      }
       // v0.1.9 piece 2 — live token-utilization snapshot per
       // docs/CONTEXT-AWARENESS.md §4.4. Read at tool-call time (NOT at
       // construction): the cumulative tokens are mutating live on
@@ -1122,7 +1115,25 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       // `{ used: 0, modelWindow: null }` so the field is always present
       // (back-compat: existing callers that haven't wired the snapshot
       // yet still get a well-formed payload).
+      //
+      // NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` is also
+      // computed from this snapshot's `used` field. Both `tokenLimit`
+      // (per-task user cap from `runConfig.tokenLimit`) and
+      // `snapshot.used` (cumulative input + output tokens off RunBudget)
+      // are the same currency; subtracting yields the actionable
+      // "remaining capacity" the agent's prompt logic uses to decide
+      // "should I hand off now?" Pre-fix, the handler reported the
+      // ceiling itself (`tokensRemaining = tokenLimit`), so any prompt
+      // logic like "if tokensRemaining < 5000, hand off" never
+      // triggered.
       const snapshot = deps.tokenUtilizationSnapshot?.() ?? { used: 0, modelWindow: null };
+      const budget: { tokensRemaining?: number; secondsRemaining?: number } = {};
+      if (typeof tokenLimit === 'number' && tokenLimit > 0) {
+        budget.tokensRemaining = Math.max(0, tokenLimit - snapshot.used);
+      }
+      if (typeof secondsRemaining === 'number' && Number.isFinite(secondsRemaining)) {
+        budget.secondsRemaining = secondsRemaining;
+      }
       const tokenUtilization: {
         used: number;
         modelWindow: number | null;

@@ -429,6 +429,167 @@ describe('NB1 regression — tokenUtilizationSnapshot wired through production p
 });
 
 /* =====================================================================
+ * NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` reports REMAINING,
+ * not the cap, when wired through the FULL production pattern.
+ *
+ * REGRESSION TEST for audit-rev2 HIGH NH1.
+ *
+ * Pre-fix, `defineGetMyContext`'s handler set
+ * `budget.tokensRemaining = tokenLimit` unconditionally — the ceiling,
+ * not the actual remaining capacity. Any agent prompt logic like "if
+ * tokensRemaining < 5000, hand off" therefore never triggered.
+ *
+ * The fix passes `tokenUtilizationSnapshot` (already wired in
+ * production via NB1's `buildTokenUtilizationBridge`) into
+ * `defineGetMyContext` and uses `snapshot.used` to compute remaining.
+ * Both `tokenLimit` and `snapshot.used` are the same currency
+ * (cumulative input + output tokens off `RunBudget`), so
+ * `tokensRemaining = max(0, tokenLimit - used)`.
+ *
+ * This test drives the FULL production wireup pattern (same
+ * `buildTokenUtilizationBridge` + `onBudgetReady` triple `main.ts`
+ * uses) across multiple iterations and asserts `tokensRemaining`
+ * decreases monotonically as tokens are consumed.
+ * ===================================================================== */
+
+describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) through production pattern', () => {
+  /**
+   * LLM stub that performs THREE iterations:
+   *   - chat #1: tool_call to `get_my_context`, usage 600/350 → +950.
+   *   - chat #2: tool_call to `get_my_context`, usage 800/200 → +1000 (cumulative 1950).
+   *   - chat #3: final text, usage 5/5.
+   * The third chat's usage is irrelevant to the assertions — we sample
+   * `tokensRemaining` from the two get_my_context tool_call traces.
+   */
+  function llmThatCallsGetMyContextTwiceThenFinishes(): {
+    llm: LLMClient;
+    chatCalls(): number;
+  } {
+    let calls = 0;
+    return {
+      llm: {
+        chat(_req: ChatRequest): Promise<ChatResult> {
+          calls += 1;
+          if (calls === 1) {
+            return Promise.resolve({
+              content: '',
+              tool_calls: [{ id: 'gmc-1', name: 'get_my_context', args: {} }],
+              stopReason: 'tool_use',
+              usage: { inputTokens: 600, outputTokens: 350 },
+            });
+          }
+          if (calls === 2) {
+            return Promise.resolve({
+              content: '',
+              tool_calls: [{ id: 'gmc-2', name: 'get_my_context', args: {} }],
+              stopReason: 'tool_use',
+              usage: { inputTokens: 800, outputTokens: 200 },
+            });
+          }
+          return Promise.resolve({
+            content: 'done.',
+            stopReason: 'end_turn',
+            usage: { inputTokens: 5, outputTokens: 5 },
+          });
+        },
+        async *chatStream(_req: ChatRequest): AsyncIterable<ChatDelta> {
+          yield { content: 'done.', stopReason: 'end_turn' };
+          await Promise.resolve();
+        },
+      },
+      chatCalls: () => calls,
+    };
+  }
+
+  it('FULL wireup: tokensRemaining decreases as tokens are consumed across iterations', async () => {
+    const cfg: PodConfig = {
+      taskId: 'task-uid-nh1',
+      taskName: 't-nh1',
+      taskNamespace: 'default',
+      agentName: 'researcher',
+      agentSpec: {
+        model: 'workers-ai/x',
+        tools: ['get_my_context'],
+      },
+      // Per-task user cap. tokenLimit=5000 means after 950 tokens
+      // tokensRemaining should be 4050; after 1950 it should be 3050.
+      taskSpec: { payload: {}, runConfig: { tokenLimit: 5_000 } },
+      litellmBaseUrl: 'http://litellm.test:4000/v1',
+      logLevel: 'info',
+      traceContentMode: 'preview',
+      contextWindowTokens: 131_072,
+    };
+
+    // Production wireup pattern (mirrors main.ts).
+    const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(
+      cfg.contextWindowTokens,
+    );
+    const ctxDef = defineGetMyContext({
+      podConfig: cfg,
+      tokenUtilizationSnapshot,
+    });
+    const substrateTools = new InProcessToolProvider({
+      id: 'kagent-substrate',
+      tools: [ctxDef],
+    });
+
+    const llm = llmThatCallsGetMyContextTwiceThenFinishes();
+    const result = await runAgentTask(cfg, {
+      llm: llm.llm,
+      sinks: [],
+      spawnTools: substrateTools,
+      onBudgetReady,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(llm.chatCalls()).toBe(3);
+
+    // Two get_my_context tool_calls in trace order.
+    const ctxTraces = result.traces.filter(
+      (t) => t.trace_type === 'tool_call' && t.tool_name === 'get_my_context',
+    );
+    expect(ctxTraces).toHaveLength(2);
+
+    function readTokensRemaining(rawOutput: unknown): number {
+      expect(typeof rawOutput).toBe('string');
+      const blocks = JSON.parse(rawOutput as string) as Array<{ type: string; text: string }>;
+      const innerJson = blocks[0]?.text;
+      expect(typeof innerJson).toBe('string');
+      const ctx = JSON.parse(innerJson as string) as {
+        budget?: { tokensRemaining?: unknown };
+      };
+      const tr = ctx.budget?.tokensRemaining;
+      expect(typeof tr).toBe('number');
+      return tr as number;
+    }
+
+    // After chat #1 (950 tokens consumed): tokensRemaining = 5000 - 950 = 4050.
+    const remainingAfterCall1 = readTokensRemaining(ctxTraces[0]?.tool_output);
+    expect(remainingAfterCall1).toBe(4050);
+
+    // After chat #2 (cumulative 1950): tokensRemaining = 5000 - 1950 = 3050.
+    const remainingAfterCall2 = readTokensRemaining(ctxTraces[1]?.tool_output);
+    expect(remainingAfterCall2).toBe(3050);
+
+    // The whole point of NH1: monotonic decrease, not the ceiling.
+    expect(remainingAfterCall2).toBeLessThan(remainingAfterCall1);
+    // Pre-fix, BOTH calls would have observed `tokensRemaining: 5000`.
+    expect(remainingAfterCall1).not.toBe(5000);
+    expect(remainingAfterCall2).not.toBe(5000);
+  });
+
+  // Clamp-to-0 behavior is covered at the unit level in
+  // builtin-tools.test.ts (`NH1: tokensRemaining clamps to 0 at and
+  // past the limit`). End-to-end clamping cannot be driven through
+  // `runAgentTask` because the executor's budget-cap check
+  // (`executor.ts:831-838`) fires AFTER token accounting but BEFORE
+  // tool dispatch — the loop terminates with `status='budget_exceeded'`
+  // before `get_my_context` runs, so the LLM never observes the
+  // post-overshoot snapshot in production. The unit test exercises the
+  // handler directly to assert the `Math.max(0, ...)` clamp.
+});
+
+/* =====================================================================
  * `buildTokenUtilizationBridge` unit shape — pure helper invariants.
  * ===================================================================== */
 

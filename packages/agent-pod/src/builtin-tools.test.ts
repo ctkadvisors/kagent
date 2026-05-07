@@ -909,7 +909,7 @@ describe('get_my_context (v0.1.9)', () => {
     expect(ctx.parentUid).toBe('parent-uid-xyz');
   });
 
-  it('reports tokensRemaining when runConfig.tokenLimit is set', async () => {
+  it('reports tokensRemaining = tokenLimit when no consumption has occurred', async () => {
     const tool = defineGetMyContext({
       podConfig: buildPodConfig({
         taskSpec: { payload: null, runConfig: { tokenLimit: 50_000 } },
@@ -927,6 +927,70 @@ describe('get_my_context (v0.1.9)', () => {
     const ctx = parseContext(result);
     const budget = ctx.budget as Record<string, unknown>;
     expect(budget.tokensRemaining).toBeUndefined();
+  });
+
+  /* =====================================================================
+   * NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` reflects the LIVE
+   * snapshot, not the cap. Same currency as `tokenLimit`
+   * (cumulative input + output tokens), so `tokensRemaining = max(0,
+   * tokenLimit - used)`. Pre-fix, the handler reported the ceiling
+   * itself (50_000), making prompt logic like "if tokensRemaining <
+   * 5000, hand off" never trigger.
+   * ===================================================================== */
+  it('NH1: tokensRemaining decreases as tokens are consumed (live snapshot)', async () => {
+    let used = 0;
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig({
+        taskSpec: { payload: null, runConfig: { tokenLimit: 50_000 } },
+      }),
+      tokenUtilizationSnapshot: () => ({ used, modelWindow: 131_072 }),
+    });
+
+    // Initial — no consumption yet.
+    let result = await callGetMyContext(tool);
+    let ctx = parseContext(result);
+    let budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBe(50_000);
+
+    // After 12_500 tokens consumed.
+    used = 12_500;
+    result = await callGetMyContext(tool);
+    ctx = parseContext(result);
+    budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBe(37_500);
+
+    // Near-exhaustion.
+    used = 49_500;
+    result = await callGetMyContext(tool);
+    ctx = parseContext(result);
+    budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBe(500);
+  });
+
+  it('NH1: tokensRemaining clamps to 0 at and past the limit', async () => {
+    let used = 50_000;
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig({
+        taskSpec: { payload: null, runConfig: { tokenLimit: 50_000 } },
+      }),
+      tokenUtilizationSnapshot: () => ({ used, modelWindow: 131_072 }),
+    });
+
+    // At the limit — exactly 0.
+    let result = await callGetMyContext(tool);
+    let ctx = parseContext(result);
+    let budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBe(0);
+
+    // Past the limit (gateway's input usage > our cap on the next call) —
+    // clamp to 0, never go negative. The agent should never see
+    // "tokensRemaining: -150"; that would crash any prompt template
+    // doing arithmetic on it.
+    used = 50_150;
+    result = await callGetMyContext(tool);
+    ctx = parseContext(result);
+    budget = ctx.budget as Record<string, unknown>;
+    expect(budget.tokensRemaining).toBe(0);
   });
 
   it('threads secondsRemaining from the optional callback', async () => {
