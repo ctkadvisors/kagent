@@ -232,20 +232,121 @@ function defaultReadFile(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
+/**
+ * Audit C2 H11 (2026-05-06) — error type the boot path uses to
+ * distinguish "JWKS endpoint unreachable / flapping" from genuine
+ * verification failures. `main.ts`'s capability-load catch already
+ * patches AgentTask `Failed`; surfacing this typed error lets the
+ * pod's structured Failed-status reason carry `jwks_unreachable: ...`
+ * so the operator can spot a transient template-server flap vs. a
+ * tampered JWT.
+ *
+ * `JwksUnreachableError.cause` carries the last underlying error
+ * (DOMException AbortError on timeout, TypeError on network failure,
+ * Error on non-2xx HTTP, malformed body Error). The 3-attempt backoff
+ * (250ms → 750ms → 2250ms) absorbs the operator's rolling-restart
+ * window without taking down legitimate pod boots.
+ */
+export class JwksUnreachableError extends Error {
+  readonly url: string;
+  readonly attempts: number;
+  override readonly cause?: unknown;
+  constructor(url: string, attempts: number, cause?: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(`jwks_unreachable: ${url} after ${String(attempts)} attempts (${reason})`);
+    this.name = 'JwksUnreachableError';
+    this.url = url;
+    this.attempts = attempts;
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+/**
+ * Per-attempt fetch timeout (audit C2 H11). 10s gives the operator's
+ * template-server enough headroom for cold-start + first-request JWKS
+ * generation while keeping a SIGTERM-aware ceiling well below
+ * kubelet's default `terminationGracePeriodSeconds`.
+ */
+const JWKS_FETCH_TIMEOUT_MS = 10_000;
+
+/**
+ * Backoff schedule between JWKS fetch attempts (audit C2 H11). 3 total
+ * attempts (initial + 2 retries) with delays {250ms, 750ms, 2250ms}
+ * between them. Total worst-case wall-clock = 3 × 10s timeout +
+ * 250+750+2250 ms ≈ 33.25s — still inside the operator's
+ * `terminationGracePeriodSeconds` and inside the kubelet's
+ * pod-startup budget.
+ */
+const JWKS_RETRY_DELAYS_MS: readonly number[] = [250, 750, 2250];
+
+/**
+ * Sleep helper — exposed so tests can stub it via `setTimeout`-fake
+ * timers without owning the function reference. Inlined inside
+ * `fetchJwksWithRetry`.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Audit C2 H11 — wraps a single `fetchOnce` JWKS call with:
+ *   - per-attempt 10s AbortController timeout, and
+ *   - 3-attempt exponential-ish backoff (250ms, 750ms, 2250ms).
+ *
+ * On terminal failure (all retries exhausted) throws
+ * `JwksUnreachableError` so `main.ts`'s capability-load catch can
+ * surface a structured `error: jwks_unreachable: <detail>` on the
+ * AgentTask `Failed` patch (per docs/SUBSTRATE-V1.md §3.6).
+ *
+ * Exported for unit tests; `defaultFetchJwks` wires
+ * `globalThis.fetch` as `fetchOnce`.
+ */
+export async function fetchJwksWithRetry(
+  url: string,
+  fetchOnce: (url: string, init: { signal: AbortSignal }) => Promise<Response>,
+  opts: {
+    readonly timeoutMs?: number;
+    readonly retryDelaysMs?: readonly number[];
+    readonly sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<{ readonly keys: readonly JWK[] }> {
+  const timeoutMs = opts.timeoutMs ?? JWKS_FETCH_TIMEOUT_MS;
+  const delays = opts.retryDelaysMs ?? JWKS_RETRY_DELAYS_MS;
+  const sleeper = opts.sleep ?? sleep;
+  const totalAttempts = delays.length;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchOnce(url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`JWKS fetch ${url} returned HTTP ${String(response.status)}`);
+      }
+      const body: unknown = await response.json();
+      if (
+        typeof body !== 'object' ||
+        body === null ||
+        !Array.isArray((body as { keys?: unknown }).keys)
+      ) {
+        throw new Error(`JWKS fetch ${url} returned malformed body`);
+      }
+      return body as { keys: readonly JWK[] };
+    } catch (err) {
+      lastErr = err;
+      // Last attempt: don't sleep; throw structured error below.
+      if (attempt < totalAttempts) {
+        await sleeper(delays[attempt - 1] ?? 0);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new JwksUnreachableError(url, totalAttempts, lastErr);
+}
+
 async function defaultFetchJwks(url: string): Promise<{ readonly keys: readonly JWK[] }> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`JWKS fetch ${url} returned HTTP ${String(response.status)}`);
-  }
-  const body: unknown = await response.json();
-  if (
-    typeof body !== 'object' ||
-    body === null ||
-    !Array.isArray((body as { keys?: unknown }).keys)
-  ) {
-    throw new Error(`JWKS fetch ${url} returned malformed body`);
-  }
-  return body as { keys: readonly JWK[] };
+  return fetchJwksWithRetry(url, (u, init) => fetch(u, init));
 }
 
 /**

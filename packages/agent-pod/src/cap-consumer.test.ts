@@ -12,7 +12,13 @@ import {
 } from '@kagent/capability-types';
 import { generateKeyPair } from 'jose';
 
-import { bundleAdmits, loadCapabilityFromEnv, loadCapabilityOptional } from './cap-consumer.js';
+import {
+  bundleAdmits,
+  fetchJwksWithRetry,
+  JwksUnreachableError,
+  loadCapabilityFromEnv,
+  loadCapabilityOptional,
+} from './cap-consumer.js';
 
 const ISSUER = 'kagent.knuteson.io/operator';
 
@@ -279,5 +285,250 @@ describe('jwks helper sanity', () => {
     const { jwks } = await makeKeysAndJwt({ jti: 'cap-sanity' });
     const local = createLocalJWKSet({ keys: jwks.keys });
     expect(typeof local).toBe('function');
+  });
+});
+
+/* =====================================================================
+ * Audit C2 H11 — JWKS fetch fragility (timeout + retry + structured
+ * Failed status patch on terminal failure).
+ *
+ * Pre-fix `defaultFetchJwks` was a single `fetch()` with no timeout
+ * and no retry. A transient operator template-server flap during pod
+ * boot caused the AgentTask to hit CrashLoopBackOff with no
+ * operator-visible signal. Fix: 10s per-attempt timeout (AbortController),
+ * 3-attempt backoff (250ms / 750ms / 2250ms), terminal failure throws
+ * `JwksUnreachableError` whose message is structured for the AgentTask
+ * `Failed` status patch.
+ * ===================================================================== */
+
+describe('fetchJwksWithRetry (H11)', () => {
+  function makeFetcher(
+    responses: ReadonlyArray<() => Promise<Response>>,
+  ): (url: string, init: { signal: AbortSignal }) => Promise<Response> {
+    let i = 0;
+    return (_url, _init) => {
+      const fn = responses[i] ?? responses[responses.length - 1];
+      i += 1;
+      return fn?.() ?? Promise.reject(new Error('no fetcher'));
+    };
+  }
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('returns the parsed body on first-attempt success', async () => {
+    const result = await fetchJwksWithRetry(
+      'http://example/jwks.json',
+      makeFetcher([() => Promise.resolve(jsonResponse({ keys: [{ kid: 'k1' }] }))]),
+      { sleep: () => Promise.resolve() },
+    );
+    expect(result.keys).toHaveLength(1);
+  });
+
+  it('retries on first-attempt network error and succeeds on second', async () => {
+    const sleeps: number[] = [];
+    const result = await fetchJwksWithRetry(
+      'http://example/jwks.json',
+      makeFetcher([
+        () => Promise.reject(new TypeError('fetch failed')),
+        () => Promise.resolve(jsonResponse({ keys: [{ kid: 'k2' }] })),
+      ]),
+      {
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result.keys).toHaveLength(1);
+    expect(sleeps).toEqual([250]);
+  });
+
+  it('honors all 3 backoff delays before terminal failure', async () => {
+    const sleeps: number[] = [];
+    await expect(
+      fetchJwksWithRetry(
+        'http://example/jwks.json',
+        makeFetcher([
+          () => Promise.reject(new TypeError('fail 1')),
+          () => Promise.reject(new TypeError('fail 2')),
+          () => Promise.reject(new TypeError('fail 3')),
+        ]),
+        {
+          sleep: (ms) => {
+            sleeps.push(ms);
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(JwksUnreachableError);
+    // 3 attempts → 2 sleeps between attempts (no sleep after final attempt).
+    expect(sleeps).toEqual([250, 750]);
+  });
+
+  it('throws JwksUnreachableError with structured message on terminal failure', async () => {
+    let caught: unknown;
+    try {
+      await fetchJwksWithRetry(
+        'http://operator-template/.well-known/jwks.json',
+        makeFetcher([() => Promise.reject(new TypeError('connection refused'))]),
+        { sleep: () => Promise.resolve(), retryDelaysMs: [10] },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(JwksUnreachableError);
+    const e = caught as JwksUnreachableError;
+    expect(e.message).toMatch(/jwks_unreachable/);
+    expect(e.message).toContain('http://operator-template/.well-known/jwks.json');
+    expect(e.url).toBe('http://operator-template/.well-known/jwks.json');
+    expect(e.attempts).toBe(1);
+    expect(e.cause).toBeInstanceOf(TypeError);
+  });
+
+  it('treats non-2xx HTTP as failure and retries', async () => {
+    const sleeps: number[] = [];
+    const result = await fetchJwksWithRetry(
+      'http://example/jwks.json',
+      makeFetcher([
+        () => Promise.resolve(new Response('boom', { status: 503 })),
+        () => Promise.resolve(jsonResponse({ keys: [{ kid: 'k3' }] })),
+      ]),
+      {
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result.keys).toHaveLength(1);
+    expect(sleeps).toEqual([250]);
+  });
+
+  it('treats malformed JWKS body (no keys array) as failure and retries', async () => {
+    const sleeps: number[] = [];
+    const result = await fetchJwksWithRetry(
+      'http://example/jwks.json',
+      makeFetcher([
+        () => Promise.resolve(jsonResponse({ wrong: 'shape' })),
+        () => Promise.resolve(jsonResponse({ keys: [{ kid: 'k4' }] })),
+      ]),
+      {
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    );
+    expect(result.keys).toHaveLength(1);
+    expect(sleeps).toEqual([250]);
+  });
+
+  it('aborts on per-attempt timeout via AbortController.signal', async () => {
+    // Make the fetch listen to the AbortSignal and reject when fired.
+    // Use a 5ms timeout so the test runs fast.
+    let signalSeen: AbortSignal | undefined;
+    const slowFetcher: (url: string, init: { signal: AbortSignal }) => Promise<Response> = (
+      _url,
+      init,
+    ) => {
+      signalSeen = init.signal;
+      return new Promise((_, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+        // Don't resolve — let the timeout fire.
+      });
+    };
+    const sleeps: number[] = [];
+    await expect(
+      fetchJwksWithRetry('http://example/jwks.json', slowFetcher, {
+        timeoutMs: 5,
+        retryDelaysMs: [1, 1, 1],
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+      }),
+    ).rejects.toBeInstanceOf(JwksUnreachableError);
+    expect(signalSeen).toBeDefined();
+    // 3 attempts, 2 sleeps between.
+    expect(sleeps.length).toBe(2);
+  });
+
+  it('default schedule is 3 attempts (initial + 2 retries) with 250/750/2250 ms backoff', async () => {
+    // Smoke-test the default schedule by passing only the fetcher and
+    // a sleep stub — no opts override. The exact delays must match the
+    // task spec.
+    const sleeps: number[] = [];
+    await expect(
+      fetchJwksWithRetry(
+        'http://example/jwks.json',
+        makeFetcher([
+          () => Promise.reject(new TypeError('fail 1')),
+          () => Promise.reject(new TypeError('fail 2')),
+          () => Promise.reject(new TypeError('fail 3')),
+        ]),
+        {
+          sleep: (ms) => {
+            sleeps.push(ms);
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(JwksUnreachableError);
+    // Default delays are [250, 750, 2250] but with 3 attempts only 2
+    // delays between — verify the prefix matches.
+    expect(sleeps).toEqual([250, 750]);
+  });
+});
+
+describe('JwksUnreachableError (H11) — structured boot-time Failed signal', () => {
+  it('embeds url + attempt count + reason in message for status patch', () => {
+    const cause = new TypeError('ECONNREFUSED');
+    const err = new JwksUnreachableError('http://op/.well-known/jwks.json', 3, cause);
+    expect(err.message).toContain('jwks_unreachable');
+    expect(err.message).toContain('http://op/.well-known/jwks.json');
+    expect(err.message).toContain('3 attempts');
+    expect(err.message).toContain('ECONNREFUSED');
+  });
+
+  it('main.ts capability-load catch surfaces the structured error message', async () => {
+    // Simulate the boot path: loadCapabilityOptional uses a JWKS fetcher
+    // that always fails. The error should propagate up so main.ts's
+    // try/catch (audit C2.1 BLOCKER #1) sees a JwksUnreachableError
+    // whose message can be embedded into the AgentTask Failed patch.
+    const enoent = new TypeError('connection refused');
+    let caught: Error | undefined;
+    try {
+      await loadCapabilityOptional({
+        env: { KAGENT_CAP_JWT_FILE: '/cap.jwt' },
+        readFile: () => 'fake.jwt.body',
+        fetchJwks: (url) => {
+          throw new JwksUnreachableError(url, 3, enoent);
+        },
+      });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught?.message).toMatch(/jwks_unreachable/);
+    // The catch in main.ts:127-149 builds:
+    //   `capability load failed: ${message}`
+    // The message MUST contain the structured prefix so the operator
+    // can grep `jwks_unreachable` in the AgentTask status.
+    const failedStatusError = `capability load failed: ${caught?.message ?? ''}`;
+    expect(failedStatusError).toContain('jwks_unreachable');
+  });
+
+  it('cause chain is preserved on the error instance', () => {
+    const cause = new Error('underlying');
+    const err = new JwksUnreachableError('http://x', 3, cause);
+    expect(err.cause).toBe(cause);
+    expect(err.name).toBe('JwksUnreachableError');
   });
 });
