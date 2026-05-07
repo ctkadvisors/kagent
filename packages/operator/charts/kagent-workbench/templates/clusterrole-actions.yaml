@@ -2,29 +2,46 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2026 Chris Knuteson
 
-ClusterRole — WRITE surface for the workbench-api (WS-J).
+Role — WRITE surface for the workbench-api (WS-J), scoped to the
+release namespace (H17 — was a ClusterRole, now namespaced). Filename
+stays `clusterrole-actions.yaml` for git history continuity; it now
+emits Role + RoleBinding (see clusterrolebinding-actions.yaml). The
+"clusterrole" prefix in the filename is a misnomer kept to avoid
+churning manifest paths in downstream tools that key by filename.
+
+H17 motivation: prior to this change, the actions surface granted
+`agenttasks: [create]` and `modelendpoints: [patch, update]`
+cluster-wide (every namespace). Combined with B6's spoofable
+`X-Forwarded-User` header, an authenticated workbench user could
+create AgentTasks or mutate ModelEndpoint bounds in any namespace,
+including tenant namespaces. Restricting to the release namespace
+removes the cross-namespace blast radius. Multi-namespace dispatch is
+a future feature behind an explicit values flag, NOT a default.
 
 Kept distinct from `clusterrole.yaml` so an install with
 `actions.create=false` is provably write-proof: the read role grants
-no `create`/`update`/`delete` verbs anywhere; the write role does not
+no `create`/`update`/`delete` verbs anywhere; the write Role does not
 exist when actions are disabled. Drop-in: bind/unbind by toggling
 `.Values.rbac.actions.create`.
 
-Today this grants `agenttasks: [create]` only — the smallest verb set
-that satisfies POST /api/tasks. WS-K (spawn_child_task) does NOT use
-this role; it ships its own RBAC on the agent-pod's namespace-scoped
-Role. WS-M (AgentTemplate) will extend this role with
+Today this grants `agenttasks: [create]` + `modelendpoints:
+[patch, update]` only — the smallest verb set that satisfies POST
+/api/tasks and PATCH /api/modelendpoints, scoped to the release
+namespace. WS-K (spawn_child_task) does NOT use this role; it ships
+its own RBAC on the agent-pod's namespace-scoped Role. WS-M
+(AgentTemplate) will extend this Role with
 `agenttemplates: [get,list,watch]` when it lands.
 
 `/cancel` and `/retry` (WORKBENCH.md §5) are not implemented in v0.1;
-when they land they extend this role with `agenttasks: [delete]` plus
+when they land they extend this Role with `agenttasks: [delete]` plus
 the corresponding write verb on `agenttasks/status`.
 */}}
 {{- if and .Values.rbac.create .Values.rbac.actions.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ include "kagent-workbench.fullname" . }}-actions
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kagent-workbench.labels" . | nindent 4 }}
     app.kubernetes.io/component: workbench-actions
