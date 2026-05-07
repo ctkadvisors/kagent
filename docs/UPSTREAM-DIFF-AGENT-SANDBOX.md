@@ -165,9 +165,11 @@ The audit found two real defects in the *consumer* side (capability is fail-open
 
 Plus `refusal.ts` for the sub-agent-refused-but-returned-success-shape pattern.
 
+**Update 2026-05-07:** the run-end detector battery now also includes `context_pressure_ignored` (commit `fc32b13`). It flags Agent CRs whose prompts ride to high context utilization (>70%) without delegating via `spawn_child_task` in the last N=3 iterations — i.e. the prompt is failing to manage its own context budget despite having the introspection tool (`get_my_context.tokenUtilization`, commit `fb549c0`) and the substrate-side refusal at 95% (commit `73f67f4`) wired up. This is exactly the kind of thing pure-isolation primitives won't catch: the pod runs to completion fine; the *prompt* is bad at self-managing its window. Worth folding into the upstream-share conversation alongside the original four — the design rationale is in `evidence/audit-rev2/R1.md` §3 and the slate is documented in `docs/CONTEXT-AWARENESS.md`.
+
 These earned their keep against Llama-4-Scout via Cloudflare AI Gateway in the chat-server experiments documented in `docs/HARNESS-LESSONS.md`. The cross-cutting lesson from that doc: **most "framework bugs" in the agent-platform space are model-tier bugs in disguise.** A Sandbox CR by itself can't see that.
 
-**Would you consider:** whether agent-sandbox wants an opinion on what "the agent's output is suspicious" means at the substrate level, or whether that's deliberately out of scope. If it's in scope, the four detectors are pure functions over a trace + final message + user prompt — they'd port to any controller.
+**Would you consider:** whether agent-sandbox wants an opinion on what "the agent's output is suspicious" means at the substrate level, or whether that's deliberately out of scope. If it's in scope, the five detectors are pure functions over a trace + final message + user prompt (and, for `context_pressure_ignored`, a token-utilization signal threaded from the gateway) — they'd port to any controller.
 
 ### 5.3 Substrate-mediated post-completion verifier hook
 

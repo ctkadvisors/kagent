@@ -4,19 +4,23 @@
 
 ## 1. The OSS market gap
 
-In 2026 the agent-platform field has converged on a primitive: each agent gets its own sandbox, with persistent state, per-instance scheduling, and a managed loop. AWS calls it Bedrock AgentCore. Cloudflare calls it Agents + Sandbox SDK. Anthropic calls it Managed Agents (Agent → Environment → Session). All three ship proprietary, cloud-locked implementations.
+In 2026 the agent-platform field converged on a shared primitive: each agent gets its own sandbox, with persistent state, per-instance scheduling, and a managed loop. AWS calls it Bedrock AgentCore. Cloudflare calls it Agents + Sandbox SDK. Anthropic calls it Managed Agents (Agent → Environment → Session). The OSS / K8s-native equivalent of *that primitive* — per-agent pod isolation as a CRD with declared lifecycle — is shipped today by [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) (v0.4.5 as of 2026-05-06; Sandbox CR + SandboxTemplate + SandboxClaim + SandboxWarmPool). Solo.io kagent.dev consumes it via `SandboxAgent`. **Earlier framing of this project claimed kagent was the only OSS K3s-native agent framework. As of 2026-05, that's false** (see `docs/UPSTREAM-DIFF-AGENT-SANDBOX.md` and `evidence/audit-rev2/R1.md` §1). The defensible scope for kagent is narrower and sharper, and lives in two primitives the surveyed OSS+proprietary landscape does not ship:
 
-**Nobody has shipped the OSS / K3s equivalent.** Every component to assemble it exists:
-- **Kata Containers** — microVM-grade per-pod isolation as a Kubernetes `RuntimeClass`
-- **NATS JetStream** — durable subject-based messaging, KV buckets for live state
-- **Bun** — lean TypeScript runtime; ~40MB RSS for an agent pod (Anthropic-owned as of Dec 2025)
-- **LiteLLM** — multi-provider OpenAI-compat proxy with virtual keys, fallbacks, cost tracking
-- **Langfuse** — self-hostable trace + cost + eval store
-- **`@kubernetes/client-node`** — TS Kubernetes client with watch/informer patterns sufficient for a hand-rolled operator
+**(a) Substrate-thin context-pressure handling.** Pre-call refusal when the next call would push the conversation past 95% of the model's context window (`73f67f4`); agent-side introspection of remaining headroom via the `get_my_context` tool (`tokenUtilization = {used, modelWindow, percentage}` — `fb549c0`); and a run-end `context_pressure_ignored` detector that flags Agent CRs whose prompts ride into the safety-net without delegating (`fc32b13`). The design is *substrate-thin* — kagent observes and refuses; the application's prompt owns the handoff strategy. This is distinct from Claude Code's auto-compaction at 95% (substrate-thick: substrate owns the summarizer model and template) and from `BufferedChatCompletionContext` in autogen-core (buffer-windowing, pre-tokenization). No surveyed OSS substrate ships this triple. Defensible 12+ months on the current evidence (`evidence/audit-rev2/R1.md` §3, R2 §5.2 Moat 1).
 
-But nobody has wired them. AWS AgentCore is non-portable (locked to Bedrock + AWS). CF Agents is non-portable (Durable Objects don't exist outside Cloudflare; `workerd` OSS doesn't include them). Anthropic Managed Agents is non-portable (managed cloud, Claude-only).
+**(b) Sealed-JWT capability narrowing on spawn.** The operator mints a JOSE bundle (ES256 default, RS256 fallback) for each AgentTask from `Agent.spec.capabilityClaims`, narrowed by the parent's bundle when one was provided. Substrate enforces `child.claims ⊆ parent.claims` at admission; the agent-pod cannot escalate (`packages/operator/src/cap-issuer.ts`, `packages/agent-pod/src/cap-consumer.ts`). Macaroons are a 2014-era concept; nothing else in OSS K8s land ships caveat-narrowing JWT capabilities at the K8s spawn boundary today (`evidence/audit-rev2/R1.md` R1.4 #4). Defensible 6-12 months — small in scope, but uncontested.
 
-`kagent` is the composition. K3s-native, MIT-licensed, BYO-everything (cluster, LLM endpoint, sandbox profile). Sandbox-per-agent. A2A messaging. Unified trace. Same manifests run on the homelab and on GKE / EKS / AKS unchanged.
+Everything else in the substrate is composition. Same manifests run on the homelab K3s and on GKE / EKS / AKS unchanged. MIT-licensed, BYO-everything (cluster, LLM endpoint, sandbox profile).
+
+> ### Sidebar — what we're best at vs. what we compose with
+>
+> kagent does not invent per-agent isolation, SPIFFE identity, or durable workflow. It composes with projects that have shipped those primitives strongly:
+>
+> - **Per-agent isolation** — [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) (v0.4.5; SIG Apps; 2,059★). Lifecycle, SandboxWarmPool, suspend/resume via GKE Pod snapshots, Kata + gVisor support. The integration path (kagent's AgentTask reconciler emits `SandboxClaim` instead of `Job`) is documented in `docs/UPSTREAM-DIFF-AGENT-SANDBOX.md` §6 path 1.
+> - **SPIFFE identity** — [Red Hat Kagenti](https://github.com/kagenti/kagenti) ships the strongest SPIFFE story of any surveyed OSS project (auto-injected SVIDs via SPIRE + Istio Ambient). kagent's `v0.4.3-identity` slate plans to consume the same pattern.
+> - **Durable workflow** — [Restate](https://restate.dev) for `AgentWorkflow`'s long-running orchestration semantics (planned `v0.3.2-workflows`). Argo Workflows + Argo Events are the alternative for an agent-sandbox-shaped consumer that doesn't want a kagent-side workflow CRD.
+>
+> The defensible novel claims (a) and (b) above are reserved for the substrate-thin context handling and the capability narrowing primitive — the two places the audit (R1, R2) found no OSS or proprietary peer.
 
 ## 2. The kernel pivot
 
