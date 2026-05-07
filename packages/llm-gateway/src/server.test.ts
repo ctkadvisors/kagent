@@ -37,11 +37,14 @@ class StubApiKeyRepo implements ApiKeyRepo {
   revokedId: string | undefined;
   revokeMatches = true;
   insertId = '17';
+  /** H18 — capture every keyHash passed to touchLastUsed for assertions. */
+  touchedKeyHashes: string[] = [];
 
   async getByHash(): Promise<null> {
     return Promise.resolve(null);
   }
-  async touchLastUsed(): Promise<void> {
+  async touchLastUsed(keyHash: string): Promise<void> {
+    this.touchedKeyHashes.push(keyHash);
     return Promise.resolve();
   }
   async insert(input: InsertApiKeyInput): Promise<void> {
@@ -78,15 +81,17 @@ interface BootedServer {
   close(): Promise<void>;
 }
 
-function bootServer(): Promise<BootedServer> {
+function bootServer(
+  overrides: Partial<Pick<ServerDeps, 'apiKeyLookup' | 'modelIndex' | 'routerDeps'>> = {},
+): Promise<BootedServer> {
   return new Promise((resolve, reject) => {
     const repo = new StubApiKeyRepo();
     const deps: ServerDeps = {
-      modelIndex: new ModelIndex(),
+      modelIndex: overrides.modelIndex ?? new ModelIndex(),
       inFlight: new InFlightCounter(),
       aimd: new AimdController({ seed: 1, max: 4, minSafe: 1 }),
-      routerDeps: {} as unknown as RouterDeps,
-      apiKeyLookup: () => Promise.resolve(null),
+      routerDeps: overrides.routerDeps ?? ({} as unknown as RouterDeps),
+      apiKeyLookup: overrides.apiKeyLookup ?? (() => Promise.resolve(null)),
       apiKeyRepo: repo,
       usageRepo: new StubUsageRepo(),
       adminToken: ADMIN_TOKEN,
@@ -265,5 +270,77 @@ describe('DELETE /admin/keys/:id', () => {
   it('rejects without admin auth (401)', async () => {
     const res = await fetch(`${booted.url}/admin/keys/42`, { method: 'DELETE' });
     expect(res.status).toBe(401);
+  });
+});
+
+/* =====================================================================
+ * H18 (MCALL sibling) — touchLastUsed is wired into the chat-completions
+ * auth path so admin-list rendering reflects key activity. The audit
+ * surfaced this as "wired-but-dead" by spirit (test passes / production
+ * dead) but the WBD paradigm doc reclassifies it as MCALL: the dep is
+ * required + threaded; the call is just missing. Fix is: call it.
+ * ===================================================================== */
+
+describe('POST /v1/chat/completions — touchLastUsed (H18)', () => {
+  it('invokes apiKeyRepo.touchLastUsed with the auth keyHash on every authenticated request', async () => {
+    const validKey = 'sk-h18-regression-test-key-1234';
+    const validHash = hashApiKey(validKey);
+    const lookup = (
+      hash: string,
+    ): Promise<{
+      readonly keyHash: string;
+      readonly keyPrefix: string;
+      readonly status: 'active';
+      readonly expiresAt: null;
+    } | null> => {
+      if (hash === validHash) {
+        return Promise.resolve({
+          keyHash: validHash,
+          keyPrefix: validKey.slice(0, 8),
+          status: 'active' as const,
+          expiresAt: null,
+        });
+      }
+      return Promise.resolve(null);
+    };
+    const booted = await bootServer({ apiKeyLookup: lookup });
+    try {
+      // Issue a request that AUTHENTICATES but is then rejected at body
+      // validation — validates wiring without needing a router stub.
+      const res = await fetch(`${booted.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${validKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      // Body fails validation (no model+messages) → 400. Auth still ran.
+      expect(res.status).toBe(400);
+      // Allow the fire-and-forget Promise to flush.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(booted.repo.touchedKeyHashes).toContain(validHash);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('does NOT invoke touchLastUsed when authentication fails', async () => {
+    const booted = await bootServer({ apiKeyLookup: () => Promise.resolve(null) });
+    try {
+      const res = await fetch(`${booted.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer sk-bogus-key-not-in-repo',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ model: 'm', messages: [] }),
+      });
+      expect(res.status).toBe(401);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(booted.repo.touchedKeyHashes).toEqual([]);
+    } finally {
+      await booted.close();
+    }
   });
 });

@@ -231,6 +231,14 @@ export function buildHandler(
         writeJson(res, auth.statusCode, createOpenAIError(auth.message, 'authentication_error'));
         return;
       }
+      // H18 (MCALL sibling) — touch last_used_at on every successful
+      // authentication so the admin-list view reflects key activity.
+      // Fire-and-forget — a transient DB hiccup must NOT fail the
+      // user-visible chat call. Best surface for diagnosis is an
+      // operator log line.
+      void deps.apiKeyRepo.touchLastUsed(auth.keyHash).catch((err: unknown) => {
+        console.error('[llm-gateway] touchLastUsed failed:', err);
+      });
       let body: ChatCompletionRequest;
       try {
         body = (await readJsonBody(req)) as ChatCompletionRequest;
