@@ -38,7 +38,32 @@ export const API_GROUP_VERSION = `${API_GROUP}/${API_VERSION}` as const;
  * ===================================================================== */
 
 export interface AgentSpec {
-  readonly model: string;
+  /**
+   * Physical model id passed to LiteLLM (e.g. `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`).
+   *
+   * Optional since the substrate's `modelClass` primitive landed
+   * (v0.1.8-modelclass.0) — an Agent may declare a logical capability
+   * tier (`modelClass`) instead of a hard-coded physical model id, and
+   * the operator's resolver translates the class to a model centrally
+   * via chart values.
+   *
+   * AT LEAST ONE of `model` or `modelClass` MUST be set; admission
+   * rejects otherwise. When both are set, `model` is the explicit
+   * override (escape-hatch for one-off agents that need a physical
+   * model the cluster's classes don't cover); the operator-side
+   * resolver prefers `model` over `modelClass`.
+   *
+   * Mirror of `AgentSpec.model` in `operator/src/crds/types.ts` —
+   * see that file for the canonical comments. Keep both in sync.
+   */
+  readonly model?: string;
+  /**
+   * Logical model-capability tier (e.g. `tool-caller-default`,
+   * `text-generator-default`). Resolved to a physical model id by the
+   * operator at job-spec build time via chart-supplied class→model
+   * values. Mirror of `AgentSpec.modelClass` in `operator/src/crds/types.ts`.
+   */
+  readonly modelClass?: string;
   readonly systemPrompt?: string;
   /**
    * v0.1.6 — Langfuse-managed system prompt reference. Mirror of

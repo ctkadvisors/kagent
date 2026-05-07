@@ -398,6 +398,34 @@ describe('agentSummary', () => {
     const tasks: AgentTask[] = [makeTask({ name: 'unseen', uid: 'u' })];
     expect(agentSummary(a, { tasks }).recentTaskCounts.pending).toBe(1);
   });
+
+  /* v0.1.8-modelclass — substrate visibility for the logical-tier
+   * primitive. The mapper must surface `modelClass` and tolerate
+   * Agents that omit `model:` entirely (the migrated demo fleet). */
+
+  it('surfaces modelClass when set; omits model when unset', () => {
+    const a = makeAgent({ model: undefined, modelClass: 'tool-caller-default' });
+    const summary = agentSummary(a);
+    expect(summary.modelClass).toBe('tool-caller-default');
+    expect(summary.model).toBeUndefined();
+  });
+
+  it('surfaces both model and modelClass when both are set (escape-hatch)', () => {
+    const a = makeAgent({
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      modelClass: 'tool-caller-default',
+    });
+    const summary = agentSummary(a);
+    expect(summary.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(summary.modelClass).toBe('tool-caller-default');
+  });
+
+  it('omits modelClass when only model is set (legacy pinned Agent)', () => {
+    const a = makeAgent({ model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' });
+    const summary = agentSummary(a);
+    expect(summary.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+    expect(summary.modelClass).toBeUndefined();
+  });
 });
 
 /* =====================================================================

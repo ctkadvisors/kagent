@@ -81,12 +81,20 @@ function isAgentTaskShape(obj: unknown): obj is AgentTask {
   return o.kind === 'AgentTask' && typeof o.spec === 'object' && o.spec !== null;
 }
 
-function isAgentShape(obj: unknown): obj is Agent {
+export function isAgentShape(obj: unknown): obj is Agent {
   if (typeof obj !== 'object' || obj === null) return false;
   const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
   if (o.kind !== 'Agent') return false;
-  const spec = o.spec as { model?: unknown } | null;
-  return typeof spec === 'object' && spec !== null && typeof spec.model === 'string';
+  const spec = o.spec as { model?: unknown; modelClass?: unknown } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  // Mirror the operator's CRD admission rule: at-least-one of `model`
+  // or `modelClass` MUST be a non-empty string. Pre-v0.1.8-modelclass
+  // this checked only `model`; that silently filtered every migrated
+  // Agent (modelClass-only) out of the workbench cache, leaving the
+  // /api/agents endpoint serving stale pre-migration snapshots forever.
+  const hasModel = typeof spec.model === 'string' && spec.model.length > 0;
+  const hasModelClass = typeof spec.modelClass === 'string' && spec.modelClass.length > 0;
+  return hasModel || hasModelClass;
 }
 
 export function createInformerSet(deps: InformerDeps, cache: SnapshotCache): InformerSet {

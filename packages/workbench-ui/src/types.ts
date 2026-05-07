@@ -175,6 +175,13 @@ export interface AgentSummaryRow {
   readonly name: string;
   readonly namespace: string;
   readonly model?: string;
+  /**
+   * Logical model-capability tier (e.g. `tool-caller-default`). Set
+   * when the Agent CR uses the `modelClass` primitive instead of a
+   * literal `model` pin. Surfaces alongside `model` so the UI can
+   * label the tier even when no physical model is set at the Agent layer.
+   */
+  readonly modelClass?: string;
   readonly tools?: readonly string[];
   readonly capabilities?: readonly string[];
 }

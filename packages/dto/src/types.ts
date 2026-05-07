@@ -225,8 +225,22 @@ export interface AgentSummary {
   /** Agent metadata.namespace. */
   readonly namespace: string;
 
-  /** Model identifier (Agent.spec.model). */
-  readonly model: string;
+  /**
+   * Physical model identifier from Agent.spec.model. Optional since
+   * v0.1.8-modelclass.0 — Agents may declare a logical `modelClass`
+   * tier instead and let the operator resolve the physical id at
+   * job-spec build time. List-row consumers should display
+   * `modelClass` when `model` is undefined.
+   */
+  readonly model?: string;
+
+  /**
+   * Logical capability tier from Agent.spec.modelClass
+   * (e.g. `tool-caller-default`, `text-generator-default`). When set,
+   * substrate visibility flows: a UI can show the tier even if no
+   * physical model is pinned at the Agent layer.
+   */
+  readonly modelClass?: string;
 
   /** Sandbox profile — 'default' or 'strict'. Falls back to 'default' when unset. */
   readonly sandboxProfile: 'default' | 'strict';

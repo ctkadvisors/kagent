@@ -179,7 +179,8 @@ export function agentSummary(agent: Agent, opts: AgentSummaryOptions = {}): Agen
   return {
     name: agent.metadata.name ?? '',
     namespace,
-    model: agent.spec.model,
+    ...(agent.spec.model !== undefined && { model: agent.spec.model }),
+    ...(agent.spec.modelClass !== undefined && { modelClass: agent.spec.modelClass }),
     sandboxProfile: agent.spec.sandboxProfile ?? 'default',
     capabilities: agent.spec.capabilities ?? [],
     tools: agent.spec.tools ?? [],
