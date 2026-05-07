@@ -76,6 +76,53 @@ export interface GatewayRouteDeps {
    * Reads via customApi remain enabled either way.
    */
   readonly writesEnabled?: boolean;
+  /**
+   * NEW-L1 — TTL (ms) for the cached cluster-wide ModelEndpoint
+   * listing. Default 5000 (matches M14's node-list TTL). Set to `0`
+   * in tests to disable caching.
+   */
+  readonly modelEndpointIndexTtlMs?: number;
+  /**
+   * NEW-M1 — when set, PATCH /api/modelendpoints/:ns/:name rejects
+   * requests with a `:ns` other than this value. Combined with the
+   * H17 namespaced Role+RoleBinding, the workbench can only mutate
+   * ModelEndpoints in its own release namespace. Empty / undefined =
+   * no extra check (back-compat for harnesses that don't thread the
+   * release namespace through).
+   */
+  readonly defaultNamespace?: string;
+  /** Test-only clock override (ms). Defaults to `Date.now`. */
+  readonly now?: () => number;
+}
+
+/**
+ * NEW-L1 — TTL-cached loader. Mirrors `cluster.ts`'s `ttlCachedLoader`
+ * shape but kept module-local so the two routes don't grow a shared
+ * helper module just for one cache. Coalesces concurrent misses.
+ */
+function ttlCachedLoader<T>(
+  load: () => Promise<T>,
+  ttlMs: number,
+  now: () => number,
+): () => Promise<T> {
+  let cachedAt = 0;
+  let cached: T | undefined;
+  let inFlight: Promise<T> | null = null;
+  return async function load_(): Promise<T> {
+    const t = now();
+    if (cached !== undefined && t - cachedAt < ttlMs) return cached;
+    if (inFlight !== null) return inFlight;
+    inFlight = load()
+      .then((v) => {
+        cached = v;
+        cachedAt = now();
+        return v;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
+  };
 }
 
 const KAGENT_GROUP = 'kagent.knuteson.io';
@@ -246,6 +293,23 @@ export function buildModelEndpointMergePatch(body: PatchInFlightBody): {
 export function gatewayRoute(deps: GatewayRouteDeps): Hono {
   const app = new Hono();
 
+  // NEW-L1 — cache the (potentially expensive) cluster-wide
+  // `listClusterCustomObject` for ModelEndpoint behind a 5s TTL.
+  // Without this every page refresh issued an uncached cluster-wide
+  // list against the apiserver. The cache is per-route-instance so
+  // tests can construct a fresh instance with a different TTL or 0
+  // (cache disabled).
+  const TTL_MS = deps.modelEndpointIndexTtlMs ?? 5_000;
+  const now = deps.now ?? Date.now;
+  const customApi = deps.customApi;
+  const loadIndex = (): Promise<Map<string, { name: string; namespace: string }>> => {
+    if (customApi === undefined) {
+      return Promise.resolve(new Map<string, { name: string; namespace: string }>());
+    }
+    return buildModelEndpointIndex(customApi);
+  };
+  const cachedLoadIndex = TTL_MS > 0 ? ttlCachedLoader(loadIndex, TTL_MS, now) : loadIndex;
+
   app.get('/api/gateway/capacity', async (c) => {
     if (deps.gatewayClient === undefined) {
       return c.json(
@@ -261,11 +325,8 @@ export function gatewayRoute(deps: GatewayRouteDeps): Hono {
       const rows = await deps.gatewayClient.capacity();
       // Best-effort enrich with CR identity. Failure of the K8s list
       // doesn't fail the response — the UI is still useful with just
-      // the gateway-side state.
-      const index =
-        deps.customApi !== undefined
-          ? await buildModelEndpointIndex(deps.customApi)
-          : new Map<string, { name: string; namespace: string }>();
+      // the gateway-side state. NEW-L1: index is cached at 5s TTL.
+      const index = await cachedLoadIndex();
       const enriched = enrichCapacityRows(rows, index);
       const body: CapacityResponse = { rows: enriched, fetchedAt: new Date().toISOString() };
       return c.json(body);

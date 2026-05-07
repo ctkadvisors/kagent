@@ -236,6 +236,48 @@ describe('GET /api/gateway/capacity', () => {
     expect(body.rows[1]?.crName).toBe('workers-ai-llama-4-scout');
   });
 
+  // NEW-L1 — `buildModelEndpointIndex` cached at 5s TTL so a chatty UI
+  // poll loop collapses to one cluster-wide list per window.
+  it('caches buildModelEndpointIndex within the TTL window (NEW-L1)', async () => {
+    const client = makeClient({
+      capacity: vi.fn(() => Promise.resolve([])),
+    });
+    const list = vi.fn(() => Promise.resolve({ items: [] }));
+    const customApi = { listClusterCustomObject: list } as unknown as CustomObjectsApi;
+    let t = 1_000_000;
+    const app = gatewayRoute({
+      gatewayClient: client,
+      customApi,
+      modelEndpointIndexTtlMs: 5_000,
+      now: () => t,
+    });
+    await app.request(makeRequest('GET', '/api/gateway/capacity'));
+    t += 100;
+    await app.request(makeRequest('GET', '/api/gateway/capacity'));
+    t += 4_000;
+    await app.request(makeRequest('GET', '/api/gateway/capacity'));
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-loads buildModelEndpointIndex after the TTL elapses (NEW-L1)', async () => {
+    const client = makeClient({
+      capacity: vi.fn(() => Promise.resolve([])),
+    });
+    const list = vi.fn(() => Promise.resolve({ items: [] }));
+    const customApi = { listClusterCustomObject: list } as unknown as CustomObjectsApi;
+    let t = 1_000_000;
+    const app = gatewayRoute({
+      gatewayClient: client,
+      customApi,
+      modelEndpointIndexTtlMs: 5_000,
+      now: () => t,
+    });
+    await app.request(makeRequest('GET', '/api/gateway/capacity'));
+    t += 6_000;
+    await app.request(makeRequest('GET', '/api/gateway/capacity'));
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
   it('falls back to gateway-only rows when K8s list fails', async () => {
     const client = makeClient({
       capacity: vi.fn(() =>

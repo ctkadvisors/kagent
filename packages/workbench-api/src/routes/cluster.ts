@@ -125,6 +125,48 @@ export interface ClusterRouteDeps {
    * 503s. Reads-only; no write surface here.
    */
   readonly coreApi?: CoreV1Api;
+  /**
+   * M14 — TTL for the cached `listNode()` response (ms). Default 5000.
+   * Test-injectable so we can flip cache hit/miss without sleeping.
+   * Set `0` to disable the cache entirely (tests).
+   */
+  readonly nodeListTtlMs?: number;
+  /** Test-only clock override (ms). Defaults to `Date.now`. */
+  readonly now?: () => number;
+}
+
+/**
+ * M14 — wrap an async loader with a TTL cache. Coalesces concurrent
+ * misses so a stampede of `/api/cluster/{snapshot,nodes}` requests
+ * issues at most one upstream `listNode()`. Errors blow the cache;
+ * the next caller re-tries (we do NOT cache failures — a 502 from the
+ * apiserver shouldn't pin the workbench in a 5-second outage window).
+ *
+ * NEW-L1 reuses the same shape for `buildModelEndpointIndex`.
+ */
+function ttlCachedLoader<T>(
+  load: () => Promise<T>,
+  ttlMs: number,
+  now: () => number,
+): () => Promise<T> {
+  let cachedAt = 0;
+  let cached: T | undefined;
+  let inFlight: Promise<T> | null = null;
+  return async function load_(): Promise<T> {
+    const t = now();
+    if (cached !== undefined && t - cachedAt < ttlMs) return cached;
+    if (inFlight !== null) return inFlight;
+    inFlight = load()
+      .then((v) => {
+        cached = v;
+        cachedAt = now();
+        return v;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+    return inFlight;
+  };
 }
 
 interface KubeNodeShape {
@@ -274,13 +316,28 @@ function taskRow(
 
 export function clusterRoute(deps: ClusterRouteDeps): Hono {
   const app = new Hono();
+  // M14 — wrap `listNode()` in a 5s TTL cache shared by both
+  // `/api/cluster/nodes` and `/api/cluster/snapshot`. Without this an
+  // authenticated user (or a chatty UI poll loop) could issue
+  // unbounded `listNode` calls against the apiserver — the audit
+  // surfaced this as a low-cost amplification vector. The TTL is short
+  // enough that a node going NotReady still surfaces in the UI within
+  // 5s and long enough that a user mashing F5 collapses to a single
+  // upstream call.
+  const TTL_MS = deps.nodeListTtlMs ?? 5_000;
+  const now = deps.now ?? Date.now;
+  const loadNodeList = async (): Promise<{ items?: KubeNodeShape[] }> => {
+    if (deps.coreApi === undefined) return { items: [] };
+    return deps.coreApi.listNode();
+  };
+  const cachedListNode = TTL_MS > 0 ? ttlCachedLoader(loadNodeList, TTL_MS, now) : loadNodeList;
 
   app.get('/api/cluster/nodes', async (c) => {
     if (deps.coreApi === undefined) {
       return c.json({ error: 'cluster-api-disabled' }, 503);
     }
     try {
-      const list = (await deps.coreApi.listNode()) as { items?: KubeNodeShape[] };
+      const list = await cachedListNode();
       const allPods = deps.cache.listPods();
       const podCountByNode = new Map<string, number>();
       for (const p of allPods) {
@@ -305,11 +362,19 @@ export function clusterRoute(deps: ClusterRouteDeps): Hono {
       return c.json({ error: 'cluster-api-disabled' }, 503);
     }
     let nodes: NodeRow[] = [];
+    // NEW-M2 — snapshot the pod-cache list ONCE and reuse it for both
+    // the per-node count and the response payload. Previously the
+    // handler called `listPods()` twice (once before the await for the
+    // count, once after for the rows), so a pod lifecycle event between
+    // those points would surface inconsistent counts. The pod cache is
+    // a synchronous read; the only async hop is the node list, which
+    // we now hoist BEFORE both pod reads.
+    let allPodsForCount: ReadonlyArray<V1Pod> = [];
     try {
-      const nodeList = (await deps.coreApi.listNode()) as { items?: KubeNodeShape[] };
-      const allPods = deps.cache.listPods();
+      const nodeList = await cachedListNode();
+      allPodsForCount = deps.cache.listPods();
       const podCountByNode = new Map<string, number>();
-      for (const p of allPods) {
+      for (const p of allPodsForCount) {
         const n = p.spec?.nodeName ?? null;
         if (n !== null) podCountByNode.set(n, (podCountByNode.get(n) ?? 0) + 1);
       }
@@ -319,10 +384,11 @@ export function clusterRoute(deps: ClusterRouteDeps): Hono {
     } catch (err) {
       console.warn('[workbench-api] cluster snapshot — nodes failed:', err);
       // Continue — pods + tasks still useful even when node list errors.
+      allPodsForCount = deps.cache.listPods();
     }
 
     const allTasks = deps.cache.listTasks();
-    const allPods = deps.cache.listPods();
+    const allPods = allPodsForCount;
     const allAgents = deps.cache.listAgents();
 
     const activeTasks = allTasks
