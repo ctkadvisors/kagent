@@ -58,7 +58,11 @@ export { parseEnv, type GatewayConfig } from './env.js';
 export {
   DEFAULT_CONFORMANCE_TRACEPARENT,
   buildChatProbeHeaders,
+  // H19 — `evaluateMtlsSvidFallback` is the deprecated alias; new
+  // callers should use `recordMtlsSvidExpectation` for the
+  // declared-expectation evaluator. Both are exported for back-compat.
   evaluateMtlsSvidFallback,
+  recordMtlsSvidExpectation,
   runGatewayConformance,
   type GatewayConformanceCheck,
   type GatewayConformanceCheckId,

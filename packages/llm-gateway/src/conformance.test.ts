@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildChatProbeHeaders,
   evaluateMtlsSvidFallback,
+  recordMtlsSvidExpectation,
   type GatewayConformanceFetchFn,
   type GatewayConformanceFetchInit,
   type GatewayConformanceFetchResponse,
@@ -233,5 +234,35 @@ describe('evaluateMtlsSvidFallback', () => {
     });
     expect(check.status).toBe('pass');
     expect(check.observed).toMatchObject({ selectedPath: 'bearer_fallback' });
+  });
+
+  it('back-compat alias points at recordMtlsSvidExpectation (H19)', () => {
+    expect(evaluateMtlsSvidFallback).toBe(recordMtlsSvidExpectation);
+  });
+});
+
+describe('recordMtlsSvidExpectation (H19)', () => {
+  it('tags every observed result with source: declared', () => {
+    const r = recordMtlsSvidExpectation({
+      gatewayMtlsEnabled: true,
+      svidAvailable: true,
+      bearerFallbackAllowed: false,
+    });
+    expect(r.observed).toMatchObject({ source: 'declared', selectedPath: 'mtls_svid' });
+  });
+
+  it('fails when neither path is available', () => {
+    const r = recordMtlsSvidExpectation({
+      gatewayMtlsEnabled: true,
+      svidAvailable: false,
+      bearerFallbackAllowed: false,
+    });
+    expect(r.status).toBe('fail');
+    expect(r.observed).toMatchObject({ source: 'declared', selectedPath: 'none' });
+  });
+
+  it('expected message advertises the declared-vs-probed distinction', () => {
+    const r = recordMtlsSvidExpectation();
+    expect(r.expected).toMatch(/declared expectation/);
   });
 });

@@ -113,16 +113,40 @@ export function buildChatProbeHeaders(
   };
 }
 
-export function evaluateMtlsSvidFallback(
+/**
+ * H19 — record-shape evaluator for the mTLS / SVID fallback posture.
+ *
+ * The previous name `evaluateMtlsSvidFallback` implied this function
+ * actively *probed* the gateway's TLS handshake / SPIRE workload-API
+ * socket. It does not — it reads the caller-supplied expectation
+ * struct and emits a `pass` / `fail` based on declared values. That
+ * shape is fine for documenting the intended posture in CI and for
+ * Enterprise Pilot RC evidence (alongside the live-runbook in
+ * GATEWAY-CONFORMANCE.md), but the *function name* needs to advertise
+ * "I did not actually probe; I am recording an expectation."
+ *
+ * Renamed accordingly. The new return shape additionally tags
+ * `source: 'declared'` so report consumers can filter for live
+ * probes when those land. A future `probeMtlsSvid` (path (a) in the
+ * audit) will emit `source: 'probed'` from the same dimension; the
+ * arbiter can then tell at a glance whether RC evidence is from a
+ * live probe or a declared expectation.
+ *
+ * Back-compat: the old name is re-exported as a deprecated alias so
+ * any external callers (e.g. conformance-cli) keep compiling. New
+ * code should import `recordMtlsSvidExpectation`.
+ */
+export function recordMtlsSvidExpectation(
   input: MtlsSvidExpectation = DEFAULT_MTLS_SVID_EXPECTATION,
 ): GatewayConformanceCheck {
   const observed = {
+    source: 'declared' as const,
     gatewayMtlsEnabled: input.gatewayMtlsEnabled,
     svidAvailable: input.svidAvailable,
     bearerFallbackAllowed: input.bearerFallbackAllowed,
   };
   const expected =
-    'Gateway auth has an available path: mTLS with SVID, or bearer fallback when mTLS/SVID is unavailable.';
+    'Gateway auth has an available path: mTLS with SVID, or bearer fallback when mTLS/SVID is unavailable. (declared expectation; live probe lives in GATEWAY-CONFORMANCE.md runbook)';
 
   if (input.gatewayMtlsEnabled && input.svidAvailable) {
     return check({
@@ -151,6 +175,14 @@ export function evaluateMtlsSvidFallback(
     notes: 'Neither SVID-backed mTLS nor bearer fallback is available.',
   });
 }
+
+/**
+ * @deprecated Renamed to `recordMtlsSvidExpectation` (H19) to make
+ * "this evaluator does not probe; it records a declared expectation"
+ * legible from the function name. Kept as an alias for back-compat;
+ * remove in v0.3.
+ */
+export const evaluateMtlsSvidFallback = recordMtlsSvidExpectation;
 
 export async function runGatewayConformance(
   input: GatewayConformanceInput,
@@ -193,7 +225,7 @@ export async function runGatewayConformance(
   }
 
   checks.push(await probeRotationEndpoint(target, input.adminToken, fetchFn));
-  checks.push(evaluateMtlsSvidFallback(input.mtls));
+  checks.push(recordMtlsSvidExpectation(input.mtls));
 
   return {
     target,
