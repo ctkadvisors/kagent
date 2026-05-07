@@ -218,6 +218,68 @@ describe('routeFailureForSupervision — gating', () => {
   });
 });
 
+describe('routeFailureForSupervision — informer-cache fast path (M2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses deps.getTaskByUid for parent + uid lookups, skipping the LIST', async () => {
+    const parent = makeTask({ name: 'p', uid: 'pu', phase: 'Dispatched' });
+    const failed = makeTask({
+      name: 'c',
+      uid: 'cu',
+      parentUid: 'pu',
+      phase: 'Failed',
+      reason: 'MissingRequiredOutputs',
+      restartCount: 0,
+    });
+    const agent = makeAgent({ supervisionStrategy: 'one_for_one', maxRestarts: 3 });
+    const deps = buildDeps({ parent, agent, siblings: [failed] });
+    // Wire the informer-cache reader. It should serve BOTH the parent
+    // fetch AND the per-target fetch (dispatchDecision) without any
+    // LIST being issued.
+    const cache = new Map<string, AgentTask>([
+      ['pu', parent],
+      ['cu', failed],
+    ]);
+    const depsWithCache: SupervisionRouterDeps = {
+      ...deps,
+      getTaskByUid: (uid: string) => cache.get(uid),
+    };
+
+    const result = await routeFailureForSupervision(failed, depsWithCache);
+    expect(result.kind).toBe('applied');
+    // Cache hit on both parent and target → no LIST call.
+    expect(deps.mocks.customApi.listNamespacedCustomObject).not.toHaveBeenCalled();
+    // restartCount patched as usual.
+    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
+  });
+
+  it('falls back to LIST when getTaskByUid misses (cold cache)', async () => {
+    const parent = makeTask({ name: 'p', uid: 'pu', phase: 'Dispatched' });
+    const failed = makeTask({
+      name: 'c',
+      uid: 'cu',
+      parentUid: 'pu',
+      phase: 'Failed',
+      reason: 'MissingRequiredOutputs',
+      restartCount: 0,
+    });
+    const agent = makeAgent({ supervisionStrategy: 'one_for_one', maxRestarts: 3 });
+    const deps = buildDeps({ parent, agent, siblings: [failed] });
+    const depsWithCache: SupervisionRouterDeps = {
+      ...deps,
+      // Cache returns undefined for every UID (cold-start race).
+      getTaskByUid: () => undefined,
+    };
+
+    const result = await routeFailureForSupervision(failed, depsWithCache);
+    expect(result.kind).toBe('applied');
+    // LIST fallback fires for both fetchParentTask + fetchTaskByUid.
+    expect(deps.mocks.customApi.listNamespacedCustomObject).toHaveBeenCalled();
+  });
+});
+
 describe('routeFailureForSupervision — one_for_one (default)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -129,6 +129,16 @@ export interface SupervisionRouterDeps {
    */
   readonly listChildrenForParent?: (parentUid: string, namespace: string) => readonly AgentTask[];
   /**
+   * Informer-cache reader: returns the AgentTask with the given UID
+   * (any namespace the informer is watching). Production wiring threads
+   * the same closure that already feeds `reconcileParentFromChildEvent`
+   * (`main.ts:getTaskByUid`, backed by the AgentTask informer cache).
+   * When wired, `fetchParentTask` and `fetchTaskByUid` short-circuit the
+   * unbounded LIST and pull from cache (M2). Tests may leave it unset
+   * (legacy LIST path remains correct).
+   */
+  readonly getTaskByUid?: (uid: string) => AgentTask | undefined;
+  /**
    * Audit hooks (best-effort).
    */
   readonly audit?: SupervisionAuditHooks;
@@ -397,25 +407,24 @@ async function fetchParentTask(
   namespace: string,
   child: AgentTask,
 ): Promise<AgentTask | null> {
-  // First try the informer cache (fast path) — when the operator
-  // wired listChildrenForParent we likely also have a way to look up
-  // by UID via the same informer; for v0.3.1 simplicity we use the
-  // CustomObjectsApi LIST. Production code paths could later swap in
-  // a getTaskByUid lookup similar to reconcileParentFromChildEvent.
+  // M2 — informer-cache fast path. When `deps.getTaskByUid` is wired
+  // (production main.ts threads the same informer-backed closure that
+  // feeds `reconcileParentFromChildEvent`), look up the parent in the
+  // local cache rather than issuing an unbounded namespaced LIST. The
+  // legacy LIST stays as a fallback for tests and for clusters where
+  // the cache hasn't synced yet.
   const parentUid = child.metadata.labels?.[PARENT_TASK_UID_LABEL];
   if (typeof parentUid !== 'string' || parentUid.length === 0) return null;
 
-  // The informer cache contains every AgentTask in the watched
-  // namespace; the listChildrenForParent reader filters by parent
-  // UID, but we want the parent itself. Fall back to a fresh list
-  // when no informer integration exists.
-  if (deps.listChildrenForParent !== undefined) {
-    // The informer-cache reader returns siblings; but main.ts wires
-    // the SAME cache that holds the parent. We can't retrieve the
-    // parent through listChildrenForParent (it's filtered by parent
-    // label, which the parent itself doesn't carry). The router will
-    // do a single-shot LIST instead — bounded by the namespace.
+  if (deps.getTaskByUid !== undefined) {
+    const cached = deps.getTaskByUid(parentUid);
+    if (cached !== undefined) return cached;
+    // Cache miss — informer hasn't seen this UID yet (e.g., race with
+    // an apiserver write that the informer hasn't reflected). Fall
+    // through to the LIST so the router stays correct under cold
+    // cache.
   }
+
   try {
     /* eslint-disable @typescript-eslint/no-unsafe-assignment */
     const res = await deps.customApi.listNamespacedCustomObject({
@@ -547,11 +556,11 @@ async function fetchTaskByUid(
   namespace: string,
   uid: string,
 ): Promise<AgentTask | null> {
-  if (deps.listChildrenForParent !== undefined) {
-    // Same informer-cache caveat as fetchParentTask — sibling reader
-    // filters by parent uid. We DO have a sibling list when the
-    // caller already invoked listSiblings; but to keep the router
-    // self-contained + composable we accept the LIST cost here.
+  // M2 — informer-cache fast path. See `fetchParentTask` for the same
+  // pattern + cold-cache fallback rationale.
+  if (deps.getTaskByUid !== undefined) {
+    const cached = deps.getTaskByUid(uid);
+    if (cached !== undefined) return cached;
   }
   try {
     /* eslint-disable @typescript-eslint/no-unsafe-assignment */

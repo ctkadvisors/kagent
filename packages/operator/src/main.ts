@@ -1779,6 +1779,12 @@ async function main(): Promise<void> {
   const supervisionRouterDeps: SupervisionRouterDeps = {
     customApi,
     listChildrenForParent,
+    // M2 — informer-cache reader for parent + UID lookups. Production
+    // wiring threads the same closure that already feeds
+    // `reconcileParentFromChildEvent`; the supervision router's
+    // `fetchParentTask` and `fetchTaskByUid` consult this before
+    // falling back to the unbounded LIST.
+    getTaskByUid,
     get audit(): SupervisionAuditHooks | undefined {
       return supervisionAuditHolder.hooks;
     },
