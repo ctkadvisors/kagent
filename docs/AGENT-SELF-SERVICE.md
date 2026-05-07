@@ -577,4 +577,54 @@ These aren't blockers for the plan; they're decisions to make as the code lands.
 
 ---
 
+## 12. Substrate built-in tool name reservation (compat-as-feature)
+
+**Decision (resolves Q1 above):** kagent v0.1 ships substrate built-in
+tools with **bare snake_case names** (no `kagent_` / `kagent.` prefix).
+The Q1 lean toward namespace-prefixing was reversed during W2-Pod
+implementation: every published consumer (homelab-orchestrator,
+ai-interviewer, the dynamic-specialists demo) and every tool registry
+test fixture references the bare names. Renaming would break wire
+compatibility for zero functional gain — bare names ARE the contract.
+
+The currently-shipped reserved name set, source of truth in
+`packages/agent-pod/src/builtin-tools-spawn.ts`,
+`packages/agent-pod/src/builtin-tools-wait.ts`,
+`packages/agent-pod/src/builtin-tools-publish.ts`,
+`packages/agent-pod/src/builtin-tools-template.ts`, and
+`packages/agent-pod/src/builtin-tools.ts`:
+
+- `spawn_child_task` — WS-K
+- `wait_for_child_task` — WS-L
+- `wait_for_children_all` — WS-L
+- `publish_event` — WS-Events
+- `ensure_agent_from_template` — WS-M
+- `get_my_context` — Piece 2 (CONTEXT-AWARENESS.md §4.4)
+- `read_artifact`, `write_artifact` — WS-Artifacts
+- `read_blackboard`, `write_blackboard`, `list_blackboard`,
+  `append_blackboard` — WS-Blackboard
+- `http_get`, `rss_fetch`, `extract_text` — substrate utility tools
+
+**Rule for application-layer tool authors:** these names are
+**reserved by the substrate**. Do not register an HTTP / MCP /
+in-process tool under any of these names; the runner's
+`assertSubstrateToolsAdmitted` check (runner.ts:597-651) treats
+collisions as a configuration error and refuses to start.
+
+**Rule for substrate contributors:** new built-in tools added in
+future slates SHOULD pick a bare name that does not look likely to
+collide with a common application-layer tool (e.g. prefer
+`kagent_get_run_summary` over `get_run_summary`), but existing
+v0.1-shipped names remain reserved as-is for back-compat. This is
+the same compat-as-feature posture documented in `PROTOCOLS.md` for
+the wire surface.
+
+**Future migration path (NOT v0.1):** if substrate growth makes
+collisions likely, a future major version may introduce a
+`KAGENT_SUBSTRATE_TOOL_PREFIX` opt-in (default empty, set to
+`kagent_` to namespace every reserved name on a fresh deploy).
+Tracked as a v0.2+ design decision; not committed.
+
+---
+
 **Bottom line:** This plan closes the substrate → user gap in four sequenced, contractually scoped workstreams totaling ~5-6 days of focused work. WS-J ships a real "click to run a task" path today. WS-K + WS-L close the agent → agent loop. WS-M delivers the dynamic-specialists payoff `AGENT-TEMPLATES.md` already designed but never implemented. Each workstream tags independently and remains usable on its own — the user gets value from WS-J in isolation, even if WS-M is still weeks out.

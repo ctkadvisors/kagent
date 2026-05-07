@@ -177,10 +177,34 @@ export function validateArtifactName(name: unknown): string {
   // Refuse non-printable characters: C0 control chars (0x00-0x1F includes
   // NUL / newline / tab), DEL (0x7F), and the C1 control range
   // (0x80-0x9F). Any other Unicode code point is allowed.
+  //
+  // L3 (audit-rev2 C2 §1) — also blacklist the Unicode bidirectional
+  // override / formatting characters. These code points have no
+  // legitimate use in a substrate-controlled artifact name and have a
+  // long-known history of visually deceiving humans reading log /
+  // trace UIs ("Trojan Source" / CVE-2021-42574). Even though our
+  // PVC layout is byte-faithful (the kernel doesn't care about bidi),
+  // an artifact name that displays as `report.pdf` in the trace UI
+  // but is actually `report.exe.pdf` (with a U+202E overriding the
+  // direction) is a UX-level deception we refuse at the validator.
+  //   U+202A LEFT-TO-RIGHT EMBEDDING
+  //   U+202B RIGHT-TO-LEFT EMBEDDING
+  //   U+202C POP DIRECTIONAL FORMATTING
+  //   U+202D LEFT-TO-RIGHT OVERRIDE
+  //   U+202E RIGHT-TO-LEFT OVERRIDE
+  //   U+2066 LEFT-TO-RIGHT ISOLATE
+  //   U+2067 RIGHT-TO-LEFT ISOLATE
+  //   U+2068 FIRST STRONG ISOLATE
+  //   U+2069 POP DIRECTIONAL ISOLATE
   for (let i = 0; i < name.length; i++) {
     const code = name.charCodeAt(i);
     if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
       throw new Error('write_artifact: "name" must not contain non-printable characters');
+    }
+    if ((code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)) {
+      throw new Error(
+        'write_artifact: "name" must not contain Unicode bidirectional override characters (U+202A-U+202E, U+2066-U+2069)',
+      );
     }
   }
   return name;

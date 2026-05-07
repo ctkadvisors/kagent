@@ -264,10 +264,24 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
         body: manifest,
       });
       const meta = readMeta(created);
+      // L8 (audit-rev2 C2 §1) — assert `meta.uid` is present rather than
+      // silently degrading to `uid: ''`. The downstream
+      // `wait_for_child_task` tool polls by uid (`getTaskByUid` at
+      // k8s-task-creator.ts:296-314 + builtin-tools-wait.ts polling
+      // loop): a uid of `''` will never match any AgentTask, producing a
+      // silent timeout. The apiserver always echoes `metadata.uid` on a
+      // 201 Created response (it's stamped server-side and is the very
+      // identity of the resource), so an empty/missing uid here means
+      // the apiserver returned a malformed body — fail loud.
+      if (typeof meta.uid !== 'string' || meta.uid.length === 0) {
+        throw new Error(
+          `k8s-task-creator: createChildTask: apiserver returned AgentTask without metadata.uid (namespace=${parent.namespace} name=${input.name}); refusing to return uid='' which would cause silent wait_for_child_task timeouts`,
+        );
+      }
       return {
         namespace: meta.namespace ?? parent.namespace,
         name: meta.name ?? input.name,
-        uid: meta.uid ?? '',
+        uid: meta.uid,
       };
     },
 
