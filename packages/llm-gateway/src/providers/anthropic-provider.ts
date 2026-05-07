@@ -15,6 +15,7 @@
  */
 
 import { BaseProvider } from './base-provider.js';
+import { BackendError } from '../backend-error.js';
 import type {
   ChatCompletionChunk,
   ChatCompletionResponse,
@@ -68,8 +69,11 @@ export class AnthropicProvider extends BaseProvider {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      const text = await response.text().catch(() => '<no body>');
-      throw new Error(`anthropic error ${String(response.status)}: ${text}`);
+      // H13/H15 — see ollama provider above.
+      throw await BackendError.fromUpstreamResponse({
+        backend: 'anthropic',
+        response,
+      });
     }
     const data = (await response.json()) as AnthropicResponse;
     const out: ChatCompletionResponse = this.toOpenAi(
@@ -98,8 +102,11 @@ export class AnthropicProvider extends BaseProvider {
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      const text = await response.text().catch(() => '<no body>');
-      throw new Error(`anthropic error ${String(response.status)}: ${text}`);
+      // H13/H15 — see ollama provider above.
+      throw await BackendError.fromUpstreamResponse({
+        backend: 'anthropic',
+        response,
+      });
     }
     if (response.body === null) {
       throw new Error('anthropic response body is null');

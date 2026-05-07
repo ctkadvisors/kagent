@@ -13,6 +13,7 @@
  */
 
 import { BaseProvider } from './base-provider.js';
+import { BackendError } from '../backend-error.js';
 import type {
   ChatCompletionChunk,
   ChatCompletionResponse,
@@ -64,8 +65,13 @@ export class OllamaProvider extends BaseProvider {
       body: JSON.stringify(ollamaRequest),
     });
     if (!response.ok) {
-      const body = await response.text().catch(() => '<no body>');
-      throw new Error(`ollama error ${String(response.status)}: ${body}`);
+      // H13/H15 — BackendError carries status + Retry-After (when
+      // present) and applies the secret-scrubber + 256-char truncation
+      // before the message reaches usage_records.error_message.
+      throw await BackendError.fromUpstreamResponse({
+        backend: 'ollama',
+        response,
+      });
     }
     const data = (await response.json()) as OllamaChatChunk;
     const promptTokens =
@@ -117,8 +123,13 @@ export class OllamaProvider extends BaseProvider {
       body: JSON.stringify(ollamaRequest),
     });
     if (!response.ok) {
-      const body = await response.text().catch(() => '<no body>');
-      throw new Error(`ollama error ${String(response.status)}: ${body}`);
+      // H13/H15 — BackendError carries status + Retry-After (when
+      // present) and applies the secret-scrubber + 256-char truncation
+      // before the message reaches usage_records.error_message.
+      throw await BackendError.fromUpstreamResponse({
+        backend: 'ollama',
+        response,
+      });
     }
     if (response.body === null) {
       throw new Error('ollama response body is null');

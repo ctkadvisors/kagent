@@ -10,10 +10,11 @@
  *   → usage record → AIMD update → in-flight release
  *
  * Returns a discriminated union of:
- *   - `dispatched`  — provider returned a response; HTTP 200/etc.
- *   - `at_cap`      — current in-flight ≥ AIMD cap; HTTP 429
- *   - `unknown_model` — no ModelEndpoint registered; HTTP 400
- *   - `dispatch_error` — provider threw; HTTP 502 (already AIMD-decreased)
+ *   - `dispatched`        — provider returned a response; HTTP 200/etc.
+ *   - `at_cap`            — current in-flight ≥ AIMD cap; HTTP 429 + Retry-After
+ *   - `unknown_model`     — no ModelEndpoint registered; HTTP 400
+ *   - `backend_throttled` — upstream returned 429/503 (H13); HTTP 429/503 + Retry-After
+ *   - `dispatch_error`    — provider threw a non-throttle error; HTTP 502 (AIMD-decreased)
  *
  * Pure orchestration — does NOT touch HTTP wire format. The server
  * layer translates the discriminated union into a status code and
@@ -23,6 +24,8 @@
  */
 
 import type { AimdController } from './aimd.js';
+import { BackendError } from './backend-error.js';
+import { sanitizeUpstreamErrorBody } from './error-scrub.js';
 import type { InFlightCounter } from './inflight-counter.js';
 import type { ModelIndex } from './model-index.js';
 import type { UsageRecorder } from './usage-recorder.js';
@@ -93,6 +96,24 @@ export type RouteResult =
       readonly statusCode: 400;
       readonly model: string;
     }
+  /**
+   * H13 — upstream backpressure path. Distinct from `at_cap` (which
+   * is gateway-side admission) and from `dispatch_error` (which is
+   * unstructured 5xx). When the provider throws a `BackendError` with
+   * `status` in {429, 503}, we propagate the upstream's status + the
+   * supplied (or default) `Retry-After` so the server layer emits
+   * HTTP 429/503 + `Retry-After` and agent-pod's chatWithRetry can
+   * honour the upstream's backoff hint instead of immediately
+   * retrying and stampeding the upstream (GATEWAY-CONTRACT.md §7).
+   */
+  | {
+      readonly kind: 'backend_throttled';
+      readonly statusCode: 429 | 503;
+      readonly retryAfterSec: number;
+      readonly model: string;
+      readonly backend: string;
+      readonly message: string;
+    }
   | {
       readonly kind: 'dispatch_error';
       readonly statusCode: 502;
@@ -102,6 +123,13 @@ export type RouteResult =
 
 /** Default Retry-After hint — admission reconciler is the primary queue. */
 const DEFAULT_RETRY_AFTER_SECONDS = 5;
+
+/**
+ * H13 — Retry-After fallback when the upstream sends a 429/503 without
+ * the header. We pick a small but non-zero hint so agent-pod still
+ * sleeps before retrying instead of stampeding the upstream.
+ */
+const DEFAULT_BACKEND_RETRY_AFTER_SECONDS = 5;
 
 /**
  * Main entry. Streaming path lives in `routeStream` (deferred to v0.2
@@ -185,8 +213,52 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
       latencyMs: result.latencyMs,
     };
   } catch (err: unknown) {
+    // H13 — typed BackendError with status 429/503 routes to the
+    // backend_throttled discriminator. AIMD still gets `onError` so
+    // the local cap halves; we want the upstream's pressure to be
+    // visible in our admission control, not just propagated.
+    if (err instanceof BackendError && (err.status === 429 || err.status === 503)) {
+      deps.aimd.onError(endpoint.model, backendUrl);
+      const sanitisedMessage = sanitizeUpstreamErrorBody(err.message);
+      const retryAfterSec = err.retryAfter ?? DEFAULT_BACKEND_RETRY_AFTER_SECONDS;
+      const upstreamStatus = err.status;
+      void deps.usage
+        .record({
+          apiKeyPrefix: ctx.apiKeyPrefix,
+          requestId: ctx.requestId,
+          model: endpoint.model,
+          backend,
+          backendUrl,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: Date.now() - startedAt,
+          statusCode: upstreamStatus,
+          streaming: false,
+          taskUid: ctx.taskUid,
+          agentName: ctx.agentName,
+          errorMessage: sanitisedMessage,
+        })
+        .catch(() => {
+          /* swallow — primary error already in flight */
+        });
+      return {
+        kind: 'backend_throttled',
+        statusCode: upstreamStatus,
+        retryAfterSec,
+        model: endpoint.model,
+        backend,
+        message: sanitisedMessage,
+      };
+    }
+
     deps.aimd.onError(endpoint.model, backendUrl);
-    const message = err instanceof Error ? err.message : String(err);
+    // H15 — even on the dispatch_error path, run the message through
+    // the same scrub + truncate pipeline. Provider exceptions can
+    // include upstream bodies (e.g. a BackendError with status outside
+    // 429/503, or a generic Error wrapping a third-party SDK's
+    // diagnostic that may itself carry a key fragment).
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const sanitisedMessage = sanitizeUpstreamErrorBody(rawMessage);
     void deps.usage
       .record({
         apiKeyPrefix: ctx.apiKeyPrefix,
@@ -201,7 +273,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
         streaming: false,
         taskUid: ctx.taskUid,
         agentName: ctx.agentName,
-        errorMessage: message,
+        errorMessage: sanitisedMessage,
       })
       .catch(() => {
         /* swallow — primary error already in flight */
@@ -210,7 +282,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
       kind: 'dispatch_error',
       statusCode: 502,
       model: endpoint.model,
-      message,
+      message: sanitisedMessage,
     };
   } finally {
     deps.inFlight.release(endpoint.model, backendUrl);

@@ -306,6 +306,22 @@ export function buildHandler(
             ),
           );
           return;
+        case 'backend_throttled':
+          // H13 — propagate upstream backpressure as HTTP 429/503 +
+          // Retry-After. agent-pod's chatWithRetry (with NH2's 30 s
+          // cap) consumes Retry-After cleanly; without this branch a
+          // raw upstream 429 would land as 502 and trigger an
+          // immediate retry stampede.
+          res.setHeader('Retry-After', String(result.retryAfterSec));
+          writeJson(
+            res,
+            result.statusCode,
+            createOpenAIError(
+              `upstream ${result.backend} ${String(result.statusCode)} for ${result.model}: ${result.message}`,
+              result.statusCode === 503 ? 'service_unavailable_error' : 'rate_limit_error',
+            ),
+          );
+          return;
         case 'dispatch_error':
           writeJson(
             res,

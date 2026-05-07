@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AimdController } from './aimd.js';
+import { BackendError } from './backend-error.js';
 import { InFlightCounter } from './inflight-counter.js';
 import { ModelIndex } from './model-index.js';
 import { route, type RouterDeps } from './router.js';
@@ -221,6 +222,114 @@ describe('route', () => {
     await Promise.resolve();
     expect(deps.usage.events.at(-1)?.statusCode).toBe(502);
     expect(deps.usage.events.at(-1)?.errorMessage).toContain('upstream 500');
+  });
+
+  it('on BackendError 429 — emits backend_throttled with retryAfterSec from upstream (H13)', async () => {
+    const deps = buildDeps(modelEp('m', 8, 8));
+    const provider = new FakeProvider('mock', () =>
+      Promise.reject(
+        new BackendError({
+          backend: 'openai',
+          status: 429,
+          message: 'openai error 429: rate limit',
+          retryAfter: 7,
+        }),
+      ),
+    );
+    const result = await route(deps, {
+      requestId: 'r-throttle-1',
+      request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
+      apiKeyPrefix: 'sk-pfx',
+      taskUid: 'task-1',
+      agentName: 'researcher',
+      providerOverride: provider,
+    });
+    expect(result.kind).toBe('backend_throttled');
+    if (result.kind === 'backend_throttled') {
+      expect(result.statusCode).toBe(429);
+      expect(result.retryAfterSec).toBe(7);
+      expect(result.backend).toBe('mock');
+      expect(result.message).toContain('429');
+    }
+    // AIMD still halves on a backend_throttled — local admission needs
+    // to feel the upstream pressure too.
+    expect(deps.aimd.currentCap('m', 'http://x')).toBe(4);
+    expect(deps.inFlight.current('m', 'http://x')).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deps.usage.events.at(-1)?.statusCode).toBe(429);
+  });
+
+  it('on BackendError 503 without Retry-After — falls back to a non-zero default (H13)', async () => {
+    const deps = buildDeps(modelEp('m', 8, 8));
+    const provider = new FakeProvider('mock', () =>
+      Promise.reject(
+        new BackendError({
+          backend: 'openai',
+          status: 503,
+          message: 'openai error 503: maintenance',
+        }),
+      ),
+    );
+    const result = await route(deps, {
+      requestId: 'r-throttle-2',
+      request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
+      apiKeyPrefix: null,
+      taskUid: null,
+      agentName: null,
+      providerOverride: provider,
+    });
+    expect(result.kind).toBe('backend_throttled');
+    if (result.kind === 'backend_throttled') {
+      expect(result.statusCode).toBe(503);
+      expect(result.retryAfterSec).toBeGreaterThan(0);
+    }
+  });
+
+  it('on BackendError outside 429/503 — falls through to dispatch_error (H13)', async () => {
+    const deps = buildDeps(modelEp('m', 8, 8));
+    const provider = new FakeProvider('mock', () =>
+      Promise.reject(
+        new BackendError({
+          backend: 'openai',
+          status: 500,
+          message: 'openai error 500: oops',
+        }),
+      ),
+    );
+    const result = await route(deps, {
+      requestId: 'r-non-throttle',
+      request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
+      apiKeyPrefix: null,
+      taskUid: null,
+      agentName: null,
+      providerOverride: provider,
+    });
+    expect(result.kind).toBe('dispatch_error');
+  });
+
+  it('on dispatch_error path — scrubs secrets in errorMessage before recording (H15)', async () => {
+    const deps = buildDeps(modelEp('m', 8, 8));
+    const provider = new FakeProvider('mock', () =>
+      Promise.reject(new Error('upstream 500: token sk-abcdefghijklmnopqrstuvwx invalid')),
+    );
+    const result = await route(deps, {
+      requestId: 'r-scrub',
+      request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
+      apiKeyPrefix: null,
+      taskUid: null,
+      agentName: null,
+      providerOverride: provider,
+    });
+    expect(result.kind).toBe('dispatch_error');
+    if (result.kind === 'dispatch_error') {
+      expect(result.message).toContain('[REDACTED]');
+      expect(result.message).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    const lastEvent = deps.usage.events.at(-1);
+    expect(lastEvent?.errorMessage).not.toContain('sk-abcdefghijklmnopqrstuvwx');
   });
 
   it('synchronises AIMD bounds with the latest ModelEndpoint observation', async () => {

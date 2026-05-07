@@ -26,6 +26,7 @@
  */
 
 import { BaseProvider } from './base-provider.js';
+import { BackendError } from '../backend-error.js';
 import type {
   BackendKind,
   ChatCompletionChunk,
@@ -71,8 +72,16 @@ export abstract class OpenAICompatProvider extends BaseProvider {
       body,
     });
     if (!response.ok) {
-      const text = await response.text().catch(() => '<no body>');
-      throw new Error(`${this.name} error ${String(response.status)}: ${text}`);
+      // H13/H15 — surface a typed error envelope. BackendError carries
+      // status + Retry-After (when present) so the router can map 429
+      // upstream to a 429 downstream instead of collapsing it to 502.
+      // The error body is also truncated + secret-scrubbed in
+      // BackendError.fromUpstreamResponse — never let a raw upstream
+      // response body land in `usage_records.error_message`.
+      throw await BackendError.fromUpstreamResponse({
+        backend: this.name,
+        response,
+      });
     }
     const data = (await response.json()) as ChatCompletionResponse;
     const stamped: ChatCompletionResponse = {
@@ -105,8 +114,11 @@ export abstract class OpenAICompatProvider extends BaseProvider {
       body,
     });
     if (!response.ok) {
-      const text = await response.text().catch(() => '<no body>');
-      throw new Error(`${this.name} error ${String(response.status)}: ${text}`);
+      // H13/H15 — see chatCompletion path above.
+      throw await BackendError.fromUpstreamResponse({
+        backend: this.name,
+        response,
+      });
     }
     if (response.body === null) {
       throw new Error(`${this.name} response body is null`);
