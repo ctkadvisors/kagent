@@ -273,6 +273,18 @@ Critical path (sequential): ~16-20 weeks. Calendar weeks compress further with a
 5. Pure-functional `evaluateStrategy()` engine in `@kagent/supervision` with comprehensive unit tests for all 4 strategies ✓
 6. Helm wiring: `supervision:` values block (default `enabled: true`), `KAGENT_SUPERVISION_*` env, no new RBAC verbs needed ✓
 
+> **⚠ `supervisionStrategy = restart` records intent ONLY (M1, audit-rev2).**
+>
+> The `restart` action — invoked by `one_for_one` strategy on a structured failure under the `maxRestarts` cap — does NOT re-spawn the underlying Job in v0.3.1. The router calls `patchRestartCount` to bump `AgentTask.status.restartCount` + emits `supervision.applied` with `action: 'restart'` so audit consumers can see the substrate's *decision*, but the actual re-issue of work is the application's responsibility.
+>
+> **Why:** re-creating a Job for a Failed AgentTask is application-layer concern that composes with Workflows (Wave 2) and per-Agent in-flight caps (Wave 4 Quotas). The substrate's job HERE is to (a) bound the restart loop with `maxRestarts` and (b) carve out the supervision decision so the operator-recreate path knows what to do.
+>
+> **Consumer responsibility:** when an operator's audit consumer sees `action: 'restart'`, the substrate has already bumped `restartCount`. To realize the restart, the consumer must:
+>   1. Bump the AgentTask's generation (e.g., a `metadata.annotations` patch) to trigger an operator reconcile re-dispatch, OR
+>   2. Create a new AgentTask with the same spec.
+>
+> See `supervision-router.ts:582-619` (`patchRestartCount`) and the file-level JSDoc for the v0.3+ deferred-restart-mechanic narrative.
+
 ### 4.3 Sub-team: Workflows ✓ SHIPPED v0.3.2-workflows
 
 **Releases:** `v0.3.2-workflows` — **SHIPPED**

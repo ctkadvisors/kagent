@@ -330,6 +330,17 @@ export interface AgentSpec {
    *   - `escalate`      propagate the failure to the parent task; the
    *                     parent's strategy then handles this subtree
    *                     as a single failed child.
+   *
+   * **⚠ `restart` action records INTENT only (M1, audit-rev2 / v0.3.1).**
+   * The router bumps `AgentTask.status.restartCount` + emits
+   * `supervision.applied` with `action: 'restart'`, but does NOT
+   * re-spawn the underlying Job. Consumers observing the audit event
+   * must re-issue the work themselves (bump generation on the
+   * AgentTask, or create a new AgentTask). Re-creating a Job is
+   * application-layer concern in v0.3.x; the substrate bounds the
+   * restart loop via `maxRestarts` + carves the decision so the
+   * operator-recreate path knows what to do. See `docs/WAVES.md` §4.2
+   * and the file-level JSDoc on `supervision-router.ts`.
    */
   readonly supervisionStrategy?: SupervisionStrategy;
 
