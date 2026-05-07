@@ -89,6 +89,11 @@ import {
   type SupervisionRouterDeps,
   type InfraFaultFields,
 } from './supervision-router.js';
+import {
+  createInformerHealth,
+  startSubstrateHealthServer,
+  type InformerHealth,
+} from './substrate-health.js';
 import { deriveIdempotencyKey, hashTaskInputs, IdempotencyCache } from './task-admission.js';
 import { PARENT_TASK_UID_LABEL, parentTaskRefFromChild } from './task-graph.js';
 import { startTemplateServer } from './template-server.js';
@@ -1050,9 +1055,11 @@ export function buildHandler(
   supervisionDeps?: SupervisionHandlerDeps,
   blackboardHandler?: BlackboardHandlerDeps,
   verifierHandler?: VerifierHandlerDeps,
+  health?: InformerHealth,
 ): AgentTaskHandler {
   return {
     async onAdd(task) {
+      health?.recordEvent('agenttask');
       const result = await reconcileAgentTask(task, deps);
       logResult('add', task, result);
       await maybeReconcileParent('add', task, deps);
@@ -1066,6 +1073,7 @@ export function buildHandler(
       await maybeRouteBlackboard(task, blackboardHandler);
     },
     async onUpdate(task) {
+      health?.recordEvent('agenttask');
       const result = await reconcileAgentTask(task, deps);
       logResult('update', task, result);
       // === v0.1.7-rig.2 — Substrate verifier ===
@@ -1127,11 +1135,17 @@ export function buildHandler(
       await maybeRouteBlackboard(task, blackboardHandler);
     },
     onDelete(task) {
+      health?.recordEvent('agenttask');
       console.log(
         `[kagent-operator] delete AgentTask ${task.metadata.namespace ?? '(no-ns)'}/${task.metadata.name ?? '(no-name)'} (Job GC by ownerRef)`,
       );
     },
     onError(err) {
+      // M21 — emit `substrate.informer_error` (structured stdout +
+      // metric counter) before the legacy console.error so log-scraping
+      // dashboards can pattern-match the event without parsing the
+      // free-form trailing message.
+      health?.recordError('agenttask', err);
       console.error('[kagent-operator] watch error:', err);
     },
   };
@@ -1994,11 +2008,31 @@ async function main(): Promise<void> {
     );
   }
 
+  // === M21 — substrate informer health ===
+  // ONE tracker shared across the AgentTask + Job + Pod informers; each
+  // informer's onAdd/onUpdate/onDelete + onError feeds it. The
+  // `/healthz` endpoint flips to 503 if no event has fired in 5
+  // minutes (configurable via `KAGENT_INFORMER_FRESHNESS_MAX_MS`).
+  const informerFreshnessMaxMs = (() => {
+    const raw = process.env.KAGENT_INFORMER_FRESHNESS_MAX_MS;
+    if (typeof raw !== 'string' || raw.length === 0) return undefined;
+    const n = Number.parseInt(raw, 10);
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  })();
+  const healthzPort = (() => {
+    const raw = process.env.KAGENT_HEALTHZ_PORT;
+    if (typeof raw !== 'string' || raw.length === 0) return undefined;
+    const n = Number.parseInt(raw, 10);
+    return Number.isInteger(n) && n > 0 && n < 65_536 ? n : undefined;
+  })();
+  const informerHealth = createInformerHealth();
+
   const handler = buildHandler(
     deps,
     supervisionHandlerDeps,
     blackboardHandlerDeps,
     verifierHandlerDeps,
+    informerHealth,
   );
   // Single informer-opts object reused for both the AgentTask and the
   // Job/Pod informers — keeps the namespace toggle in lockstep so a
@@ -2042,15 +2076,23 @@ async function main(): Promise<void> {
     jobListFn,
     {
       async onJob(job: V1Job): Promise<void> {
+        informerHealth.recordEvent('job');
         await routeJobEventToFailureSurface(job, surfaceFailure);
       },
       async onPod(pod: V1Pod): Promise<void> {
+        informerHealth.recordEvent('pod');
         const ref = parentTaskRef(pod);
         if (ref === null) return;
         const verdict = detectPodFailure(pod);
         if (verdict !== null) await surfaceFailure(ref, verdict);
       },
       onError(err) {
+        // M21 — same `substrate.informer_error` emission as the
+        // AgentTask informer; the `source` field distinguishes whether
+        // the watch error came from the Job or Pod path (currently
+        // collapsed into "job-pod" because the pair shares a single
+        // handler — a future refactor can split them).
+        informerHealth.recordError('job-pod', err);
         console.error('[kagent-operator] job/pod watch error:', err);
       },
     },
@@ -2295,6 +2337,15 @@ async function main(): Promise<void> {
       })
     : undefined;
 
+  // === M21 — substrate health server ===
+  // Boot the `/healthz` + `/metrics` HTTP server before the informers
+  // start, so an apiserver flap during boot is observable via the same
+  // surface it'll be observable via at steady state.
+  const substrateHealthServer = await startSubstrateHealthServer(informerHealth, {
+    ...(healthzPort !== undefined && { port: healthzPort }),
+    ...(informerFreshnessMaxMs !== undefined && { freshnessMaxMs: informerFreshnessMaxMs }),
+  });
+
   // Graceful shutdown — stop the informer cleanly on SIGTERM/SIGINT
   // so K8s can drain the operator pod without orphaning the watch.
   const shutdown = async (signal: string): Promise<void> => {
@@ -2308,6 +2359,13 @@ async function main(): Promise<void> {
       await jobPodInformer.stop();
     } catch (err) {
       console.error('[kagent-operator] job/pod informer stop failed:', err);
+    }
+    if (substrateHealthServer !== undefined) {
+      try {
+        await substrateHealthServer.close();
+      } catch (err) {
+        console.error('[kagent-operator] substrate health server close failed:', err);
+      }
     }
     if (admissionWiring !== undefined) {
       try {

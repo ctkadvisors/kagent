@@ -68,6 +68,18 @@ resources:
     cpu: '500m'
     memory: '256Mi'
 
+# M21 — substrate informer health surface. The operator boots an HTTP
+# server exposing `/healthz` (200 OK / 503 STALE depending on observed
+# informer freshness) and `/metrics` (Prometheus text format,
+# `kagent_operator_informer_errors_total` counter). The chart wires the
+# port via `KAGENT_HEALTHZ_PORT`; the freshness window via
+# `KAGENT_INFORMER_FRESHNESS_MAX_MS`. A liveness probe on `/healthz`
+# follows in a v0.1.x patch — for now the surface exists so external
+# scrapers + ad-hoc curls can observe operator health.
+substrateHealth:
+  port: 8081
+  freshnessMaxMs: 300000 # 5 minutes; informer silence past this flips /healthz to 503
+
 # Container that runs INSIDE the Pods the operator creates.
 agentPod:
   image:

@@ -131,7 +131,6 @@ spec:
             - name: kagent-cas
               mountPath: {{ .Values.cas.mountPath | quote }}
             {{- end }}
-          {{- if or .Values.agentPod.templates.enabled .Values.capabilities.enabled .Values.triggers.enabled }}
           ports:
             {{- if or .Values.agentPod.templates.enabled .Values.capabilities.enabled }}
             # WS-M template-server / Wave 5 JWKS endpoint. Exposes
@@ -152,7 +151,12 @@ spec:
               containerPort: {{ .Values.triggers.webhook.port }}
               protocol: TCP
             {{- end }}
-          {{- end }}
+            # M21 — substrate health (`/healthz`, `/metrics`). Always
+            # exposed; the v0.1.x livenessProbe wiring lives in a
+            # follow-up commit (the surface itself is non-breaking).
+            - name: healthz
+              containerPort: {{ .Values.substrateHealth.port }}
+              protocol: TCP
           env:
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
@@ -524,6 +528,17 @@ spec:
             {{- if .Values.audit.enabled }}
             - name: KAGENT_AUDIT_NATS_URL
               value: {{ .Values.audit.natsUrl | quote }}
+            {{- end }}
+            # M21 — substrate health (`/healthz`, `/metrics`) +
+            # informer freshness threshold. The operator boots an HTTP
+            # server on `KAGENT_HEALTHZ_PORT`; `KAGENT_INFORMER_FRESHNESS_MAX_MS`
+            # controls when /healthz flips to 503 STALE. See
+            # `substrate-health.ts`.
+            {{- with .Values.substrateHealth }}
+            - name: KAGENT_HEALTHZ_PORT
+              value: {{ .port | quote }}
+            - name: KAGENT_INFORMER_FRESHNESS_MAX_MS
+              value: {{ .freshnessMaxMs | quote }}
             {{- end }}
             # Wave 0 sub-team Entry — KagentSchedule controller +
             # HMAC-signed webhook receiver. The flag toggles both
