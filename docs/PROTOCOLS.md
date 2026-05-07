@@ -249,17 +249,13 @@ Identity + auth between kagent and external services.
 
 Each slate has the same shape: small, file-scoped, additive, single-PR-shippable.
 
-### Slate 1 — A2A v1.0 wire format on the Event primitive (`v0.2.3-a2a-wire`)
+> **Slate ordering revised (rev3, 2026-05-07).** Per `evidence/audit-rev3/R2.md` §5.3 and STRATEGIC S-RE-ORDER, the rev2 ordering (A2A wire first, cap-narrowing RFC fifth) was wrong. The rev3 pressure-test of the rev2 "12-month moat" claim found the moat is closer to **4-7 months for the "no one else has this" framing**; the contribution-back path is the only way to convert that uniqueness window into permanent positioning at SIG Apps. Once the SIG-Apps gap closes (a competitor lands a capability primitive upstream first, or the SIG ships its own shape), the moat ages out regardless of how fast the substrate ships A2A. Therefore: **ship the cap-narrowing RFC FIRST as Slate 1**; A2A wire moves to Slate 5. The implementation specs of the other slates do not change; only the ordering and rationale.
 
-**Why first:** highest interop leverage. Today kagent agents are an island; with this slate they trade tasks with [150+ production deployments using A2A](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations) (LF anniversary count, April 9 2026).
+### Slate 1 — Capability narrowing as a public RFC (`v0.2.3-cap-rfc`)
 
-**What lands:**
-- New `@kagent/a2a` package — [A2A v1.0](https://a2a-protocol.org/latest/announcing-1.0/) envelope encoder/decoder (typed, zod-validated).
-- New `Agent.spec.a2aCard` field — the signed agent card per the A2A spec.
-- `publish_event` and `subscribe_event` tool wiring extended to optionally accept/emit A2A-shaped envelopes (gated by an env flag for back-compat).
-- Operator emits the agent card on Agent CR admission; serves it at a well-known URL via the workbench-api.
+**Why first (rev3):** the contribution-back path is the only way to convert a 4-7-month moat into permanent positioning at SIG Apps. Per `evidence/audit-rev3/R2.md` §3.1 Path 4, an accepted KEP-shape contribution is 6-12 weeks to land — and it locks the moat upstream. The SIG-Apps gap is uncontested today (zero open issues on capability/identity/JWT/SPIFFE in `kubernetes-sigs/agent-sandbox` per rev3 R1 §1.2(i)); it will not stay uncontested. A2A wire is bridge-able after the fact (slate 5 below); capability narrowing is harder to retrofit if someone else ships the standard first.
 
-**What does NOT land:** kagent doesn't become an A2A registry server (that's a separate decision). NATS stays the transport; A2A is the message shape on top.
+**What lands:** `docs/RFC-CAPABILITY-NARROWING.md` (already drafted) opened as a discussion issue + (if traction lands) KEP draft on `kubernetes-sigs/agent-sandbox`. Reference implementation extracted from `packages/operator/src/cap-issuer.ts` and `packages/agent-pod/src/cap-consumer.ts` into a standalone MIT library suitable for SIG adoption.
 
 ### Slate 2 — MCP-server-out (kagent agents AS MCP-callable tools) (`v0.2.4-mcp-server-out`)
 
@@ -275,7 +271,7 @@ Each slate has the same shape: small, file-scoped, additive, single-PR-shippable
 
 ### Slate 3 — Reference-passing handoff envelope (`v0.2.5-handoff`)
 
-**Why third:** depends on slates 1 and 2 (the envelope format should be A2A-task-lifecycle-shaped where possible; the agent that picks up the handoff might be reached via MCP). Closes the long-running-agent loop the v0.1.9 context-awareness slate started.
+**Why third:** depends on slate 5 (the envelope format should be A2A-task-lifecycle-shaped where possible) and slate 2 (the agent that picks up the handoff might be reached via MCP). Closes the long-running-agent loop the v0.1.9 context-awareness slate started.
 
 **What lands:** per §6.
 
@@ -285,11 +281,17 @@ Each slate has the same shape: small, file-scoped, additive, single-PR-shippable
 
 **What lands:** `@kagent/agent-pod-nats-subscriber` adapter, lifecycle-managed by the agent-pod main loop, gated behind the same cap.subscribe claim as `subscribe_event`.
 
-### Slate 5 — Capability narrowing as a public RFC (`v0.2.7-cap-rfc`)
+### Slate 5 — A2A v1.0 wire format on the Event primitive (`v0.2.7-a2a-wire`)
 
-**Why fifth:** no rush; this is the contribution-back-to-upstream play. kagent's JWT cap-narrowing-on-spawn is genuinely unique in OSS K8s land (per audit R1.4 #4). Write the spec as a standalone RFC-shaped doc, offer to k8s-sigs / SIG Apps as a primitive, or to the IETF macaroons-adjacent track.
+**Why fifth (rev3):** still the highest interop leverage; today kagent agents are an island and with this slate they trade tasks with [150+ production deployments using A2A](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations) (LF anniversary count, April 9 2026). Demoted from rev2's slate 1 because (a) the cap-narrowing RFC has a tighter SIG-Apps window (rev3 R2 §3.1 Path 4) and (b) A2A wire is still bridge-able after the fact whereas cap-narrowing is not. See `docs/A2A-IMPLEMENTATION-PLAN.md` §4 for the implementation architecture decision (Option A bridge vs Option D in-pod transparent-proxy server).
 
-**What lands:** `docs/RFC-CAPABILITY-NARROWING.md` + a reference implementation extracted from `packages/operator/src/cap-issuer.ts` and `packages/agent-pod/src/cap-consumer.ts` into a standalone library.
+**What lands:**
+- New `@kagent/a2a` package — [A2A v1.0](https://a2a-protocol.org/latest/announcing-1.0/) envelope encoder/decoder (typed, zod-validated).
+- New `Agent.spec.a2aCard` field — the signed agent card per the A2A spec.
+- `publish_event` and `subscribe_event` tool wiring extended to optionally accept/emit A2A-shaped envelopes (gated by an env flag for back-compat).
+- Operator emits the agent card on Agent CR admission; serves it at a well-known URL.
+
+**What does NOT land:** kagent doesn't become an A2A registry server (that's a separate decision). NATS stays the transport; A2A is the message shape on top.
 
 ---
 
@@ -299,11 +301,11 @@ Each slate's marketing line maps to a specific real system that today requires c
 
 | Slate | "Now compatible with…" | Concrete demo |
 |---|---|---|
-| 1 — A2A wire | Vertex / AgentCore / Foundry / 150+ A2A-speaking agents | A kagent researcher receives a task from a Vertex orchestrator, completes it, returns A2A-shaped result. |
+| 1 — Cap narrowing RFC | (No one yet — kagent is the reference; SIG-Apps contribution-back) | k8s-sigs RFC discussion; SIG Apps decides; if accepted, kagent's narrowing primitive becomes the upstream-blessed shape. |
 | 2 — MCP-server-out | Claude Code / any MCP client | An external Claude Code instance lists kagent agents as tools, calls one, gets a result. |
 | 3 — Handoff envelope | Long-running agentic workflows that span days | A research session spans 5 chained handoffs over 12 hours; a single Workbench task graph view shows the chain; no manual YAML in between. |
 | 4 — In-pod NATS subscribe | Real-time agent meshes; streaming cancel | An operator cancels a parent task; all in-flight children receive the signal within 1s. |
-| 5 — Cap narrowing RFC | (No one yet — kagent is the reference) | k8s-sigs RFC discussion; SIG Apps decides. |
+| 5 — A2A wire | Vertex / AgentCore / Foundry / 150+ A2A-speaking agents | A kagent researcher receives a task from a Vertex orchestrator, completes it, returns A2A-shaped result. |
 
 The shift from "kagent is the only X" to "kagent is the substrate that speaks Y, Z, and W out of the box" is the thing this doc commits to. **Compat is not a defensive crouch — it's the offensive play.** The audit's R1 finding makes the defensive crouch unviable; this slate stack makes the offensive play concrete.
 
