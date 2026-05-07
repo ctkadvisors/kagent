@@ -31,6 +31,13 @@ import {
   makeInformer,
 } from '@kubernetes/client-node';
 
+import {
+  type RestartOptions,
+  type RestartTimer,
+  type InformerRestartLogger,
+  createRestarter,
+} from './informer-restart.js';
+
 const MANAGED_BY_LABEL = 'kagent.knuteson.io/managed-by=kagent-operator';
 const TASK_LABEL = 'kagent.knuteson.io/task';
 
@@ -68,6 +75,15 @@ export interface JobPodInformerSet {
 export interface JobPodInformerOptions {
   /** Namespace to watch. Undefined = cluster-wide watch. */
   readonly namespace?: string;
+  /**
+   * Optional override of the restart backoff schedule (H6 — defaults
+   * to 5s → 5min cap with 12 consecutive-failure cap). Tests inject
+   * a deterministic schedule + fake timer; production leaves
+   * `restartOpts` undefined.
+   */
+  readonly restartOpts?: RestartOptions;
+  /** Test-only timer injection so the backoff doesn't sleep on real time. */
+  readonly restartTimer?: RestartTimer;
 }
 
 export function createJobPodInformer(
@@ -119,11 +135,37 @@ export function createJobPodInformer(
   jobInformer.on('update', (j) => {
     void Promise.resolve(handler.onJob(j)).catch((err: unknown) => handler.onError?.(err));
   });
+  // H6 — use safeRestart with exponential backoff + cap on consecutive
+  // failures instead of `setTimeout(() => void <informer>.start(), 5000)`.
+  // Job + Pod each get their own restarter — they fail independently
+  // (Pod watch may flake while Job watch is healthy and vice versa),
+  // so consecutive-failure counts must NOT be shared. The cap-reached
+  // callback is groundwork for M21 readiness-probe wiring (W3-Operator).
+  const jobRestartLogger: InformerRestartLogger = {
+    onStartRejected(err, attempt, nextDelayMs): void {
+      handler.onError?.(err);
+      console.error(
+        `[kagent-operator] Job informer start() rejected (attempt ${attempt.toString()}, next delay ${nextDelayMs.toString()}ms):`,
+        err,
+      );
+    },
+    onCapReached(err, totalAttempts): void {
+      handler.onError?.(err);
+      console.error(
+        `[kagent-operator] Job informer restart cap reached after ${totalAttempts.toString()} consecutive failures; Job watch is permanently broken:`,
+        err,
+      );
+    },
+  };
+  const jobRestarter = createRestarter(
+    jobInformer,
+    jobRestartLogger,
+    opts.restartOpts ?? {},
+    opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
+  );
   jobInformer.on('error', (err) => {
     handler.onError?.(err);
-    setTimeout(() => {
-      void jobInformer.start();
-    }, 5000);
+    jobRestarter.safeRestart(err);
   });
 
   podInformer.on('add', (p) => {
@@ -132,11 +174,31 @@ export function createJobPodInformer(
   podInformer.on('update', (p) => {
     void Promise.resolve(handler.onPod(p)).catch((err: unknown) => handler.onError?.(err));
   });
+  const podRestartLogger: InformerRestartLogger = {
+    onStartRejected(err, attempt, nextDelayMs): void {
+      handler.onError?.(err);
+      console.error(
+        `[kagent-operator] Pod informer start() rejected (attempt ${attempt.toString()}, next delay ${nextDelayMs.toString()}ms):`,
+        err,
+      );
+    },
+    onCapReached(err, totalAttempts): void {
+      handler.onError?.(err);
+      console.error(
+        `[kagent-operator] Pod informer restart cap reached after ${totalAttempts.toString()} consecutive failures; Pod watch is permanently broken:`,
+        err,
+      );
+    },
+  };
+  const podRestarter = createRestarter(
+    podInformer,
+    podRestartLogger,
+    opts.restartOpts ?? {},
+    opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
+  );
   podInformer.on('error', (err) => {
     handler.onError?.(err);
-    setTimeout(() => {
-      void podInformer.start();
-    }, 5000);
+    podRestarter.safeRestart(err);
   });
 
   return {
