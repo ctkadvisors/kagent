@@ -413,6 +413,31 @@ export function parseEnv(
   // tooling can read from process.env without re-deriving) — this
   // line is the human-grep target.
   console.log(`[kagent-agent-pod] spec source: ${specSource}`);
+  // Audit-rev2 M11 — when the deprecated env-JSON fallback path is
+  // taken, emit a structured WARN naming the v0.3.0 removal target.
+  // Operators who built tooling against `KAGENT_AGENT_SPEC` /
+  // `KAGENT_TASK_SPEC` env-vars need a runtime signal that the path
+  // is on the way out; the ROADMAP entry tracks the timeline.
+  // ConfigMap-path takes silently — it's the new normal. `'mixed'` is
+  // the partial-mount edge case (also worth a WARN — the operator
+  // emits both paths atomically, so one missing is unexpected).
+  if (specSource === 'env-json') {
+    console.warn(
+      '[kagent-agent-pod] DEPRECATED: spec source is env-JSON ' +
+        '(KAGENT_AGENT_SPEC / KAGENT_TASK_SPEC). The ConfigMap mount at ' +
+        '/var/kagent/config/{agent,task}.spec.json is the supported path. ' +
+        'env-JSON fallback is targeted for removal in v0.3.0-cas (single-release ' +
+        'back-compat tail per docs/ROADMAP.md Phase 4 §"Move Agent + Task spec ' +
+        'injection off env JSON").',
+    );
+  } else if (specSource === 'mixed') {
+    console.warn(
+      '[kagent-agent-pod] UNEXPECTED: spec source is "mixed" — agent.spec and ' +
+        'task.spec resolved from different paths (one ConfigMap, one env-JSON). ' +
+        'The operator emits both paths atomically; mixed is the partial-mount ' +
+        'edge case. Investigate the pod-spec for missing volumeMounts.',
+    );
+  }
   return config;
 }
 

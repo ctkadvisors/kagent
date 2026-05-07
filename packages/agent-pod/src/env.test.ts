@@ -176,14 +176,21 @@ describe('parseEnv', () => {
         try {
           const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: raw });
           expect(cfg.contextWindowTokens).toBeUndefined();
+          // Audit-rev2 M11 — parseEnv now also emits a WARN when the
+          // env-JSON spec-source path is taken (deprecated). Filter to
+          // the context-window WARN we care about for this assertion.
+          const ctxWindowWarns = warnSpy.mock.calls.filter((call) =>
+            (call[0] as string).includes('KAGENT_AGENT_MODEL_CONTEXT_WINDOW'),
+          );
           if (raw.length > 0) {
-            // Empty string is treated as "unset" — no warn. Anything
-            // else that fails to parse a positive integer warns once.
-            expect(warnSpy).toHaveBeenCalled();
-            const msg = warnSpy.mock.calls[0]?.[0] as string;
+            // Empty string is treated as "unset" — no context-window
+            // warn. Anything else that fails to parse a positive
+            // integer warns once.
+            expect(ctxWindowWarns.length).toBeGreaterThan(0);
+            const msg = ctxWindowWarns[0]?.[0] as string;
             expect(msg).toContain('KAGENT_AGENT_MODEL_CONTEXT_WINDOW');
           } else {
-            expect(warnSpy).not.toHaveBeenCalled();
+            expect(ctxWindowWarns.length).toBe(0);
           }
         } finally {
           warnSpy.mockRestore();
