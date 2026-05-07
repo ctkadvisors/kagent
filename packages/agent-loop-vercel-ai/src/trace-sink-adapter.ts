@@ -30,22 +30,39 @@
  * greater than the previous, single counter shared across all entry
  * types — `executor.ts:24-27` invariant 1).
  *
- * Production note: this is a structural bridge, not a
- * full-fidelity `TraceSink` (which is a pluggable
- * `emit(entry)` interface in `@kagent/agent-loop/trace.ts:153-157`
- * that's typically wired to Stdout / OTel / Langfuse). The bridge
- * collects entries into an in-memory array; integrators can pipe
- * them into a real `TraceSink` after the run completes via the
- * exposed `traces()` accessor.
+ * Production wiring (R3-LOW-2): the bridge accepts an optional
+ * `traceSinks?: readonly TraceSink[]` array. Each entry pushed onto
+ * the in-memory `traces` collection is ALSO forwarded to every
+ * registered sink via `sink.emit(entry)`. This mirrors
+ * `executor.ts:emitToSinks` — production OTel / Langfuse / Stdout
+ * sinks see the same record stream the kagent reference loop emits.
+ * Caller is expected to construct sinks via the existing
+ * `@kagent/trace-sinks` factories (or any custom `TraceSink`
+ * implementation). Sink errors are swallowed — emit MUST NOT crash
+ * the run, matching the reference loop's invariant in
+ * `trace.ts:169-172`.
+ *
+ * Back-compat: when `traceSinks` is undefined the bridge behaves
+ * exactly as the pre-R3 in-memory collector — `traces()` returns
+ * the same array and tests that read the array continue to work.
  */
 
-import type { TraceEntry } from '@kagent/agent-loop';
+import type { TraceEntry, TraceSink } from '@kagent/agent-loop';
 import { estimateTokens, truncateForStorage, truncateMessages } from '@kagent/agent-loop';
 
 export interface TraceSinkBridgeOpts {
   readonly runId: string;
   /** Model id surfaced on `llm_call` entries. */
   readonly model?: string;
+  /**
+   * Optional fan-out sinks — every emitted `TraceEntry` is forwarded
+   * via `sink.emit(entry)` so production OTel / Langfuse / Stdout
+   * sinks receive the same stream the kagent reference loop emits.
+   * Construct via `@kagent/trace-sinks` factories or any custom
+   * `TraceSink` implementation. Sink errors are swallowed — emit
+   * MUST NOT crash the run.
+   */
+  readonly traceSinks?: readonly TraceSink[];
 }
 
 /**
@@ -108,6 +125,32 @@ export function buildTraceSinkBridge(opts: TraceSinkBridgeOpts): TraceSinkBridge
   const traces: TraceEntry[] = [];
   const seq = { value: 0 };
   let iterationCounter = 0;
+  const sinks: readonly TraceSink[] = opts.traceSinks ?? [];
+
+  // R3-LOW-2 — fan-out helper. Push to in-memory collection AND
+  // forward to every registered sink. Sink errors are swallowed
+  // (matches `executor.ts:emitToSinks` + `trace.ts:169-172`
+  // invariant). Awaiting `emit()` is fire-and-forget here: the bridge
+  // doesn't have a per-step async boundary to safely await on (the
+  // AI SDK's `onStepFinish` is sync), so we kick the promise and
+  // attach a `.catch` to swallow rejection. Sinks that need flush
+  // semantics expose `flush()` separately and the integrator awaits
+  // it after the run completes.
+  const fanOut = (entry: TraceEntry): void => {
+    traces.push(entry);
+    for (const sink of sinks) {
+      try {
+        const r = sink.emit(entry);
+        if (r && typeof r.catch === 'function') {
+          r.catch(() => {
+            /* sink errors must not crash the run */
+          });
+        }
+      } catch {
+        /* sink errors must not crash the run */
+      }
+    }
+  };
 
   const openIteration = (): void => {
     const entry: TraceEntry = {
@@ -119,7 +162,7 @@ export function buildTraceSinkBridge(opts: TraceSinkBridgeOpts): TraceSinkBridge
       latency_ms: 0,
       iteration: iterationCounter++,
     };
-    traces.push(entry);
+    fanOut(entry);
   };
 
   const onStepFinish = (step: StepLike): void => {
@@ -142,7 +185,7 @@ export function buildTraceSinkBridge(opts: TraceSinkBridgeOpts): TraceSinkBridge
       cost_usd: null,
       ...(step.finishReason !== undefined && { stop_reason: step.finishReason }),
     };
-    traces.push(llmEntry);
+    fanOut(llmEntry);
     // Tool calls: emit one tool_call entry per result.
     const results = step.toolResults ?? [];
     for (const r of results) {
@@ -159,7 +202,7 @@ export function buildTraceSinkBridge(opts: TraceSinkBridgeOpts): TraceSinkBridge
         tool_output: truncateForStorage(safeStringify(r.output)),
         is_error: detectToolError(r.output),
       };
-      traces.push(tcEntry);
+      fanOut(tcEntry);
     }
   };
 
@@ -183,7 +226,7 @@ export function buildTraceSinkBridge(opts: TraceSinkBridgeOpts): TraceSinkBridge
       cumulative_cost_usd: null,
       hit_iteration_cap: false,
     };
-    traces.push(entry);
+    fanOut(entry);
   };
 
   return {

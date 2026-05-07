@@ -111,4 +111,71 @@ describe('buildTraceSinkBridge', () => {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]!);
     }
   });
+
+  it('forwards every emitted entry to registered TraceSinks (R3-LOW-2)', () => {
+    // Build a fake sink that captures emitted entries. The bridge's
+    // `traces()` accessor still returns the in-memory collection;
+    // the new contract is that the SAME stream also fans out to
+    // every registered sink so production OTel + Langfuse + Stdout
+    // sinks see every entry.
+    const captured: { entries: { trace_type: string; sequence: number }[] } = { entries: [] };
+    const sink = {
+      emit: (entry: { trace_type: string; sequence: number }): void => {
+        captured.entries.push({ trace_type: entry.trace_type, sequence: entry.sequence });
+      },
+    };
+    const bridge = buildTraceSinkBridge({
+      runId: 'r1',
+      model: 'm',
+      traceSinks: [sink],
+    });
+    bridge.openIteration();
+    bridge.onStepFinish({
+      text: 'hi',
+      usage: { inputTokens: 1, outputTokens: 1 },
+      toolCalls: [{ toolName: 't', input: {} }],
+      toolResults: [{ toolName: 't', output: 'ok' }],
+    });
+    bridge.onFinish({
+      finalText: 'hi',
+      status: 'completed',
+      cumulativeInputTokens: 1,
+      cumulativeOutputTokens: 1,
+    });
+    // The sink should have received: iteration_boundary, llm_call,
+    // tool_call, run_complete (4 entries, monotonic sequence).
+    expect(captured.entries.map((e) => e.trace_type)).toEqual([
+      'iteration_boundary',
+      'llm_call',
+      'tool_call',
+      'run_complete',
+    ]);
+    // The in-memory `traces()` accessor must remain identical to the
+    // sink stream — this preserves back-compat for callers that read
+    // the array.
+    expect(bridge.traces().length).toBe(captured.entries.length);
+  });
+
+  it('swallows sink emit() errors so a buggy sink cannot crash the run (R3-LOW-2)', () => {
+    const goodSink = {
+      received: 0,
+      emit: function emitGood(): void {
+        this.received++;
+      },
+    };
+    const badSink = {
+      emit: (): void => {
+        throw new Error('intentional sink failure');
+      },
+    };
+    const bridge = buildTraceSinkBridge({
+      runId: 'r1',
+      traceSinks: [badSink, goodSink],
+    });
+    expect(() => bridge.openIteration()).not.toThrow();
+    expect(() => bridge.openIteration()).not.toThrow();
+    // Good sink should still have observed both entries even though
+    // the bad sink threw on each one.
+    expect(goodSink.received).toBe(2);
+  });
 });

@@ -36,6 +36,7 @@ import {
   type RunBudget,
   type TerminalStatus,
   type TraceEntry,
+  type TraceSink,
 } from '@kagent/agent-loop';
 import type { CapabilityBundle } from '@kagent/capability-types';
 import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
@@ -100,6 +101,17 @@ export interface RunVercelAiAgentTaskInput {
    * the field but did not pass it to `streamText`.
    */
   readonly maxSteps?: number;
+  /**
+   * Optional fan-out trace sinks (R3-LOW-2). Every emitted
+   * `TraceEntry` is forwarded via `sink.emit(entry)` so production
+   * OTel / Langfuse / Stdout sinks receive the same stream the
+   * kagent reference loop produces. Construct via
+   * `@kagent/trace-sinks` factories or any custom `TraceSink`
+   * implementation. When undefined, the bridge runs in legacy
+   * in-memory-only mode (the previous default; observability is
+   * silently dropped — log-loud-flag-loud during integration).
+   */
+  readonly traceSinks?: readonly TraceSink[];
   /**
    * Test injection — when supplied, runs through this stub instead of
    * the real `streamText`. The test harness uses this to drive
@@ -173,6 +185,7 @@ export async function runVercelAiAgentTask(
   const trace = buildTraceSinkBridge({
     runId: input.runId,
     ...(input.modelId !== undefined && { model: input.modelId }),
+    ...(input.traceSinks !== undefined && { traceSinks: input.traceSinks }),
   });
   trace.openIteration();
 
