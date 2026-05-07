@@ -224,7 +224,8 @@ export async function routeFailureForSupervision(
   let currentFailed = failedTask;
   let currentReason = reasonRaw;
   let depth = 0;
-  while (depth < MAX_ESCALATION_DEPTH) {
+  const escalationCap = resolveMaxEscalationDepth();
+  while (depth < escalationCap) {
     const parentUid = currentFailed.metadata.labels?.[PARENT_TASK_UID_LABEL];
     if (typeof parentUid !== 'string' || parentUid.length === 0) {
       // Reached a root task during escalation — substrate-level
@@ -299,7 +300,41 @@ export async function routeFailureForSupervision(
   };
 }
 
-const MAX_ESCALATION_DEPTH = 8;
+/**
+ * Default escalation-depth cap. The supervision-router walks up the
+ * parent chain when a supervisor's strategy is `escalate`; this cap
+ * prevents a misconfigured CRD (e.g. a parent label cycle, or a
+ * pathologically deep tree) from spinning the operator. Eight levels
+ * is far beyond any realistic homelab/single-tenant agent tree.
+ *
+ * Operators can override via `KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH`
+ * (Helm value `agentPod.supervision.maxEscalationDepth`). Bad values
+ * (negative, NaN, non-integer, zero) fall back to the default with a
+ * warn-log so a typo can't silently disable the cap.
+ */
+const DEFAULT_MAX_ESCALATION_DEPTH = 8;
+
+/**
+ * Resolve the escalation-depth cap from env, falling back to the
+ * substrate default on bad input. Exported so tests can drive it
+ * without process.env mutation gymnastics.
+ */
+export function resolveMaxEscalationDepth(
+  raw: string | undefined = process.env.KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH,
+  warn: (msg: string) => void = (m) => {
+    console.warn(m);
+  },
+): number {
+  if (typeof raw !== 'string' || raw.length === 0) return DEFAULT_MAX_ESCALATION_DEPTH;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed <= 0) {
+    warn(
+      `[kagent-operator] KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH=${JSON.stringify(raw)} is not a positive integer — falling back to default ${DEFAULT_MAX_ESCALATION_DEPTH.toString()}`,
+    );
+    return DEFAULT_MAX_ESCALATION_DEPTH;
+  }
+  return parsed;
+}
 
 /**
  * Resolve `Agent.spec.supervisionStrategy` with v0.1 default. Unknown

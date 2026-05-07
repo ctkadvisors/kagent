@@ -587,6 +587,13 @@ spec:
               value: {{ .Values.supervision.defaultStrategy | quote }}
             - name: KAGENT_SUPERVISION_MAX_RESTARTS
               value: {{ .Values.supervision.maxRestarts.default | quote }}
+            # Audit-rev2 L4: env-overridable escalation-depth cap; default
+            # 8 is the substrate floor. Bad values fall back at the
+            # operator with a warn-log (see resolveMaxEscalationDepth).
+            {{- if hasKey .Values.supervision "maxEscalationDepth" }}
+            - name: KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH
+              value: {{ .Values.supervision.maxEscalationDepth | quote }}
+            {{- end }}
             # ---------------------------------------------------------------
             # v0.1.7-rig.2 — Substrate verifier reconciler
             # ---------------------------------------------------------------

@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { API_GROUP_VERSION, type Agent, type AgentTask } from './crds/index.js';
 import {
+  resolveMaxEscalationDepth,
   resolveMaxRestarts,
   resolveStrategy,
   routeFailureForSupervision,
@@ -521,6 +522,45 @@ describe('routeFailureForSupervision — rest_for_one', () => {
       )
       .map((c) => (c[0] as { name: string }).name);
     expect(new Set(terminations)).toEqual(new Set(['after1', 'after2']));
+  });
+});
+
+describe('resolveMaxEscalationDepth — audit-rev2 L4', () => {
+  it('returns the substrate default (8) when env is unset', () => {
+    expect(resolveMaxEscalationDepth(undefined)).toBe(8);
+  });
+
+  it('returns the substrate default (8) when env is empty', () => {
+    expect(resolveMaxEscalationDepth('')).toBe(8);
+  });
+
+  it('parses a positive integer override', () => {
+    expect(resolveMaxEscalationDepth('16')).toBe(16);
+  });
+
+  it('falls back to default with warn-log on a negative value', () => {
+    const warns: string[] = [];
+    expect(resolveMaxEscalationDepth('-1', (m) => warns.push(m))).toBe(8);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain('KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH');
+  });
+
+  it('falls back to default with warn-log on zero (zero would disable the cap)', () => {
+    const warns: string[] = [];
+    expect(resolveMaxEscalationDepth('0', (m) => warns.push(m))).toBe(8);
+    expect(warns).toHaveLength(1);
+  });
+
+  it('falls back to default with warn-log on NaN / non-numeric input', () => {
+    const warns: string[] = [];
+    expect(resolveMaxEscalationDepth('not-a-number', (m) => warns.push(m))).toBe(8);
+    expect(warns).toHaveLength(1);
+  });
+
+  it('falls back to default with warn-log on a non-integer (3.5)', () => {
+    const warns: string[] = [];
+    expect(resolveMaxEscalationDepth('3.5', (m) => warns.push(m))).toBe(8);
+    expect(warns).toHaveLength(1);
   });
 });
 

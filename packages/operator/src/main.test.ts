@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentTask } from './crds/index.js';
 import {
+  BoundedSeenSet,
   buildJobSpecOptionsFromEnv,
   parseModelClassesEnv,
   seedIdempotencyCacheFromInformer,
@@ -51,6 +52,9 @@ const TOUCHED_VARS = [
   'KAGENT_CONTEXT_PRESSURE_THRESHOLD',
   // Audit-rev2 M12 follow-up — blackboard cap-claim trapdoor flag.
   'KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN',
+  // Audit-rev2 L5 — security-context env vars (fail-closed parser).
+  'KAGENT_AGENT_POD_SECURITY_CONTEXT',
+  'KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -896,5 +900,112 @@ describe('seedIdempotencyCacheFromInformer (M4)', () => {
     const second = seedIdempotencyCacheFromInformer(cache, [t]);
     expect(second.seeded).toBe(0);
     // The live `recordOutputs` value is preserved.
+  });
+});
+
+describe('parseSecurityContextEnv — audit-rev2 L5 fail-closed', () => {
+  it('parses a valid JSON object successfully (and threads it onto extraEnv-bearing options)', () => {
+    process.env.KAGENT_AGENT_POD_SECURITY_CONTEXT = JSON.stringify({
+      runAsNonRoot: true,
+      runAsUser: 1000,
+    });
+    // No throw → success path. The exact field shape isn't asserted
+    // here (other tests cover the BuildJobSpecOptions plumbing); we
+    // just need to confirm valid JSON does not fail-closed.
+    expect(() => buildJobSpecOptionsFromEnv()).not.toThrow();
+  });
+
+  it('THROWS on malformed JSON (security-relevant config must fail-closed, not silently fall back)', () => {
+    process.env.KAGENT_AGENT_POD_SECURITY_CONTEXT = '{not valid json';
+    expect(() => buildJobSpecOptionsFromEnv()).toThrow(/malformed JSON/);
+  });
+
+  it('THROWS when the JSON is not an object (e.g. a string literal)', () => {
+    process.env.KAGENT_AGENT_POD_SECURITY_CONTEXT = '"runAsRoot"';
+    expect(() => buildJobSpecOptionsFromEnv()).toThrow(/not a JSON object/);
+  });
+
+  it('THROWS when the JSON is an array (not an object)', () => {
+    process.env.KAGENT_AGENT_POD_SECURITY_CONTEXT = '[]';
+    expect(() => buildJobSpecOptionsFromEnv()).toThrow(/not a JSON object/);
+  });
+
+  it('THROWS on null (parseSecurityContextEnv treats null as invalid)', () => {
+    process.env.KAGENT_AGENT_POD_SECURITY_CONTEXT = 'null';
+    expect(() => buildJobSpecOptionsFromEnv()).toThrow(/not a JSON object/);
+  });
+
+  it('returns success when env is unset (returns undefined for callers, no throw)', () => {
+    // Both vars unset (cleaned in beforeEach). Build should succeed.
+    expect(() => buildJobSpecOptionsFromEnv()).not.toThrow();
+  });
+
+  it('THROWS on malformed CONTAINER security context too', () => {
+    process.env.KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT = '{[}';
+    expect(() => buildJobSpecOptionsFromEnv()).toThrow(/malformed JSON/);
+  });
+});
+
+describe('BoundedSeenSet — audit-rev2 L6 LRU-shaped IdempotencyCache', () => {
+  it('rejects a non-positive cap at construction', () => {
+    expect(() => new BoundedSeenSet(0)).toThrow(/positive integer/);
+    expect(() => new BoundedSeenSet(-1)).toThrow(/positive integer/);
+    expect(() => new BoundedSeenSet(3.5)).toThrow(/positive integer/);
+    expect(() => new BoundedSeenSet(Number.NaN)).toThrow(/positive integer/);
+  });
+
+  it('reports membership via has() after add()', () => {
+    const s = new BoundedSeenSet(3);
+    s.add('a');
+    s.add('b');
+    expect(s.has('a')).toBe(true);
+    expect(s.has('b')).toBe(true);
+    expect(s.has('c')).toBe(false);
+  });
+
+  it('add() is idempotent (same key twice does not double the size)', () => {
+    const s = new BoundedSeenSet(3);
+    s.add('a');
+    s.add('a');
+    expect(s.size).toBe(1);
+  });
+
+  it('evicts oldest entry FIFO when cap is exceeded (NOT clear-on-cliff)', () => {
+    const s = new BoundedSeenSet(3);
+    s.add('a');
+    s.add('b');
+    s.add('c');
+    expect(s.size).toBe(3);
+    expect(s.has('a')).toBe(true);
+    s.add('d');
+    expect(s.size).toBe(3);
+    // FIFO: 'a' is the oldest, must be evicted; 'b','c','d' remain.
+    expect(s.has('a')).toBe(false);
+    expect(s.has('b')).toBe(true);
+    expect(s.has('c')).toBe(true);
+    expect(s.has('d')).toBe(true);
+  });
+
+  it('preserves dedupe across the cap boundary (regression for the clear-on-cliff bug)', () => {
+    // Pre-fix behavior: at size > N, clear() drops EVERY entry, so the
+    // next informer scan would re-record every Completed task. With
+    // FIFO eviction, only the oldest entry is dropped — recent
+    // history survives.
+    const s = new BoundedSeenSet(2);
+    s.add('older');
+    s.add('recent');
+    s.add('newest'); // evicts 'older'
+    expect(s.has('recent')).toBe(true);
+    expect(s.has('newest')).toBe(true);
+    expect(s.has('older')).toBe(false);
+  });
+
+  it('cap=1 degenerate case keeps only the newest entry', () => {
+    const s = new BoundedSeenSet(1);
+    s.add('a');
+    s.add('b');
+    expect(s.size).toBe(1);
+    expect(s.has('a')).toBe(false);
+    expect(s.has('b')).toBe(true);
   });
 });

@@ -729,28 +729,39 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
 
 /**
  * Parse a JSON-encoded security-context env var. Returns the parsed
- * object on success; logs + returns undefined on parse failure (so the
- * caller falls back to job-spec.ts defaults instead of erroring at
- * operator boot).
+ * object on success; THROWS on malformed input so the operator
+ * fail-closes (CrashLoop) rather than silently dropping the
+ * security-relevant config and re-rendering Jobs with the job-spec
+ * defaults.
+ *
+ * Audit-rev2 L5: previously this returned `undefined` on parse failure
+ * with a warn-log. Because the caller (`buildJobSpecOptionsFromEnv`)
+ * passes `undefined` straight through, a typo'd JSON in
+ * `KAGENT_AGENT_POD_SECURITY_CONTEXT` resulted in every spawned Job
+ * silently inheriting the substrate defaults instead of the
+ * cluster-operator-pinned posture. For security-relevant config that's
+ * the wrong tradeoff: a CrashLooping operator surfaces immediately as
+ * a `Failed` Pod (kubectl describe / Events / dashboard alert), while
+ * a silent fall-through is invisible until a security audit catches it.
  */
 function parseSecurityContextEnv<T>(varName: string, raw: string | undefined): T | undefined {
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      console.warn(
-        `[kagent-operator] ${varName} is not a JSON object — falling back to job-spec defaults`,
-      );
-      return undefined;
-    }
-    return parsed as T;
+    parsed = JSON.parse(raw);
   } catch (err) {
-    console.warn(
-      `[kagent-operator] failed to parse ${varName} as JSON (falling back to job-spec defaults):`,
-      err,
+    throw new Error(
+      `[kagent-operator] ${varName} is malformed JSON — refusing to boot with default fall-through (security-relevant config must fail closed): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
     );
-    return undefined;
   }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `[kagent-operator] ${varName} is not a JSON object — refusing to boot with default fall-through (security-relevant config must fail closed)`,
+    );
+  }
+  return parsed as T;
 }
 
 /**
@@ -1509,6 +1520,57 @@ export function seedIdempotencyCacheFromInformer(
     );
   }
   return { seeded, skipped };
+}
+
+/**
+ * Bounded insertion-order set with FIFO eviction. Used by the locality
+ * sample-recorder to dedupe per-task Completed transitions without
+ * letting the seen-set grow unbounded.
+ *
+ * Audit-rev2 L6: the previous implementation used `new Set<string>()`
+ * with a `if (size > N) clear()` reset, which is a memory bound but
+ * not LRU — at the cliff, every entry is dropped at once and the
+ * dedupe property is lost for the duration of the next informer scan
+ * (and the same Completed task gets re-recorded). This bounded set
+ * evicts only the oldest entry once the cap is hit, preserving recent
+ * dedupe history. Map preserves insertion order in JS; the
+ * delete-on-readd trick refreshes recency, which we DON'T do here
+ * because plain `has()` lookups are read-only by design. (LRU on read
+ * would route both `has` and `add` through the recency refresh; we
+ * specifically want FIFO-on-add semantics — once a task UID is seen
+ * we never need to "freshen" it.)
+ */
+export class BoundedSeenSet {
+  private readonly entries = new Map<string, true>();
+  private readonly cap: number;
+
+  constructor(cap: number) {
+    if (!Number.isInteger(cap) || cap <= 0) {
+      throw new Error(`BoundedSeenSet cap must be a positive integer, got ${String(cap)}`);
+    }
+    this.cap = cap;
+  }
+
+  has(key: string): boolean {
+    return this.entries.has(key);
+  }
+
+  add(key: string): void {
+    if (this.entries.has(key)) return;
+    this.entries.set(key, true);
+    while (this.entries.size > this.cap) {
+      // Map iteration order = insertion order; the first key is the
+      // oldest. Single-step eviction; the loop guard is defensive
+      // (cap can only be exceeded by exactly one entry per call).
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
 }
 
 async function main(): Promise<void> {
@@ -2973,7 +3035,12 @@ async function main(): Promise<void> {
     // wasn't Completed but the new copy is, that's the signal to
     // record. Implemented as a dedicated per-task tracker map so the
     // event handler doesn't need to consult the informer cache.
-    const seenCompleted = new Set<string>();
+    //
+    // Audit-rev2 L6: BoundedSeenSet (FIFO-evicting, cap=10000) replaces
+    // the previous `Set<string>` + `if (size > 10K) clear()` cliff. The
+    // cap and dedupe behavior are preserved; only oldest-N eviction
+    // changes so the dedupe property survives across the boundary.
+    const seenCompleted = new BoundedSeenSet(10_000);
     const recordSample = (task: AgentTask): void => {
       if (task.status?.phase !== 'Completed') return;
       const uid = task.metadata.uid;
@@ -3007,13 +3074,9 @@ async function main(): Promise<void> {
       for (const t of inf.list()) {
         recordSample(t);
       }
-      // Bound the seen-set so it doesn't grow unbounded — drop
-      // entries we won't see again (terminal tasks > 1h old). The
-      // CAS GC already enforces task-tree retention; this is just
-      // a memory safety bound.
-      if (seenCompleted.size > 10_000) {
-        seenCompleted.clear();
-      }
+      // Memory bound is enforced inline by BoundedSeenSet on every
+      // `add()` (FIFO eviction at cap=10K); see L6 comment above for
+      // history. No periodic clear() needed here.
     }, sampleScanIntervalMs);
     sampleTimer.unref?.();
 

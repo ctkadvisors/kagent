@@ -795,6 +795,16 @@ supervision:
     # fails-closed with `reason: restart_limit_exceeded`. Setting 0
     # disables restarts entirely (first failure is terminal).
     default: 3
+  # Audit-rev2 L4: cap on the parent-chain walk performed when a
+  # supervisor's strategy is `escalate`. Prevents a misconfigured CRD
+  # (parent label cycle, pathologically deep tree) from spinning the
+  # operator. The substrate default of 8 is far beyond any realistic
+  # homelab/single-tenant agent tree; raise only for installs that
+  # legitimately have deep supervisor hierarchies. Bad values
+  # (negative, NaN, non-integer, zero) at the operator fall back to 8
+  # with a warn-log. Plumbed as KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH
+  # on the operator deployment (substrate-level, not per-pod).
+  maxEscalationDepth: 8
 
 # ---------------------------------------------------------------------
 # v0.1.7-rig.2 — substrate verifier reconciler. Two dispatch paths:
