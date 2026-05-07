@@ -1,0 +1,53 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Operator namespaced Role + RoleBinding (audit-rev2 L7).
+
+Scope: the release namespace ONLY. Holds the secrets verbs the operator
+needs in-namespace so the default install (`watchAllNamespaces: false`,
+the chart's posture per `values.yaml:53`) does NOT grant cluster-wide
+`secrets: [get,create,patch,delete]` — that blast radius previously
+spanned every namespace including kube-system, gateway dataplane, and
+LiteLLM/Langfuse credentials, even when the operator only watched the
+release namespace.
+
+When `watchAllNamespaces: true`, the cluster-scoped supplement renders
+in `templates/clusterrole.yaml` so cross-namespace mints (capability
+Secrets per AgentTask, Workflow runtime cap-Secrets per AgentWorkflow)
+keep working. This Role still renders in both cases — it's the floor;
+the ClusterRole adds reach.
+
+The verbs are unchanged from the prior cluster-wide grant:
+  - get      — readNamespacedSecret in createSecretIdempotent's 409 path
+  - create   — capability Secret per AgentTask, workflow cap-Secret
+  - patch    — workflow cap-Secret rotation (mergePatch, ownerRef + JWT)
+  - delete   — finalizer-driven workflow Secret cleanup
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'create', 'patch', 'delete']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kagent-operator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

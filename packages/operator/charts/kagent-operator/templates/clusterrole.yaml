@@ -170,9 +170,23 @@ rules:
   - apiGroups: ['']
     resources: ['services']
     verbs: ['get', 'list', 'watch', 'create', 'delete']
+  # Audit-rev2 L7 — secrets RBAC scope is `watchAllNamespaces`-conditional.
+  #
+  # Default install (`watchAllNamespaces: false`) scopes the operator to the
+  # release namespace only; secrets verbs live in the namespaced Role
+  # rendered by `templates/role.yaml` (the always-on companion). The
+  # ClusterRole below skips the `secrets` rule entirely so a single
+  # release-ns blast radius can't be widened by accident.
+  #
+  # `watchAllNamespaces: true` installs supplement with cluster-scoped
+  # secrets verbs because the operator may mint capability Secrets and
+  # Workflow runtime Secrets in any namespace where an AgentTask /
+  # AgentWorkflow is admitted.
+  {{- if .Values.watchAllNamespaces }}
   - apiGroups: ['']
     resources: ['secrets']
     verbs: ['get', 'create', 'patch', 'delete']
+  {{- end }}
   # ---------------------------------------------------------------------
   # Wave 3 — Identity (v0.4.3-identity)
   # ---------------------------------------------------------------------
