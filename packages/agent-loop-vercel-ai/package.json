@@ -1,0 +1,45 @@
+{
+  "name": "@kagent/agent-loop-vercel-ai",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reference adapter that proves the 'any framework runs in a kagent pod' claim survives the v0.1.9 context-awareness slate. Bridges Vercel AI SDK v6 to kagent's substrate guarantees: context-window safety-net, capability JWT enforcement, substrate-tools re-emission, RunBudget extraction, and trace-sink mapping.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "peerDependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@kagent/agent-loop": "workspace:*",
+    "@kagent/agent-pod": "workspace:*",
+    "@kagent/capability-types": "workspace:*",
+    "@kagent/in-process-tool-provider": "workspace:*",
+    "ai": "^6.0.0",
+    "zod": "^3.25.76 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "3.0.10",
+    "@kagent/agent-loop": "workspace:*",
+    "@kagent/agent-pod": "workspace:*",
+    "@kagent/capability-types": "workspace:*",
+    "@kagent/in-process-tool-provider": "workspace:*",
+    "ai": "6.0.175",
+    "zod": "4.3.6"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
