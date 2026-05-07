@@ -49,6 +49,8 @@ const TOUCHED_VARS = [
   // v0.1.9 context-awareness — threshold env vars (Pieces 3 + 4).
   'KAGENT_CONTEXT_SAFETY_THRESHOLD',
   'KAGENT_CONTEXT_PRESSURE_THRESHOLD',
+  // Audit-rev2 M12 follow-up — blackboard cap-claim trapdoor flag.
+  'KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -245,6 +247,45 @@ describe('buildJobSpecOptionsFromEnv — context-awareness threshold forwarding 
     const opts = buildJobSpecOptionsFromEnv();
     const env = opts.extraEnv ?? [];
     expect(findEnv(env, 'KAGENT_CONTEXT_SAFETY_THRESHOLD')).toBe('0.5');
+  });
+});
+
+/* =====================================================================
+ * Audit-rev2 M12 follow-up — blackboard fail-open trapdoor forwarding.
+ *
+ * The chart's `agentPod.blackboard.failOpen=true` (gated at chart-render
+ * time on `agentPod.blackboard.acknowledgeUnsafe=true`) projects
+ * `KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN=true` onto the operator
+ * deployment. The operator MUST re-emit it as KAGENT_BLACKBOARD_FAIL_OPEN
+ * onto every spawned agent-pod's env so the agent-pod's
+ * main.ts blackboard-claim default-deny path knows to flip to
+ * {read: ['*'], write: ['*']}. Default off — the env stays absent on
+ * every spawned pod and the agent-pod default-deny path holds.
+ * ===================================================================== */
+describe('buildJobSpecOptionsFromEnv — blackboard fail-open forwarding (audit-rev2 M12 follow-up)', () => {
+  it('forwards KAGENT_BLACKBOARD_FAIL_OPEN onto spawned-Job env when chart sets failOpen=true', () => {
+    process.env.KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN = 'true';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_BLACKBOARD_FAIL_OPEN')).toBe('true');
+  });
+
+  it('omits KAGENT_BLACKBOARD_FAIL_OPEN when the chart-side flag is unset (default-deny posture)', () => {
+    // No env set; afterEach cleared previous test's value.
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_BLACKBOARD_FAIL_OPEN')).toBeUndefined();
+  });
+
+  it('omits KAGENT_BLACKBOARD_FAIL_OPEN when the chart-side flag is "false" verbatim (literal-true gate)', () => {
+    // The agent-pod treats only "true" as on; the operator's forward
+    // gate uses the same exact-string comparison.
+    process.env.KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN = 'false';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_BLACKBOARD_FAIL_OPEN')).toBeUndefined();
   });
 });
 

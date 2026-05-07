@@ -681,6 +681,20 @@ spec:
             # KAGENT_BLACKBOARD_BUCKET stamping in job-spec.ts.
             - name: KAGENT_BLACKBOARD_ENABLED
               value: {{ .Values.blackboard.enabled | ternary "true" "false" | quote }}
+            # Audit-rev2 M12 follow-up — blackboard cap-claim trapdoor.
+            # `agentPod.blackboard.failOpen=true` (gated at chart-render
+            # time by `agentPod.blackboard.acknowledgeUnsafe=true`)
+            # flips every spawned agent-pod's blackboard cap-claim
+            # default to {read: ['*'], write: ['*']}. Forwarded onto
+            # the operator deployment as KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN
+            # — main.ts:buildJobSpecOptionsFromEnv() re-emits as
+            # KAGENT_BLACKBOARD_FAIL_OPEN onto every spawned Job.
+            # Default false (stays unset on every spawned pod);
+            # agent-pod main.ts treats only the literal "true" as on.
+            {{- if and .Values.agentPod.blackboard (eq (default false .Values.agentPod.blackboard.failOpen) true) }}
+            - name: KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN
+              value: "true"
+            {{- end }}
             # ---------------------------------------------------------------
             # Wave 3 — Events
             # ---------------------------------------------------------------

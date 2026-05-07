@@ -107,4 +107,29 @@ Validate values at template time. Currently guards two trapdoors:
 {{- if or (le $pressureF 0.0) (ge $pressureF 1.0) -}}
 {{- fail (printf "kagent-operator: agentPod.contextPressureThreshold must be in (0, 1) (got %v) — values <=0 or >=1 silently re-default to 0.7 in the agent-pod runner, masking the misconfig. See docs/CONTEXT-AWARENESS.md §4.1 and evidence/audit-rev2/C1.md NH1" $pressure) -}}
 {{- end -}}
+{{/*
+  Audit-rev2 M12 follow-up — blackboard fail-open requires explicit
+  acknowledgement.
+
+  `agentPod.blackboard.failOpen=true` flips every spawned agent-pod's
+  blackboard cap-claim default to {read: ['*'], write: ['*']} —
+  cluster-wide unrestricted read+write. This is intentional for
+  bootstrap / dev clusters but a foot-gun shaped exactly like the
+  capability-mount silent-disable that NH3 closed: an operator who
+  flips it without realizing the consequence has no way to know
+  before the pod boots.
+
+  Refuse to render when failOpen=true without acknowledgeUnsafe=true.
+  The pod-side WARN in agent-pod/src/main.ts:539-549 is defense-in-
+  depth (catches non-chart-mediated env injection); this gate catches
+  the chart-mediated path before the env is ever stamped. See
+  packages/operator/charts/kagent-operator/values.yaml agentPod.blackboard
+  for the user-facing prose.
+*/}}
+{{- $bb := .Values.agentPod.blackboard -}}
+{{- if $bb -}}
+{{- if and (eq (default false $bb.failOpen) true) (ne (default false $bb.acknowledgeUnsafe) true) -}}
+{{- fail "kagent-operator: agentPod.blackboard.failOpen=true requires agentPod.blackboard.acknowledgeUnsafe=true. The fail-open posture grants every spawned agent-pod cluster-wide blackboard read+write (claims.blackboard = {read: ['*'], write: ['*']}). Refusing to render — set acknowledgeUnsafe=true ONLY as a deliberate, time-boxed escape hatch (e.g. bootstrap / dev clusters with no cap-issuer wired). See packages/operator/charts/kagent-operator/values.yaml agentPod.blackboard and evidence/audit-rev2/W3-Pod-REPORT.md §5 'M12 follow-up'." -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

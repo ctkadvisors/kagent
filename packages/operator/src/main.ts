@@ -592,6 +592,21 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       value: env.KAGENT_CONTEXT_PRESSURE_THRESHOLD,
     });
   }
+  // Audit-rev2 M12 follow-up — blackboard cap-claim trapdoor. Forward
+  // the chart-side `agentPod.blackboard.failOpen=true` knob (which the
+  // chart's _helpers.tpl gate paired with `acknowledgeUnsafe=true`)
+  // verbatim onto every spawned agent-pod's env. The agent-pod's
+  // main.ts treats only the literal "true" as on and emits a
+  // structured boot-time WARN naming the consequence + the chart-time
+  // gate (defense-in-depth). Default off — env stays unset on every
+  // spawned pod, blackboard tools default-deny when no cap-claim is
+  // present.
+  if (env.KAGENT_AGENT_POD_BLACKBOARD_FAIL_OPEN === 'true') {
+    extraEnv.push({
+      name: 'KAGENT_BLACKBOARD_FAIL_OPEN',
+      value: 'true',
+    });
+  }
   // WS-M — substrate kill switch + URL plumbing for the in-pod
   // ensure_agent_from_template tool. Forwarded only when the
   // template-server is enabled on the operator side; the chart binds

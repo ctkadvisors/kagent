@@ -302,6 +302,41 @@ agentPod:
   capability:
     allowMissing: false
 
+  # Audit-rev2 M12 follow-up — blackboard cap-claim trapdoor.
+  #
+  # When the agent-pod boots and the operator-minted capability bundle
+  # does NOT carry a `claims.blackboard` slot, the in-pod blackboard
+  # tools (`read_blackboard`, `write_blackboard`, `list_blackboard`,
+  # `append_blackboard`) ALL gate against the cap-claim ACL. With NO
+  # claim and NO override, the tools refuse every call (default-deny
+  # — the safe posture).
+  #
+  # `failOpen: true` flips that to `claims.blackboard = {read: ['*'],
+  # write: ['*']}` — i.e. cluster-wide unrestricted read/write across
+  # every key the in-process agent can name. This is intentional for
+  # development / bootstrap clusters that haven't wired the cap-issuer
+  # yet, but it MUST NEVER ship to production silently.
+  #
+  # The chart-render-time guard in `kagent-operator.validateValues`
+  # refuses to install when `failOpen: true` is set without
+  # `acknowledgeUnsafe: true` — the operator must say "I know what I'm
+  # doing" out loud, in two places, before the chart renders. The
+  # agent-pod's main.ts ALSO emits a structured boot-time WARN naming
+  # the consequence + the override (defense-in-depth so the runtime
+  # log mirrors the chart-time gate).
+  #
+  # Plumbed env (deployment.yaml + spawned-Job env via main.ts):
+  #   KAGENT_BLACKBOARD_FAIL_OPEN=true|false (forwarded onto every
+  #   spawned agent-pod's env when failOpen=true).
+  blackboard:
+    # When true, the agent-pod's blackboard tools default to unrestricted
+    # cluster-wide read+write claims. Default false (safe).
+    failOpen: false
+    # Required-by-default trapdoor acknowledgement. Setting `failOpen:
+    # true` WITHOUT also setting this true is rejected at chart-render
+    # time. Pair the two only as a deliberate, time-boxed escape hatch.
+    acknowledgeUnsafe: false
+
   # WS-M — AgentTemplate substrate. When enabled:
   #   - the operator boots the template-server on `serverPort`
   #   - the operator-fullname-templates Service exposes it ClusterIP
