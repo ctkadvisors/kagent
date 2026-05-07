@@ -426,8 +426,12 @@ What we already have in `packages/agent-loop/src/detectors/`:
 - `detectRefusal` (`refusal.ts:26`) — fires when 0 tool calls AND
   final_answer < 200 chars AND matches a known phrase ("input is
   incomplete", "please provide more details", etc.). Returns the
-  matched phrase or null. This is structurally good and language-aware
-  for a known set.
+  matched phrase or null. This is structurally good. **The phrase
+  set is ENGLISH-ONLY** (audit-rev2 C2 §1 L10) — agents running with
+  non-English system prompts or non-English fine-tunes will miss
+  their refusal phrases and silently slip through. Per-locale phrase
+  sets are tracked as a v0.2+ TODO in `refusal.ts`'s JSDoc; the v0.1
+  homelab pilot is English-only by design.
 - `computeQualityFlags` (`quality-flags.ts`) — emits four flag ids:
   - `synthesis_low_yield` — substantive tool work was done but the
     final message dropped most of it.
