@@ -186,7 +186,12 @@ describe('loadFromEnv', () => {
         ['/var/kagent/cap-ca/tls.crt', chartKeys.publicPem],
       ]);
       const ca = await loadFromEnv(
-        { KAGENT_IDENTITY_ENABLED: 'true', KAGENT_CAP_ISSUER: 'urn:spire-test' },
+        {
+          KAGENT_IDENTITY_ENABLED: 'true',
+          KAGENT_CAP_ISSUER: 'urn:spire-test',
+          // H20 — explicit alg required when SPIRE source is selected.
+          KAGENT_CAP_SIGNING_ALG: 'ES256',
+        },
         (p) => {
           const v = fakeFiles.get(p);
           if (v === undefined) return '';
@@ -235,7 +240,117 @@ describe('loadFromEnv', () => {
           KAGENT_IDENTITY_ENABLED: 'true',
           KAGENT_SPIRE_CAP_SIGNING_KEY_FILE: '/etc/spire/cap.key',
           KAGENT_SPIRE_CAP_SIGNING_PUB_FILE: '/etc/spire/cap.crt',
+          // H20 — explicit alg required when SPIRE source is selected.
+          KAGENT_CAP_SIGNING_ALG: 'ES256',
         },
+        (p) => fakeFiles.get(p) ?? '',
+      );
+      expect(ca.alg).toBe('ES256');
+    });
+
+    /* H20 — alg-confusion via PEM length heuristic. When identity is
+     * enabled AND a SPIRE-managed key is being sourced, the operator
+     * MUST get an explicit alg from env. Without one, the loader fails
+     * closed instead of guessing via PEM body length.
+     */
+    it('H20 — explicit alg required when SPIRE source is selected (ES256 path succeeds)', async () => {
+      const spireKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv(
+        {
+          KAGENT_IDENTITY_ENABLED: 'true',
+          KAGENT_CAP_SIGNING_ALG: 'ES256',
+        },
+        (p) => fakeFiles.get(p) ?? '',
+      );
+      expect(ca.alg).toBe('ES256');
+    });
+
+    it('H20 — RS256 PEM with explicit RS256 env succeeds', async () => {
+      const spireKeys = await makeRsaKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv(
+        {
+          KAGENT_IDENTITY_ENABLED: 'true',
+          KAGENT_CAP_SIGNING_ALG: 'RS256',
+        },
+        (p) => fakeFiles.get(p) ?? '',
+      );
+      expect(ca.alg).toBe('RS256');
+    });
+
+    it('H20 — missing KAGENT_CAP_SIGNING_ALG when SPIRE source is selected fails closed', async () => {
+      const spireKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+      ]);
+      await expect(
+        loadFromEnv({ KAGENT_IDENTITY_ENABLED: 'true' }, (p) => fakeFiles.get(p) ?? ''),
+      ).rejects.toThrow(/KAGENT_CAP_SIGNING_ALG must be set explicitly/);
+    });
+
+    it('H20 — invalid KAGENT_CAP_SIGNING_ALG (unknown value) fails closed when SPIRE source is selected', async () => {
+      const spireKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+      ]);
+      await expect(
+        loadFromEnv(
+          { KAGENT_IDENTITY_ENABLED: 'true', KAGENT_CAP_SIGNING_ALG: 'HS256' },
+          (p) => fakeFiles.get(p) ?? '',
+        ),
+      ).rejects.toThrow(/KAGENT_CAP_SIGNING_ALG must be set explicitly/);
+    });
+
+    it('H20 — RS256 PEM with mismatched ES256 env fails at materials load (key/alg mismatch)', async () => {
+      // Real RSA private key with explicit ES256 — `loadFromMaterials`
+      // calls `importPKCS8(pem, 'ES256')` which rejects because the key
+      // type doesn't match. Fail-closed at sign time confirmed.
+      const spireKeys = await makeRsaKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/spire-cap-ca/tls.key', spireKeys.privatePem],
+        ['/var/kagent/spire-cap-ca/tls.crt', spireKeys.publicPem],
+      ]);
+      await expect(
+        loadFromEnv(
+          { KAGENT_IDENTITY_ENABLED: 'true', KAGENT_CAP_SIGNING_ALG: 'ES256' },
+          (p) => fakeFiles.get(p) ?? '',
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('H20 — chart-Secret path is unaffected (no env required when not in SPIRE branch)', async () => {
+      // Wave-2 path: KAGENT_IDENTITY_ENABLED unset → chart-Secret path
+      // continues to use `detectAlgFromPem` heuristic. The H20 fail-closed
+      // guard applies ONLY when the SPIRE branch is selected.
+      const chartKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/cap-ca/tls.key', chartKeys.privatePem],
+        ['/var/kagent/cap-ca/tls.crt', chartKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv({}, (p) => fakeFiles.get(p) ?? '');
+      // Detected via PEM length heuristic — back-compat preserved.
+      expect(ca.alg).toBe('ES256');
+    });
+
+    it('H20 — fall-back to chart-Secret (SPIRE files absent) does NOT enforce explicit alg', async () => {
+      // Identity enabled but SPIRE files absent → falls through to
+      // chart-Secret path, where the heuristic is acceptable.
+      const chartKeys = await makeEsKeys();
+      const fakeFiles = new Map<string, string>([
+        ['/var/kagent/cap-ca/tls.key', chartKeys.privatePem],
+        ['/var/kagent/cap-ca/tls.crt', chartKeys.publicPem],
+      ]);
+      const ca = await loadFromEnv(
+        { KAGENT_IDENTITY_ENABLED: 'true' },
         (p) => fakeFiles.get(p) ?? '',
       );
       expect(ca.alg).toBe('ES256');

@@ -244,6 +244,18 @@ export async function loadFromMaterials(input: CapCaMaterials): Promise<CapCa> {
  * chart-managed Secret for cap signing without forcing a re-mint at
  * SPIRE-cert rotation time.
  *
+ * H20 — alg-confusion via PEM length heuristic. When the SPIRE branch
+ * is taken (identity enabled AND SPIRE-managed files present), the
+ * loader REQUIRES an explicit `KAGENT_CAP_SIGNING_ALG` (`ES256` or
+ * `RS256`) and fails closed otherwise. The PEM-length heuristic in
+ * `detectAlgFromPem` is robust enough for the chart Secret path
+ * (operator-controlled key generation) but a SPIRE workload-cert
+ * path could rotate to a key shape we don't predict — a malformed
+ * PEM dropped into the mounted Secret could trigger alg-confusion at
+ * sign time. The chart's default `capabilities.alg: ES256` (in
+ * `values.yaml`) ensures `KAGENT_CAP_SIGNING_ALG` is plumbed to
+ * production deployments out of the box.
+ *
  * `readFile` is dependency-injected so tests can drive both paths
  * without real filesystem access.
  */
@@ -277,11 +289,27 @@ export async function loadFromEnv(
       spirePubPem.length > 0
     ) {
       console.log(`[kagent-operator] cap-ca: using SPIRE-managed signing key at ${spireKeyPath}`);
-      const alg = parseAlg(env.KAGENT_CAP_SIGNING_ALG) ?? detectAlgFromPem(spireKeyPem);
+      // H20 — when identity is enabled AND we're sourcing a SPIRE-managed
+      // key, REQUIRE an explicit `KAGENT_CAP_SIGNING_ALG`. The PEM-length
+      // heuristic in `detectAlgFromPem` is robust enough for the chart
+      // Secret path (operator-controlled key generation) but a SPIRE
+      // workload-cert path could rotate to a key shape we don't predict.
+      // A misconfigured PEM would silently flip the alg at sign time —
+      // an alg-confusion vector. Fail closed: refuse to mint without
+      // explicit operator intent.
+      const explicitAlg = parseAlg(env.KAGENT_CAP_SIGNING_ALG);
+      if (explicitAlg === undefined) {
+        throw new Error(
+          'KAGENT_CAP_SIGNING_ALG must be set explicitly (ES256 or RS256) when ' +
+            'KAGENT_IDENTITY_ENABLED=true and SPIRE-managed signing keys are present. ' +
+            'PEM-length heuristics are not safe for SPIRE workload-cert sources — ' +
+            'an unspecified alg could enable alg-confusion at sign time.',
+        );
+      }
       return await loadFromMaterials({
         privatePem: spireKeyPem,
         publicPem: spirePubPem,
-        alg,
+        alg: explicitAlg,
         ...(env.KAGENT_CAP_SIGNING_KID !== undefined && { kid: env.KAGENT_CAP_SIGNING_KID }),
         ...(env.KAGENT_CAP_ISSUER !== undefined && { issuer: env.KAGENT_CAP_ISSUER }),
       });
