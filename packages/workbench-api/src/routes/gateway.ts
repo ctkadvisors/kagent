@@ -399,6 +399,27 @@ export function gatewayRoute(deps: GatewayRouteDeps): Hono {
     if (typeof name !== 'string' || name.length === 0) {
       return c.json({ error: 'invalid-name' }, 400);
     }
+    // NEW-M1 — enforce namespace match against the workbench's release
+    // namespace. The actions Role+RoleBinding (kagent-workbench chart,
+    // post-H17) is already namespace-scoped, so apiserver would reject
+    // a cross-namespace PATCH with 403. Enforcing here as well gives
+    // the user a clean 403 with a recognizable error shape, AND
+    // protects in test/dev contexts where the chart's RBAC isn't
+    // applied. Combined with B6 (spoofable X-Forwarded-User), this
+    // closes the cross-namespace tuning vector that NEW-M1 surfaced.
+    if (
+      typeof deps.defaultNamespace === 'string' &&
+      deps.defaultNamespace.length > 0 &&
+      namespace !== deps.defaultNamespace
+    ) {
+      return c.json(
+        {
+          error: 'namespace-not-permitted',
+          message: `PATCH limited to the workbench's release namespace (${deps.defaultNamespace}); requested ${namespace}`,
+        },
+        403,
+      );
+    }
 
     let parsedBody: PatchInFlightBody;
     try {

@@ -142,6 +142,11 @@ export function buildRouter(deps: RouterDeps): Hono {
         customApi: deps.readCustomApi ?? deps.customApi,
       }),
       writesEnabled: deps.writesEnabled === true && deps.customApi !== undefined,
+      // NEW-M1 — when set, PATCH /api/modelendpoints/:ns/:name rejects
+      // requests whose `:ns` differs from the workbench's release
+      // namespace. The chart sets WORKBENCH_DEFAULT_NAMESPACE to
+      // .Release.Namespace; main.ts threads it through here.
+      ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
     }),
   );
   app.route(

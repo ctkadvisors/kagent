@@ -443,4 +443,52 @@ describe('PATCH /api/modelendpoints/:namespace/:name', () => {
     );
     expect(res.status).toBe(500);
   });
+
+  /* =====================================================================
+   * NEW-M1 — PATCH must enforce namespace match against the workbench's
+   * release namespace. The chart's actions Role+RoleBinding is already
+   * namespace-scoped (post-H17), so apiserver would 403 a cross-namespace
+   * PATCH; enforcing here gives the user a clean 403 + protects test/dev
+   * contexts where the chart's RBAC isn't applied.
+   * ===================================================================== */
+
+  it('rejects cross-namespace PATCH with 403 (NEW-M1)', async () => {
+    const fixture = fakeApi();
+    const app = gatewayRoute({
+      customApi: fixture.api,
+      writesEnabled: true,
+      defaultNamespace: 'kagent-system',
+    });
+    const res = await app.request(
+      makeRequest('PATCH', '/api/modelendpoints/other-tenant/foo', { seed: 4 }),
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string; message?: string };
+    expect(body.error).toBe('namespace-not-permitted');
+    expect(body.message ?? '').toMatch(/kagent-system/);
+    expect(fixture.patches).not.toHaveBeenCalled();
+  });
+
+  it('admits same-namespace PATCH when defaultNamespace matches (NEW-M1)', async () => {
+    const fixture = fakeApi();
+    const app = gatewayRoute({
+      customApi: fixture.api,
+      writesEnabled: true,
+      defaultNamespace: 'kagent-system',
+    });
+    const res = await app.request(
+      makeRequest('PATCH', '/api/modelendpoints/kagent-system/foo', { seed: 4 }),
+    );
+    expect(res.status).toBe(200);
+    expect(fixture.patches).toHaveBeenCalledTimes(1);
+  });
+
+  it('without defaultNamespace, no namespace check is enforced (back-compat)', async () => {
+    const fixture = fakeApi();
+    const app = gatewayRoute({ customApi: fixture.api, writesEnabled: true });
+    const res = await app.request(
+      makeRequest('PATCH', '/api/modelendpoints/any-namespace/foo', { seed: 4 }),
+    );
+    expect(res.status).toBe(200);
+  });
 });
