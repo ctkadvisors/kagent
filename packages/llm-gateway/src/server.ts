@@ -31,6 +31,7 @@ import {
   handleRevokeApiKey,
   parseCreateApiKeyBody,
   parseRevokeIdFromUrl,
+  validateRevokeId,
 } from './admin-routes.js';
 import { authenticate, type ApiKeyLookup } from './auth.js';
 import { parseKagentHeaders } from './headers.js';
@@ -207,6 +208,21 @@ export function buildHandler(
       const id = parseRevokeIdFromUrl(url);
       if (id === undefined) {
         writeJson(res, 400, { error: { message: 'expected /admin/keys/:id' } });
+        return;
+      }
+      // M19 — validate `:id` is a positive decimal BIGSERIAL before
+      // hitting Postgres. The pg query is parameterized (safe from
+      // SQLi) but pg's BIGSERIAL cast throws on a non-numeric input,
+      // surfacing as a 500 with the parse-error text leaking back to
+      // the client. Reject early with a structured 400.
+      const validation = validateRevokeId(id);
+      if (!validation.ok) {
+        writeJson(res, 400, {
+          error: {
+            message: validation.message ?? 'invalid id',
+            type: 'invalid_request_error',
+          },
+        });
         return;
       }
       try {

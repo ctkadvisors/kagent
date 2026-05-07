@@ -260,7 +260,9 @@ describe('DELETE /admin/keys/:id', () => {
 
   it('returns 404 when the id does not match an existing row', async () => {
     booted.repo.revokeMatches = false;
-    const res = await fetch(`${booted.url}/admin/keys/missing`, {
+    // Numeric id that simply doesn't exist in the repo (M19: id-shape
+    // validation passes because it's a valid BIGSERIAL).
+    const res = await fetch(`${booted.url}/admin/keys/9999`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
     });
@@ -270,6 +272,53 @@ describe('DELETE /admin/keys/:id', () => {
   it('rejects without admin auth (401)', async () => {
     const res = await fetch(`${booted.url}/admin/keys/42`, { method: 'DELETE' });
     expect(res.status).toBe(401);
+  });
+
+  /* =====================================================================
+   * M19 — admin numeric validation. The pg query is parameterized
+   * (safe from SQLi) but pg's BIGSERIAL cast THROWS on a non-numeric
+   * input, surfacing as a 500 + parse-error text leakage. Reject
+   * non-numeric / out-of-range ids with structured 400 BEFORE hitting
+   * the repo.
+   * ===================================================================== */
+
+  it('rejects a non-numeric id with 400 (M19)', async () => {
+    const res = await fetch(`${booted.url}/admin/keys/abc-def`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: { message?: string } };
+    expect(body.error?.message ?? '').toMatch(/positive decimal integer/);
+    expect(booted.repo.revokedId).toBeUndefined(); // never reached the repo
+  });
+
+  it('rejects a negative-shaped id with 400 (M19)', async () => {
+    const res = await fetch(`${booted.url}/admin/keys/-5`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(400);
+    expect(booted.repo.revokedId).toBeUndefined();
+  });
+
+  it('rejects an id with leading zeros with 400 (M19)', async () => {
+    const res = await fetch(`${booted.url}/admin/keys/0042`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(400);
+    expect(booted.repo.revokedId).toBeUndefined();
+  });
+
+  it('rejects an id that exceeds BIGSERIAL range with 400 (M19)', async () => {
+    // BIGSERIAL max is 2^63-1 = 9_223_372_036_854_775_807
+    const res = await fetch(`${booted.url}/admin/keys/9223372036854775808`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(400);
+    expect(booted.repo.revokedId).toBeUndefined();
   });
 });
 

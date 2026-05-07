@@ -365,6 +365,72 @@ describe('handleRevokeApiKey', () => {
   });
 });
 
+/* =====================================================================
+ * M19 — admin numeric validation. parseRevokeIdFromUrl gives us the
+ * raw URL segment; validateRevokeId rejects shapes that pg's BIGSERIAL
+ * cast would throw on (non-numeric, negative, leading zeros, overflow).
+ * ===================================================================== */
+
+describe('validateRevokeId (M19)', () => {
+  it('accepts a small positive integer', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    expect(validateRevokeId('1')).toEqual({ ok: true, id: '1' });
+    expect(validateRevokeId('42')).toEqual({ ok: true, id: '42' });
+  });
+
+  it('accepts BIGSERIAL maximum exactly', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    expect(validateRevokeId('9223372036854775807')).toEqual({
+      ok: true,
+      id: '9223372036854775807',
+    });
+  });
+
+  it('rejects empty string', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    const r = validateRevokeId('');
+    expect(r.ok).toBe(false);
+    expect(r.message ?? '').toMatch(/required/);
+  });
+
+  it('rejects non-decimal characters (alphabetic, dashes)', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    expect(validateRevokeId('abc').ok).toBe(false);
+    expect(validateRevokeId('42abc').ok).toBe(false);
+    expect(validateRevokeId('abc-def').ok).toBe(false);
+  });
+
+  it('rejects negative-shaped ids', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    expect(validateRevokeId('-5').ok).toBe(false);
+  });
+
+  it('rejects leading-zero ids', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    expect(validateRevokeId('042').ok).toBe(false);
+    // `0` alone is also rejected — id starts at 1 (BIGSERIAL).
+    expect(validateRevokeId('0').ok).toBe(false);
+  });
+
+  it('rejects scientific notation', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    expect(validateRevokeId('1e10').ok).toBe(false);
+  });
+
+  it('rejects ids exceeding BIGSERIAL range', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    const r = validateRevokeId('9223372036854775808');
+    expect(r.ok).toBe(false);
+    expect(r.message ?? '').toMatch(/range/);
+  });
+
+  it('rejects id with too many digits (regex bound)', async () => {
+    const { validateRevokeId } = await import('./admin-routes.js');
+    // 20-digit string is structurally rejected by the regex (max 19).
+    expect(validateRevokeId('99999999999999999999').ok).toBe(false);
+  });
+});
+
 describe('parseRevokeIdFromUrl', () => {
   it('extracts the id from /admin/keys/:id', async () => {
     const { parseRevokeIdFromUrl } = await import('./admin-routes.js');

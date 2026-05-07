@@ -320,3 +320,57 @@ export function parseRevokeIdFromUrl(url: string): string | undefined {
   if (tail.includes('/')) return undefined;
   return tail;
 }
+
+/**
+ * M19 — validation result for the revoke `:id` segment.
+ *
+ * The pg query is parameterized (safe from SQLi) but pg's BIGSERIAL
+ * cast THROWS on a non-numeric input, surfacing as a 500 with
+ * Postgres's parse-error text leaking back to the client. Validate
+ * shape early so non-numeric ids get a structured 400 instead.
+ *
+ * Spec accepts unsigned-decimal-integer-only — the api_keys.id column
+ * is BIGSERIAL (1..2^63-1). We don't support negative or scientific
+ * notation; the column never produces those values.
+ */
+export interface RevokeIdValidation {
+  readonly ok: boolean;
+  readonly id?: string;
+  readonly message?: string;
+}
+
+const REVOKE_ID_PATTERN = /^[1-9][0-9]{0,18}$/;
+const REVOKE_ID_MAX_BIGINT = 9_223_372_036_854_775_807n; // pg BIGSERIAL max
+
+/**
+ * Validate that the supplied revoke id is a positive decimal integer
+ * within BIGSERIAL range. Returns `{ok: true, id}` on success; on
+ * failure returns `{ok: false, message}` with a user-meaningful
+ * explanation that the server layer turns into HTTP 400.
+ *
+ * Pure function — exported for tests.
+ */
+export function validateRevokeId(idRaw: string): RevokeIdValidation {
+  if (idRaw.length === 0) {
+    return { ok: false, message: 'id is required' };
+  }
+  if (!REVOKE_ID_PATTERN.test(idRaw)) {
+    return {
+      ok: false,
+      message: 'id must be a positive decimal integer (BIGSERIAL)',
+    };
+  }
+  // Defensive: reject ids that overflow BIGINT range. Postgres would
+  // throw "value out of range" on insert/lookup; we surface 400 here
+  // so the operator sees a recognizable validation failure shape.
+  let asBigInt: bigint;
+  try {
+    asBigInt = BigInt(idRaw);
+  } catch {
+    return { ok: false, message: 'id is not a valid integer' };
+  }
+  if (asBigInt > REVOKE_ID_MAX_BIGINT) {
+    return { ok: false, message: 'id exceeds BIGSERIAL range' };
+  }
+  return { ok: true, id: idRaw };
+}
