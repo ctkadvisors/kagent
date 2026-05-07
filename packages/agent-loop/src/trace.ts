@@ -71,6 +71,26 @@ export interface TraceEntry {
   input_tokens_est?: number;
   /** Estimated output tokens. */
   output_tokens_est?: number;
+  /**
+   * Audit-rev2 NM6 follow-up — provenance marker for `input_tokens_est`
+   * and `output_tokens_est`. Two values:
+   *
+   *   - `'reported'`: the LLM gateway / backend supplied
+   *     `ChatResult.usage.{inputTokens, outputTokens}` and the trace
+   *     entry's token fields reflect those numbers verbatim.
+   *   - `'estimate'`: the gateway omitted usage; the executor fell
+   *     back to `estimateTokens` (chars/4 heuristic, see trace.ts:168).
+   *     Per docs/CONTEXT-AWARENESS.md §8 the heuristic is 20–40% off
+   *     depending on tokenization. The 5% margin between Piece 3's
+   *     safety-net (95%) and the upstream's hard 100% reject absorbs
+   *     most of that drift, but operators triaging a context-window
+   *     incident need to see this marker to know whether the cumulative
+   *     budget readings are precise or approximated.
+   *
+   * Optional for back-compat with v0.1.8 traces (which carried no
+   * marker). Present on `llm_call` entries from this fix forward.
+   */
+  usage_source?: 'reported' | 'estimate';
   /** Backend-reported cost in USD. `null` when no backend reported (D-16). */
   cost_usd?: number | null;
   /** Mapped stop reason (see `ChatResult.stopReason`). */

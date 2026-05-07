@@ -121,6 +121,57 @@ describe('AgentExecutor — loop semantics', () => {
     expect(result.budget.cumulativeOutputTokens).toBe(7);
   });
 
+  it("SC3.5b (NM6 follow-up): trace entry carries usage_source='reported' when ChatResult.usage was supplied", async () => {
+    const llm = makeStubLLM({
+      scriptedResponses: [{ content: 'short', usage: { inputTokens: 42, outputTokens: 7 } }],
+    });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'x' }],
+    });
+    const llmTrace = result.traces.find((t) => t.trace_type === 'llm_call');
+    expect(llmTrace?.usage_source).toBe('reported');
+    // Sanity: token fields still reflect the reported numbers.
+    expect(llmTrace?.input_tokens_est).toBe(42);
+    expect(llmTrace?.output_tokens_est).toBe(7);
+  });
+
+  it("SC3.5c (NM6 follow-up): trace entry carries usage_source='estimate' when the gateway omits ChatResult.usage", async () => {
+    // No `usage` on the scripted response — executor falls back to
+    // estimateTokens. Operators triaging context-window incidents read
+    // this marker to know whether the cumulative budget is precise or
+    // approximated. Per docs/CONTEXT-AWARENESS.md §8.
+    const llm = makeStubLLM({ scriptedResponses: [{ content: 'hello world' }] });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'a longer-ish input' }],
+    });
+    const llmTrace = result.traces.find((t) => t.trace_type === 'llm_call');
+    expect(llmTrace?.usage_source).toBe('estimate');
+    // Sanity: estimate-derived counts still positive (chars/4 floor of 1).
+    expect(llmTrace?.input_tokens_est).toBeGreaterThan(0);
+    expect(llmTrace?.output_tokens_est).toBeGreaterThan(0);
+  });
+
+  it("SC3.5d (NM6 follow-up): partial usage (inputTokens reported, outputTokens missing) is treated as 'estimate'", async () => {
+    // Defensive: a backend that reports only one half of the
+    // (input, output) pair is unreliable for cumulative-budget
+    // precision; mark the entry 'estimate' so observers don't
+    // mistake the partial number for full provenance.
+    const llm = makeStubLLM({
+      scriptedResponses: [{ content: 'partial', usage: { inputTokens: 42 } }],
+    });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'x' }],
+    });
+    const llmTrace = result.traces.find((t) => t.trace_type === 'llm_call');
+    expect(llmTrace?.usage_source).toBe('estimate');
+  });
+
   it('SC3.6: in-memory trace accumulator — 3 iterations; result.traces.length matches; sequence numbers monotonic', async () => {
     const llm = makeStubLLM({
       scriptedResponses: [

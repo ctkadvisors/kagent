@@ -882,6 +882,18 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           }))
         : undefined;
 
+      // Audit-rev2 NM6 follow-up — provenance of token-count numbers.
+      // When the gateway / backend reported usage, the executor records
+      // the exact numbers; when it didn't, we fall back to the
+      // `estimateTokens` heuristic (chars/4) which can drift 20-40%
+      // from real tokenization. The trace marker lets operators
+      // triaging a context-window incident see at a glance whether
+      // cumulative budget readings are precise or approximated. See
+      // docs/CONTEXT-AWARENESS.md §8.
+      const usageReported =
+        llmResult.usage?.inputTokens !== undefined && llmResult.usage.outputTokens !== undefined;
+      const usageSource: 'reported' | 'estimate' = usageReported ? 'reported' : 'estimate';
+
       // (2) Record LLM trace + token + cost accounting
       const llmEntry: TraceEntry = {
         schema_version: '1',
@@ -900,6 +912,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           llmResult.usage?.inputTokens ??
           estimateTokens(currentMessages.map((m) => m.content).join('\n')),
         output_tokens_est: llmResult.usage?.outputTokens ?? estimateTokens(llmResult.content),
+        usage_source: usageSource,
         cost_usd: llmResult.usage?.costUsd ?? null,
         ...(llmResult.stopReason !== undefined && { stop_reason: llmResult.stopReason }),
         tools_available: JSON.stringify(toolDescriptors.map((t) => t.name)),
