@@ -280,6 +280,53 @@ describe('routeFailureForSupervision — informer-cache fast path (M2)', () => {
   });
 });
 
+describe('routeFailureForSupervision — M22 infra-fault audit threads resolved agent name', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses deps.resolveAgentName for capability-targeted infra faults', async () => {
+    const failed = makeTask({
+      name: 'cap-task',
+      uid: 'cu',
+      parentUid: 'pu',
+      phase: 'Failed',
+      reason: 'OOMKilled',
+      errorMessage: 'pod cu OOMKilled',
+    });
+    // Strip targetAgent — simulate a capability-targeted task.
+    (failed.spec as { targetAgent?: string }).targetAgent = undefined;
+
+    const deps = buildDeps();
+    const resolveAgentName = vi.fn().mockResolvedValue('agent-resolved-from-capability');
+    const depsWithResolver: SupervisionRouterDeps = { ...deps, resolveAgentName };
+
+    const result = await routeFailureForSupervision(failed, depsWithResolver);
+    expect(result.kind).toBe('infra-fault-observed');
+    expect(deps.mocks.audit.emitInfraFault).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName: 'agent-resolved-from-capability' }),
+    );
+  });
+
+  it('falls back to spec.targetAgent when resolveAgentName is unset', async () => {
+    const failed = makeTask({
+      name: 'task-with-target',
+      uid: 'cu',
+      parentUid: 'pu',
+      phase: 'Failed',
+      reason: 'ImagePullBackOff',
+      errorMessage: 'pod cu image pull failure',
+    });
+    const deps = buildDeps();
+
+    await routeFailureForSupervision(failed, deps);
+    // makeTask defaults targetAgent to 'parent-agent'.
+    expect(deps.mocks.audit.emitInfraFault).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName: 'parent-agent' }),
+    );
+  });
+});
+
 describe('routeFailureForSupervision — one_for_one (default)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

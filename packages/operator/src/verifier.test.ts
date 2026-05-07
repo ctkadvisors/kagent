@@ -1246,3 +1246,64 @@ describe('verifier — M13 transient-retry on Langfuse + gateway', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 });
+
+describe('verifier — M22 audit emits resolved agent name', () => {
+  it('uses deps.resolveAgentName for capability-targeted tasks (no targetAgent)', async () => {
+    const fixture = fakeApi();
+    fixture.setJobOutcome({ succeeded: 1 });
+    const audit = recordingAudit();
+    const task = {
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTask',
+      metadata: { name: 'cap-targeted', namespace: 'default', uid: 'u-1' },
+      spec: {
+        targetCapability: 'tool/web-search',
+        verifyContract: { scriptRef: { name: 's' } },
+      },
+      status: { phase: 'Completed', result: { content: 'ok' } },
+    } as unknown as AgentTask;
+    fixture.setReadTask(task);
+
+    const resolveAgentName = vi.fn().mockResolvedValue('researcher-resolved-from-capability');
+
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      audit: audit.hooks,
+      jobPollIntervalMs: 5,
+      resolveAgentName,
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+    expect(result.action).toBe('verified');
+    expect(audit.started).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName: 'researcher-resolved-from-capability' }),
+    );
+    expect(audit.completed).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName: 'researcher-resolved-from-capability' }),
+    );
+    expect(resolveAgentName).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to spec.targetAgent when no resolver is wired (back-compat)', async () => {
+    const fixture = fakeApi();
+    fixture.setJobOutcome({ succeeded: 1 });
+    const audit = recordingAudit();
+    const task = makeTask({
+      spec: {
+        targetAgent: 'researcher-spec',
+        verifyContract: { scriptRef: { name: 's' } },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      audit: audit.hooks,
+      jobPollIntervalMs: 5,
+    });
+
+    await reconciler.onAgentTaskUpdate(task);
+    expect(audit.started).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName: 'researcher-spec' }),
+    );
+  });
+});

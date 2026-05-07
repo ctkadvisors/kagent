@@ -280,6 +280,16 @@ export interface VerifierDispatchDeps {
    * {@link VERIFIER_TRANSIENT_RETRY_BASE_MS}.
    */
   readonly transientRetryBaseMs?: number;
+  /**
+   * M22 — resolve a verifier-target task to its concrete Agent name.
+   * `task.spec.targetAgent` is `undefined` for capability-targeted
+   * tasks, so passing `task.spec.targetAgent` straight into audit
+   * fields stamps an empty string. Production wiring (`main.ts`)
+   * threads a closure that walks the same path `resolveTargetAgent`
+   * does (informer cache → registry resolver). Tests may leave it
+   * unset; the audit fields fall back to `task.spec.targetAgent ?? ''`.
+   */
+  readonly resolveAgentName?: (task: AgentTask) => Promise<string | undefined>;
 }
 
 /**
@@ -568,6 +578,13 @@ async function dispatchVerification(
   const startedAt = (deps.now ?? Date.now)();
   const pick = pickDispatchMode(contract);
 
+  // M22 — resolve the agent name once before any audit emission. For
+  // capability-targeted tasks `task.spec.targetAgent` is undefined; the
+  // resolver (production: same path `resolveTargetAgent` walks) returns
+  // the resolved Agent name. Falls back to the raw spec value (or '')
+  // when no resolver is wired or the resolution fails.
+  const resolvedAgentName = await resolveAgentNameSafely(task, deps);
+
   if (pick.mode === 'misconfig') {
     const verdict: VerifierVerdict = {
       passed: false,
@@ -580,16 +597,24 @@ async function dispatchVerification(
       completedAt: new Date(startedAt).toISOString(),
     };
     const judgeRef = describeJudgeRef(contract, verdict.mode);
-    await emitStarted(task, deps, verdict.mode, judgeRef);
+    await emitStarted(task, deps, verdict.mode, judgeRef, resolvedAgentName);
     await patchVerificationStatus(task, deps, verdict);
     const durationMs = Math.max(0, (deps.now ?? Date.now)() - startedAt);
-    await emitFailed(task, deps, verdict.mode, judgeRef, durationMs, pick.reason);
+    await emitFailed(
+      task,
+      deps,
+      verdict.mode,
+      judgeRef,
+      durationMs,
+      pick.reason,
+      resolvedAgentName,
+    );
     return { action: 'verified', verdict, judgeRef, durationMs };
   }
 
   // Real dispatch.
   const judgeRef = describeJudgeRef(contract, pick.mode);
-  await emitStarted(task, deps, pick.mode, judgeRef);
+  await emitStarted(task, deps, pick.mode, judgeRef, resolvedAgentName);
 
   let verdict: VerifierVerdict;
   if (pick.mode === 'script') {
@@ -601,11 +626,45 @@ async function dispatchVerification(
   await patchVerificationStatus(task, deps, verdict);
   const durationMs = Math.max(0, (deps.now ?? Date.now)() - startedAt);
   if (verdict.passed) {
-    await emitCompleted(task, deps, verdict.mode, judgeRef, durationMs);
+    await emitCompleted(task, deps, verdict.mode, judgeRef, durationMs, resolvedAgentName);
   } else {
-    await emitFailed(task, deps, verdict.mode, judgeRef, durationMs, verdict.reason ?? 'unknown');
+    await emitFailed(
+      task,
+      deps,
+      verdict.mode,
+      judgeRef,
+      durationMs,
+      verdict.reason ?? 'unknown',
+      resolvedAgentName,
+    );
   }
   return { action: 'verified', verdict, judgeRef, durationMs };
+}
+
+/**
+ * M22 — best-effort agent-name resolver. Returns:
+ *   - resolved name when `deps.resolveAgentName` is wired and returns one
+ *   - `task.spec.targetAgent` when set (the legacy path)
+ *   - empty string when neither is available (capability-targeted task,
+ *     no resolver) — preserves the prior emission shape for backward
+ *     compatibility on the audit consumer.
+ */
+async function resolveAgentNameSafely(
+  task: AgentTask,
+  deps: VerifierDispatchDeps,
+): Promise<string> {
+  if (deps.resolveAgentName !== undefined) {
+    try {
+      const resolved = await deps.resolveAgentName(task);
+      if (typeof resolved === 'string' && resolved.length > 0) return resolved;
+    } catch (err) {
+      console.warn(
+        '[kagent-operator/verifier] resolveAgentName raised; falling back to spec.targetAgent:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return task.spec.targetAgent ?? '';
 }
 
 function describeJudgeRef(contract: VerifyContract, mode: 'script' | 'llmJudge'): string {
@@ -1166,6 +1225,7 @@ async function emitStarted(
   deps: VerifierDispatchDeps,
   mode: 'script' | 'llmJudge',
   judgeRef: string,
+  resolvedAgentName: string,
 ): Promise<void> {
   if (deps.audit === undefined) return;
   try {
@@ -1173,7 +1233,9 @@ async function emitStarted(
       taskUid: task.metadata.uid ?? '',
       taskNamespace: task.metadata.namespace ?? 'default',
       taskName: task.metadata.name ?? '',
-      agentName: task.spec.targetAgent,
+      // M22 — resolved agent name (capability-targeted tasks no longer
+      // stamp `undefined`).
+      agentName: resolvedAgentName,
       mode,
       judgeRef,
     });
@@ -1188,6 +1250,7 @@ async function emitCompleted(
   mode: 'script' | 'llmJudge',
   judgeRef: string,
   durationMs: number,
+  resolvedAgentName: string,
 ): Promise<void> {
   if (deps.audit === undefined) return;
   try {
@@ -1195,7 +1258,7 @@ async function emitCompleted(
       taskUid: task.metadata.uid ?? '',
       taskNamespace: task.metadata.namespace ?? 'default',
       taskName: task.metadata.name ?? '',
-      agentName: task.spec.targetAgent,
+      agentName: resolvedAgentName,
       mode,
       judgeRef,
       durationMs,
@@ -1212,6 +1275,7 @@ async function emitFailed(
   judgeRef: string,
   durationMs: number,
   reason: string,
+  resolvedAgentName: string,
 ): Promise<void> {
   if (deps.audit === undefined) return;
   try {
@@ -1219,7 +1283,7 @@ async function emitFailed(
       taskUid: task.metadata.uid ?? '',
       taskNamespace: task.metadata.namespace ?? 'default',
       taskName: task.metadata.name ?? '',
-      agentName: task.spec.targetAgent,
+      agentName: resolvedAgentName,
       mode,
       judgeRef,
       durationMs,

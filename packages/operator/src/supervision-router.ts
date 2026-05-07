@@ -139,6 +139,16 @@ export interface SupervisionRouterDeps {
    */
   readonly getTaskByUid?: (uid: string) => AgentTask | undefined;
   /**
+   * M22 — resolve a task's concrete Agent name. The infra-fault audit
+   * path runs BEFORE the parent + agent are resolved, so the
+   * supervision router has no `Agent` object in scope. The default
+   * behavior (`task.spec.targetAgent ?? ''`) collapses to an empty
+   * string for capability-targeted tasks; production wiring threads a
+   * closure that walks the same path `resolveTargetAgent` does
+   * (informer cache → registry resolver). Tests may leave it unset.
+   */
+  readonly resolveAgentName?: (task: AgentTask) => Promise<string | undefined>;
+  /**
    * Audit hooks (best-effort).
    */
   readonly audit?: SupervisionAuditHooks;
@@ -763,12 +773,29 @@ async function emitInfraSafe(
   reasonRaw: string | undefined,
 ): Promise<void> {
   if (deps.audit?.emitInfraFault === undefined) return;
+  // M22 — resolve agent name for capability-targeted failed tasks.
+  // Resolver throws are caught + the audit emission falls back to the
+  // raw spec value (preserves prior behavior for non-resolver paths).
+  let agentName = task.spec.targetAgent ?? '';
+  if (deps.resolveAgentName !== undefined) {
+    try {
+      const resolved = await deps.resolveAgentName(task);
+      if (typeof resolved === 'string' && resolved.length > 0) {
+        agentName = resolved;
+      }
+    } catch (err) {
+      console.warn(
+        '[kagent-operator] supervision-router: resolveAgentName raised in emitInfraSafe:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
   try {
     await deps.audit.emitInfraFault({
       taskUid: task.metadata.uid ?? '',
       taskNamespace: task.metadata.namespace ?? 'default',
       taskName: task.metadata.name ?? '',
-      agentName: task.spec.targetAgent ?? '',
+      agentName,
       source: classifyInfraSource(reasonRaw),
       reason: stripInfraSourcePrefix(reasonRaw ?? ''),
       message: task.status?.error ?? reasonRaw ?? '',

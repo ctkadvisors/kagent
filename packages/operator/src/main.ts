@@ -1878,6 +1878,24 @@ async function main(): Promise<void> {
   // populates `supervisionAuditHolder.hooks` once the publisher is
   // connected; until then, the router's audit emissions no-op
   // gracefully (publisher not configured).
+  // M22 — shared agent-name resolver for verifier + supervision audit
+  // emissions. Returns the resolved Agent name for capability-targeted
+  // tasks (so audit fields no longer collapse to '' when a task uses
+  // `targetCapability`). Best-effort: errors propagate to the caller's
+  // try/catch wrapper which falls back to `task.spec.targetAgent ?? ''`.
+  const resolveAgentNameForTask = async (
+    task: import('./crds/index.js').AgentTask,
+  ): Promise<string | undefined> => {
+    if (typeof task.spec.targetAgent === 'string' && task.spec.targetAgent.length > 0) {
+      return task.spec.targetAgent;
+    }
+    if (typeof task.spec.targetCapability === 'string' && task.spec.targetCapability.length > 0) {
+      const resolved = await capabilityRegistry.resolveCapability(task.spec.targetCapability);
+      return resolved ?? undefined;
+    }
+    return undefined;
+  };
+
   const supervisionAuditHolder: { hooks?: SupervisionAuditHooks } = {};
   const supervisionRouterDeps: SupervisionRouterDeps = {
     customApi,
@@ -1888,6 +1906,8 @@ async function main(): Promise<void> {
     // `fetchParentTask` and `fetchTaskByUid` consult this before
     // falling back to the unbounded LIST.
     getTaskByUid,
+    // M22 — capability-targeted infra-fault audits no longer stamp ''.
+    resolveAgentName: resolveAgentNameForTask,
     get audit(): SupervisionAuditHooks | undefined {
       return supervisionAuditHolder.hooks;
     },
@@ -2014,6 +2034,9 @@ async function main(): Promise<void> {
         process.env.KAGENT_VERIFIER_SCRIPT_IMAGE.length > 0 && {
           scriptImage: process.env.KAGENT_VERIFIER_SCRIPT_IMAGE,
         }),
+      // M22 — capability-targeted task verifier audits no longer stamp
+      // an empty agentName.
+      resolveAgentName: resolveAgentNameForTask,
       audit: verifierAuditFanout,
     });
     verifierHandlerDeps = { enabled: true, reconciler: verifierReconciler };
