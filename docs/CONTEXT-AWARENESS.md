@@ -253,6 +253,10 @@ Existing v0.1.8 deployments must work unchanged after this slate ships:
 
 The migration story for existing operators: bump chart values to add `contextWindowTokens` per class. One PR. No CRD migration. No agent-pod restart required for already-running tasks (they keep using the per-pod env from when they were dispatched).
 
+> **Operator caveat — pinned-model Agents (audit-rev2 NM1).** Agents using literal `spec.model` (the escape-hatch documented in `MODEL-ROUTING.md` §6) do **not** receive `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`. The 95% safety-net (Piece 3) and the `context_pressure_ignored` detector (Piece 4) are no-ops for these pods because the resolver returns `source: 'override'` with `contextWindowTokens: undefined` (per `model-class-resolver.ts:144-145`). A cluster that migrates most Agents to `modelClass` but leaves a few pinned (e.g. `spec.model: gpt-4o`) gets context-awareness on the migrated subset only. Migrate to `modelClass` to enable context-awareness across the fleet, or accept that pinned-model Agents are intentionally outside the slate's protection.
+
+> **Operator caveat — in-flight binding (audit-rev2 NM2).** In-flight `AgentTask` Pods are bound to the value of `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` (and the threshold envs) at spawn time. A Helm upgrade that changes `agent.modelClasses[<class>].contextWindowTokens` only affects **newly-dispatched** Pods — already-running tasks keep tripping the safety-net at the old window. The reverse is also true: lowering the window mid-flight to tighten a runaway agent does not constrain Pods that were dispatched before the upgrade. Operators tuning the window down to bound a misbehaving agent should expect propagation only after the next dispatch wave.
+
 ---
 
 ## 8. Out of scope / explicit non-goals for v0.1.9
@@ -263,6 +267,8 @@ The migration story for existing operators: bump chart values to add `contextWin
 - **Cross-model window heuristics.** The chart values are explicit per class; the substrate does not infer windows from model names.
 - **Pre-flight estimation.** The check is `cumulative + 0` against threshold — we do NOT try to estimate the size of the next prompt. That estimate would be wrong often enough to be misleading. The 95% safety margin absorbs the next call's input budget by convention.
 - **Compaction-quality detector.** No flag like `compaction_lossy`. If the agent self-managed handoff with a bad summary, the existing F1/F2/F3 detectors will catch downstream symptoms (synthesis vacuity, methodology fabrication).
+
+> **`estimateTokens` fallback caveat (audit-rev2 NM6).** The safety-net + detector both read cumulative tokens off `RunBudget.cumulativeInputTokens + cumulativeOutputTokens`. The executor populates that pair from `usage.inputTokens` / `usage.outputTokens` reported by the gateway response. When the upstream gateway/provider does not report `usage.{inputTokens,outputTokens}` (some Workers AI shapes, older vLLM builds, untyped openai-compat backends), the executor falls back to `estimateTokens` — a character-count heuristic in `packages/agent-loop/src/trace.ts`. The estimate can be 20–40% off depending on the model's tokenization (Llama 4 vs Claude vs GPT-4 each tokenize differently). The 5% margin between Piece 3's 95% safety-net and the upstream provider's hard 100% reject (HTTP 400 — context window exceeded) absorbs most of this drift, but operators relying on tight context budgets should ensure their gateway reports usage. Cloudflare AI Gateway DOES report usage on the modern Workers AI endpoints; LiteLLM Proxy DOES when fed a proper provider; bare-metal Ollama via `/v1/chat/completions` DOES. Verify by inspecting an `llm_call` trace entry — when the `*_tokens_est` fallback fired, the trace will show the heuristic count and a `usage_source: 'estimate'` marker (forthcoming).
 
 ---
 

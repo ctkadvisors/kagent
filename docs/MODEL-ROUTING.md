@@ -293,6 +293,8 @@ The precedence in §3.1 makes the escape-hatch explicit. Setting
 `model:` to `null` while `modelClass` is set is treated identically
 to `model:` being absent (the YAML form most CRD writers end up with).
 
+> **Context-awareness caveat (audit-rev2 NM1).** Agents using literal `spec.model` (the escape-hatch) do **not** receive `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`. The 95% substrate safety-net AND the `context_pressure_ignored` detector are no-ops for these pods because `resolveAgentModel` returns `source: 'override'` with `contextWindowTokens: undefined` (per `packages/operator/src/model-class-resolver.ts:144-145` and the explicit design decision in `CONTEXT-AWARENESS.md` §9 Q5). A cluster that migrates most Agents to `modelClass` but leaves a few pinned (e.g. for reproducibility) gets context-awareness on the migrated subset only. This is intentional but easy to miss — operators expecting a cluster-wide safety-net should know that pinned-model Agents are silently outside its protection. **Migrate to `modelClass` to enable context-awareness**, or accept the carve-out as a deliberate part of the override path.
+
 ### 6.1 Migration table — current Agent CRs
 
 The Phase 4 migration commit changes these manifests in lock-step:
