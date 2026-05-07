@@ -462,6 +462,40 @@ export function parseTaskDepth(raw: string | undefined): number {
 }
 
 /**
+ * Lower bound on `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`. Mirrors
+ * `CONTEXT_WINDOW_TOKENS_MIN` in `packages/operator/src/main.ts`. Below
+ * this the safety-net over-trips regardless of agent behavior — every
+ * non-trivial run hits the 95% threshold immediately. Audit-rev2 NH4
+ * follow-up — defense-in-depth at the agent-pod side mirrors the
+ * operator-side guard so a non-chart-mediated env override (e.g.
+ * manual Job manifest, future non-chart deploy) still gets the same
+ * graceful-degrade-with-warn posture.
+ *
+ * Kept loose enough (1000) that test fixtures provoking deterministic
+ * 95% utilization with sub-K-token budgets continue to work — those
+ * fixtures don't go through this env path; they construct `RunBudget`
+ * directly.
+ */
+export const CONTEXT_WINDOW_TOKENS_MIN = 1000;
+
+/**
+ * Upper bound on `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`. Mirrors
+ * `CONTEXT_WINDOW_TOKENS_MAX` in `packages/operator/src/main.ts` (2^21
+ * = 2_097_152) — already larger than any production model as of
+ * 2026-05-07 (Gemini 1.5 Pro is 1M, Claude 3 Opus is 200K, GPT-4o is
+ * 128K). Above this the tokenUtilization percentage always reports
+ * near-zero, silently disabling the substrate's 95% safety-net AND the
+ * `context_pressure_ignored` detector.
+ *
+ * Audit-rev2 NH4 follow-up — the operator-side `parseModelClassesEnv`
+ * already enforces this bound, so the chart-mediated path never produces
+ * an out-of-range value. This guard catches the non-chart-mediated case
+ * (manual env override on a Job manifest) so the silent-disable
+ * trapdoor can't sneak through any deploy mechanism.
+ */
+export const CONTEXT_WINDOW_TOKENS_MAX = 2_097_152;
+
+/**
  * v0.1.9 — parse `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` into a positive
  * integer (the model's declared context-window size in tokens). Returns
  * undefined for absent / empty input — back-compat normal case.
@@ -473,6 +507,15 @@ export function parseTaskDepth(raw: string | undefined): number {
  * pieces 2/3/4. A typo on the operator chart should never take down a
  * long-running AgentTask.
  *
+ * Audit-rev2 NH4 follow-up (= W1-Operator's filed sub-task in
+ * `evidence/audit-rev2/W1-Operator-REPORT.md` §6): also bounds the value
+ * within `[CONTEXT_WINDOW_TOKENS_MIN, CONTEXT_WINDOW_TOKENS_MAX]`. The
+ * upper-bound case is the silent-disable trapdoor (a fat-fingered
+ * `999_999_999_999` would mean cumulative/window is always near zero,
+ * disabling the safety-net). The lower-bound case is the over-trip
+ * trapdoor (e.g. `999`). Mirror of `parseModelClassesEnv` at the
+ * operator side — three distinct WARN shapes per misconfig category.
+ *
  * Exported for unit tests.
  */
 export function parseContextWindowTokens(raw: string | undefined): number | undefined {
@@ -482,6 +525,22 @@ export function parseContextWindowTokens(raw: string | undefined): number | unde
     console.warn(
       `[kagent-agent-pod] KAGENT_AGENT_MODEL_CONTEXT_WINDOW='${raw}' is not a positive integer; ` +
         `ignoring (context-awareness pieces 2/3/4 will degrade to no-op).`,
+    );
+    return undefined;
+  }
+  if (n > CONTEXT_WINDOW_TOKENS_MAX) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_AGENT_MODEL_CONTEXT_WINDOW=${n} is above CONTEXT_WINDOW_TOKENS_MAX=${CONTEXT_WINDOW_TOKENS_MAX} — ` +
+        `values this large silently disable the substrate's context-pressure safety-net ` +
+        `(used/contextWindowTokens always near zero); ignoring (pieces 2/3/4 degrade to no-op).`,
+    );
+    return undefined;
+  }
+  if (n < CONTEXT_WINDOW_TOKENS_MIN) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_AGENT_MODEL_CONTEXT_WINDOW=${n} is below CONTEXT_WINDOW_TOKENS_MIN=${CONTEXT_WINDOW_TOKENS_MIN} — ` +
+        `values this small over-trip the safety-net regardless of agent behavior; ` +
+        `ignoring (pieces 2/3/4 degrade to no-op).`,
     );
     return undefined;
   }

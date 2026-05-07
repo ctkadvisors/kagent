@@ -190,6 +190,62 @@ describe('parseEnv', () => {
         }
       },
     );
+
+    /*
+     * Audit-rev2 NH4 follow-up — defense-in-depth bounds at the agent-pod
+     * side. Mirrors the operator's parseModelClassesEnv guard. When the
+     * env is set to a value above CONTEXT_WINDOW_TOKENS_MAX (= 2_097_152)
+     * or below CONTEXT_WINDOW_TOKENS_MIN (= 1000), drop with a structured
+     * WARN naming the bound that was violated.
+     */
+    it('drops with above-MAX warn when value exceeds CONTEXT_WINDOW_TOKENS_MAX (silent-disable trapdoor)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const cfg = parseEnv({
+          ...baseEnv,
+          KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '999999999999',
+        });
+        expect(cfg.contextWindowTokens).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalled();
+        const msg = warnSpy.mock.calls[0]?.[0] as string;
+        expect(msg).toContain('above CONTEXT_WINDOW_TOKENS_MAX');
+        expect(msg).toContain('2097152');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('drops with below-MIN warn when value is below CONTEXT_WINDOW_TOKENS_MIN (over-trip trapdoor)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const cfg = parseEnv({
+          ...baseEnv,
+          KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '999',
+        });
+        expect(cfg.contextWindowTokens).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalled();
+        const msg = warnSpy.mock.calls[0]?.[0] as string;
+        expect(msg).toContain('below CONTEXT_WINDOW_TOKENS_MIN');
+        expect(msg).toContain('1000');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('admits exact MIN boundary value (1000)', () => {
+      const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '1000' });
+      expect(cfg.contextWindowTokens).toBe(1000);
+    });
+
+    it('admits exact MAX boundary value (2_097_152)', () => {
+      const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '2097152' });
+      expect(cfg.contextWindowTokens).toBe(2_097_152);
+    });
+
+    it('admits typical production windows (200_000 for Claude 3 Opus)', () => {
+      const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '200000' });
+      expect(cfg.contextWindowTokens).toBe(200_000);
+    });
   });
 
   /* =====================================================================

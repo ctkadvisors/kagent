@@ -423,12 +423,37 @@ export function mergeArtifactSources(
  * rather than failing the run; the detector is observation-only and
  * misconfiguration here should not trip an AgentTask. Exported for the
  * unit-test suite.
+ *
+ * Audit-rev2 NH3 follow-up (= W1-Operator's filed sub-task in
+ * `evidence/audit-rev2/W1-Operator-REPORT.md` §6): when the env is
+ * present but parses out-of-range, log a structured WARN naming the
+ * offending value + the legal range + the default the caller will fall
+ * back to. The operator-chart guard now rejects out-of-range values
+ * BEFORE they reach the pod (Helm-render-time fail), so this WARN
+ * fires only on the non-chart-mediated path (manual Job manifest, future
+ * non-chart deploy). Defense-in-depth — silent fall-through is the
+ * smoking-gun shape the audit found at the operator side.
  */
 export function parseContextPressureThresholdEnv(raw: string | undefined): number | undefined {
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return undefined;
-  if (n <= 0 || n > 1) return undefined;
+  if (!Number.isFinite(n)) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_CONTEXT_PRESSURE_THRESHOLD='${raw}' is not a finite number; ` +
+        `falling back to detector default (0.7). The legal range is (0, 1]. ` +
+        `If you set this via the operator Helm chart, the chart-render guard should have rejected it; ` +
+        `check for a manual env override on the Job manifest.`,
+    );
+    return undefined;
+  }
+  if (n <= 0 || n > 1) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_CONTEXT_PRESSURE_THRESHOLD=${n} is outside the legal range (0, 1]; ` +
+        `falling back to detector default (0.7). Values <=0 or >1 silently disable the ` +
+        `context_pressure_ignored detector — the chart-render guard normally rejects these.`,
+    );
+    return undefined;
+  }
   return n;
 }
 
@@ -925,10 +950,36 @@ export async function resolveSystemPrompt(
  * here keeps the agent-pod boot resilient to a typo'd Helm value.
  *
  * Exported for the runner test suite.
+ *
+ * Audit-rev2 NH3 follow-up (= W1-Operator's filed sub-task in
+ * `evidence/audit-rev2/W1-Operator-REPORT.md` §6): when the env is
+ * present but parses out-of-range, log a structured WARN naming the
+ * offending value + the legal range + the default the caller will fall
+ * back to. The operator-chart guard now rejects out-of-range values
+ * BEFORE they reach the pod (Helm-render-time fail), so this WARN
+ * fires only on the non-chart-mediated path (manual Job manifest, future
+ * non-chart deploy). Defense-in-depth — silent fall-through is the
+ * smoking-gun shape the audit found at the operator side.
  */
 export function parseContextSafetyThreshold(raw: string | undefined): number | undefined {
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0 || n > 1) return undefined;
+  if (!Number.isFinite(n)) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_CONTEXT_SAFETY_THRESHOLD='${raw}' is not a finite number; ` +
+        `falling back to executor default (0.95). The legal range is (0, 1]. ` +
+        `If you set this via the operator Helm chart, the chart-render guard should have rejected it; ` +
+        `check for a manual env override on the Job manifest.`,
+    );
+    return undefined;
+  }
+  if (n <= 0 || n > 1) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_CONTEXT_SAFETY_THRESHOLD=${n} is outside the legal range (0, 1]; ` +
+        `falling back to executor default (0.95). Values <=0 or >1 silently disable the ` +
+        `substrate's context-window safety-net — the chart-render guard normally rejects these.`,
+    );
+    return undefined;
+  }
   return n;
 }

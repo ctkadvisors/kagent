@@ -14,7 +14,7 @@ import type {
   ToolProvider,
   ToolResult,
 } from '@kagent/agent-loop';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { PodConfig } from './env.js';
 import {
@@ -991,5 +991,106 @@ describe('parseContextPressureThresholdEnv (v0.1.9 context-awareness Piece 4)', 
     expect(parseContextPressureThresholdEnv('-0.5')).toBeUndefined();
     expect(parseContextPressureThresholdEnv('1.5')).toBeUndefined();
     expect(parseContextPressureThresholdEnv('NaN')).toBeUndefined();
+  });
+
+  /*
+   * Audit-rev2 NH3 follow-up — defense-in-depth WARN log when env value
+   * is outside the legal range. The operator-chart guard already rejects
+   * out-of-range values pre-deploy, but a manually-overridden Job manifest
+   * (or future non-chart deploy) needs a runtime signal — silent
+   * fall-through is the smoking-gun shape.
+   */
+  it('logs structured WARN naming offending value when outside (0, 1]', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextPressureThresholdEnv('1.5');
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain('KAGENT_CONTEXT_PRESSURE_THRESHOLD');
+      expect(msg).toContain('1.5');
+      expect(msg).toContain('(0, 1]');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('logs structured WARN naming offending value when not finite', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextPressureThresholdEnv('not-a-number');
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain('KAGENT_CONTEXT_PRESSURE_THRESHOLD');
+      expect(msg).toContain("'not-a-number'");
+      expect(msg).toContain('not a finite number');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does NOT warn when env is unset (clean baseline)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextPressureThresholdEnv(undefined);
+      parseContextPressureThresholdEnv('');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+/*
+ * Audit-rev2 NH3 follow-up — symmetric WARN coverage for the safety
+ * threshold parser. Same rationale as the pressure-threshold tests.
+ */
+describe('parseContextSafetyThreshold WARN coverage (NH3 follow-up)', () => {
+  it('logs structured WARN naming offending value when outside (0, 1]', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextSafetyThreshold('0');
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain('KAGENT_CONTEXT_SAFETY_THRESHOLD');
+      expect(msg).toContain('(0, 1]');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('logs structured WARN naming offending value when not finite', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextSafetyThreshold('abc');
+      expect(warnSpy).toHaveBeenCalled();
+      const msg = warnSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain('KAGENT_CONTEXT_SAFETY_THRESHOLD');
+      expect(msg).toContain("'abc'");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does NOT warn when env is unset (clean baseline)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextSafetyThreshold(undefined);
+      parseContextSafetyThreshold('');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does NOT warn for in-range values', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      parseContextSafetyThreshold('0.95');
+      parseContextSafetyThreshold('1');
+      parseContextSafetyThreshold('0.5');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
