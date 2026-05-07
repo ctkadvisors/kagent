@@ -1046,3 +1046,203 @@ describe('verifier — defensive', () => {
     expect(result.verdict?.passed).toBe(true);
   });
 });
+
+describe('verifier — M3 poll-loop backoff', () => {
+  it('reduces readNamespacedJob calls vs the prior flat-tick cadence (script path)', async () => {
+    // Configure the Job to stay non-terminal for several poll ticks so
+    // we can observe the call count under exponential backoff. With the
+    // pre-M3 flat 5ms cadence + a bounded wall-clock test horizon, the
+    // operator would issue ~10 reads; under backoff (5→10→20→40→50)
+    // the same horizon yields ≤6 reads before resolving.
+    const fixture = fakeApi();
+    let ticks = 0;
+    /* eslint-disable-next-line @typescript-eslint/unbound-method */
+    const baseRead = fixture.batchApi.readNamespacedJob as unknown as ReturnType<typeof vi.fn>;
+    /* eslint-disable-next-line @typescript-eslint/no-misused-promises */
+    baseRead.mockImplementation(({ name }: { name: string }) => {
+      const job = fixture.jobs.find((j) => j.metadata?.name === name);
+      if (job === undefined) {
+        const err = new Error('not found') as Error & { code?: number };
+        err.code = 404;
+        return Promise.reject(err);
+      }
+      ticks++;
+      if (ticks < 4) {
+        return Promise.resolve({ ...job, status: { active: 1 } });
+      }
+      return Promise.resolve({ ...job, status: { succeeded: 1 } });
+    });
+    const task = makeTask({
+      spec: {
+        targetAgent: 'r',
+        verifyContract: { scriptRef: { name: 's' } },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      jobPollIntervalMs: 5,
+      jobPollIntervalCapMs: 50,
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+    expect(result.action).toBe('verified');
+    expect(result.verdict?.passed).toBe(true);
+    // Backoff observed: at most 4 reads to land the success outcome.
+    expect(baseRead.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+});
+
+describe('verifier — M13 transient-retry on Langfuse + gateway', () => {
+  it('retries Langfuse 503 then succeeds within VERIFIER_TRANSIENT_RETRY_ATTEMPTS', async () => {
+    const fixture = fakeApi();
+    let calls = 0;
+    const fetchPrompt = vi.fn(() => {
+      calls++;
+      if (calls < 2) {
+        const err = new Error('langfuse unavailable') as Error & { status?: number };
+        err.status = 503;
+        return Promise.reject(err);
+      }
+      return Promise.resolve('judge: {{outputs}}');
+    });
+    const task = makeTask({
+      spec: {
+        targetAgent: 'r',
+        verifyContract: { llmJudgePromptRef: { name: 'p' } },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: '{"verdict":"pass","reason":"ok"}' } }],
+        }),
+    });
+
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      fetchPrompt,
+      gatewayBaseUrl: 'http://gw.local',
+      fetch: fetchImpl,
+      transientRetryBaseMs: 1,
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+    expect(result.action).toBe('verified');
+    expect(result.verdict?.passed).toBe(true);
+    expect(fetchPrompt).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries gateway 502 then succeeds', async () => {
+    const fixture = fakeApi();
+    const fetchPrompt = vi.fn().mockResolvedValue('judge: {{outputs}}');
+    const task = makeTask({
+      spec: {
+        targetAgent: 'r',
+        verifyContract: { llmJudgePromptRef: { name: 'p' } },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+
+    let calls = 0;
+    const fetchImpl = vi.fn(() => {
+      calls++;
+      if (calls < 2) {
+        return Promise.resolve({
+          ok: false,
+          status: 502,
+          text: () => Promise.resolve('bad gateway'),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            choices: [{ message: { content: '{"verdict":"pass","reason":"ok"}' } }],
+          }),
+      });
+    });
+
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      fetchPrompt,
+      gatewayBaseUrl: 'http://gw.local',
+      fetch: fetchImpl as unknown as VerifierDispatchDeps['fetch'],
+      transientRetryBaseMs: 1,
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+    expect(result.action).toBe('verified');
+    expect(result.verdict?.passed).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces wrong_prompt_type as a structured reason instead of langfuse_fetch_failed', async () => {
+    const fixture = fakeApi();
+    const wrongType = new Error(
+      'Langfuse prompt "p" has type="chat"; only text prompts are supported by the verifier',
+    ) as Error & { kagentLangfuseReason?: string };
+    wrongType.kagentLangfuseReason = 'wrong_prompt_type';
+    const fetchPrompt = vi.fn().mockRejectedValue(wrongType);
+    const task = makeTask({
+      spec: {
+        targetAgent: 'r',
+        verifyContract: { llmJudgePromptRef: { name: 'p' } },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      fetchPrompt,
+      gatewayBaseUrl: 'http://gw.local',
+      transientRetryBaseMs: 1,
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+    expect(result.action).toBe('verified');
+    expect(result.verdict?.passed).toBe(false);
+    expect(result.verdict?.reason).toBe('langfuse_wrong_prompt_type');
+    // Wrong-prompt-type is a permanent error → no retry.
+    expect(fetchPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after VERIFIER_TRANSIENT_RETRY_ATTEMPTS on persistent gateway 503', async () => {
+    const fixture = fakeApi();
+    const fetchPrompt = vi.fn().mockResolvedValue('judge: {{outputs}}');
+    const task = makeTask({
+      spec: {
+        targetAgent: 'r',
+        verifyContract: { llmJudgePromptRef: { name: 'p' } },
+      },
+    } as Partial<AgentTask>);
+    fixture.setReadTask(task);
+
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 503,
+        text: () => Promise.resolve('still down'),
+      }),
+    );
+
+    const reconciler = buildVerifierReconciler({
+      ...fixture,
+      fetchPrompt,
+      gatewayBaseUrl: 'http://gw.local',
+      fetch: fetchImpl as unknown as VerifierDispatchDeps['fetch'],
+      transientRetryBaseMs: 1,
+    });
+
+    const result = await reconciler.onAgentTaskUpdate(task);
+    expect(result.action).toBe('verified');
+    expect(result.verdict?.passed).toBe(false);
+    expect(result.verdict?.reason).toBe('gateway_error:503');
+    // Three attempts before fail-fast.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});

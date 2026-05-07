@@ -3776,15 +3776,28 @@ export function buildLangfusePromptFetcherForOperator(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
-      throw new Error(
+      // M13 — surface the HTTP status on the thrown error so the
+      // verifier's `retryTransient` helper can classify 502/503/504 as
+      // retriable. Prior shape was an opaque message-only Error which
+      // looked permanent to the retry layer.
+      const err = new Error(
         `Langfuse GET ${url} returned ${String(res.status)}: ${await res.text().catch(() => '<no body>')}`,
-      );
+      ) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
     }
     const body = (await res.json()) as { type?: string; prompt?: unknown };
     if (body.type !== 'text') {
-      throw new Error(
+      // M13 — structured marker so the verifier returns
+      // `langfuse_wrong_prompt_type` rather than the generic
+      // `langfuse_fetch_failed`. Operators investigating a verifier
+      // failure get an actionable reason without having to read pod
+      // logs.
+      const err = new Error(
         `Langfuse prompt "${name}" has type="${String(body.type)}"; only text prompts are supported by the verifier`,
-      );
+      ) as Error & { kagentLangfuseReason?: string };
+      err.kagentLangfuseReason = 'wrong_prompt_type';
+      throw err;
     }
     if (typeof body.prompt !== 'string') {
       throw new Error(`Langfuse prompt "${name}" body is not a string (got ${typeof body.prompt})`);

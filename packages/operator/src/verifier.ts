@@ -107,8 +107,25 @@ export const DEFAULT_VERIFIER_SCRIPT_TIMEOUT_SECONDS = 60;
 /** Maximum bytes of script-output we capture as `reason` on failure. */
 export const VERIFIER_REASON_MAX_BYTES = 4096;
 
-/** Polling cadence (ms) while a verifier Job runs. */
+/**
+ * Initial polling cadence (ms) while a verifier Job runs. The backoff
+ * doubles up to {@link VERIFIER_JOB_POLL_INTERVAL_CAP_MS}. M3 — replaces
+ * the prior fixed 500ms tick that issued ~120 `readNamespacedJob` calls
+ * per verifier run on a 60s timeout.
+ */
 export const VERIFIER_JOB_POLL_INTERVAL_MS = 500;
+
+/** Cap on the per-tick poll interval used by the M3 backoff schedule. */
+export const VERIFIER_JOB_POLL_INTERVAL_CAP_MS = 5_000;
+
+/**
+ * M13 — number of attempts the operator-side Langfuse fetcher + the
+ * gateway POST tolerate transient 5xx responses before giving up.
+ * 3 attempts at 500ms / 1s backoff covers the common Langfuse rolling
+ * restart / brief NLB hiccup window without dragging the verifier loop.
+ */
+export const VERIFIER_TRANSIENT_RETRY_ATTEMPTS = 3;
+export const VERIFIER_TRANSIENT_RETRY_BASE_MS = 500;
 
 /** Default OpenAI-compatible chat-completions path. */
 export const VERIFIER_GATEWAY_CHAT_PATH = '/chat/completions';
@@ -250,6 +267,19 @@ export interface VerifierDispatchDeps {
   readonly gatewayTimeoutMs?: number;
   /** Override Job poll interval (tests bring this down to 5ms). */
   readonly jobPollIntervalMs?: number;
+  /**
+   * M3 — cap on the per-tick poll interval after exponential backoff.
+   * Tests pass small values (e.g. 50ms) to keep timing-dependent runs
+   * fast; production leaves it unset → {@link VERIFIER_JOB_POLL_INTERVAL_CAP_MS}.
+   */
+  readonly jobPollIntervalCapMs?: number;
+  /**
+   * M13 — base millisecond delay between retry attempts when Langfuse
+   * or the gateway return transient (5xx) responses. Tests inject 1ms
+   * to keep retries snappy; production leaves it unset →
+   * {@link VERIFIER_TRANSIENT_RETRY_BASE_MS}.
+   */
+  readonly transientRetryBaseMs?: number;
 }
 
 /**
@@ -637,7 +667,17 @@ async function runScriptVerifier(
   //    backstop; we also bound poll-time to `(timeoutSeconds + 5)`
   //    seconds in wall-clock so a stuck-Pending Job lands as a
   //    `verifier_timeout` rather than dragging the reconciler.
-  const pollInterval = deps.jobPollIntervalMs ?? VERIFIER_JOB_POLL_INTERVAL_MS;
+  //
+  //    M3 — exponential backoff (500ms → 1s → 2s → 4s, capped at 5s)
+  //    instead of a flat 500ms tick. A 60s verifier with the prior
+  //    cadence issued ~120 `readNamespacedJob` calls; under backoff a
+  //    typical 3–5s script lands in ≤4 reads, and a stuck-Pending Job
+  //    that runs to the wall-clock deadline issues ~16 reads instead of
+  //    120. Tests inject `jobPollIntervalMs` to keep them deterministic;
+  //    the cap is honored regardless.
+  const initialPoll = deps.jobPollIntervalMs ?? VERIFIER_JOB_POLL_INTERVAL_MS;
+  const pollCap = deps.jobPollIntervalCapMs ?? VERIFIER_JOB_POLL_INTERVAL_CAP_MS;
+  let pollInterval = initialPoll;
   const wallClockDeadlineMs = startedAt + (timeoutSeconds + 5) * 1000;
   while ((deps.now ?? Date.now)() < wallClockDeadlineMs) {
     let observed: V1Job;
@@ -647,6 +687,7 @@ async function runScriptVerifier(
       console.warn('[kagent-operator/verifier] Job read failed:', err);
       // Poll-loop transient — keep trying until deadline.
       await sleep(pollInterval);
+      pollInterval = Math.min(pollInterval * 2, pollCap);
       continue;
     }
     const succeeded = observed.status?.succeeded ?? 0;
@@ -668,6 +709,7 @@ async function runScriptVerifier(
       return failVerdict('script', reason, startedAt);
     }
     await sleep(pollInterval);
+    pollInterval = Math.min(pollInterval * 2, pollCap);
   }
   return failVerdict('script', 'verifier_timeout', startedAt);
 }
@@ -842,6 +884,75 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /* =====================================================================
+ * M13 — transient-error classification + retry helper.
+ *
+ * Wraps Langfuse fetcher invocations and the gateway POST in a small
+ * retry loop. Only 502/503/504 surface as retriable; 4xx and parse
+ * errors fail-fast (the substrate doesn't keep hammering the gateway
+ * on a permanent error). Network errors (ECONNREFUSED, AbortError —
+ * but NOT timeout) also retry once or twice — they typically recover
+ * within sub-second.
+ * ===================================================================== */
+
+/** Internal — extract a numeric HTTP status code from an arbitrary thrown error. */
+function transientStatusFromError(err: unknown): number | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const e = err as { status?: unknown; statusCode?: unknown; code?: unknown };
+  for (const candidate of [e.status, e.statusCode, e.code]) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+    if (typeof candidate === 'string') {
+      const parsed = Number.parseInt(candidate, 10);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+/** True for the substrate's transient-retry classification (502/503/504 only). */
+function isTransient5xx(status: number | undefined): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+/**
+ * Retry a thunk N times on transient 5xx (default 502/503/504). Any
+ * non-transient throw propagates immediately so the caller's reason-tag
+ * stays specific (`langfuse_fetch_failed` for permanent fetch errors,
+ * `gateway_error:404` for permanent 4xx, etc.).
+ */
+async function retryTransient<T>(
+  attempts: number,
+  baseDelayMs: number,
+  op: () => Promise<T>,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await op();
+    } catch (err) {
+      lastErr = err;
+      const status = transientStatusFromError(err);
+      if (!isTransient5xx(status)) throw err;
+      if (i === attempts - 1) break;
+      await sleep(baseDelayMs * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * True iff the thrown error carries the structured "wrong prompt type"
+ * marker the operator's `buildLangfusePromptFetcherForOperator` stamps
+ * when Langfuse returns a non-`text` prompt body. Used by
+ * `runLlmJudgeVerifier` to surface a specific reason tag rather than
+ * the generic `langfuse_fetch_failed`.
+ */
+export function isWrongPromptTypeError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { kagentLangfuseReason?: unknown };
+  return e.kagentLangfuseReason === 'wrong_prompt_type';
+}
+
+/* =====================================================================
  * LLM-judge path
  * ===================================================================== */
 
@@ -862,15 +973,27 @@ async function runLlmJudgeVerifier(
     return failVerdict('llmJudge', 'verifier_misconfig:langfuse_unconfigured', startedAt);
   }
 
-  // 1. Fetch the prompt body.
+  // 1. Fetch the prompt body. M13 — retry transient 5xx (502/503/504)
+  // up to 3 times with exponential backoff before failing fast as
+  // `langfuse_fetch_failed`. The fetcher (`buildLangfusePromptFetcherForOperator`)
+  // already throws a structured `wrong_prompt_type` Error; surface that
+  // verbatim so the verifier reason is actionable rather than the
+  // generic catchall.
   let template: string;
+  const transientBase = deps.transientRetryBaseMs ?? VERIFIER_TRANSIENT_RETRY_BASE_MS;
+  const fetchPrompt = deps.fetchPrompt;
   try {
-    template = await deps.fetchPrompt(ref.name, ref.version);
+    template = await retryTransient(VERIFIER_TRANSIENT_RETRY_ATTEMPTS, transientBase, () =>
+      fetchPrompt(ref.name, ref.version),
+    );
   } catch (err) {
     console.warn(
       `[kagent-operator/verifier] Langfuse fetch for "${ref.name}" failed:`,
       err instanceof Error ? err.message : err,
     );
+    if (isWrongPromptTypeError(err)) {
+      return failVerdict('llmJudge', 'langfuse_wrong_prompt_type', startedAt);
+    }
     return failVerdict('llmJudge', 'langfuse_fetch_failed', startedAt);
   }
 
@@ -902,13 +1025,25 @@ async function runLlmJudgeVerifier(
     headers.authorization = `Bearer ${deps.gatewayApiKey}`;
   }
 
+  // M13 — retry transient gateway 5xx (502/503/504) up to 3 times.
+  // Network errors and timeouts retain the existing fail-fast tags
+  // (`gateway_error:network`, `verifier_timeout`) so the substrate
+  // doesn't paper over a misconfigured base URL.
   let response: Response;
   try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body,
-      signal: AbortSignal.timeout(timeout),
+    response = await retryTransient(VERIFIER_TRANSIENT_RETRY_ATTEMPTS, transientBase, async () => {
+      const r = await fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: AbortSignal.timeout(timeout),
+      });
+      if (isTransient5xx(r.status)) {
+        const e = new Error(`gateway transient ${String(r.status)}`);
+        (e as Error & { status?: number }).status = r.status;
+        throw e;
+      }
+      return r;
     });
   } catch (err) {
     const isAbort =
@@ -916,6 +1051,10 @@ async function runLlmJudgeVerifier(
       (err.name === 'TimeoutError' || err.name === 'AbortError' || err.message.includes('aborted'));
     if (isAbort) {
       return failVerdict('llmJudge', 'verifier_timeout', startedAt);
+    }
+    const status = transientStatusFromError(err);
+    if (isTransient5xx(status)) {
+      return failVerdict('llmJudge', `gateway_error:${String(status)}`, startedAt);
     }
     console.warn('[kagent-operator/verifier] gateway fetch raised:', err);
     return failVerdict('llmJudge', 'gateway_error:network', startedAt);
