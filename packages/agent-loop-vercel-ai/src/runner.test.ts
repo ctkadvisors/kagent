@@ -207,78 +207,112 @@ describe('runVercelAiAgentTask', () => {
     expect(llms.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('runs the detector and surfaces context_pressure_ignored when the trace shape supports it', async () => {
-    // Drive the runner with a stub that synthesizes step usage
-    // pushing cumulative-via-middleware ABOVE the detector's pressure
-    // threshold. The middleware tracks cumulative; the runner reads
-    // its snapshot. The trace bridge stamps boundaries each step.
+  it('detector fires context_pressure_ignored under realistic middleware accounting (R3-LOW-4)', async () => {
+    // R3-LOW-4 — pre-fix this test's title claimed it tested the
+    // detector firing but the body asserted the NEGATIVE shape (the
+    // stub bypassed the wrapped model so the middleware's cumulative
+    // counter stayed at 0 and the detector could not fire). The
+    // audit (audit-rev3/R3.md §2 runner.test.ts) flagged this as the
+    // exact "test the code path, not the guarantee" anti-pattern.
     //
-    // To produce the right shape we simulate that the middleware has
-    // observed N tokens by passing a step whose usage is high. The
-    // middleware records usage on `wrapStream` (via finish chunk) /
-    // `wrapGenerate` (post-call). Our stub bypasses the wrapped
-    // model entirely — instead we drive the trace bridge by calling
-    // onStepFinish with usage values that the run-budget extractor
-    // would normally derive from the middleware.
-    //
-    // Practical approach: pre-load cumulative state by having
-    // `_streamText` push fabricated step finishes whose usage ends
-    // up reflected in the MIDDLEWARE's counters. The middleware is
-    // not observed by the stub in this test; instead we rely on the
-    // detector reading the budget the runner returns. To force the
-    // detector to fire we set contextWindowTokens=1000 + push step
-    // usage that the run-budget extractor's `cumulativeFromMiddleware`
-    // path will pick up as "the safety net's view." The runner uses
-    // `safetyMw.currentCumulativeTokens()` as authoritative; the
-    // test supplies the model that the middleware wraps (a no-op).
-    //
-    // To assert deterministically we drive the path with a stub
-    // streamText that reports usage on its finish-step events,
-    // and we don't rely on the middleware's accounting — we assert
-    // the budget came out correctly.
-    const stub = (callerOpts: Record<string, unknown>) => {
+    // Higher-fidelity fake: instead of bypassing the wrapped model,
+    // the fake `_streamText` calls into `wrappedModel.doGenerate(...)`
+    // for each simulated step. The middleware's `wrapGenerate`
+    // intercepts each call and records usage from the returned shape
+    // — so by the time the runner extracts `safetyMw.currentCumulativeTokens()`
+    // for the budget, the cumulative counter reflects ACTUAL token
+    // accounting (not the stubbed step-finish payload). The detector
+    // then sees a realistic utilization ratio.
+    // Sync function returning a `text` Promise — matches `streamText`'s
+    // own contract (it returns a `StreamTextResult` synchronously and
+    // the caller awaits `.text`). The Promise body drives the wrapped
+    // model directly, so the middleware's `wrapGenerate` runs and
+    // accumulates real usage.
+    const fakeStreamText = (callerOpts: Record<string, unknown>): { text: Promise<string> } => {
+      const wrappedModel = callerOpts.model as {
+        doGenerate: (params: unknown) => Promise<{
+          content: { type: string; text: string }[];
+          usage: {
+            inputTokens: { total: number };
+            outputTokens: { total: number };
+          };
+        }>;
+      };
       const onStepFinish = callerOpts.onStepFinish as ((step: unknown) => void) | undefined;
-      // Three steps of high usage; no spawn_child_task in toolResults.
-      if (onStepFinish) {
-        onStepFinish({
-          text: 'partial',
-          usage: { inputTokens: 250, outputTokens: 100 },
-          toolCalls: [],
-          toolResults: [],
-        });
-        onStepFinish({
-          text: 'partial 2',
-          usage: { inputTokens: 250, outputTokens: 100 },
-          toolCalls: [],
-          toolResults: [],
-        });
-        onStepFinish({
-          text: 'final',
-          usage: { inputTokens: 250, outputTokens: 100 },
-          toolCalls: [],
-          toolResults: [],
-        });
-      }
-      return { text: Promise.resolve('final') };
+      const drive = async (): Promise<string> => {
+        // Each simulated step calls into the wrapped model. The
+        // middleware observes usage on every call. Three rounds of
+        // 350 tokens each accumulates to 1050 tokens — drives
+        // utilization above the default 0.7 detector threshold for a
+        // 1000-token window.
+        for (let i = 0; i < 3; i++) {
+          const result = await wrappedModel.doGenerate({ prompt: [] });
+          if (onStepFinish) {
+            onStepFinish({
+              text: result.content[0]?.text ?? '',
+              finishReason: i === 2 ? 'stop' : 'tool-calls',
+              usage: {
+                inputTokens: result.usage.inputTokens.total,
+                outputTokens: result.usage.outputTokens.total,
+              },
+              toolCalls: [],
+              toolResults: [],
+            });
+          }
+        }
+        return 'final';
+      };
+      return { text: drive() };
     };
-    // Note: with the stub bypassing the model, the middleware's
-    // cumulative counter stays 0 — the runner uses that snapshot for
-    // the budget. So the detector's utilization is 0/1000 = 0 → does
-    // NOT fire. This test asserts the NEGATIVE shape: the stub path
-    // produces a clean run; the detector only fires under realistic
-    // middleware accounting.
+
+    // Build a LanguageModelV3-shaped fake whose `doGenerate` returns
+    // a usage record the middleware can observe. The middleware's
+    // `wrapGenerate` will intercept this — so the cumulative counter
+    // accumulates real tokens, not stubbed values.
+    const realModel = {
+      specificationVersion: 'v3' as const,
+      provider: 'fake',
+      modelId: 'fake-pressure',
+      doGenerate: () =>
+        Promise.resolve({
+          content: [{ type: 'text', text: 'partial' }],
+          usage: {
+            inputTokens: { total: 250 },
+            outputTokens: { total: 100 },
+          },
+          finishReason: 'stop',
+          warnings: [],
+        }),
+    } as unknown as LanguageModelV3;
+
     const result = await runVercelAiAgentTask({
-      model: stubModel,
+      model: realModel,
       runId: 'task-3',
-      userMessage: 'go',
+      userMessage: 'a representative user prompt with some real content',
       contextWindowTokens: 1000,
+      // Lower the detector's pressure threshold so 1050/1000 = 1.05
+      // utilization clearly exceeds it. Default is 0.7; we leave
+      // default to verify the realistic ratio fires the detector.
       spawnToolAdmitted: true,
-      _streamText: stub as never,
+      _streamText: fakeStreamText as never,
     });
+
+    // Substrate-guarantee assertion (R3-LOW-4 the corrected one):
+    // the budget reflects the cumulative tokens the middleware
+    // observed via three 350-token rounds (1050 total) against a
+    // 1000-token window — the detector MUST see this utilization.
     expect(result.status).toBe('completed');
-    // The trace should still contain three llm_call entries (one per
-    // step) and per-step iteration boundaries.
+    expect(result.budget.contextWindowTokens).toBe(1000);
+    expect(result.budget.cumulativeInputTokens).toBe(750);
+    expect(result.budget.cumulativeOutputTokens).toBe(300);
+    // The trace shape is still detector-readable (per Component 4).
     const llms = result.traces.filter((t) => t.trace_type === 'llm_call');
     expect(llms.length).toBe(3);
+    // The detector fires `context_pressure_ignored` when (a) cumulative
+    // usage exceeds the configured pressure threshold (default 0.7),
+    // (b) `spawnToolAdmitted` is true, and (c) no spawn_child_task
+    // was invoked in the lookback window. All three hold here, so
+    // the substrate guarantee is observable end-to-end.
+    expect(result.flags).toContain('context_pressure_ignored');
   });
 });
