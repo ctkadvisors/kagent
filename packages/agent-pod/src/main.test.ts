@@ -3,13 +3,22 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import type { ChatDelta, ChatRequest, ChatResult, LLMClient } from '@kagent/agent-loop';
 import type { CapabilityBundle } from '@kagent/capability-types';
+import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 import { EventPublisher, type EventNatsConnectionLike } from '@kagent/events';
 import { describe, expect, it } from 'vitest';
 
+import { defineGetMyContext } from './builtin-tools.js';
 import { definePublishEvent } from './builtin-tools-publish.js';
 import type { PodConfig } from './env.js';
-import { buildCancelledResult, buildShutdownPlan, selectPublishCapabilityBundle } from './main.js';
+import {
+  buildCancelledResult,
+  buildShutdownPlan,
+  buildTokenUtilizationBridge,
+  selectPublishCapabilityBundle,
+} from './main.js';
+import { runAgentTask } from './runner.js';
 
 const baseConfig: PodConfig = {
   taskId: 'task-uid-1',
@@ -232,5 +241,223 @@ describe('publish_event wiring (audit C2.2 — fail-closed when no operator JWT)
       tool.handler({ topic: 'research.findings', data: { x: 1 } }, FAKE_CTX),
     ).rejects.toThrow(/policy_denied:no_capability/);
     expect(conn.publishCalls).toHaveLength(0);
+  });
+});
+
+/* =====================================================================
+ * v0.1.9 / NB1 — `tokenUtilizationSnapshot` is wired through the FULL
+ * production pattern.
+ *
+ * REGRESSION TEST for audit-rev2 BLOCKER NB1
+ * (`evidence/audit-rev2/C2.md` §2 NB1).
+ *
+ * Before the fix, `defineGetMyContext` was constructed in `main.ts`
+ * WITHOUT a `tokenUtilizationSnapshot` dep. The handler's
+ * `deps.tokenUtilizationSnapshot?.()` optional-chain therefore fell
+ * through to the `?? { used: 0, modelWindow: null }` literal on every
+ * call — making the LLM read `tokenUtilization.percentage = null`
+ * unconditionally, even mid-run. The unit test suite (which injects
+ * the dep directly) stayed green; the marquee context-awareness
+ * feature was dead in production.
+ *
+ * This test drives the FULL production wireup pattern (the same
+ * holder + thunk + onBudgetReady triple `main.ts` uses), executes a
+ * loop where the LLM consumes tokens then calls `get_my_context`,
+ * and asserts the LLM observes a non-fallback live utilization
+ * snapshot. It would FAIL before the fix and PASS after.
+ *
+ * Per `evidence/audit-rev2/WIRED-BUT-DEAD-CODE-PARADIGM.md` Step
+ * Fix Shape #3, this is the regression test that drives the FULL
+ * production wireup, not the unit-with-deps shape.
+ * ===================================================================== */
+
+describe('NB1 regression — tokenUtilizationSnapshot wired through production pattern', () => {
+  /**
+   * Build the smallest LLM client that exercises the wired-up loop
+   * with token consumption. First chat() reports a tool_call to
+   * `get_my_context` with realistic token usage (input=600, output=350
+   * → cumulative=950). Second chat() returns a final string. The
+   * handler observes the executor's mutated `RunBudget` AT TOOL-CALL
+   * TIME — which is the moment NB1 was failing.
+   */
+  function llmThatCallsGetMyContextThenFinishes(): {
+    llm: LLMClient;
+    chatCalls(): number;
+  } {
+    let calls = 0;
+    return {
+      llm: {
+        chat(_req: ChatRequest): Promise<ChatResult> {
+          calls += 1;
+          if (calls === 1) {
+            return Promise.resolve({
+              content: '',
+              tool_calls: [{ id: 'gmc-1', name: 'get_my_context', args: {} }],
+              stopReason: 'tool_use',
+              // 600 + 350 = 950 cumulative tokens after this call.
+              usage: { inputTokens: 600, outputTokens: 350 },
+            });
+          }
+          return Promise.resolve({
+            content: 'done.',
+            stopReason: 'end_turn',
+            usage: { inputTokens: 5, outputTokens: 5 },
+          });
+        },
+        async *chatStream(_req: ChatRequest): AsyncIterable<ChatDelta> {
+          yield { content: 'done.', stopReason: 'end_turn' };
+          await Promise.resolve();
+        },
+      },
+      chatCalls: () => calls,
+    };
+  }
+
+  // Mirrors the main.ts production wireup verbatim:
+  //   1. buildTokenUtilizationBridge captures the live RunBudget via
+  //      onBudgetReady, exposes a thunk that reads cumulative tokens
+  //      at TOOL-CALL time.
+  //   2. defineGetMyContext is constructed BEFORE runAgentTask is
+  //      called, with the thunk wired into its deps.
+  //   3. runAgentTask is given the onBudgetReady callback and the
+  //      pre-built tool provider.
+  // The order matters because `defineGetMyContext` runs at boot
+  // (before the executor allocates its budget), but the snapshot
+  // reads at TOOL-CALL time (after the budget exists + has been
+  // mutated).
+
+  it('FULL wireup: get_my_context observes live tokenUtilization.used > 0 + modelWindow set + percentage numeric', async () => {
+    const cfg: PodConfig = {
+      taskId: 'task-uid-nb1',
+      taskName: 't-nb1',
+      taskNamespace: 'default',
+      agentName: 'researcher',
+      agentSpec: {
+        model: 'workers-ai/x',
+        // Agent must declare get_my_context for the substrate
+        // tool-allowlist gate to admit it (universal admit also
+        // works; we list explicitly to mirror the production
+        // contract).
+        tools: ['get_my_context'],
+      },
+      taskSpec: { payload: {} },
+      litellmBaseUrl: 'http://litellm.test:4000/v1',
+      logLevel: 'info',
+      traceContentMode: 'preview',
+      // Operator-projected KAGENT_AGENT_MODEL_CONTEXT_WINDOW. Without
+      // this, modelWindow stays null and the test cannot distinguish
+      // wired-correctly from wired-but-dead.
+      contextWindowTokens: 131_072,
+    };
+
+    // Production wireup pattern (mirrors main.ts).
+    const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(
+      cfg.contextWindowTokens,
+    );
+
+    // Substrate-tools provider mirrors the in-pod-built provider from
+    // main.ts (`InProcessToolProvider({ tools: [defineGetMyContext(...)] })`).
+    const ctxDef = defineGetMyContext({
+      podConfig: cfg,
+      tokenUtilizationSnapshot,
+    });
+
+    const substrateTools = new InProcessToolProvider({
+      id: 'kagent-substrate',
+      tools: [ctxDef],
+    });
+
+    const llm = llmThatCallsGetMyContextThenFinishes();
+
+    const result = await runAgentTask(cfg, {
+      llm: llm.llm,
+      sinks: [],
+      spawnTools: substrateTools,
+      // KEY: this is the production wire-up that NB1 was missing.
+      onBudgetReady,
+    });
+
+    // Sanity — both LLM round-trips fired, the tool was called.
+    expect(result.status).toBe('completed');
+    expect(llm.chatCalls()).toBe(2);
+
+    // The LLM observes `get_my_context`'s payload via the executor's
+    // `tool_call` trace entry — the LLM literally sees the
+    // tool_output string and reasons over it. Pull THAT exact value
+    // out so the assertions reflect what the model would have read,
+    // not just what the handler internally returned.
+    const toolCallTrace = result.traces.find(
+      (t) => t.trace_type === 'tool_call' && t.tool_name === 'get_my_context',
+    );
+    expect(toolCallTrace).toBeDefined();
+    expect(toolCallTrace?.is_error).not.toBe(true);
+
+    // Output is `[{type:'text', text:'<json>'}]` (ContentBlock[] from
+    // jsonContent in defineGetMyContext). Parse it to inspect the
+    // `tokenUtilization` block.
+    const rawOutput = toolCallTrace?.tool_output;
+    expect(typeof rawOutput).toBe('string');
+    const blocks = JSON.parse(rawOutput as string) as Array<{ type: string; text: string }>;
+    const innerJson = blocks[0]?.text;
+    expect(typeof innerJson).toBe('string');
+    const ctx = JSON.parse(innerJson as string) as {
+      tokenUtilization?: { used?: unknown; modelWindow?: unknown; percentage?: unknown };
+    };
+    const observedUtilization = ctx.tokenUtilization ?? {};
+
+    // The post-fix invariants — these are the EXACT three assertions
+    // the audit task brief required:
+    //   (1) tokenUtilization.used > 0 after token consumption
+    //   (2) tokenUtilization.modelWindow === configured contextWindowTokens
+    //   (3) tokenUtilization.percentage is a number (not null)
+    expect(typeof observedUtilization.used).toBe('number');
+    expect(observedUtilization.used as number).toBeGreaterThan(0);
+    // 600 input + 350 output = 950 cumulative; the get_my_context
+    // tool call happens AFTER the first chat() resolves, so the
+    // executor has already credited those tokens onto the live budget.
+    expect(observedUtilization.used).toBe(950);
+
+    expect(observedUtilization.modelWindow).toBe(131_072);
+    expect(observedUtilization.modelWindow).not.toBeNull();
+
+    expect(typeof observedUtilization.percentage).toBe('number');
+    expect(observedUtilization.percentage).not.toBeNull();
+    // 950/131072 ≈ 0.00725; rounded to 4 decimals → 0.0072.
+    expect(observedUtilization.percentage as number).toBeGreaterThan(0);
+    expect(observedUtilization.percentage as number).toBeLessThan(0.01);
+  });
+});
+
+/* =====================================================================
+ * `buildTokenUtilizationBridge` unit shape — pure helper invariants.
+ * ===================================================================== */
+
+describe('buildTokenUtilizationBridge (NB1 helper)', () => {
+  it('returns used=0 + modelWindow=null when contextWindowTokens is undefined and onBudgetReady has not fired', () => {
+    const { tokenUtilizationSnapshot } = buildTokenUtilizationBridge(undefined);
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, modelWindow: null });
+  });
+
+  it('returns modelWindow = configured contextWindowTokens even before onBudgetReady fires', () => {
+    const { tokenUtilizationSnapshot } = buildTokenUtilizationBridge(131_072);
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, modelWindow: 131_072 });
+  });
+
+  it('after onBudgetReady fires, the snapshot reads cumulativeInputTokens + cumulativeOutputTokens LIVE from the captured ref', () => {
+    const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(8000);
+    const budget = {
+      cumulativeInputTokens: 100,
+      cumulativeOutputTokens: 50,
+      cumulativeCostUsd: null,
+    };
+    onBudgetReady(budget);
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 150, modelWindow: 8000 });
+
+    // Mutate the captured ref the way the executor does between
+    // iterations — the snapshot MUST reflect the new value (live read,
+    // not at-construction snapshot).
+    budget.cumulativeInputTokens = 600;
+    budget.cumulativeOutputTokens = 350;
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 950, modelWindow: 8000 });
   });
 });

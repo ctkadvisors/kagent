@@ -235,6 +235,34 @@ export interface RunInput<TType extends string = string> {
    * undefined (the safety-net is gated on both fields being set).
    */
   contextSafetyThreshold?: number;
+  /**
+   * v0.1.9 / context-awareness slate (NB1 fix; see
+   * docs/CONTEXT-AWARENESS.md §4.4).
+   *
+   * Optional one-shot callback invoked exactly once at the start of
+   * `run()`, immediately after the executor allocates the run's
+   * `RunBudget`. The callback receives the live mutable budget object —
+   * the SAME reference the loop accumulates input/output tokens onto
+   * — so callers (typically the agent-pod's `main.ts`) can hand that
+   * reference into a `tokenUtilizationSnapshot` thunk wired through
+   * `defineGetMyContext`. The thunk reads `cumulativeInputTokens` +
+   * `cumulativeOutputTokens` at TOOL-CALL time (not construction
+   * time), which is the only correct moment because the loop mutates
+   * those fields after every successful chat() call.
+   *
+   * Without this hook the production wiring of `get_my_context` had
+   * no way to thread the live budget into the tool's deps, so
+   * `tokenUtilizationSnapshot` always fell back to `{ used: 0,
+   * modelWindow: null }` and the LLM read `percentage: null` —
+   * making the v0.1.9 marquee "agent-managed context handling"
+   * feature inert. See audit `evidence/audit-rev2/C2.md` §2 NB1.
+   *
+   * Tests that don't need live token introspection omit the field;
+   * tests that need it inject a callback that records the budget into
+   * a closure-shared variable (mirroring the production pattern in
+   * `main.ts`).
+   */
+  onBudgetReady?: (budget: RunBudget) => void;
   /** Caller-owned cancellation signal. */
   signal?: AbortSignal;
 }
@@ -557,6 +585,24 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         contextWindowTokens: input.contextWindowTokens,
       }),
     };
+    // v0.1.9 / NB1 — hand the LIVE mutable budget reference back to the
+    // caller so `tokenUtilizationSnapshot` (wired through
+    // `defineGetMyContext` in main.ts) reads cumulative tokens at
+    // TOOL-CALL time, not at construction. Wrapped in try/catch so a
+    // misbehaving observer cannot fail the run (the budget itself is
+    // owned by the executor; the callback is a one-way data export).
+    if (input.onBudgetReady !== undefined) {
+      try {
+        input.onBudgetReady(budget);
+      } catch (err) {
+        // Defensive: log but do not propagate. The hook is observation
+        // only; an exception here would otherwise terminate a run for
+        // a wireup defect rather than for any agent-loop fault.
+        console.warn(
+          `[agent-loop] onBudgetReady observer threw — ignoring: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     const traces: TraceEntry[] = [];
     // Sequence counter as a mutable ref so `chatWithRetry` can advance it
     // when emitting per-attempt failure traces. The run loop reads the

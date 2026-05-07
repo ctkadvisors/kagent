@@ -36,7 +36,7 @@ import {
   parseTraceparent,
   setupOtelExporter,
 } from '@kagent/trace-sinks';
-import type { TraceSink } from '@kagent/agent-loop';
+import type { RunBudget, TraceSink } from '@kagent/agent-loop';
 import type { CapabilityBundle } from '@kagent/capability-types';
 
 import type { PodConfig } from './env.js';
@@ -271,6 +271,20 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onSignal);
   process.on('SIGINT', onSignal);
 
+  // v0.1.9 / NB1 (audit-rev2 C2 §2) — live-budget bridge.
+  //
+  // The executor allocates `RunBudget` AFTER `runAgentTask` is invoked,
+  // but `defineGetMyContext` must be constructed BEFORE the run starts
+  // (so the LLM can call the tool from iteration 0). We bridge that
+  // ordering with a closure-shared mutable holder + an
+  // `onBudgetReady` observer hook (threaded through runner.ts into
+  // executor.ts). See `buildTokenUtilizationBridge` for the helper
+  // that owns the holder + thunk; main.ts wires both ends, the helper
+  // is exported for direct unit testing of the wireup.
+  const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(
+    config.contextWindowTokens,
+  );
+
   // WS-K + WS-L — wire substrate task-graph tools when the flag is on.
   // Default-OFF per AGENT-SELF-SERVICE.md §11 Q5 — opt-in via Helm
   // value `agentPod.spawnChild.enabled` flipping
@@ -360,6 +374,15 @@ async function main(): Promise<void> {
       podConfig: config,
       ...(capabilityBundle !== undefined && { capabilityBundle }),
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+      // v0.1.9 / NB1 — wire the live token-utilization snapshot per
+      // docs/CONTEXT-AWARENESS.md §4.4. The thunk reads cumulative
+      // input + output tokens off the SAME RunBudget reference the
+      // executor mutates each iteration (captured via onBudgetReady
+      // below). When `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` is unset,
+      // modelWindow falls through as null and the §4.4 contract still
+      // surfaces a well-formed `tokenUtilization` block (with
+      // percentage=null) rather than failing.
+      tokenUtilizationSnapshot,
     });
     const subTools = [spawnDefs, waitChildDef, waitAllDef, ctxDef];
     // WS-M — append the template tool when the operator's
@@ -525,6 +548,11 @@ async function main(): Promise<void> {
       ...(eventsTools !== undefined && { eventsTools }),
       ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
       ...(capabilityBundle !== undefined && { capabilityBundle }),
+      // v0.1.9 / NB1 — capture the executor's live RunBudget into
+      // `liveBudget` so the get_my_context tool's
+      // `tokenUtilizationSnapshot` thunk reads cumulative tokens off
+      // the SAME object the loop mutates each iteration.
+      onBudgetReady,
     });
   } catch (err) {
     // If the runner threw because we already aborted, treat it as a
@@ -601,6 +629,62 @@ if (isDirectInvocation) {
     console.error('[kagent-agent-pod] fatal:', err);
     process.exit(1);
   });
+}
+
+/**
+ * v0.1.9 / NB1 (audit-rev2 C2 §2) — live-budget bridge between the
+ * executor's `RunBudget` (allocated inside `executor.run()`) and the
+ * `tokenUtilizationSnapshot` dep that `defineGetMyContext` reads at
+ * TOOL-CALL time.
+ *
+ * Returns a paired `{ onBudgetReady, tokenUtilizationSnapshot }` where:
+ *
+ *   - `onBudgetReady(budget)` is wired into `runAgentTask` via
+ *     `RunDeps.onBudgetReady`. It captures the executor's mutable
+ *     budget reference into a closure-shared variable.
+ *   - `tokenUtilizationSnapshot()` is wired into `defineGetMyContext`
+ *     via `GetMyContextDeps.tokenUtilizationSnapshot`. It reads
+ *     cumulative input + output tokens off the SAME object the
+ *     executor mutates after every successful chat() call, plus the
+ *     operator-projected `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` (passed
+ *     in via `contextWindowTokens`).
+ *
+ * Before this bridge existed, the `tokenUtilizationSnapshot` dep was
+ * omitted from production wiring while tests injected it directly,
+ * so `get_my_context` always returned the `{ used: 0, modelWindow:
+ * null }` fallback in production — making v0.1.9's marquee
+ * context-awareness feature inert. See
+ * `evidence/audit-rev2/WIRED-BUT-DEAD-CODE-PARADIGM.md` for the
+ * detection discipline this regression was found through.
+ *
+ * Pure factory — exported so the regression test can drive the exact
+ * production wireup pattern without spawning the agent-pod process.
+ */
+export function buildTokenUtilizationBridge(contextWindowTokens: number | undefined): {
+  readonly onBudgetReady: (budget: RunBudget) => void;
+  readonly tokenUtilizationSnapshot: () => {
+    readonly used: number;
+    readonly modelWindow: number | null;
+  };
+} {
+  let liveBudget: RunBudget | undefined;
+  const onBudgetReady = (budget: RunBudget): void => {
+    liveBudget = budget;
+  };
+  const tokenUtilizationSnapshot = (): {
+    readonly used: number;
+    readonly modelWindow: number | null;
+  } => {
+    const used =
+      liveBudget !== undefined
+        ? liveBudget.cumulativeInputTokens + liveBudget.cumulativeOutputTokens
+        : 0;
+    return {
+      used,
+      modelWindow: contextWindowTokens ?? null,
+    };
+  };
+  return { onBudgetReady, tokenUtilizationSnapshot };
 }
 
 /**

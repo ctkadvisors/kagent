@@ -31,6 +31,7 @@ import {
   type ChatMessage,
   type ExecutionResult,
   type LLMClient,
+  type RunBudget,
   type TerminalStatus,
   type ToolProvider,
   type TraceEntry,
@@ -170,6 +171,26 @@ export interface RunDeps {
    * full agent loop.
    */
   readonly artifactRegistry?: ArtifactRegistry;
+  /**
+   * v0.1.9 / NB1 fix — see docs/CONTEXT-AWARENESS.md §4.4 and
+   * `evidence/audit-rev2/C2.md` §2 NB1.
+   *
+   * Forward-only callback fired exactly once when the executor
+   * allocates the run's `RunBudget`. Production wiring uses this hook
+   * in `main.ts` to capture the live mutable budget reference, then
+   * feed `tokenUtilizationSnapshot` (the `defineGetMyContext` dep)
+   * with a thunk that reads `cumulativeInputTokens +
+   * cumulativeOutputTokens` AT TOOL-CALL time. Without this hook, the
+   * `get_my_context` tool's tokenUtilization snapshot fell back to
+   * `{ used: 0, modelWindow: null }` unconditionally — making the
+   * marquee context-awareness feature inert in production while tests
+   * (which inject the snapshot directly) stayed green.
+   *
+   * The runner forwards this verbatim onto `executor.run({
+   * onBudgetReady })`. Optional + observation-only; any throw inside
+   * the callback is swallowed by the executor.
+   */
+  readonly onBudgetReady?: (budget: RunBudget) => void;
 }
 
 /**
@@ -305,6 +326,10 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
       contextWindowTokens: config.contextWindowTokens,
     }),
     ...(contextSafetyThreshold !== undefined && { contextSafetyThreshold }),
+    // v0.1.9 / NB1 — forward the live-budget observer hook so main.ts
+    // can wire `tokenUtilizationSnapshot` against the actual mutating
+    // budget reference. See `RunDeps.onBudgetReady` JSDoc.
+    ...(deps.onBudgetReady !== undefined && { onBudgetReady: deps.onBudgetReady }),
   });
 
   // v0.1.9 context-awareness — Piece 4 detector knob. Read the
