@@ -79,7 +79,25 @@ export function createModelEndpointWatch(
 
   const apply = (ep: ModelEndpoint): void => {
     if (!isModelEndpoint(ep)) return;
-    modelIndex.upsert(ep);
+    const result = modelIndex.upsert(ep);
+    if (result.kind === 'collision') {
+      // M20 — two CRs claiming the same `spec.model` is a
+      // misconfiguration. Log a structured one-liner so the operator
+      // can find the offending CR; do NOT update AIMD bounds (the
+      // existing entry's CR keeps its routing). The collision could
+      // be transient (a CR rename in flight) or persistent (two CRs
+      // with the same model name); either way, deterministic routing
+      // beats flapping.
+      console.warn(
+        `[llm-gateway] ModelEndpoint collision rejected: ` +
+          `model=${ep.spec.model} ` +
+          `existing=${result.existing.namespace}/${result.existing.name} ` +
+          `(backendUrl=${result.existing.backendUrl}) ` +
+          `incoming=${result.incoming.namespace}/${result.incoming.name} ` +
+          `(backendUrl=${result.incoming.backendUrl})`,
+      );
+      return;
+    }
     aimd.updateBounds(ep.spec.model, ep.spec.backendUrl, normalizeBounds(ep));
   };
 
@@ -87,7 +105,10 @@ export function createModelEndpointWatch(
   informer.on('update', apply);
   informer.on('delete', (ep) => {
     if (!isModelEndpoint(ep)) return;
-    modelIndex.delete(ep.spec.model);
+    // M20 — pass the CR identity so we don't tombstone an entry that
+    // belongs to a different (collision-survivor) CR.
+    const identity = `${ep.metadata.namespace ?? '<no-ns>'}/${ep.metadata.name}`;
+    modelIndex.delete(ep.spec.model, identity);
   });
   informer.on('error', (err) => {
     console.error('[llm-gateway] model-endpoint watch error:', err);
