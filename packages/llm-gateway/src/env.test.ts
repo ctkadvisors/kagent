@@ -16,10 +16,53 @@ describe('parseEnv', () => {
     expect(cfg.databaseUrl).toBe('postgres://u:p@h:5432/d');
     expect(cfg.database).toBeNull();
     expect(cfg.adminApiToken).toBe('tok-123');
+    expect(cfg.adminApiTokenReadonly).toBeNull();
     expect(cfg.port).toBe(4000);
     expect(cfg.backendTimeoutMs).toBe(60000);
     expect(cfg.modelEndpointNamespace).toBe('kagent-system');
     expect(cfg.backendApiKeys).toEqual({});
+  });
+
+  /* =====================================================================
+   * M23 — optional read-only admin token. Empty / unset = legacy
+   * single-token mode. Whitespace-only is treated as unset. Equality
+   * with the full token is rejected at boot (defeats the split).
+   * ===================================================================== */
+
+  it('treats absent ADMIN_API_TOKEN_READONLY as null (M23 back-compat)', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      ADMIN_API_TOKEN: 'tok',
+    });
+    expect(cfg.adminApiTokenReadonly).toBeNull();
+  });
+
+  it('treats whitespace-only ADMIN_API_TOKEN_READONLY as null (M23)', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      ADMIN_API_TOKEN: 'tok',
+      ADMIN_API_TOKEN_READONLY: '   ',
+    });
+    expect(cfg.adminApiTokenReadonly).toBeNull();
+  });
+
+  it('parses a non-empty ADMIN_API_TOKEN_READONLY (M23)', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      ADMIN_API_TOKEN: 'full-tok',
+      ADMIN_API_TOKEN_READONLY: 'read-tok',
+    });
+    expect(cfg.adminApiTokenReadonly).toBe('read-tok');
+  });
+
+  it('rejects ADMIN_API_TOKEN_READONLY that equals ADMIN_API_TOKEN (M23 — split defeated)', () => {
+    expect(() =>
+      parseEnv({
+        DATABASE_URL: 'postgres://u:p@h:5432/d',
+        ADMIN_API_TOKEN: 'same-tok',
+        ADMIN_API_TOKEN_READONLY: 'same-tok',
+      }),
+    ).toThrow(/must NOT equal ADMIN_API_TOKEN/);
   });
 
   it('parses optional overrides', () => {

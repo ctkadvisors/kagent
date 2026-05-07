@@ -82,6 +82,58 @@ describe('adminAuth', () => {
       statusCode: 403,
     });
   });
+
+  /* =====================================================================
+   * M23 — admin scope split. Read-only admin token accepted on `read`
+   * scope; key-management endpoints (`full` scope) continue to require
+   * the canonical token.
+   * ===================================================================== */
+
+  it('accepts the read-only token on read scope (M23)', () => {
+    expect(
+      adminAuth(
+        fakeReq({ authorization: 'Bearer read-tok' }),
+        { fullToken: 'full-tok', readToken: 'read-tok' },
+        'read',
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it('REJECTS the read-only token on full scope (M23)', () => {
+    expect(
+      adminAuth(
+        fakeReq({ authorization: 'Bearer read-tok' }),
+        { fullToken: 'full-tok', readToken: 'read-tok' },
+        'full',
+      ),
+    ).toMatchObject({ ok: false, statusCode: 403 });
+  });
+
+  it('still accepts the full token on read scope (M23 — back-compat)', () => {
+    expect(
+      adminAuth(
+        fakeReq({ authorization: 'Bearer full-tok' }),
+        { fullToken: 'full-tok', readToken: 'read-tok' },
+        'read',
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it('rejects an unknown token on read scope when only fullToken is configured (back-compat)', () => {
+    expect(
+      adminAuth(fakeReq({ authorization: 'Bearer wrong' }), { fullToken: 'full-tok' }, 'read'),
+    ).toMatchObject({ ok: false, statusCode: 403 });
+  });
+
+  it('does not accept arbitrary tokens just because read scope was requested', () => {
+    expect(
+      adminAuth(
+        fakeReq({ authorization: 'Bearer guess' }),
+        { fullToken: 'full-tok', readToken: 'read-tok' },
+        'read',
+      ),
+    ).toMatchObject({ ok: false, statusCode: 403 });
+  });
 });
 
 function ep(model: string, max = 4, seed = 2, url = 'http://x'): ModelEndpoint {

@@ -38,6 +38,20 @@ adminApiToken:
   secretName: '' # required when enabled=true
   secretKey: token
 
+# M23 — optional read-only admin bearer. When set, /admin/capacity and
+# /admin/usage accept this token in addition to `adminApiToken`. Key-
+# management endpoints (POST/GET/DELETE /admin/keys) continue to require
+# the full `adminApiToken`. Workbench-api can be wired with this
+# narrower token so a workbench memory-disclosure CVE cannot mint or
+# revoke arbitrary `sk-<...>` keys.
+#
+# To opt in: provision a separate Secret with a different value than
+# `adminApiToken`'s Secret, set `adminReadOnlyApiToken.secretName` to
+# its name. Leave blank for the legacy single-token posture.
+adminReadOnlyApiToken:
+  secretName: '' # optional; empty = read-only token disabled
+  secretKey: token
+
 # Backend (provider) API keys. The gateway consults these when routing
 # a request to a backendKind that requires an Authorization header
 # (cloudflare, openai, anthropic, bedrock, groq, …). A backend with no

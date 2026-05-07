@@ -62,6 +62,15 @@ export interface ServerDeps {
   readonly apiKeyRepo: ApiKeyRepo;
   readonly usageRepo: UsageRepo;
   readonly adminToken: string;
+  /**
+   * M23 — optional read-only admin token. When set, `/admin/capacity`
+   * and `/admin/usage` accept EITHER `adminToken` OR `adminReadToken`.
+   * Key-management endpoints (`/admin/keys` POST/GET/DELETE) continue
+   * to require the full `adminToken`. Workbench-api can be wired with
+   * just the read token so a memory-disclosure CVE in the workbench
+   * cannot mint/revoke arbitrary keys.
+   */
+  readonly adminReadToken?: string;
   readonly readinessProbe: () => Promise<boolean>;
 }
 
@@ -100,8 +109,17 @@ export function buildHandler(
     }
 
     // ----- Admin endpoints -----
+    // M23 — capacity + usage accept BOTH the full admin token AND the
+    // optional read-only admin token (when configured). Key-management
+    // endpoints (POST/GET/DELETE /admin/keys) continue to require the
+    // full token.
+    const adminExpectations = {
+      fullToken: deps.adminToken,
+      ...(typeof deps.adminReadToken === 'string' &&
+        deps.adminReadToken.length > 0 && { readToken: deps.adminReadToken }),
+    };
     if (method === 'GET' && url.startsWith('/admin/capacity')) {
-      const auth = adminAuth(req, deps.adminToken);
+      const auth = adminAuth(req, adminExpectations, 'read');
       if (!auth.ok) {
         writeJson(res, auth.statusCode ?? 401, {
           error: { message: auth.message ?? 'unauthorized' },
@@ -113,7 +131,7 @@ export function buildHandler(
     }
 
     if (method === 'GET' && url.startsWith('/admin/usage')) {
-      const auth = adminAuth(req, deps.adminToken);
+      const auth = adminAuth(req, adminExpectations, 'read');
       if (!auth.ok) {
         writeJson(res, auth.statusCode ?? 401, {
           error: { message: auth.message ?? 'unauthorized' },

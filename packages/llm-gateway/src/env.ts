@@ -35,6 +35,17 @@
  * Required:
  *   ADMIN_API_TOKEN    — bearer token gating /admin/* endpoints.
  *
+ * Optional:
+ *   ADMIN_API_TOKEN_READONLY — M23: read-only bearer accepted on
+ *                              /admin/capacity + /admin/usage in
+ *                              addition to ADMIN_API_TOKEN. Key-
+ *                              management endpoints (POST/GET/DELETE
+ *                              /admin/keys) continue to require
+ *                              ADMIN_API_TOKEN. Workbench-api can be
+ *                              wired with this token so a workbench
+ *                              memory-disclosure CVE cannot mint/
+ *                              revoke arbitrary keys.
+ *
  * Optional with defaults:
  *   PORT                       (default 4000)
  *   BACKEND_TIMEOUT_MS         (default 60000)
@@ -107,6 +118,13 @@ export interface GatewayConfig {
    */
   readonly database: DatabaseConnConfig | null;
   readonly adminApiToken: string;
+  /**
+   * M23 — optional read-only admin token. When non-null,
+   * `/admin/capacity` + `/admin/usage` accept either this token OR
+   * the canonical `adminApiToken`. Null means the legacy single-token
+   * behavior (back-compat).
+   */
+  readonly adminApiTokenReadonly: string | null;
   readonly port: number;
   readonly backendTimeoutMs: number;
   readonly modelEndpointNamespace: string;
@@ -186,6 +204,22 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
   }
   const databaseUrl = splitConn === null ? (dsnRaw as string) : null;
   const adminApiToken = required(env, 'ADMIN_API_TOKEN');
+  // M23 — optional readonly admin token. Trim whitespace; treat empty
+  // as not-configured.
+  const adminReadonlyRaw = env.ADMIN_API_TOKEN_READONLY;
+  const adminApiTokenReadonly =
+    typeof adminReadonlyRaw === 'string' && adminReadonlyRaw.trim().length > 0
+      ? adminReadonlyRaw.trim()
+      : null;
+  // Defensive: reject equality between the full and read tokens. If
+  // an operator accidentally sets both env vars to the same string,
+  // the split is no-op'd and a CVE leaking the read token also leaks
+  // the full token. Refusing at boot is louder than logging a warning.
+  if (adminApiTokenReadonly !== null && adminApiTokenReadonly === adminApiToken) {
+    throw new Error(
+      'invalid env ADMIN_API_TOKEN_READONLY: must NOT equal ADMIN_API_TOKEN (M23 — split posture defeated when tokens match)',
+    );
+  }
   const port = parsePort(env.PORT);
   const backendTimeoutMs = parsePositiveInt(
     env.BACKEND_TIMEOUT_MS,
@@ -199,6 +233,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
     databaseUrl,
     database: splitConn,
     adminApiToken,
+    adminApiTokenReadonly,
     port,
     backendTimeoutMs,
     modelEndpointNamespace:

@@ -140,6 +140,18 @@ spec:
                   name: {{ .Values.adminApiToken.secretName | quote }}
                   key: {{ .Values.adminApiToken.secretKey | quote }}
             {{- end }}
+            # M23 — optional read-only admin bearer. Accepted on
+            # /admin/capacity + /admin/usage; key-management endpoints
+            # continue to require ADMIN_API_TOKEN. Wire workbench-api
+            # with THIS token to cap blast radius of a workbench
+            # memory-disclosure CVE.
+            {{- if .Values.adminReadOnlyApiToken.secretName }}
+            - name: ADMIN_API_TOKEN_READONLY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.adminReadOnlyApiToken.secretName | quote }}
+                  key: {{ .Values.adminReadOnlyApiToken.secretKey | quote }}
+            {{- end }}
             # Kagent integration — the gateway uses these to namespace
             # CR watches and to label its OTEL spans.
             - name: KAGENT_NAMESPACE

@@ -82,7 +82,9 @@ interface BootedServer {
 }
 
 function bootServer(
-  overrides: Partial<Pick<ServerDeps, 'apiKeyLookup' | 'modelIndex' | 'routerDeps'>> = {},
+  overrides: Partial<
+    Pick<ServerDeps, 'apiKeyLookup' | 'modelIndex' | 'routerDeps' | 'adminReadToken'>
+  > = {},
 ): Promise<BootedServer> {
   return new Promise((resolve, reject) => {
     const repo = new StubApiKeyRepo();
@@ -95,6 +97,7 @@ function bootServer(
       apiKeyRepo: repo,
       usageRepo: new StubUsageRepo(),
       adminToken: ADMIN_TOKEN,
+      ...(overrides.adminReadToken !== undefined && { adminReadToken: overrides.adminReadToken }),
       readinessProbe: () => Promise.resolve(true),
     };
     const handler = buildHandler(deps);
@@ -319,6 +322,111 @@ describe('DELETE /admin/keys/:id', () => {
     });
     expect(res.status).toBe(400);
     expect(booted.repo.revokedId).toBeUndefined();
+  });
+});
+
+/* =====================================================================
+ * M23 — admin scope split. /admin/capacity + /admin/usage accept the
+ * read-only admin token; /admin/keys POST/GET/DELETE require the full
+ * admin token. Workbench-api can be wired with the read token so a
+ * workbench memory-disclosure CVE cannot mint or revoke API keys.
+ * ===================================================================== */
+
+const READ_TOKEN = 'admin-read-only-token-7654321098';
+
+describe('admin scope split (M23)', () => {
+  it('accepts the read-only token on GET /admin/capacity', async () => {
+    const booted = await bootServer({ adminReadToken: READ_TOKEN });
+    try {
+      const res = await fetch(`${booted.url}/admin/capacity`, {
+        headers: { authorization: `Bearer ${READ_TOKEN}` },
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('accepts the read-only token on GET /admin/usage', async () => {
+    const booted = await bootServer({ adminReadToken: READ_TOKEN });
+    try {
+      const res = await fetch(`${booted.url}/admin/usage`, {
+        headers: { authorization: `Bearer ${READ_TOKEN}` },
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('REJECTS the read-only token on POST /admin/keys (key-mgmt)', async () => {
+    const booted = await bootServer({ adminReadToken: READ_TOKEN });
+    try {
+      const res = await fetch(`${booted.url}/admin/keys`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${READ_TOKEN}`,
+        },
+        body: JSON.stringify({ label: 'cli' }),
+      });
+      expect(res.status).toBe(403);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('REJECTS the read-only token on GET /admin/keys', async () => {
+    const booted = await bootServer({ adminReadToken: READ_TOKEN });
+    try {
+      const res = await fetch(`${booted.url}/admin/keys`, {
+        headers: { authorization: `Bearer ${READ_TOKEN}` },
+      });
+      expect(res.status).toBe(403);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('REJECTS the read-only token on DELETE /admin/keys/:id', async () => {
+    const booted = await bootServer({ adminReadToken: READ_TOKEN });
+    try {
+      const res = await fetch(`${booted.url}/admin/keys/42`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${READ_TOKEN}` },
+      });
+      expect(res.status).toBe(403);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('still accepts the full token on read endpoints (back-compat)', async () => {
+    const booted = await bootServer({ adminReadToken: READ_TOKEN });
+    try {
+      const res = await fetch(`${booted.url}/admin/capacity`, {
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('without read token configured, only the full token works (back-compat)', async () => {
+    const booted = await bootServer(); // adminReadToken not set
+    try {
+      const a = await fetch(`${booted.url}/admin/capacity`, {
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
+      expect(a.status).toBe(200);
+      const b = await fetch(`${booted.url}/admin/capacity`, {
+        headers: { authorization: 'Bearer some-other-token' },
+      });
+      expect(b.status).toBe(403);
+    } finally {
+      await booted.close();
+    }
   });
 });
 

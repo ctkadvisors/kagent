@@ -108,6 +108,12 @@ async function main(): Promise<void> {
       apiKeyRepo.getByHash(h),
     apiKeyRepo,
     adminToken: cfg.adminApiToken,
+    // M23 — pass through optional read-only admin token. When set,
+    // `/admin/capacity` + `/admin/usage` accept it as a second
+    // bearer alongside `adminApiToken`. Workbench-api can use this
+    // narrower token so a workbench memory-disclosure CVE cannot
+    // mint or revoke `/v1/chat/completions` API keys.
+    ...(cfg.adminApiTokenReadonly !== null && { adminReadToken: cfg.adminApiTokenReadonly }),
     readinessProbe: () => pingPool(pool),
     routerDeps: {
       modelIndex,

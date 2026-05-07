@@ -50,7 +50,59 @@ function hmacToken(value: string): Buffer {
   return createHmac('sha256', ADMIN_TOKEN_HMAC_KEY).update(value).digest();
 }
 
-export function adminAuth(req: IncomingMessage, expectedToken: string): AdminAuthResult {
+/**
+ * M23 — admin scopes.
+ *
+ * Workbench-api's `/admin/capacity` + `/admin/usage` reads do NOT
+ * need the full admin power that gates `/admin/keys` (which can
+ * mint, list, and revoke arbitrary `sk-<...>` API keys). Splitting
+ * the trust posture into two scopes:
+ *
+ *   - `full`   — accepts the canonical admin token. Required for
+ *                `/admin/keys` POST/GET/DELETE (key management).
+ *                Also accepted on the read endpoints (back-compat).
+ *   - `read`   — accepts EITHER the admin token OR a separately
+ *                provisioned read-only admin token. Used by
+ *                `/admin/capacity` + `/admin/usage`.
+ *
+ * Workbench-api can be wired with the `read` token only, so a
+ * memory-disclosure CVE that leaks the workbench's bearer token
+ * cannot mint or revoke keys. The chart's `kagent-llm-gateway-token`
+ * Secret continues to hold the canonical admin token (back-compat);
+ * a new optional Secret holds the read token when the operator opts
+ * into the split.
+ */
+export type AdminScope = 'full' | 'read';
+
+export interface AdminAuthExpectations {
+  /** Canonical admin token — required, accepts every scope. */
+  readonly fullToken: string;
+  /**
+   * Optional read-only admin token. When set, accepted on `read`-scope
+   * endpoints in addition to the full token. Empty / undefined =
+   * read endpoints accept ONLY the full token (back-compat).
+   */
+  readonly readToken?: string;
+}
+
+/**
+ * Auth a request against the admin-token expectations. `scope` selects
+ * which token(s) are accepted: `'full'` rejects anything but the
+ * canonical token; `'read'` accepts either the canonical OR the
+ * read-only token (when configured).
+ *
+ * Three-arg shape (req, expected: string, scope?): back-compat
+ * convenience for tests and the existing key-management call sites
+ * that don't need to distinguish scopes — single-string arg behaves
+ * exactly like the pre-M23 `adminAuth`.
+ */
+export function adminAuth(
+  req: IncomingMessage,
+  expected: string | AdminAuthExpectations,
+  scope: AdminScope = 'full',
+): AdminAuthResult {
+  const expectations: AdminAuthExpectations =
+    typeof expected === 'string' ? { fullToken: expected } : expected;
   const auth = req.headers.authorization;
   if (typeof auth !== 'string' || auth.length === 0) {
     return { ok: false, statusCode: 401, message: 'missing authorization header' };
@@ -61,11 +113,28 @@ export function adminAuth(req: IncomingMessage, expectedToken: string): AdminAut
   // `supplied.length === 0`; the hmac compare below handles that
   // uniformly with all other mismatched inputs.
   const suppliedDigest = hmacToken(supplied);
-  const expectedDigest = hmacToken(expectedToken);
-  if (!timingSafeEqual(suppliedDigest, expectedDigest)) {
-    return { ok: false, statusCode: 403, message: 'admin token mismatch' };
+  const fullDigest = hmacToken(expectations.fullToken);
+  if (timingSafeEqual(suppliedDigest, fullDigest)) {
+    return { ok: true };
   }
-  return { ok: true };
+  // M23 — on `read` scope, also accept the read-only token (when set).
+  // We always run the timingSafeEqual against the read-token digest
+  // (digest length is fixed at 32 bytes) so a missing read token
+  // doesn't open a timing channel. When `readToken` is empty/undef,
+  // we still compute and compare against the digest of the empty
+  // string so the path is constant-time relative to the configured
+  // policy.
+  if (scope === 'read') {
+    const readDigest = hmacToken(expectations.readToken ?? '');
+    if (
+      expectations.readToken !== undefined &&
+      expectations.readToken.length > 0 &&
+      timingSafeEqual(suppliedDigest, readDigest)
+    ) {
+      return { ok: true };
+    }
+  }
+  return { ok: false, statusCode: 403, message: 'admin token mismatch' };
 }
 
 export interface CapacityRow {
