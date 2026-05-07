@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# v0.1.9 RC1 spectrum scenario bundle. Apply with:
+#
+#   kubectl apply -k examples/rc-spectrum/
+#
+# Resources land in the `kagent-rc-spectrum` namespace. The bundle
+# assumes the `kagent-operator` chart is already installed in
+# `kagent-system` (or wherever the operator runs), and that the
+# `kagent-llm-gateway-token` + Langfuse + OTLP-headers secrets are
+# mirrored into kagent-rc-spectrum (the new_localai overlay's
+# `rc-spectrum-secrets.yaml` does this in production).
+#
+# See README.md for the full runbook + per-scenario expected
+# evidence.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kagent-rc-spectrum
+
+# Shared labels stamp every CR so the workbench evidence collector
+# and reviewers can filter the bundle as a unit. Same shape as
+# rc-pilot — `tenant=rc-spectrum` for namespace-of-purpose audit.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/managed-by: kagent-rc-spectrum
+      app.kubernetes.io/created-by: rc-spectrum-runbook
+      kagent.knuteson.io/role: rc-spectrum
+      kagent.knuteson.io/tenant: rc-spectrum
+
+commonAnnotations:
+  kagent.knuteson.io/evidence-bundle: rc-spectrum-1
+  # Bump this string to force Argo to re-create every CR in this
+  # bundle on the next sync — same pattern as rc-pilot's `rc-run`.
+  kagent.knuteson.io/rc-run: rc-spectrum-1
+
+resources:
+  - 00-namespace.yaml
+  - 01-agents.yaml
+  - 10-research-deep.yaml
+  - 20-code-generator.yaml
+  - 30-long-running.yaml
+  - 40-model-compare-scout.yaml
+  - 41-model-compare-llama70.yaml
+  - 50-multi-step-fanout.yaml
+
+# Same Replace=true / Sync-hook pattern rc-pilot uses so each
+# Argo sync (i.e. each commit on main) re-runs the spectrum:
+# AgentTasks are run-once per the operator's idempotency guard,
+# so we delete + recreate them through the Argo Sync hook.
+patches:
+  - target:
+      kind: AgentTask
+    patch: |-
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1hook
+        value: Sync
+      - op: add
+        path: /metadata/annotations/argocd.argoproj.io~1hook-delete-policy
+        value: BeforeHookCreation

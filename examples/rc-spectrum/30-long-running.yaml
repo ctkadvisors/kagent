@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 30 — Long-running iterative refinement. The orchestrator
+# is told to run a multi-pass refinement workflow, dispatching one
+# child summarizer per pass via spawn_child_task. This is the first
+# scenario that exercises:
+#   - high maxIterations (24 — enough for 6+ tool-call rounds with
+#     reasoning between),
+#   - long timeout (1200s = 20min),
+#   - sustained parent re-reconcile loop as children land in waves,
+#   - operator's child-fanout AIMD interaction with the CF gateway
+#     when the same parent emits N sequential children.
+#
+# Expected terminal state:
+#   status.phase                          == 'Completed'
+#   status.children.length                >= 3 (target: 4 passes)
+#   status.successCount + failureCount    == status.children.length
+#   status.aggregatePhase                 'AllComplete'
+#   pilotEvidence.taskGraph               populated
+#   status.completedAt - status.startedAt >> typical (multi-minute)
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-spectrum-long-running
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: long-running
+spec:
+  targetAgent: rc-spectrum-long-orchestrator
+  payload:
+    smokeTest: true
+    expectedPasses: 4
+  originalUserMessage: |
+    Run a 4-pass iterative refinement on the question:
+
+      "What is the simplest production-shaped K3s topology for a
+       3-node homelab (1 control-plane + 2 workers) that supports
+       both x86 and ARM64 nodes, GitOps reconciliation, and a
+       single LoadBalancer ingress?"
+
+    For each pass, dispatch one rc-spectrum-summarizer-scout child
+    task via spawn_child_task with a tightening prompt:
+
+      Pass 1 — broad, identify the 3 biggest decisions.
+      Pass 2 — given pass-1 output, pick CNI + ingress.
+      Pass 3 — given pass-2 output, address GitOps story.
+      Pass 4 — given pass-3 output, produce the final 5-bullet plan.
+
+    Wait for each child to complete before dispatching the next.
+    After pass 4 completes, return a structured rollup with one
+    section per pass + a final consolidated plan.
+  expectedTools:
+    - spawn_child_task
+  runConfig:
+    timeoutSeconds: 1200
+    maxIterations: 24

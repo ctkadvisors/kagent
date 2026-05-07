@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 50 — Cross-model fanout. The orchestrator is told to
+# spawn 3 children spread across both summarizer agents (scout +
+# 70B). Exercises:
+#   - operator's parent re-reconcile when children land out of
+#     order across two models with different latency profiles,
+#   - capability resolution + child-mint path for a parent whose
+#     `allowedChildAgents` spans multiple physical models,
+#   - workbench's task-graph aggregation when sibling children
+#     have different `model` attributions in their audit stamps.
+#
+# Expected terminal state:
+#   status.phase                  == 'Completed'
+#   status.children.length        == 3
+#   status.aggregatePhase         'AllComplete'
+#   distinct child models in pilotEvidence.taskGraph children:
+#     at least one of `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`
+#     AND at least one of `workers-ai/@cf/meta/llama-3.3-70b-instruct`.
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-spectrum-fanout
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: fanout
+spec:
+  targetAgent: rc-spectrum-fanout-orchestrator
+  payload:
+    smokeTest: true
+    expectedChildren: 3
+    expectedModelDiversity: 2
+  originalUserMessage: |
+    Decompose the question "What does it take to run a production-
+    shaped K3s cluster on mixed x86 + ARM64 nodes?" into THREE
+    focused child subtasks, each handled by spawn_child_task:
+
+      Child A — networking story (CNI, multi-arch images, ingress).
+        Target: rc-spectrum-summarizer-scout.
+      Child B — storage + stateful workload story (CSI, PVC, HA).
+        Target: rc-spectrum-summarizer-70b.
+      Child C — GitOps + day-2 story (ArgoCD, drift, secrets).
+        Target: rc-spectrum-summarizer-scout.
+
+    After all three children complete, return a single rollup
+    paragraph synthesizing their answers + one explicit
+    recommendation.
+  expectedTools:
+    - spawn_child_task
+  runConfig:
+    timeoutSeconds: 600
+    maxIterations: 12

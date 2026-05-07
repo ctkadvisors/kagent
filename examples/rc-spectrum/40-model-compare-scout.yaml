@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 40 — Model comparison, scout side. Pair with 41-model-
+# compare-llama70.yaml. Both tasks carry the IDENTICAL
+# `originalUserMessage`; the only difference is `targetAgent` (and
+# therefore the physical model the agent-pod's runner.ts hands to
+# the gateway). Reviewers diff the two `status.result.content`
+# bodies + token usage to evaluate model-shape impact on the
+# substrate's "swap models with no Agent CR change" claim.
+#
+# This is the cheapest possible substrate-level model A/B — neither
+# agent has tools, so the only variable is the gateway's model
+# routing.
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-spectrum-compare-scout
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: model-compare-scout
+spec:
+  targetAgent: rc-spectrum-summarizer-scout
+  payload:
+    smokeTest: true
+    pairKey: rc-spectrum-compare
+  originalUserMessage: |
+    Explain how cgroup v2 affects K3s pod resource limits, and
+    what specifically a K3s operator should change when migrating
+    a 1.27-era cluster to a 1.30+ cluster on the cgroup-v2 default.
+    Two sentences max.
+  runConfig:
+    timeoutSeconds: 120
+    maxIterations: 4

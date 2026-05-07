@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 41 — Model comparison, 70B side. Pair with 40-model-
+# compare-scout.yaml. See header there for the rationale.
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-spectrum-compare-llama70
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: model-compare-llama70
+spec:
+  targetAgent: rc-spectrum-summarizer-70b
+  payload:
+    smokeTest: true
+    pairKey: rc-spectrum-compare
+  originalUserMessage: |
+    Explain how cgroup v2 affects K3s pod resource limits, and
+    what specifically a K3s operator should change when migrating
+    a 1.27-era cluster to a 1.30+ cluster on the cgroup-v2 default.
+    Two sentences max.
+  runConfig:
+    timeoutSeconds: 120
+    maxIterations: 4

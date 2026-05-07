@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Agent CRs for the v0.1.9 RC1 spectrum bundle.
+#
+# The bundle deliberately spans:
+#   - two CF AI Gateway models on the same `/compat` endpoint:
+#       * workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+#       * workers-ai/@cf/meta/llama-3.3-70b-instruct
+#     (both already documented as known-good against the homelab
+#     gateway in docs/MODEL-ROUTING.md and docs/V0.1-COMPARISON.md)
+#   - varied workload shapes: deep research (single-shot, long
+#     output), code generation (tool-using, artifact-producing),
+#     iterative orchestration (long-running, high maxIterations,
+#     multi-child fanout), head-to-head model comparison.
+#
+# Every Agent declares its model with the LiteLLM provider prefix
+# per CLAUDE.md (Cloudflare AI Gateway is the homelab default
+# endpoint). Reuse-friendly: tweak `spec.model` to flip the whole
+# agent's backend; tweak `llmParams.maxTokens` to widen the output
+# budget for long-form scenarios.
+
+# ---------------------------------------------------------------------
+# rc-spectrum-researcher — single-shot deep researcher on Llama 3.3
+# 70B. Higher maxTokens budget than rc-pilot's summarizers because
+# the researcher is expected to produce structured multi-paragraph
+# output, not one-line summaries. No tools wired — the researcher's
+# job is synthesis from its own latent knowledge, not tool-calling
+# (`spec.tools` empty / unset means the agent-pod registers zero
+# built-in tools per packages/agent-pod/src/builtin-tools.ts).
+# ---------------------------------------------------------------------
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: rc-spectrum-researcher
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: researcher
+spec:
+  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct'
+  version: 0.1.0
+  systemPrompt: |
+    You are a precise technical researcher. Produce structured,
+    well-sourced answers. Use markdown headings + bullet points.
+    Do NOT invent citations; if you are uncertain about a claim,
+    qualify it with "as of training cutoff" or similar.
+  sandboxProfile: default
+  llmParams:
+    temperature: 0.2
+    maxTokens: 2048
+---
+# ---------------------------------------------------------------------
+# rc-spectrum-code-writer — code generator that emits its output
+# via the substrate write_artifact built-in tool. Llama 4 Scout —
+# the scout model is documented as the more reliable tool-caller
+# at the homelab's CF AI Gateway tier (RESILIENT-CONTRACTS.md §1.3,
+# HARNESS-LESSONS.md §"tool-call shape regressions"). Output budget
+# bumped to 2048 to fit a non-trivial Helm template + values file.
+# ---------------------------------------------------------------------
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: rc-spectrum-code-writer
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: code-generator
+spec:
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+  version: 0.1.0
+  systemPrompt: |
+    You are a senior platform engineer. When the user asks for
+    code, produce a complete, valid file (no placeholders, no
+    "..."), persist it as an artifact via the write_artifact tool
+    with the requested name + mediaType, and then return a
+    one-line confirmation citing the artifact name. Do not echo
+    the file contents back inline after persisting.
+  tools:
+    - write_artifact
+  sandboxProfile: default
+  llmParams:
+    temperature: 0.0
+    maxTokens: 2048
+---
+# ---------------------------------------------------------------------
+# rc-spectrum-long-orchestrator — long-running orchestrator that
+# spawns iterative child tasks for a multi-pass refinement. Used by
+# 30-long-running.yaml. Child set narrowed to the scout summarizer
+# so the long-runner doesn't fan out across model boundaries.
+# ---------------------------------------------------------------------
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: rc-spectrum-long-orchestrator
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: long-running
+spec:
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+  version: 0.1.0
+  systemPrompt: |
+    You orchestrate a multi-pass refinement workflow. For each pass,
+    use the spawn_child_task tool to dispatch a focused subtask to
+    rc-spectrum-summarizer-scout, then incorporate the child's
+    response into the next pass's prompt. Continue until you have
+    completed the requested number of passes or until you are
+    confident the result is final. Then return a structured rollup
+    enumerating each pass + the final synthesis.
+  tools:
+    - spawn_child_task
+  allowedChildAgents:
+    - rc-spectrum-summarizer-scout
+  maxConcurrentChildren: 1
+  sandboxProfile: default
+  llmParams:
+    temperature: 0.2
+    maxTokens: 1024
+---
+# ---------------------------------------------------------------------
+# rc-spectrum-summarizer-scout — generic short-form summarizer on
+# Llama 4 Scout. Used as a fanout child + in the head-to-head
+# model comparison.
+# ---------------------------------------------------------------------
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: rc-spectrum-summarizer-scout
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: summarizer-scout
+spec:
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+  version: 0.1.0
+  systemPrompt: 'You are a precise technical assistant. Answer in 2-3 sentences.'
+  sandboxProfile: default
+  llmParams:
+    temperature: 0.0
+    maxTokens: 384
+---
+# ---------------------------------------------------------------------
+# rc-spectrum-summarizer-70b — same shape as -scout, different
+# physical model. Pair-target for 40 vs 41 head-to-head comparison.
+# ---------------------------------------------------------------------
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: rc-spectrum-summarizer-70b
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: summarizer-70b
+spec:
+  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct'
+  version: 0.1.0
+  systemPrompt: 'You are a precise technical assistant. Answer in 2-3 sentences.'
+  sandboxProfile: default
+  llmParams:
+    temperature: 0.0
+    maxTokens: 384
+---
+# ---------------------------------------------------------------------
+# rc-spectrum-fanout-orchestrator — wider-fanout orchestrator for the
+# 50-multi-step-fanout scenario. Permits both summarizers as
+# children so the parent re-reconcile aggregates child status across
+# physical-model boundaries (substrate is supposed to be agnostic
+# to which model each child runs on).
+# ---------------------------------------------------------------------
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: Agent
+metadata:
+  name: rc-spectrum-fanout-orchestrator
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: fanout
+spec:
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+  version: 0.1.0
+  systemPrompt: |
+    You orchestrate a research fanout. Decompose the user's question
+    into 3 focused child subtasks dispatched via the spawn_child_task
+    tool. Spread children across both rc-spectrum-summarizer-scout
+    and rc-spectrum-summarizer-70b so the answer reflects two model
+    shapes. Once all children complete, return a single rollup
+    paragraph synthesizing their results.
+  tools:
+    - spawn_child_task
+  allowedChildAgents:
+    - rc-spectrum-summarizer-scout
+    - rc-spectrum-summarizer-70b
+  maxConcurrentChildren: 3
+  sandboxProfile: default
+  llmParams:
+    temperature: 0.2
+    maxTokens: 1024

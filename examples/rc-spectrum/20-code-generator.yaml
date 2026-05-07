@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 20 — Code generator. The agent is told to produce a
+# concrete Helm template file and persist it as an artifact via
+# the write_artifact built-in tool. Exercises the same artifact-
+# write path as rc-pilot's 50-artifact-producer, but with a code
+# payload large enough to stress the 2048-token output budget +
+# the agent-pod's artifact-PVC writer.
+#
+# Expected terminal state:
+#   status.phase                          == 'Completed'
+#   status.artifacts.length               >= 1
+#   status.artifacts[0].uri               starts with 'pvc://kagent-artifacts/'
+#   status.artifacts[0].mediaType         'text/plain' (Helm yaml; no
+#                                          standard mediaType for go-template)
+#   pilotEvidence.artifacts.count         matches status.artifacts.length
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-spectrum-code-generator
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: code-generator
+spec:
+  targetAgent: rc-spectrum-code-writer
+  payload:
+    smokeTest: true
+    artifactName: deployment.yaml
+    artifactMediaType: text/plain
+  originalUserMessage: |
+    Produce a complete Helm chart template for a single-replica
+    Deployment + ClusterIP Service exposing port 8080, with:
+
+      - readiness + liveness probes on /healthz
+      - resources.requests/limits sized for a small Bun app
+        (128Mi mem / 100m CPU request, 256Mi / 500m limit)
+      - a securityContext that runs as non-root, drops ALL caps,
+        readOnlyRootFilesystem: true
+      - a NetworkPolicy allowing ingress only from the same
+        namespace
+
+    Persist the templates as a single multi-document YAML artifact
+    named `deployment.yaml` (mediaType `text/plain`) via the
+    write_artifact tool. Then return a one-line confirmation.
+  expectedTools:
+    - write_artifact
+  runConfig:
+    timeoutSeconds: 300
+    maxIterations: 6

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Scenario 10 — Deep researcher on Llama 3.3 70B. Single-shot
+# (no tool calls), longer output budget. Exercises the
+# nemotron-3-nano:4b → workers-ai/llama-3.3-70b-instruct routing
+# path that hasn't been formally smoke-tested in evidence/rc1/.
+#
+# Expected terminal state:
+#   status.phase                          == 'Completed'
+#   status.structuralVerdict.suspicious   == [] (empty)
+#   status.result.content                 multi-paragraph markdown
+#   status.usage.completionTokens         > 500 (this is a long-output test)
+apiVersion: kagent.knuteson.io/v1alpha1
+kind: AgentTask
+metadata:
+  name: rc-spectrum-research-deep
+  labels:
+    kagent.knuteson.io/role: rc-spectrum
+    kagent.knuteson.io/scenario: researcher
+spec:
+  targetAgent: rc-spectrum-researcher
+  payload:
+    smokeTest: true
+  originalUserMessage: |
+    Compare K3s, k0s, and MicroK8s for a homelab operator running
+    multi-node x86 + ARM64 mixed hardware. For each, cover:
+
+    1. Networking model (default CNI, alternatives, mesh story).
+    2. Storage model (default CSI, persistent-volume options).
+    3. HA + control-plane footprint.
+    4. Operator ergonomics (install/upgrade UX, upstream cadence).
+
+    End with a short recommendation matrix.
+  runConfig:
+    timeoutSeconds: 240
+    maxIterations: 4

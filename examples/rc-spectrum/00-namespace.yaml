@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# `kagent-rc-spectrum` — isolated namespace for the v0.1.9 RC1
+# spectrum bundle. Mirrors `kagent-rc-pilot`'s shape: namespace +
+# agent-pod ServiceAccount + namespace-local Role/RoleBinding
+# scoped to the kagent.knuteson.io group only. The operator chart
+# only creates these in its release namespace, so spawning agent
+# pods here requires an explicit mirror.
+#
+# Why a second namespace alongside rc-pilot: the spectrum bundle
+# exercises the substrate against a wider task spectrum (researcher,
+# code-generator, long-running multi-step, head-to-head model
+# comparison) than the GA-evidence-driven rc-pilot set. Keeping them
+# separate means the workbench evidence pack for each is a clean
+# slice — `--namespace kagent-rc-spectrum` filters out rc-pilot rows.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kagent-rc-spectrum
+  labels:
+    kagent.knuteson.io/tenant: rc-spectrum
+    kagent.knuteson.io/role: rc-spectrum
+    app.kubernetes.io/managed-by: kagent-rc-spectrum
+    app.kubernetes.io/created-by: rc-spectrum-runbook
+  annotations:
+    kagent.knuteson.io/evidence-bundle: rc-spectrum-1
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kagent-agent-pod
+  namespace: kagent-rc-spectrum
+  labels:
+    app.kubernetes.io/name: kagent-operator
+    app.kubernetes.io/component: agent-pod
+    kagent.knuteson.io/role: rc-spectrum
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kagent-agent-pod
+  namespace: kagent-rc-spectrum
+  labels:
+    app.kubernetes.io/name: kagent-operator
+    app.kubernetes.io/component: agent-pod
+    kagent.knuteson.io/role: rc-spectrum
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks/status']
+    verbs: ['get', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['get', 'list', 'create']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agents']
+    verbs: ['get', 'list']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttemplates']
+    verbs: ['get', 'list']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kagent-agent-pod
+  namespace: kagent-rc-spectrum
+  labels:
+    app.kubernetes.io/name: kagent-operator
+    app.kubernetes.io/component: agent-pod
+    kagent.knuteson.io/role: rc-spectrum
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kagent-agent-pod
+subjects:
+  - kind: ServiceAccount
+    name: kagent-agent-pod
+    namespace: kagent-rc-spectrum
