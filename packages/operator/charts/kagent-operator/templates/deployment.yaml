@@ -417,6 +417,19 @@ spec:
             # opt-out and surfaces a runtime WARN on the agent-pod.
             - name: KAGENT_CAPABILITY_ALLOW_MISSING
               value: {{ .Values.agentPod.capability.allowMissing | ternary "true" "false" | quote }}
+            # v0.1.9 context-awareness — substrate-side circuit breaker
+            # + detector trigger thresholds. Projected onto the operator
+            # deployment; `buildJobSpecOptionsFromEnv` forwards both
+            # verbatim onto every spawned agent-pod's env. The in-pod
+            # agent-loop reads `KAGENT_CONTEXT_SAFETY_THRESHOLD` (Piece
+            # 3, default 0.95) and `KAGENT_CONTEXT_PRESSURE_THRESHOLD`
+            # (Piece 4, default 0.7) — see docs/CONTEXT-AWARENESS.md §4.1.
+            # Both are no-ops when the resolved class entry doesn't
+            # declare `contextWindowTokens`.
+            - name: KAGENT_CONTEXT_SAFETY_THRESHOLD
+              value: {{ .Values.agentPod.contextSafetyThreshold | quote }}
+            - name: KAGENT_CONTEXT_PRESSURE_THRESHOLD
+              value: {{ .Values.agentPod.contextPressureThreshold | quote }}
             # v0.1.6 — Langfuse-managed prompt fetcher. When enabled,
             # spawned agent-pods inherit KAGENT_LANGFUSE_HOST + creds
             # (forwarded by job-spec.ts via this same set of env vars)

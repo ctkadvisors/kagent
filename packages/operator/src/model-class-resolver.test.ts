@@ -14,9 +14,9 @@ import {
 describe('resolveAgentModel', () => {
   const emptyMap: ModelClassMap = {};
   const map: ModelClassMap = {
-    'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-    'text-generator-default': 'ollama/nemotron-3-nano:4b',
-    'reasoner-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+    'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+    'text-generator-default': { model: 'ollama/nemotron-3-nano:4b' },
+    'reasoner-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
   };
 
   /* --------------------- escape-hatch (model wins) --------------------- */
@@ -115,12 +115,12 @@ describe('resolveAgentModel', () => {
     }
   });
 
-  it('returns unresolvable when modelClass key maps to an empty string', () => {
+  it('returns unresolvable when modelClass key maps to an entry with empty model', () => {
     // Defense-in-depth: a misconfigured chart could ship a class with
     // an empty model. The resolver refuses; the operator must log loud.
     const result = resolveAgentModel({
       agentSpec: { modelClass: 'broken-class' },
-      classMap: { 'broken-class': '' },
+      classMap: { 'broken-class': { model: '' } },
     });
     expect(result.kind).toBe('unresolvable');
     if (result.kind === 'unresolvable') {
@@ -128,10 +128,10 @@ describe('resolveAgentModel', () => {
     }
   });
 
-  it('returns unresolvable when modelClass key maps to a whitespace-only string', () => {
+  it('returns unresolvable when modelClass key maps to an entry with whitespace-only model', () => {
     const result = resolveAgentModel({
       agentSpec: { modelClass: 'broken-class' },
-      classMap: { 'broken-class': '   ' },
+      classMap: { 'broken-class': { model: '   ' } },
     });
     expect(result.kind).toBe('unresolvable');
     if (result.kind === 'unresolvable') {
@@ -169,13 +169,78 @@ describe('resolveAgentModel', () => {
   /* --------------------------- robustness ------------------------------ */
 
   it('does not mutate the supplied classMap', () => {
-    const localMap: ModelClassMap = { 'tool-caller-default': 'openai/gpt-4o' };
+    const localMap: ModelClassMap = { 'tool-caller-default': { model: 'openai/gpt-4o' } };
     const snapshot = { ...localMap };
     resolveAgentModel({
       agentSpec: { modelClass: 'tool-caller-default' },
       classMap: localMap,
     });
     expect(localMap).toEqual(snapshot);
+  });
+
+  /* =====================================================================
+   * v0.1.9 context-awareness Piece 1 — `contextWindowTokens` surfacing.
+   *
+   * The resolver's `'resolved'` arm now carries an optional
+   * `contextWindowTokens` field, populated only for `source: 'class'`
+   * results when the matched ModelClassEntry declared the field.
+   * Per docs/CONTEXT-AWARENESS.md §4.2 + §9 Q5: the chart map is the
+   * single source of truth for context windows; literal `spec.model`
+   * (escape-hatch) is intentionally excluded.
+   * ===================================================================== */
+
+  it('surfaces contextWindowTokens when the resolved class entry declares it', () => {
+    const result = resolveAgentModel({
+      agentSpec: { modelClass: 'tool-caller-default' },
+      classMap: {
+        'tool-caller-default': {
+          model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          contextWindowTokens: 131072,
+        },
+      },
+    });
+    expect(result.kind).toBe('resolved');
+    if (result.kind === 'resolved') {
+      expect(result.source).toBe('class');
+      expect(result.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
+      expect(result.contextWindowTokens).toBe(131072);
+    }
+  });
+
+  it('omits contextWindowTokens when the resolved class entry does not declare it', () => {
+    const result = resolveAgentModel({
+      agentSpec: { modelClass: 'tool-caller-default' },
+      classMap: {
+        'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+      },
+    });
+    expect(result.kind).toBe('resolved');
+    if (result.kind === 'resolved') {
+      expect(result.contextWindowTokens).toBeUndefined();
+    }
+  });
+
+  it('does not surface contextWindowTokens on the override path (literal spec.model)', () => {
+    // Per CONTEXT-AWARENESS §9 Q5 — chart map is the single source of
+    // truth; literal `spec.model` carries no window even if the same
+    // class key exists in the map.
+    const result = resolveAgentModel({
+      agentSpec: {
+        model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        modelClass: 'tool-caller-default',
+      },
+      classMap: {
+        'tool-caller-default': {
+          model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          contextWindowTokens: 131072,
+        },
+      },
+    });
+    expect(result.kind).toBe('resolved');
+    if (result.kind === 'resolved') {
+      expect(result.source).toBe('override');
+      expect(result.contextWindowTokens).toBeUndefined();
+    }
   });
 });
 

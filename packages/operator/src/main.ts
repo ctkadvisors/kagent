@@ -71,7 +71,7 @@ import {
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import type { BuildJobSpecOptions, EnvVarSpec } from './job-spec.js';
-import type { ModelClassMap } from './model-class-resolver.js';
+import type { ModelClassEntry, ModelClassMap } from './model-class-resolver.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
 import { NatsDispatcher } from './nats-dispatcher.js';
@@ -177,16 +177,28 @@ function pushSensitiveEnv(
  * once at operator boot — the parsed map is then threaded through
  * every reconcile via `BuildJobSpecOptions.modelClassMap`.
  *
- * Contract per docs/MODEL-ROUTING.md §4 + Phase-2 brief:
+ * Contract per docs/MODEL-ROUTING.md §4 + docs/CONTEXT-AWARENESS.md §4.2:
  *   - Empty / unset → `{}` (chart default; legacy Agents with literal
  *     `spec.model` resolve via the override path).
  *   - Non-JSON OR top-level-non-object → throw. The operator's main()
  *     catches at boot and exits non-zero; the deployment CrashLoops so
  *     the misconfiguration is impossible to miss.
- *   - JSON object with non-string entries → drop those entries with a
- *     warn-log; keep the well-formed string-valued entries (partial-
- *     working chart preserves the operational surface for the entries
- *     that are correct; bad entries surface in the audit trail).
+ *
+ * Per-entry shape (back-compat + v0.1.9 extension):
+ *   - `string` → normalized to `{ model: <string> }`. Pre-v0.1.9 chart
+ *     wire format; preserved so existing overlays don't have to be
+ *     migrated in lockstep with the operator image bump.
+ *   - `{ model: <string>, contextWindowTokens?: <positive integer> }` →
+ *     v0.1.9 shape. `model` MUST be a non-empty string; entries that
+ *     fail this are dropped with a warn-log.
+ *     `contextWindowTokens` is optional; when present it MUST be a
+ *     positive integer (Number.isInteger AND > 0), otherwise the entry
+ *     is kept but the field is dropped with a warn-log (graceful
+ *     degradation — chart bug shouldn't take a class out of service).
+ *   - Anything else (number, null, array, object missing `model`) →
+ *     dropped entry with a warn-log (partial-working chart preserves
+ *     the operational surface for the entries that are correct; bad
+ *     entries surface in the audit trail).
  *
  * Exported for the unit-test suite (`main.test.ts`); production code
  * paths consult it through `buildJobSpecOptionsFromEnv()`.
@@ -209,15 +221,45 @@ export function parseModelClassesEnv(raw: string | undefined): ModelClassMap {
     );
   }
 
-  const out: Record<string, string> = {};
+  const out: Record<string, ModelClassEntry> = {};
   for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    // Back-compat: bare-string entry → normalize to { model: <string> }.
     if (typeof v === 'string') {
-      out[k] = v;
-    } else {
-      console.warn(
-        `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has non-string value (${v === null ? 'null' : typeof v}); dropping`,
-      );
+      out[k] = { model: v };
+      continue;
     }
+    // v0.1.9: object entry with at least a `model` string.
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const obj = v as Record<string, unknown>;
+      const model = obj.model;
+      if (typeof model !== 'string' || model.length === 0) {
+        console.warn(
+          `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has missing/non-string "model"; dropping`,
+        );
+        continue;
+      }
+      const rawWindow = obj.contextWindowTokens;
+      let contextWindowTokens: number | undefined;
+      if (rawWindow !== undefined) {
+        if (
+          typeof rawWindow === 'number' &&
+          Number.isFinite(rawWindow) &&
+          Number.isInteger(rawWindow) &&
+          rawWindow > 0
+        ) {
+          contextWindowTokens = rawWindow;
+        } else {
+          console.warn(
+            `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has invalid contextWindowTokens (${rawWindow === null ? 'null' : typeof rawWindow === 'number' ? String(rawWindow) : typeof rawWindow}); expected positive integer — keeping entry without context window`,
+          );
+        }
+      }
+      out[k] = contextWindowTokens !== undefined ? { model, contextWindowTokens } : { model };
+      continue;
+    }
+    console.warn(
+      `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has non-string non-object value (${v === null ? 'null' : typeof v}); dropping`,
+    );
   }
   return out;
 }
@@ -438,6 +480,36 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
     extraEnv.push({
       name: 'KAGENT_CAPABILITY_ALLOW_MISSING',
       value: env.KAGENT_CAPABILITY_ALLOW_MISSING,
+    });
+  }
+  // v0.1.9 context-awareness — threshold env vars (Pieces 3 + 4).
+  // Helm values `agentPod.contextSafetyThreshold` (default 0.95) and
+  // `agentPod.contextPressureThreshold` (default 0.7) are projected onto
+  // the operator deployment and forwarded verbatim onto every spawned
+  // agent-pod's env. The in-pod agent-loop reads these names exactly
+  // (`KAGENT_CONTEXT_SAFETY_THRESHOLD` for the substrate-side refusal at
+  // 95% — Piece 3; `KAGENT_CONTEXT_PRESSURE_THRESHOLD` for the
+  // detector trigger at 70% — Piece 4). Both fire only when
+  // `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` is also set on the spawned pod
+  // (resolved per-class above), so a chart that ships these without
+  // any contextWindowTokens-bearing classes is harmless. Per
+  // docs/CONTEXT-AWARENESS.md §4.1.
+  if (
+    typeof env.KAGENT_CONTEXT_SAFETY_THRESHOLD === 'string' &&
+    env.KAGENT_CONTEXT_SAFETY_THRESHOLD.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_CONTEXT_SAFETY_THRESHOLD',
+      value: env.KAGENT_CONTEXT_SAFETY_THRESHOLD,
+    });
+  }
+  if (
+    typeof env.KAGENT_CONTEXT_PRESSURE_THRESHOLD === 'string' &&
+    env.KAGENT_CONTEXT_PRESSURE_THRESHOLD.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_CONTEXT_PRESSURE_THRESHOLD',
+      value: env.KAGENT_CONTEXT_PRESSURE_THRESHOLD,
     });
   }
   // WS-M — substrate kill switch + URL plumbing for the in-pod

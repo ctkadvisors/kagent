@@ -812,7 +812,7 @@ describe('buildJobSpec', () => {
     };
     const job = buildJobSpec(classedAgent, sampleTask, {
       modelClassMap: {
-        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
       },
     });
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
@@ -833,7 +833,7 @@ describe('buildJobSpec', () => {
     };
     const job = buildJobSpec(overrideAgent, sampleTask, {
       modelClassMap: {
-        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
       },
     });
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
@@ -852,7 +852,7 @@ describe('buildJobSpec', () => {
     expect(() =>
       buildJobSpec(classedAgent, sampleTask, {
         modelClassMap: {
-          'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
         },
       }),
     ).toThrow(/tool-caller-strict/);
@@ -865,6 +865,98 @@ describe('buildJobSpec', () => {
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
     const byName = new Map(env.map((e) => [e.name, e.value]));
     expect(byName.get('KAGENT_AGENT_MODEL')).toBe(sampleAgent.spec.model);
+  });
+
+  /* =====================================================================
+   * v0.1.9 context-awareness Piece 1 — `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`
+   * env emission on the spawned pod.
+   *
+   * When the resolved class entry declares `contextWindowTokens`, the
+   * job-spec emits the value as an integer-string env var on the
+   * spawned pod. When the class omits the field — or the Agent took
+   * the literal `spec.model` escape hatch — the env var is omitted
+   * entirely so Pieces 2/3/4 in @kagent/agent-pod + @kagent/agent-loop
+   * degrade to no-op (preserves v0.1.8 behavior). Per
+   * docs/CONTEXT-AWARENESS.md §4.1 + §7.
+   * ===================================================================== */
+
+  it('v0.1.9 context-awareness: emits KAGENT_AGENT_MODEL_CONTEXT_WINDOW when class declares contextWindowTokens', () => {
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const job = buildJobSpec(classedAgent, sampleTask, {
+      modelClassMap: {
+        'tool-caller-default': {
+          model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          contextWindowTokens: 131072,
+        },
+      },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_AGENT_MODEL_CONTEXT_WINDOW')).toBe('131072');
+  });
+
+  it('v0.1.9 context-awareness: omits KAGENT_AGENT_MODEL_CONTEXT_WINDOW when class entry has no window', () => {
+    // Back-compat path — entry has only `model`. The env var MUST be
+    // omitted entirely so the in-pod pieces 2/3/4 see `undefined` and
+    // run as no-ops, exactly mirroring v0.1.8 behavior.
+    const classedAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        systemPrompt: sampleAgent.spec.systemPrompt,
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const job = buildJobSpec(classedAgent, sampleTask, {
+      modelClassMap: {
+        'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+      },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.has('KAGENT_AGENT_MODEL_CONTEXT_WINDOW')).toBe(false);
+  });
+
+  it('v0.1.9 context-awareness: omits KAGENT_AGENT_MODEL_CONTEXT_WINDOW for the literal spec.model escape-hatch', () => {
+    // Per CONTEXT-AWARENESS §9 Q5 — the chart map is the single source
+    // of truth for context windows. Agents using the literal `spec.model`
+    // escape-hatch never get the env var (even if the class key with a
+    // window happens to exist in the map; `source: 'override'` skips it).
+    const overrideAgent: Agent = {
+      ...sampleAgent,
+      spec: {
+        ...sampleAgent.spec,
+        model: 'anthropic/claude-3-7-sonnet-20250219',
+        modelClass: 'tool-caller-default',
+      },
+    };
+    const job = buildJobSpec(overrideAgent, sampleTask, {
+      modelClassMap: {
+        'tool-caller-default': {
+          model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+          contextWindowTokens: 131072,
+        },
+      },
+    });
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.has('KAGENT_AGENT_MODEL_CONTEXT_WINDOW')).toBe(false);
+  });
+
+  it('v0.1.9 context-awareness: legacy Agent.spec.model with no modelClassMap omits KAGENT_AGENT_MODEL_CONTEXT_WINDOW', () => {
+    // Pre-context-awareness manifest fleet — every Agent has spec.model
+    // set; no class map present. The new env var must NOT appear so
+    // already-running tasks keep the v0.1.8 (no safety-net, no detector)
+    // semantics until the chart values are migrated.
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.has('KAGENT_AGENT_MODEL_CONTEXT_WINDOW')).toBe(false);
   });
 });
 
@@ -948,7 +1040,7 @@ describe('buildAgentTaskConfigMap', () => {
       },
     };
     const cm = buildAgentTaskConfigMap(classedAgent, sampleTask, {
-      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
     });
     expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
       model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
@@ -965,7 +1057,7 @@ describe('buildAgentTaskConfigMap', () => {
       },
     };
     const cm = buildAgentTaskConfigMap(overrideAgent, sampleTask, {
-      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
     });
     expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
       model: 'anthropic/claude-3-7-sonnet-20250219',
@@ -981,7 +1073,7 @@ describe('buildAgentTaskConfigMap', () => {
       },
     };
     const cm = buildAgentTaskConfigMap(classedAgent, sampleTask, {
-      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
     });
     expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
       modelClass: 'tool-caller-default',
@@ -1008,7 +1100,7 @@ describe('buildAgentTaskConfigMap', () => {
     };
     expect(() =>
       buildAgentTaskConfigMap(classedAgent, sampleTask, {
-        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
       }),
     ).toThrow(/tool-caller-strict/);
   });
@@ -1026,7 +1118,7 @@ describe('buildJobSpec — env-JSON fallback path (useConfigMap: false) modelCla
     const job = buildJobSpec(classedAgent, sampleTask, {
       useConfigMap: false,
       modelClassMap: {
-        'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
       },
     });
     const env = job.spec?.template?.spec?.containers?.[0]?.env ?? [];

@@ -222,6 +222,43 @@ agentPod:
   # 1000s of pods before the operator notices.
   maxDepth: 4
 
+  # v0.1.9 context-awareness — substrate-side circuit breaker. When the
+  # cumulative input+output tokens for a single AgentTask reach this
+  # fraction of the resolved model's context window (declared per class
+  # in `agent.modelClasses[<class>].contextWindowTokens` below), the
+  # in-pod agent-loop refuses the next LLM call with a substrate-side
+  # error instead of letting the upstream provider's
+  # `400 context_length_exceeded` land (which is non-retryable terminal
+  # per docs/GATEWAY-CONTRACT.md §10).
+  #
+  # Projected onto the operator deployment as
+  # `KAGENT_CONTEXT_SAFETY_THRESHOLD` and forwarded verbatim onto every
+  # spawned agent-pod's env. The safety-net is a NO-OP for any task
+  # whose resolved class entry doesn't declare `contextWindowTokens`
+  # (preserves v0.1.8 behavior) — see docs/CONTEXT-AWARENESS.md §7.
+  #
+  # Float in (0, 1]. Default 0.95 (5% safety margin for the next
+  # call's input budget — we don't pre-flight-estimate per
+  # docs/CONTEXT-AWARENESS.md §8).
+  contextSafetyThreshold: 0.95
+
+  # v0.1.9 context-awareness — detector trigger point. When utilization
+  # passes this fraction AND the agent has not called `spawn_child_task`
+  # in the last N=3 iterations, the in-pod detector adds a
+  # `context_pressure_ignored` flag to `status.structuralVerdict.suspicious[]`.
+  # Observation only — the substrate never auto-spawns.
+  #
+  # Projected onto the operator deployment as
+  # `KAGENT_CONTEXT_PRESSURE_THRESHOLD` and forwarded verbatim onto every
+  # spawned agent-pod's env. Like the safety threshold, this is a NO-OP
+  # for tasks whose resolved class entry doesn't declare
+  # `contextWindowTokens`.
+  #
+  # Float in (0, 1]. Default 0.7 — early enough to give the prompt
+  # author a few iterations to react, late enough to avoid noise on
+  # short tasks.
+  contextPressureThreshold: 0.7
+
   # Audit C2.1 BLOCKER #1 (docs/AUDIT-2026-05-06.md) — capability JWT
   # mount is required-by-default. The chart projects this value as
   # KAGENT_CAPABILITY_ALLOW_MISSING onto the operator deployment; the
@@ -359,20 +396,44 @@ agentPod:
 #   - tier  = what the cluster operator paid for
 #             (default, cheap, fast, strict)
 #
+# v0.1.9 context-awareness — each entry is now an object
+# `{ model, contextWindowTokens? }`. The `model` field is the physical
+# model id (same string the LLM gateway resolves via
+# `ModelEndpoint.spec.model`); `contextWindowTokens` is the model's
+# documented context window in tokens. When set, the operator projects
+# it onto the spawned agent-pod as `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`,
+# enabling the in-pod safety-net (refusal at `contextSafetyThreshold`,
+# default 95%) and the detector flag (`context_pressure_ignored` at
+# `contextPressureThreshold`, default 70%). When omitted, the
+# context-awareness primitives degrade to no-op for tasks using that
+# class — see docs/CONTEXT-AWARENESS.md §4.2.
+#
+# Pre-v0.1.9 chart wire format (entry as a bare string) is still
+# accepted by `parseModelClassesEnv` (normalized to `{ model: <string> }`
+# at boot), so existing overlays continue to work without an in-place
+# bump. New overlays SHOULD use the object form so context-awareness is
+# available end-to-end.
+#
 # Example overlay value (homelab — workers-ai for tool-callers, local
 # Ollama for text generation):
 #
 #   agent:
 #     modelClasses:
-#       tool-caller-default: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
-#       text-generator-default: 'ollama/nemotron-3-nano:4b'
-#       reasoner-default: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+#       tool-caller-default:
+#         model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+#         contextWindowTokens: 131072
+#       text-generator-default:
+#         model: 'ollama/nemotron-3-nano:4b'
+#         contextWindowTokens: 8192
+#       reasoner-default:
+#         model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+#         contextWindowTokens: 131072
 agent:
-  # Map of `Agent.spec.modelClass` → physical model id (the same string
-  # the LLM gateway resolves via `ModelEndpoint.spec.model`). When an
-  # Agent CR uses `spec.modelClass`, the operator looks up the physical
-  # model here at AgentTask materialization and populates the agent-pod's
-  # KAGENT_AGENT_MODEL env. See docs/MODEL-ROUTING.md.
+  # Map of `Agent.spec.modelClass` → entry. Each entry is an object
+  # `{ model: <string>, contextWindowTokens?: <positive integer> }`.
+  # The bare-string form (entry value is a model id) is accepted for
+  # back-compat and normalized to `{ model: <string> }` at operator boot.
+  # See docs/MODEL-ROUTING.md and docs/CONTEXT-AWARENESS.md §4.2.
   modelClasses: {}
 
 # Wave 1 — CAS

@@ -40,6 +40,9 @@ const TOUCHED_VARS = [
   // Audit BLOCKER #1 (C2.1) — capability mount required-by-default
   // opt-out flag forwarded from operator chart into spawned agent-pods.
   'KAGENT_CAPABILITY_ALLOW_MISSING',
+  // v0.1.9 context-awareness — threshold env vars (Pieces 3 + 4).
+  'KAGENT_CONTEXT_SAFETY_THRESHOLD',
+  'KAGENT_CONTEXT_PRESSURE_THRESHOLD',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -178,6 +181,64 @@ describe('buildJobSpecOptionsFromEnv — capability allow-missing forwarding (au
     const opts = buildJobSpecOptionsFromEnv();
     const env = opts.extraEnv ?? [];
     expect(findEnv(env, 'KAGENT_CAPABILITY_ALLOW_MISSING')).toBe('false');
+  });
+});
+
+/* =====================================================================
+ * v0.1.9 context-awareness Piece 1 — threshold env var forwarding.
+ *
+ * The chart projects `agentPod.contextSafetyThreshold` (default 0.95)
+ * and `agentPod.contextPressureThreshold` (default 0.7) onto the
+ * operator deployment as KAGENT_CONTEXT_SAFETY_THRESHOLD and
+ * KAGENT_CONTEXT_PRESSURE_THRESHOLD. The operator forwards both
+ * verbatim onto every spawned agent-pod's env so the in-pod agent-loop
+ * (Pieces 3 + 4 in @kagent/agent-loop) reads the same source of truth.
+ * Per docs/CONTEXT-AWARENESS.md §4.1.
+ * ===================================================================== */
+describe('buildJobSpecOptionsFromEnv — context-awareness threshold forwarding (v0.1.9)', () => {
+  it('forwards KAGENT_CONTEXT_SAFETY_THRESHOLD into spawned agent-pods when set on the operator', () => {
+    process.env.KAGENT_CONTEXT_SAFETY_THRESHOLD = '0.95';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CONTEXT_SAFETY_THRESHOLD')).toBe('0.95');
+  });
+
+  it('forwards KAGENT_CONTEXT_PRESSURE_THRESHOLD into spawned agent-pods when set on the operator', () => {
+    process.env.KAGENT_CONTEXT_PRESSURE_THRESHOLD = '0.7';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CONTEXT_PRESSURE_THRESHOLD')).toBe('0.7');
+  });
+
+  it('forwards both threshold env vars together when both are set (chart default posture)', () => {
+    process.env.KAGENT_CONTEXT_SAFETY_THRESHOLD = '0.95';
+    process.env.KAGENT_CONTEXT_PRESSURE_THRESHOLD = '0.7';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CONTEXT_SAFETY_THRESHOLD')).toBe('0.95');
+    expect(findEnv(env, 'KAGENT_CONTEXT_PRESSURE_THRESHOLD')).toBe('0.7');
+  });
+
+  it('omits both threshold env vars when neither is set on the operator', () => {
+    // No env vars set in this test (afterEach clears them).
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CONTEXT_SAFETY_THRESHOLD')).toBeUndefined();
+    expect(findEnv(env, 'KAGENT_CONTEXT_PRESSURE_THRESHOLD')).toBeUndefined();
+  });
+
+  it('forwards a non-default threshold value verbatim (operator does not validate)', () => {
+    // The agent-pod's env parser is the validation gate; the operator
+    // is a passthrough. Tightening the threshold to 0.5 should land
+    // on the spawned pod's env unchanged.
+    process.env.KAGENT_CONTEXT_SAFETY_THRESHOLD = '0.5';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_CONTEXT_SAFETY_THRESHOLD')).toBe('0.5');
   });
 });
 
@@ -401,14 +462,17 @@ describe('parseModelClassesEnv — Phase-2 modelClass map parser', () => {
     expect(parseModelClassesEnv('')).toEqual({});
   });
 
-  it('parses a well-formed JSON object with string values verbatim', () => {
+  it('parses a well-formed JSON object with string values; normalizes to { model } entries', () => {
+    // Pre-v0.1.9 wire format: bare string entries. The parser
+    // normalizes these to `{ model: <string> }` objects so downstream
+    // consumers see a uniform entry shape regardless of chart vintage.
     const raw = JSON.stringify({
       'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
       'text-generator-default': 'ollama/nemotron-3-nano:4b',
     });
     expect(parseModelClassesEnv(raw)).toEqual({
-      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
-      'text-generator-default': 'ollama/nemotron-3-nano:4b',
+      'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+      'text-generator-default': { model: 'ollama/nemotron-3-nano:4b' },
     });
   });
 
@@ -425,22 +489,130 @@ describe('parseModelClassesEnv — Phase-2 modelClass map parser', () => {
     expect(() => parseModelClassesEnv('null')).toThrow(/KAGENT_AGENT_MODEL_CLASSES_JSON/);
   });
 
-  it('drops entries whose values are not strings; keeps the well-formed ones', () => {
+  it('drops entries whose values are neither string nor object; keeps the well-formed ones', () => {
     const raw = JSON.stringify({
       'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout',
       'broken-num': 42,
-      'broken-obj': { model: 'nested' },
       'text-generator-default': 'ollama/nemotron-3-nano:4b',
       'broken-null': null,
+      'broken-bool': true,
     });
     expect(parseModelClassesEnv(raw)).toEqual({
-      'tool-caller-default': 'workers-ai/@cf/meta/llama-4-scout',
-      'text-generator-default': 'ollama/nemotron-3-nano:4b',
+      'tool-caller-default': { model: 'workers-ai/@cf/meta/llama-4-scout' },
+      'text-generator-default': { model: 'ollama/nemotron-3-nano:4b' },
     });
   });
 
-  it('returns an empty map when JSON object has no string-valued entries', () => {
+  it('returns an empty map when JSON object has no parseable entries', () => {
     const raw = JSON.stringify({ 'broken-num': 42, 'broken-null': null });
     expect(parseModelClassesEnv(raw)).toEqual({});
+  });
+
+  /* =====================================================================
+   * v0.1.9 context-awareness Piece 1 — `contextWindowTokens` per entry.
+   *
+   * Each entry may now be either:
+   *   - a bare string (back-compat: `{ model: <string> }`)
+   *   - an object `{ model: string, contextWindowTokens?: number }`
+   *
+   * Per docs/CONTEXT-AWARENESS.md §4.2: invalid contextWindowTokens
+   * (negative, zero, non-integer, non-numeric) are dropped at parse
+   * time with a warn-log; the entry is kept without the field. Entries
+   * missing a non-empty `model` are dropped entirely.
+   * ===================================================================== */
+
+  it('parses object entries with model + contextWindowTokens (v0.1.9 shape)', () => {
+    const raw = JSON.stringify({
+      'tool-caller-default': {
+        model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        contextWindowTokens: 131072,
+      },
+      'text-generator-default': {
+        model: 'ollama/nemotron-3-nano:4b',
+        contextWindowTokens: 8192,
+      },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'tool-caller-default': {
+        model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        contextWindowTokens: 131072,
+      },
+      'text-generator-default': {
+        model: 'ollama/nemotron-3-nano:4b',
+        contextWindowTokens: 8192,
+      },
+    });
+  });
+
+  it('parses object entries with only model (contextWindowTokens omitted)', () => {
+    const raw = JSON.stringify({
+      'class-a': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'class-a': { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+    });
+  });
+
+  it('mixes string and object entries in one map', () => {
+    const raw = JSON.stringify({
+      'class-string': 'workers-ai/@cf/meta/llama-4-scout',
+      'class-object': {
+        model: 'ollama/nemotron-3-nano:4b',
+        contextWindowTokens: 8192,
+      },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'class-string': { model: 'workers-ai/@cf/meta/llama-4-scout' },
+      'class-object': {
+        model: 'ollama/nemotron-3-nano:4b',
+        contextWindowTokens: 8192,
+      },
+    });
+  });
+
+  it('drops object entries whose model is missing or empty', () => {
+    const raw = JSON.stringify({
+      'no-model': { contextWindowTokens: 131072 },
+      'empty-model': { model: '', contextWindowTokens: 131072 },
+      'non-string-model': { model: 42, contextWindowTokens: 131072 },
+      'good-class': { model: 'workers-ai/@cf/meta/llama-4-scout' },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'good-class': { model: 'workers-ai/@cf/meta/llama-4-scout' },
+    });
+  });
+
+  it('drops contextWindowTokens but keeps the entry when the value is non-positive', () => {
+    const raw = JSON.stringify({
+      'class-zero': { model: 'workers-ai/m1', contextWindowTokens: 0 },
+      'class-neg': { model: 'workers-ai/m2', contextWindowTokens: -1 },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'class-zero': { model: 'workers-ai/m1' },
+      'class-neg': { model: 'workers-ai/m2' },
+    });
+  });
+
+  it('drops contextWindowTokens but keeps the entry when the value is non-integer', () => {
+    const raw = JSON.stringify({
+      'class-frac': { model: 'workers-ai/m1', contextWindowTokens: 131072.5 },
+      'class-str': { model: 'workers-ai/m2', contextWindowTokens: '131072' },
+      'class-null': { model: 'workers-ai/m3', contextWindowTokens: null },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'class-frac': { model: 'workers-ai/m1' },
+      'class-str': { model: 'workers-ai/m2' },
+      'class-null': { model: 'workers-ai/m3' },
+    });
+  });
+
+  it('drops array entries (would otherwise typeof === "object")', () => {
+    const raw = JSON.stringify({
+      'broken-arr': ['workers-ai/m1'],
+      'good-class': { model: 'workers-ai/m2' },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'good-class': { model: 'workers-ai/m2' },
+    });
   });
 });

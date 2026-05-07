@@ -34,12 +34,42 @@
  */
 
 /**
- * Cluster-supplied logical-class → physical-model id mapping. Empty
- * map (`{}`) is the chart default — the homelab overlay supplies the
- * actual entries. Read-only at this layer; the operator parses it once
- * at boot and threads the same reference through every reconcile.
+ * v0.1.9 context-awareness — per-class entry shape.
+ *
+ * `model` is the physical model id the LLM gateway resolves
+ * (`workers-ai/@cf/...`, `ollama/...`); `contextWindowTokens` is the
+ * model's documented context window in tokens. When present, the
+ * operator projects it onto every spawned agent-pod as
+ * `KAGENT_AGENT_MODEL_CONTEXT_WINDOW=<integer>` so the in-pod agent-loop
+ * can compute utilization (Piece 2), enforce a substrate-side
+ * safety-net at 95% (Piece 3), and the detector battery can flag
+ * `context_pressure_ignored` at 70% (Piece 4). When omitted, all three
+ * downstream pieces degrade to no-op per docs/CONTEXT-AWARENESS.md §7.
+ *
+ * Shape kept open-ended (no `readonly` on the inner field set) so a
+ * future `priceTier`/`maxOutputTokens`/etc. addition is one-line.
  */
-export type ModelClassMap = Readonly<Record<string, string>>;
+export interface ModelClassEntry {
+  readonly model: string;
+  readonly contextWindowTokens?: number;
+}
+
+/**
+ * Cluster-supplied logical-class → entry mapping. Empty map (`{}`) is
+ * the chart default — the homelab overlay supplies the actual entries.
+ * Read-only at this layer; the operator parses it once at boot and
+ * threads the same reference through every reconcile.
+ *
+ * v0.1.9 context-awareness: entries widened from a bare physical-model
+ * string to a structured {@link ModelClassEntry} so the resolver can
+ * surface `contextWindowTokens` alongside the model. The Helm chart's
+ * deployment.yaml `toJson` projection of `agent.modelClasses` preserves
+ * the YAML object shape unchanged. The pre-v0.1.9 wire-format
+ * (entries as bare strings) is normalized to `{ model: <string> }` by
+ * `parseModelClassesEnv` in main.ts so chart values authored against
+ * the old shape continue to work.
+ */
+export type ModelClassMap = Readonly<Record<string, ModelClassEntry>>;
 
 /**
  * Inputs to {@link resolveAgentModel}. The agent spec is narrowed to
@@ -69,7 +99,21 @@ export interface ResolveModelInput {
  * structured audit fields without re-reading the input.
  */
 export type ResolveModelResult =
-  | { readonly kind: 'resolved'; readonly model: string; readonly source: 'override' | 'class' }
+  | {
+      readonly kind: 'resolved';
+      readonly model: string;
+      readonly source: 'override' | 'class';
+      /**
+       * v0.1.9 context-awareness — surfaced for `source: 'class'` results
+       * when the matched {@link ModelClassEntry} declares
+       * `contextWindowTokens`. The override path (`source: 'override'`,
+       * literal `spec.model`) leaves this `undefined` — the chart map
+       * is the single source of truth for context windows; per-Agent
+       * windows are explicitly out of scope per
+       * docs/CONTEXT-AWARENESS.md §9 Q5.
+       */
+      readonly contextWindowTokens?: number;
+    }
   | { readonly kind: 'unresolvable'; readonly reason: string; readonly modelClass?: string };
 
 /**
@@ -103,9 +147,20 @@ export function resolveAgentModel(input: ResolveModelInput): ResolveModelResult 
   // 2. spec.modelClass → classMap lookup.
   if (isPresent(agentSpec.modelClass)) {
     const className = agentSpec.modelClass;
-    const mapped: string | undefined = classMap[className];
-    if (isPresent(mapped)) {
-      return { kind: 'resolved', model: mapped, source: 'class' };
+    const entry: ModelClassEntry | undefined = classMap[className];
+    if (entry !== undefined && isPresent(entry.model)) {
+      // v0.1.9 — surface contextWindowTokens when the entry declares
+      // it (positive integer). Negative / zero / non-integer values
+      // are dropped at parseModelClassesEnv time, so any value that
+      // reaches here is already validated.
+      return {
+        kind: 'resolved',
+        model: entry.model,
+        source: 'class',
+        ...(typeof entry.contextWindowTokens === 'number' && {
+          contextWindowTokens: entry.contextWindowTokens,
+        }),
+      };
     }
     // 3. modelClass set but missing / empty in the cluster config.
     return {

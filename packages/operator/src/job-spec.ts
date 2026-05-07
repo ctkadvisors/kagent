@@ -423,10 +423,16 @@ export interface BuildJobSpecOptions {
    */
   readonly useConfigMap?: boolean;
   /**
-   * Phase-2 modelClass — cluster-supplied logical-class → physical-
-   * model id map. Threaded through from
-   * `KAGENT_AGENT_MODEL_CLASSES_JSON` (set by Helm
-   * `agent.modelClasses` per docs/MODEL-ROUTING.md §4).
+   * Phase-2 modelClass — cluster-supplied logical-class → entry map.
+   * Threaded through from `KAGENT_AGENT_MODEL_CLASSES_JSON` (set by
+   * Helm `agent.modelClasses` per docs/MODEL-ROUTING.md §4 +
+   * docs/CONTEXT-AWARENESS.md §4.2).
+   *
+   * v0.1.9 — each entry carries `{ model, contextWindowTokens? }`.
+   * The `model` is the physical model id; `contextWindowTokens` is
+   * the model's documented context window in tokens, projected onto
+   * the spawned pod as `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` when set
+   * (Piece 1 of the context-awareness slate).
    *
    * Consumed by the in-function {@link resolveAgentModel} call:
    *   - Agent.spec.model set      → escape-hatch; map ignored.
@@ -435,10 +441,10 @@ export interface BuildJobSpecOptions {
    * Default `{}` (empty map). Test/legacy callers may omit; legacy
    * Agents with a literal `spec.model` resolve via the override
    * path so an absent map remains backward-compatible. An Agent
-   * declaring `modelClass` whose key isn't present (or whose value is
-   * empty) raises a build-time error so the operator's reconciler
-   * surfaces it onto AgentTask `status.error` rather than silently
-   * stamping an empty `KAGENT_AGENT_MODEL` env.
+   * declaring `modelClass` whose key isn't present (or whose entry
+   * has an empty `model`) raises a build-time error so the
+   * operator's reconciler surfaces it onto AgentTask `status.error`
+   * rather than silently stamping an empty `KAGENT_AGENT_MODEL` env.
    */
   readonly modelClassMap?: ModelClassMap;
 }
@@ -621,6 +627,15 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     throw new Error(`unresolvable_model_class: ${modelResolution.reason} (Agent ${ns}/${name})`);
   }
   const resolvedModel = modelResolution.model;
+  // v0.1.9 context-awareness Piece 1 — when the resolver surfaced a
+  // `contextWindowTokens` (only happens on `source: 'class'` and only
+  // when the matched ModelClassEntry declared the field), project it
+  // onto the spawned pod as `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`. Pieces
+  // 2/3/4 in @kagent/agent-pod + @kagent/agent-loop consume this exact
+  // env name. When absent, the agent-loop's safety-net + the detector
+  // both degrade to no-op per docs/CONTEXT-AWARENESS.md §7.
+  const resolvedContextWindowTokens =
+    modelResolution.kind === 'resolved' ? modelResolution.contextWindowTokens : undefined;
   if (modelResolution.source === 'class') {
     const ns = agent.metadata.namespace ?? 'default';
     const name = agent.metadata.name ?? '?';
@@ -630,8 +645,12 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     // tag for grep-ability across the unified log stream.
     // Source=override is intentionally silent (legacy path, every
     // pre-Phase-1 Agent CR hits it).
+    const windowSuffix =
+      resolvedContextWindowTokens !== undefined
+        ? ` contextWindowTokens=${resolvedContextWindowTokens}`
+        : '';
     console.log(
-      `[operator/job-spec] resolved modelClass='${agent.spec.modelClass ?? ''}' → model='${resolvedModel}' for Agent ${ns}/${name}`,
+      `[operator/job-spec] resolved modelClass='${agent.spec.modelClass ?? ''}' → model='${resolvedModel}'${windowSuffix} for Agent ${ns}/${name}`,
     );
   }
   // v0.1.8-modelclass.1 — rewrite spec.model with the resolved id so
@@ -657,6 +676,23 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     // strings cannot reach here — `resolveAgentModel` raises on the
     // unresolvable case before this assembly runs.
     { name: 'KAGENT_AGENT_MODEL', value: resolvedModel },
+    // v0.1.9 context-awareness Piece 1 — surface the resolved class's
+    // contextWindowTokens to the agent-pod when known. Only `source:
+    // 'class'` resolutions carry this (the `'override'` escape-hatch
+    // path is intentionally unchanged — the chart map is the single
+    // source of truth for context windows per CONTEXT-AWARENESS §9 Q5).
+    // When the resolved class entry omits `contextWindowTokens`, the
+    // env var is omitted entirely so Pieces 2/3/4 in @kagent/agent-pod
+    // + @kagent/agent-loop degrade to no-op (preserves v0.1.8 behavior
+    // for any class whose chart entry hasn't declared a window yet).
+    ...(resolvedContextWindowTokens !== undefined
+      ? [
+          {
+            name: 'KAGENT_AGENT_MODEL_CONTEXT_WINDOW',
+            value: String(resolvedContextWindowTokens),
+          },
+        ]
+      : []),
     // Back-compat path: when useConfigMap is explicitly false (tests +
     // pre-v0.2.0 agent-pod images), the full JSON env entries stay.
     // v0.1.8-modelclass.1 — the serialized spec carries the resolved
