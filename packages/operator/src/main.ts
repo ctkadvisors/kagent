@@ -193,9 +193,16 @@ function pushSensitiveEnv(
  *     v0.1.9 shape. `model` MUST be a non-empty string; entries that
  *     fail this are dropped with a warn-log.
  *     `contextWindowTokens` is optional; when present it MUST be a
- *     positive integer (Number.isInteger AND > 0), otherwise the entry
- *     is kept but the field is dropped with a warn-log (graceful
- *     degradation — chart bug shouldn't take a class out of service).
+ *     positive integer (Number.isInteger AND > 0) within
+ *     `[CONTEXT_WINDOW_TOKENS_MIN, CONTEXT_WINDOW_TOKENS_MAX]` =
+ *     `[1000, 2_097_152]` (covers GPT-3.5's 4K floor down to a 1K test
+ *     slack, up to a hypothetical 2M ceiling). Out-of-range values
+ *     would silently disable the substrate's safety-net cluster-wide
+ *     because `tokenUtilization.percentage = used / contextWindowTokens`
+ *     would always report near-zero for the upper-bound case (NH4 in
+ *     evidence/audit-rev2/C3.md = NEW-H1). Otherwise the entry is kept
+ *     but the field is dropped with a warn-log (graceful degradation —
+ *     chart bug shouldn't take a class out of service).
  *   - Anything else (number, null, array, object missing `model`) →
  *     dropped entry with a warn-log (partial-working chart preserves
  *     the operational surface for the entries that are correct; bad
@@ -204,6 +211,42 @@ function pushSensitiveEnv(
  * Exported for the unit-test suite (`main.test.ts`); production code
  * paths consult it through `buildJobSpecOptionsFromEnv()`.
  */
+/**
+ * Lower bound on `contextWindowTokens` (inclusive). Below this the
+ * downstream agent-loop arithmetic (`used / contextWindowTokens`)
+ * either over-trips the safety-net or — if a class entry is mistyped
+ * to a tiny number — instantly fires the safety-net on the FIRST
+ * iteration regardless of what the agent did, which looks like a
+ * cluster-wide DoS shaped like the upper-bound case but inverted.
+ *
+ * 1000 covers GPT-3.5's 4K floor with slack for testing (some test
+ * fixtures use a few hundred tokens to provoke 95% utilization
+ * deterministically — those fixtures don't go through this env path).
+ *
+ * NH4 in evidence/audit-rev2/C3.md (= NEW-H1).
+ */
+export const CONTEXT_WINDOW_TOKENS_MIN = 1000;
+
+/**
+ * Upper bound on `contextWindowTokens` (inclusive). Above this the
+ * tokenUtilization percentage always reports near-zero, silently
+ * disabling the substrate's 95% safety-net AND the
+ * `context_pressure_ignored` detector cluster-wide. A cluster operator
+ * who fat-fingers `contextWindowTokens: 999_999_999_999` (or any
+ * value beyond what any current production model offers) gets no
+ * runtime signal that the safety-net has been disabled.
+ *
+ * 2_097_152 (2^21) covers a hypothetical 2M-token ceiling — already
+ * larger than any production model as of 2026-05-07 (Gemini 1.5 Pro
+ * is 1M, Claude 3 Opus is 200K, GPT-4o is 128K). Values that exceed
+ * this are dropped with a structured warn-log; the rest of the entry
+ * (the `model` field) survives so the class remains usable, just
+ * without context-awareness.
+ *
+ * NH4 in evidence/audit-rev2/C3.md (= NEW-H1).
+ */
+export const CONTEXT_WINDOW_TOKENS_MAX = 2_097_152;
+
 export function parseModelClassesEnv(raw: string | undefined): ModelClassMap {
   if (typeof raw !== 'string' || raw.length === 0) return {};
 
@@ -246,12 +289,38 @@ export function parseModelClassesEnv(raw: string | undefined): ModelClassMap {
           typeof rawWindow === 'number' &&
           Number.isFinite(rawWindow) &&
           Number.isInteger(rawWindow) &&
-          rawWindow > 0
+          rawWindow >= CONTEXT_WINDOW_TOKENS_MIN &&
+          rawWindow <= CONTEXT_WINDOW_TOKENS_MAX
         ) {
           contextWindowTokens = rawWindow;
+        } else if (
+          typeof rawWindow === 'number' &&
+          Number.isFinite(rawWindow) &&
+          Number.isInteger(rawWindow) &&
+          rawWindow > CONTEXT_WINDOW_TOKENS_MAX
+        ) {
+          // NH4 (= NEW-H1 in evidence/audit-rev2/C3.md): the upper-bound
+          // case is the silent-disable trapdoor. Distinguish in the log
+          // so an operator scanning logs sees the specific reason rather
+          // than the generic "expected positive integer" message — the
+          // misconfig shape is materially different (typo vs. unit error
+          // vs. pasted-in-wrong-value).
+          console.warn(
+            `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has contextWindowTokens=${rawWindow} above CONTEXT_WINDOW_TOKENS_MAX=${CONTEXT_WINDOW_TOKENS_MAX} — values this large silently disable the substrate's context-pressure safety-net (used/contextWindowTokens always near zero); keeping entry without context window`,
+          );
+        } else if (
+          typeof rawWindow === 'number' &&
+          Number.isFinite(rawWindow) &&
+          Number.isInteger(rawWindow) &&
+          rawWindow > 0 &&
+          rawWindow < CONTEXT_WINDOW_TOKENS_MIN
+        ) {
+          console.warn(
+            `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has contextWindowTokens=${rawWindow} below CONTEXT_WINDOW_TOKENS_MIN=${CONTEXT_WINDOW_TOKENS_MIN} — values this small over-trip the safety-net regardless of agent behavior; keeping entry without context window`,
+          );
         } else {
           console.warn(
-            `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has invalid contextWindowTokens (${rawWindow === null ? 'null' : typeof rawWindow === 'number' ? String(rawWindow) : typeof rawWindow}); expected positive integer — keeping entry without context window`,
+            `[kagent-operator] KAGENT_AGENT_MODEL_CLASSES_JSON entry "${k}" has invalid contextWindowTokens (${rawWindow === null ? 'null' : typeof rawWindow === 'number' ? String(rawWindow) : typeof rawWindow}); expected positive integer in [${CONTEXT_WINDOW_TOKENS_MIN}, ${CONTEXT_WINDOW_TOKENS_MAX}] — keeping entry without context window`,
           );
         }
       }

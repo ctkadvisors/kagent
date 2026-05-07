@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildJobSpecOptionsFromEnv, parseModelClassesEnv } from './main.js';
 
@@ -614,5 +614,144 @@ describe('parseModelClassesEnv — Phase-2 modelClass map parser', () => {
     expect(parseModelClassesEnv(raw)).toEqual({
       'good-class': { model: 'workers-ai/m2' },
     });
+  });
+
+  /* =====================================================================
+   * NH4 (= NEW-H1 in evidence/audit-rev2/C3.md) — `contextWindowTokens`
+   * upper-bound validation. Values above CONTEXT_WINDOW_TOKENS_MAX
+   * (2_097_152) silently disable the substrate's context-pressure
+   * safety-net cluster-wide because `tokenUtilization.percentage =
+   * used / contextWindowTokens` always reports near-zero. Values below
+   * CONTEXT_WINDOW_TOKENS_MIN (1000) over-trip the safety-net on every
+   * iteration regardless of agent behavior. Both cases drop the field
+   * and emit a structured warn-log; the rest of the entry survives so
+   * the class remains usable (without context-awareness).
+   * ===================================================================== */
+
+  it('drops contextWindowTokens above CONTEXT_WINDOW_TOKENS_MAX with a warn-log (NH4)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = JSON.stringify({
+        'class-overflow': {
+          model: 'workers-ai/m1',
+          contextWindowTokens: 999_999_999_999,
+        },
+      });
+      expect(parseModelClassesEnv(raw)).toEqual({
+        'class-overflow': { model: 'workers-ai/m1' },
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = warnSpy.mock.calls[0]?.[0] as string | undefined;
+      expect(msg).toContain('999999999999');
+      expect(msg).toContain('above');
+      expect(msg).toContain('CONTEXT_WINDOW_TOKENS_MAX');
+      expect(msg).toContain('safety-net');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('drops contextWindowTokens at 1.5 billion with a warn-log (NH4)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = JSON.stringify({
+        'class-1_5B': {
+          model: 'workers-ai/m1',
+          contextWindowTokens: 1_500_000_000,
+        },
+      });
+      expect(parseModelClassesEnv(raw)).toEqual({
+        'class-1_5B': { model: 'workers-ai/m1' },
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('above');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('passes contextWindowTokens at 200_000 (legit Claude 3 Opus window) (NH4)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = JSON.stringify({
+        'claude-opus': {
+          model: 'anthropic/claude-3-opus',
+          contextWindowTokens: 200_000,
+        },
+      });
+      expect(parseModelClassesEnv(raw)).toEqual({
+        'claude-opus': {
+          model: 'anthropic/claude-3-opus',
+          contextWindowTokens: 200_000,
+        },
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('drops contextWindowTokens at 999 (below CONTEXT_WINDOW_TOKENS_MIN) with a below-floor warn-log (NH4)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = JSON.stringify({
+        'class-tiny': { model: 'workers-ai/m1', contextWindowTokens: 999 },
+      });
+      expect(parseModelClassesEnv(raw)).toEqual({
+        'class-tiny': { model: 'workers-ai/m1' },
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const msg = warnSpy.mock.calls[0]?.[0] as string | undefined;
+      expect(msg).toContain('999');
+      expect(msg).toContain('below');
+      expect(msg).toContain('CONTEXT_WINDOW_TOKENS_MIN');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('passes contextWindowTokens at exact upper bound CONTEXT_WINDOW_TOKENS_MAX=2097152 (NH4)', () => {
+    const raw = JSON.stringify({
+      'class-max': { model: 'workers-ai/m1', contextWindowTokens: 2_097_152 },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'class-max': { model: 'workers-ai/m1', contextWindowTokens: 2_097_152 },
+    });
+  });
+
+  it('passes contextWindowTokens at exact lower bound CONTEXT_WINDOW_TOKENS_MIN=1000 (NH4)', () => {
+    const raw = JSON.stringify({
+      'class-min': { model: 'workers-ai/m1', contextWindowTokens: 1000 },
+    });
+    expect(parseModelClassesEnv(raw)).toEqual({
+      'class-min': { model: 'workers-ai/m1', contextWindowTokens: 1000 },
+    });
+  });
+
+  it('preserves rest of entry when contextWindowTokens is rejected (NH4)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = JSON.stringify({
+        'class-ok': {
+          model: 'workers-ai/m1',
+          contextWindowTokens: 131072,
+        },
+        'class-overflow': {
+          model: 'workers-ai/m2',
+          contextWindowTokens: 999_999_999_999,
+        },
+      });
+      // Rest of entry survives; only the field is dropped — the class
+      // remains usable but without context-awareness.
+      expect(parseModelClassesEnv(raw)).toEqual({
+        'class-ok': {
+          model: 'workers-ai/m1',
+          contextWindowTokens: 131072,
+        },
+        'class-overflow': { model: 'workers-ai/m2' },
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
