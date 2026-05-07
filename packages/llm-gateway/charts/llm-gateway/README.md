@@ -30,6 +30,14 @@ chart when you want:
 The gateway code path is identical in both modes — Postgres is the gateway's
 private state and never coupled to kagent.
 
+> **Production posture (audit B7):** the bundled-Postgres path is **dev-only**.
+> For production, use the BYO path against a managed Postgres or hold the
+> credentials in [Sealed-Secrets](https://github.com/bitnami-labs/sealed-secrets)
+> or [external-secrets](https://external-secrets.io/) so they're encrypted
+> at rest in git and unsealed only inside the target cluster. The chart's
+> auto-generated bundled credential Secret is a Helm-time convenience for
+> local development; do not deploy it to a multi-tenant cluster.
+
 ## Install — bundled Postgres (homelab)
 
 ```bash
@@ -50,21 +58,57 @@ kubectl create secret generic llm-gateway-token \
   --from-literal=token="$(openssl rand -hex 32)"
 ```
 
-The Bitnami `postgresql` sub-chart auto-generates a Postgres password into a
-Secret on first install and persists across upgrades. The chart then
-auto-creates the `<release>-llm-gateway-db` Secret holding the libpq DSN
-that the gateway and migration Job both consume.
+The chart auto-creates the `<release>-llm-gateway-db` Secret on first
+install. Per **audit B7**, the Secret holds **separate**
+`host` / `port` / `user` / `password` / `database` keys (NOT a
+`postgres://USER:PASSWORD@…` DSN string with the password embedded next
+to all the other connection metadata). The gateway Deployment + migration
+Job consume each value via individual `secretKeyRef` env vars
+(`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`/`PGSSLMODE`); the
+gateway code constructs the `pg.Pool` config locally without ever
+re-stringifying the password into a URL.
+
+### Bundled-Postgres TLS
+
+The bundled path defaults to `database.bundledConfig.sslMode: verify-ca`.
+Bitnami's postgresql chart auto-generates a self-signed TLS cert + CA on
+first install and persists them in a Secret; `verify-ca` validates the
+chain on every connection but allows the Service hostname to differ from
+the cert SAN (which is typical when the SAN is the Pod hostname). To
+move to `verify-full` (CA chain AND hostname check), reissue the cert
+with the Service DNS name as a SAN and override:
+
+```bash
+helm install … \
+  --set database.bundled=true \
+  --set database.bundledConfig.sslMode=verify-full
+```
+
+`sslMode=disable` is **rejected at template time** — bundled-Postgres
+must encrypt in transit since the password rides over the same channel.
+`sslMode=require` is permitted but intentionally weaker (no CA-chain
+validation); use only when the cluster's internal CA isn't trusted by
+the gateway's runtime image and the network is otherwise trusted.
 
 ## Install — BYO Postgres (cloud)
 
 Provision a Postgres database (RDS / Cloud SQL / Aurora / Neon / Supabase /
-whatever) and create a Secret holding the DSN:
+whatever) and create a Secret holding the DSN. **Production deployments
+should provision this Secret via Sealed-Secrets or external-secrets** so
+the password is encrypted at rest in git and unsealed only inside the
+target cluster — `kubectl create secret` is shown only for the quickstart:
 
 ```bash
 kubectl create secret generic external-pg \
   --namespace kagent-system \
-  --from-literal=dsn="postgres://user:pass@db.example.com:5432/kagent_llm_gateway?sslmode=require"
+  --from-literal=dsn="postgres://user:pass@db.example.com:5432/kagent_llm_gateway?sslmode=verify-full"
 ```
+
+The DSN MUST use `sslmode=verify-full` (or `verify-ca` if your provider
+exposes a CA bundle but inconsistent hostnames). `sslmode=require` is the
+documented second-best — pick it only when neither the cluster's CA nor
+the provider's CA bundle is reachable inside the gateway image. `sslmode
+=disable` is unsupported and the gateway will refuse to boot.
 
 Then install the chart pointing at it:
 

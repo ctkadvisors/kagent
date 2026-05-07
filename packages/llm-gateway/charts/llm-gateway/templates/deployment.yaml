@@ -79,16 +79,57 @@ spec:
               value: {{ .Values.service.port | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
-            # Database connection — single libpq DSN. Sourced from
-            # whichever Secret database.dsnSecretRef points at (BYO mode)
-            # or the chart-auto-generated Secret pointing at the bundled
-            # Postgres (bundled mode). Either way the env var name is
-            # the same; the gateway code treats this as opaque.
+            # Database connection (audit B7).
+            #
+            # BUNDLED MODE: Project the chart-auto-generated split
+            #   Secret as PG* env vars. The password is mounted via a
+            #   dedicated `secretKeyRef` and never appears in a DSN
+            #   string. `parseEnv` builds a `pg.Pool` config locally
+            #   from these vars — no DSN stringification anywhere.
+            #
+            # BYO MODE: Keep the legacy `DATABASE_URL` env. Deployers
+            #   point `database.dsnSecretRef` at a Secret holding the
+            #   full DSN (typically a managed-Postgres connection
+            #   string with `sslmode=require` or `verify-full`).
+            #
+            # parseEnv prefers the split path when both happen to be
+            # set, so even a deployer who runs bundled mode AND points
+            # at an external DSN by mistake gets the safe path.
+            {{- if .Values.database.bundled }}
+            - name: PGHOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: host
+            - name: PGPORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: port
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: user
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: password
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: database
+            - name: PGSSLMODE
+              value: {{ include "llm-gateway.bundledSslMode" . | quote }}
+            {{- else }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "llm-gateway.dsnSecretName" . | quote }}
-                  key: {{ include "llm-gateway.dsnSecretKey" . | quote }}
+                  name: {{ .Values.database.dsnSecretRef.name | quote }}
+                  key: {{ .Values.database.dsnSecretRef.key | quote }}
+            {{- end }}
             # Admin API bearer token — required when enabled=true. The
             # chart fails install without a Secret reference (no
             # plaintext fallback; security baseline).

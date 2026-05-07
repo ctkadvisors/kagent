@@ -10,9 +10,29 @@
  * pure function, throws on first invalid key with a message naming
  * the var so the K8s pod log makes the cause obvious.
  *
+ * Database connection (audit B7 — split-credential support):
+ *   ONE of:
+ *     DATABASE_URL     — libpq DSN. Back-compat path. The chart's BYO
+ *                        mode uses this; deployers point dsnSecretRef
+ *                        at a Secret holding the DSN string.
+ *     PGHOST + PGUSER + PGPASSWORD + PGDATABASE — split-env path.
+ *                        The chart's bundled-Postgres mode uses this so
+ *                        the password is never embedded in a DSN string
+ *                        in `stringData.dsn` (where any cluster
+ *                        operator with `secrets:get` can read the
+ *                        plaintext password right next to all the other
+ *                        connection params).
+ *   When BOTH are set, split-env wins (so the bundled chart's split
+ *   keys take precedence even if a deployer also exports DATABASE_URL
+ *   for some reason).
+ *   PGPORT             — default 5432
+ *   PGSSLMODE          — default verify-full when split-env, OR taken
+ *                        from the DATABASE_URL when in DSN mode.
+ *   PGSSLROOTCERT      — optional path to a CA bundle for verify-*
+ *                        modes. The bundled-Postgres path mounts
+ *                        Bitnami's auto-generated CA here at runtime.
+ *
  * Required:
- *   DATABASE_URL       — libpq DSN. Gateway never instantiates its own
- *                        DB; the Helm chart wires this from a Secret.
  *   ADMIN_API_TOKEN    — bearer token gating /admin/* endpoints.
  *
  * Optional with defaults:
@@ -49,8 +69,43 @@ import type { BackendKind } from './types.js';
  */
 export type BackendApiKeys = Readonly<Partial<Record<BackendKind, string>>>;
 
+/**
+ * Split-credential connection params (audit B7).
+ *
+ * The bundled-Postgres Helm path projects user/password/host/port/
+ * database into individual env vars so the password never sits in a
+ * `stringData.dsn` string next to the connection metadata. The
+ * Postgres adapter (`db/pool.ts`) reads this struct and constructs the
+ * `pg.Pool` config — we never re-stringify the password into a URL.
+ *
+ * `sslMode` mirrors libpq's verb (`disable`/`allow`/`prefer`/`require`/
+ * `verify-ca`/`verify-full`). For verify-* modes the Helm chart mounts
+ * a CA bundle at the path named by `sslRootCert`.
+ */
+export interface DatabaseConnConfig {
+  readonly host: string;
+  readonly port: number;
+  readonly user: string;
+  readonly password: string;
+  readonly database: string;
+  readonly sslMode: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+  readonly sslRootCertPath?: string;
+}
+
 export interface GatewayConfig {
-  readonly databaseUrl: string;
+  /**
+   * Legacy full-DSN path (audit-B7 back-compat). Present when
+   * `DATABASE_URL` is set AND the split-env path isn't. The pool
+   * factory consumes either this OR `database` — never both.
+   */
+  readonly databaseUrl: string | null;
+  /**
+   * Audit-B7 split-credential path. Populated when PG* env vars are
+   * present (the bundled-Postgres chart wires it that way). Wins
+   * over `databaseUrl` when both are configured so the chart's
+   * split path is the authority.
+   */
+  readonly database: DatabaseConnConfig | null;
   readonly adminApiToken: string;
   readonly port: number;
   readonly backendTimeoutMs: number;
@@ -80,8 +135,56 @@ const BACKEND_API_KEY_ENV_VARS: ReadonlyArray<readonly [BackendKind, string]> = 
   ['mock', 'BACKEND_API_KEY_MOCK'],
 ] as const;
 
+/**
+ * Parse the audit-B7 split-credential PG* env vars. Returns null when
+ * the split path isn't in use (caller should fall back to
+ * DATABASE_URL). Returns a populated config when ALL of PGHOST,
+ * PGUSER, PGPASSWORD, PGDATABASE are set; throws when only some are
+ * set (partial split-env config is always a misconfigured chart).
+ */
+export function parseDatabaseConn(env: NodeJS.ProcessEnv): DatabaseConnConfig | null {
+  const host = trimOrUndef(env.PGHOST);
+  const user = trimOrUndef(env.PGUSER);
+  const password = env.PGPASSWORD; // password may legitimately have spaces; do NOT trim
+  const database = trimOrUndef(env.PGDATABASE);
+  const present = [host, user, password, database].filter((v) => v !== undefined && v.length > 0);
+  if (present.length === 0) return null;
+  if (present.length < 4) {
+    const missing: string[] = [];
+    if (host === undefined || host.length === 0) missing.push('PGHOST');
+    if (user === undefined || user.length === 0) missing.push('PGUSER');
+    if (password === undefined || password.length === 0) missing.push('PGPASSWORD');
+    if (database === undefined || database.length === 0) missing.push('PGDATABASE');
+    throw new Error(
+      `partial split-credential PG* env: missing ${missing.join(',')} — set all four (PGHOST/PGUSER/PGPASSWORD/PGDATABASE) or set DATABASE_URL`,
+    );
+  }
+  // All four are now defined and non-empty.
+  const port = parsePositiveInt(env.PGPORT, 5432, 'PGPORT');
+  const sslMode = parseSslMode(env.PGSSLMODE);
+  const sslRootCertPath = trimOrUndef(env.PGSSLROOTCERT);
+  return Object.freeze({
+    host: host as string,
+    port,
+    user: user as string,
+    password: password as string,
+    database: database as string,
+    sslMode,
+    ...(sslRootCertPath !== undefined && sslRootCertPath.length > 0 ? { sslRootCertPath } : {}),
+  });
+}
+
 export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
-  const databaseUrl = required(env, 'DATABASE_URL');
+  const splitConn = parseDatabaseConn(env);
+  // Either split-env (audit B7 preferred) or DATABASE_URL — at least one
+  // MUST be present. Split-env wins when both are set.
+  const dsnRaw = env.DATABASE_URL;
+  if (splitConn === null && (dsnRaw === undefined || dsnRaw.length === 0)) {
+    throw new Error(
+      'required env DATABASE_URL is missing (and no split-credential PGHOST/PGUSER/PGPASSWORD/PGDATABASE provided either)',
+    );
+  }
+  const databaseUrl = splitConn === null ? (dsnRaw as string) : null;
   const adminApiToken = required(env, 'ADMIN_API_TOKEN');
   const port = parsePort(env.PORT);
   const backendTimeoutMs = parsePositiveInt(
@@ -94,6 +197,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
 
   return Object.freeze({
     databaseUrl,
+    database: splitConn,
     adminApiToken,
     port,
     backendTimeoutMs,
@@ -101,6 +205,35 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
       modelEndpointNamespace.length > 0 ? modelEndpointNamespace : DEFAULT_NAMESPACE,
     backendApiKeys,
   });
+}
+
+function trimOrUndef(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseSslMode(raw: string | undefined): DatabaseConnConfig['sslMode'] {
+  // Default `verify-full` — audit B7 calls for the cleanest secure
+  // default. The chart README documents how to override to `verify-ca`
+  // when bundled-Postgres uses a self-signed cert (the bitnami
+  // sub-chart's auto-generated CA bundle is mounted at
+  // PGSSLROOTCERT in that path).
+  if (raw === undefined || raw.length === 0) return 'verify-full';
+  const v = raw.trim();
+  if (
+    v === 'disable' ||
+    v === 'allow' ||
+    v === 'prefer' ||
+    v === 'require' ||
+    v === 'verify-ca' ||
+    v === 'verify-full'
+  ) {
+    return v;
+  }
+  throw new Error(
+    `invalid env PGSSLMODE: ${raw} (must be disable|allow|prefer|require|verify-ca|verify-full)`,
+  );
 }
 
 /**

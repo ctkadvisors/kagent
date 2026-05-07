@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { parseBackendApiKeys, parseEnv } from './env.js';
+import { parseBackendApiKeys, parseDatabaseConn, parseEnv } from './env.js';
 
 describe('parseEnv', () => {
   it('parses minimal required env (DATABASE_URL + ADMIN_API_TOKEN)', () => {
@@ -14,6 +14,7 @@ describe('parseEnv', () => {
       ADMIN_API_TOKEN: 'tok-123',
     });
     expect(cfg.databaseUrl).toBe('postgres://u:p@h:5432/d');
+    expect(cfg.database).toBeNull();
     expect(cfg.adminApiToken).toBe('tok-123');
     expect(cfg.port).toBe(4000);
     expect(cfg.backendTimeoutMs).toBe(60000);
@@ -34,8 +35,45 @@ describe('parseEnv', () => {
     expect(cfg.modelEndpointNamespace).toBe('gateway-ns');
   });
 
-  it('throws when DATABASE_URL missing', () => {
+  it('throws when neither DATABASE_URL nor split-env is set', () => {
     expect(() => parseEnv({ ADMIN_API_TOKEN: 'tok' })).toThrow(/DATABASE_URL/);
+  });
+
+  // Audit B7 — split-credential path
+  it('prefers split-env (PG*) over DATABASE_URL when both are set', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      ADMIN_API_TOKEN: 'tok',
+      PGHOST: 'pg.svc',
+      PGUSER: 'gateway',
+      PGPASSWORD: 'sekret',
+      PGDATABASE: 'kagent_llm_gateway',
+    });
+    expect(cfg.databaseUrl).toBeNull();
+    expect(cfg.database).toEqual({
+      host: 'pg.svc',
+      port: 5432,
+      user: 'gateway',
+      password: 'sekret',
+      database: 'kagent_llm_gateway',
+      sslMode: 'verify-full',
+    });
+  });
+
+  it('parses split-env without DATABASE_URL', () => {
+    const cfg = parseEnv({
+      ADMIN_API_TOKEN: 'tok',
+      PGHOST: 'pg.svc',
+      PGUSER: 'gateway',
+      PGPASSWORD: 'sekret',
+      PGDATABASE: 'd',
+      PGPORT: '6432',
+      PGSSLMODE: 'verify-ca',
+      PGSSLROOTCERT: '/etc/ssl/ca.pem',
+    });
+    expect(cfg.database?.port).toBe(6432);
+    expect(cfg.database?.sslMode).toBe('verify-ca');
+    expect(cfg.database?.sslRootCertPath).toBe('/etc/ssl/ca.pem');
   });
 
   it('throws when ADMIN_API_TOKEN missing', () => {
@@ -77,6 +115,63 @@ describe('parseEnv', () => {
     });
     // Frozen — substrate config is immutable.
     expect(Object.isFrozen(cfg.backendApiKeys)).toBe(true);
+  });
+});
+
+describe('parseDatabaseConn (audit B7)', () => {
+  it('returns null when no PG* vars are set', () => {
+    expect(parseDatabaseConn({})).toBeNull();
+  });
+
+  it('returns the full config when all four required vars are set', () => {
+    const out = parseDatabaseConn({
+      PGHOST: 'pg.svc',
+      PGUSER: 'gateway',
+      PGPASSWORD: 'sekret',
+      PGDATABASE: 'kagent_llm_gateway',
+    });
+    expect(out).toEqual({
+      host: 'pg.svc',
+      port: 5432,
+      user: 'gateway',
+      password: 'sekret',
+      database: 'kagent_llm_gateway',
+      sslMode: 'verify-full',
+    });
+  });
+
+  it('throws when split-env is partial (PGHOST without PGPASSWORD)', () => {
+    expect(() =>
+      parseDatabaseConn({
+        PGHOST: 'pg.svc',
+        PGUSER: 'gateway',
+        PGDATABASE: 'd',
+      }),
+    ).toThrow(/PGPASSWORD/);
+  });
+
+  it('passes through whitespace-bearing PGPASSWORD without trimming', () => {
+    // Postgres allows passwords with leading/trailing whitespace; we
+    // must not silently mutate them.
+    const out = parseDatabaseConn({
+      PGHOST: 'pg.svc',
+      PGUSER: 'gateway',
+      PGPASSWORD: ' my-pwd ',
+      PGDATABASE: 'd',
+    });
+    expect(out?.password).toBe(' my-pwd ');
+  });
+
+  it('rejects an unknown PGSSLMODE value', () => {
+    expect(() =>
+      parseDatabaseConn({
+        PGHOST: 'pg.svc',
+        PGUSER: 'gateway',
+        PGPASSWORD: 'p',
+        PGDATABASE: 'd',
+        PGSSLMODE: 'tls',
+      }),
+    ).toThrow(/PGSSLMODE/);
   });
 });
 

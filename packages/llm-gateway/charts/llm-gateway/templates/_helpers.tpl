@@ -79,29 +79,32 @@ requiring the deployer to override `bundled-postgres.fullnameOverride`.
 {{- end -}}
 
 {{/*
-Name of the Secret holding the gateway's DSN. When `database.bundled=true`,
-the chart auto-creates this Secret via `secret-bundled.yaml`. When
-`database.bundled=false`, the deployer provides this Secret out-of-band and
-points `database.dsnSecretRef.name` at it.
+Audit B7 — bundled mode uses split-credential Secret keys
+(host/port/user/password/database). External-DB (BYO) mode keeps the
+legacy DSN-secret-ref path so deployers don't need to migrate.
+
+`llm-gateway.bundledSecretName` returns the Secret name in bundled
+mode (synthesized as `<fullname>-db`); the deployment + migration-job
+templates read each split key via individual `secretKeyRef` entries.
 */}}
-{{- define "llm-gateway.dsnSecretName" -}}
-{{- if .Values.database.bundled -}}
+{{- define "llm-gateway.bundledSecretName" -}}
 {{- printf "%s-db" (include "llm-gateway.fullname" .) -}}
-{{- else -}}
-{{- .Values.database.dsnSecretRef.name -}}
-{{- end -}}
 {{- end -}}
 
 {{/*
-Name of the Secret key holding the DSN. The bundled Secret uses key `dsn`;
-external Secrets honour whatever the deployer set in `dsnSecretRef.key`.
+SSL mode for the bundled-Postgres path. Default is `verify-ca`
+(Bitnami auto-generates a self-signed cert; SANs may not match
+the Service hostname so verify-full is too strict by default).
+README documents the path to verify-full. `disable` is rejected
+explicitly per audit B7 — bundled-Postgres MUST encrypt in transit
+since the password rides over the same connection.
 */}}
-{{- define "llm-gateway.dsnSecretKey" -}}
-{{- if .Values.database.bundled -}}
-dsn
-{{- else -}}
-{{- .Values.database.dsnSecretRef.key -}}
+{{- define "llm-gateway.bundledSslMode" -}}
+{{- $mode := default "verify-ca" .Values.database.bundledConfig.sslMode -}}
+{{- if eq $mode "disable" -}}
+{{- fail "llm-gateway: database.bundledConfig.sslMode=disable is forbidden (audit B7) — Postgres connection MUST encrypt in transit. Use require, verify-ca (default), or verify-full." -}}
 {{- end -}}
+{{- $mode -}}
 {{- end -}}
 
 {{/*

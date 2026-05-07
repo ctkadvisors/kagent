@@ -47,7 +47,16 @@ async function main(): Promise<void> {
     `[llm-gateway] boot port=${String(cfg.port)} ns=${cfg.modelEndpointNamespace} backendApiKeys=[${configuredBackends}]`,
   );
 
-  const pool = createPool({ connectionString: cfg.databaseUrl });
+  // Audit B7: split-credential path wins over legacy DSN. parseEnv
+  // guarantees exactly one of `cfg.database` / `cfg.databaseUrl` is
+  // populated; createPool refuses both paths.
+  const pool =
+    cfg.database !== null
+      ? createPool({ connConfig: cfg.database })
+      : createPool({ connectionString: cfg.databaseUrl ?? '' });
+  const dbMode =
+    cfg.database !== null ? `split sslmode=${cfg.database.sslMode}` : 'dsn (DATABASE_URL)';
+  console.log(`[llm-gateway] db config: ${dbMode}`);
   // Migrations run synchronously at boot — keeps the chart's
   // post-install Job optional for dev/local. In production the chart
   // *also* runs them as a Hook so a fresh image deploys against an

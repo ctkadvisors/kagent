@@ -73,11 +73,43 @@ spec:
               value: 'production'
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            # Audit B7 — same split-credential / DSN-fallback split as
+            # the gateway Deployment. parseEnv consumes either path.
+            {{- if .Values.database.bundled }}
+            - name: PGHOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: host
+            - name: PGPORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: port
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: user
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: password
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "llm-gateway.bundledSecretName" . | quote }}
+                  key: database
+            - name: PGSSLMODE
+              value: {{ include "llm-gateway.bundledSslMode" . | quote }}
+            {{- else }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "llm-gateway.dsnSecretName" . | quote }}
-                  key: {{ include "llm-gateway.dsnSecretKey" . | quote }}
+                  name: {{ .Values.database.dsnSecretRef.name | quote }}
+                  key: {{ .Values.database.dsnSecretRef.key | quote }}
+            {{- end }}
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { cpu: 250m, memory: 256Mi }

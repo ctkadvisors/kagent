@@ -11,17 +11,23 @@ In-cluster gateway URL:
   http://{{ include "llm-gateway.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
 
 Database mode: {{ if .Values.database.bundled }}BUNDLED (Bitnami postgresql sub-chart){{ else }}BYO (external DSN){{ end }}
-DSN Secret:    {{ include "llm-gateway.dsnSecretName" . }} (key: {{ include "llm-gateway.dsnSecretKey" . }})
-
 {{- if .Values.database.bundled }}
+Credential Secret: {{ include "llm-gateway.bundledSecretName" . }}
+  Split-credential keys (audit B7): host / port / user / password / database
+  TLS mode: {{ include "llm-gateway.bundledSslMode" . }}
 
 Bundled Postgres Service:
   {{ include "llm-gateway.bundledPostgres.host" . }}:5432
 
 The Bitnami postgresql sub-chart auto-generated the user password into
 its own Secret on first install; this chart wires it into the
-{{ include "llm-gateway.dsnSecretName" . }} Secret as a libpq DSN
-that the gateway and migration Job both read.
+{{ include "llm-gateway.bundledSecretName" . }} Secret as separate
+host/port/user/password/database keys (NOT a DSN string with the
+password embedded — see audit B7). The gateway Deployment + migration
+Job consume each via individual `secretKeyRef` env vars
+(PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE).
+{{- else }}
+DSN Secret:    {{ .Values.database.dsnSecretRef.name }} (key: {{ .Values.database.dsnSecretRef.key }})
 {{- end }}
 
 {{- if .Values.migrations.enabled }}
