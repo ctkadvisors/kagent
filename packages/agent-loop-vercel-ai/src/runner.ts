@@ -40,7 +40,7 @@ import {
 import type { CapabilityBundle } from '@kagent/capability-types';
 import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { streamText, wrapLanguageModel, type ModelMessage } from 'ai';
+import { stepCountIs, streamText, wrapLanguageModel, type ModelMessage } from 'ai';
 
 import {
   KagentContextSafetyMiddleware,
@@ -89,7 +89,16 @@ export interface RunVercelAiAgentTaskInput {
   readonly spawnToolAdmitted?: boolean;
   /** Caller-owned cancellation. */
   readonly signal?: AbortSignal;
-  /** Step cap. Mirrors AI SDK's `stopWhen: stepCountIs(maxSteps)`. */
+  /**
+   * Step cap. Threaded into AI SDK's `stopWhen: stepCountIs(maxSteps)`
+   * so the implicit tool-using agent loop continues for at most this
+   * many steps. Defaults to 16 — matches the agent-pod runner's
+   * `maxIterations` default for the reference loop. The AI SDK's own
+   * default is `stepCountIs(1)` (single LLM step) — without this thread
+   * a tool-using agent would terminate after the first model call.
+   * See R3-B1 (audit-rev3) — `runner.ts:181-193` previously declared
+   * the field but did not pass it to `streamText`.
+   */
   readonly maxSteps?: number;
   /**
    * Test injection — when supplied, runs through this stub instead of
@@ -178,11 +187,20 @@ export async function runVercelAiAgentTask(
   let status: TerminalStatus = 'completed';
   let errorMessage: string | undefined;
   try {
+    // Thread the step cap into AI SDK's `stopWhen`. AI SDK 6 defaults
+    // to `stepCountIs(1)` (one LLM call, no implicit tool-loop). The
+    // agent-pod reference runner defaults `maxIterations` to a higher
+    // value; mirror that here so a tool-using agent actually iterates
+    // through tool-call → tool-result → next-step rounds. R3-B1
+    // (audit-rev3) — without this thread the runner terminates after
+    // ONE LLM step regardless of caller input.
+    const stepCap = input.maxSteps ?? 16;
     const stream = (input._streamText ?? streamText)({
       model: wrappedModel,
       ...(input.systemPrompt !== undefined && { system: input.systemPrompt }),
       messages,
       tools: toolBundle.tools,
+      stopWhen: stepCountIs(stepCap),
       ...(input.signal !== undefined && { abortSignal: input.signal }),
       onStepFinish: (step) => {
         trace.onStepFinish(step);
