@@ -225,6 +225,76 @@ describe('KagentContextSafetyMiddleware', () => {
   });
 });
 
+describe('KagentContextSafetyMiddleware — usage fallback (R3-LOW-1, C2R3-LOW-2)', () => {
+  it('does NOT throw on a usage shape missing .total fields (C2R3-LOW-2 optional chaining)', async () => {
+    // A non-conformant provider returns `inputTokens` / `outputTokens`
+    // shapes WITHOUT a `total` property. Pre-fix, the unconditional
+    // `.total` access threw `TypeError: Cannot read properties of
+    // undefined (reading 'total')` and the safety-net cumulative
+    // counter was poisoned. Post-fix the optional-chained read returns
+    // undefined and the estimateTokens fallback fires.
+    const mw = new KagentContextSafetyMiddleware({ contextWindowTokens: 10_000 });
+    const malformedResult = {
+      content: [{ type: 'text', text: 'hello world' }],
+      usage: {
+        // shape WITHOUT .total — both inputTokens and outputTokens are
+        // empty objects (the real failure mode for a Cloudflare-style
+        // partial-usage shape).
+        inputTokens: {},
+        outputTokens: {},
+      },
+    } as unknown as LanguageModelV3GenerateResult;
+    await mw.wrapGenerate({
+      doGenerate: () => Promise.resolve(malformedResult),
+      doStream: vi.fn(),
+      params: {
+        prompt: [{ role: 'user', content: 'a fairly short prompt' }],
+      } as unknown as LanguageModelV3CallOptions,
+      model: stubModel,
+    });
+    // The fallback should have observed >0 cumulative tokens — the
+    // `estimateTokens` heuristic on the prompt text + result content
+    // produces non-zero counts. Without the fallback this would be 0.
+    const cum = mw.currentCumulativeTokens();
+    expect(cum.input).toBeGreaterThan(0);
+    expect(cum.output).toBeGreaterThan(0);
+  });
+
+  it('falls back to estimateTokens when streaming finish chunk lacks usage entirely (R3-LOW-1)', async () => {
+    const mw = new KagentContextSafetyMiddleware({ contextWindowTokens: 10_000 });
+    const stream = new ReadableStream({
+      start(controller) {
+        // Emit several text-delta chunks so the buffer accumulates.
+        controller.enqueue({ type: 'text-delta', delta: 'hello ' });
+        controller.enqueue({ type: 'text-delta', delta: 'world from the model' });
+        // Finish chunk with NO usage at all (Cloudflare Workers AI shape).
+        controller.enqueue({ type: 'finish' });
+        controller.close();
+      },
+    });
+    const doStream = (): Promise<LanguageModelV3StreamResult> =>
+      Promise.resolve({ stream } as unknown as LanguageModelV3StreamResult);
+    const result = await mw.wrapStream({
+      doGenerate: vi.fn(),
+      doStream,
+      params: {
+        prompt: [{ role: 'user', content: 'a fairly short prompt' }],
+      } as unknown as LanguageModelV3CallOptions,
+      model: stubModel,
+    });
+    const reader = result.stream.getReader();
+    while (true) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+    // Both counters should be non-zero: input from the prompt text,
+    // output from the buffered text-delta chunks. Pre-fix, both were 0.
+    const cum = mw.currentCumulativeTokens();
+    expect(cum.input).toBeGreaterThan(0);
+    expect(cum.output).toBeGreaterThan(0);
+  });
+});
+
 describe('buildKagentContextSafetyMiddleware', () => {
   it('returns a structurally-valid LanguageModelV3Middleware', () => {
     const { middleware, instance } = buildKagentContextSafetyMiddleware({

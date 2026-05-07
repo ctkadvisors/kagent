@@ -42,6 +42,8 @@ import type {
   LanguageModelV3StreamResult,
 } from '@ai-sdk/provider';
 
+import { estimateTokens } from '@kagent/agent-loop';
+
 /**
  * The kagent-shaped error that the middleware throws when the
  * cumulative-tokens-vs-window check fails. Mirrors
@@ -158,9 +160,25 @@ export class KagentContextSafetyMiddleware {
   /**
    * Vercel AI SDK middleware contract — `wrapGenerate`. Refuses
    * before forwarding when the threshold is reached.
+   *
+   * Usage accounting (R3-LOW-1, C2R3-LOW-2):
+   *
+   * - Optional-chains `result.usage.{inputTokens,outputTokens}?.total`
+   *   so a non-conformant provider that omits one of those keys does
+   *   NOT throw `TypeError`. The audit (audit-rev3/C2.md §3 C2R3-LOW-2)
+   *   flagged the previous unconditional `.total` access as a way to
+   *   crash the safety-net on usage-less responses.
+   * - When the provider omits usage entirely (Cloudflare Workers AI is
+   *   a known case), fall back to `estimateTokens(...)` over the
+   *   request prompt + the result's text — same heuristic the
+   *   reference agent-loop's executor applies at
+   *   `executor.ts:957-963`. Without this fallback the cumulative
+   *   counter silently stays at 0, the threshold never trips, and
+   *   the safety-net no-ops.
    */
   wrapGenerate = async ({
     doGenerate,
+    params,
   }: {
     doGenerate: () => PromiseLike<LanguageModelV3GenerateResult>;
     doStream: () => PromiseLike<LanguageModelV3StreamResult>;
@@ -169,7 +187,19 @@ export class KagentContextSafetyMiddleware {
   }): Promise<LanguageModelV3GenerateResult> => {
     this.assertBelowThreshold();
     const result = await doGenerate();
-    this.recordUsage(result.usage.inputTokens.total, result.usage.outputTokens.total);
+    const inputTokens = result.usage.inputTokens?.total;
+    const outputTokens = result.usage.outputTokens?.total;
+    if (typeof inputTokens === 'number' && typeof outputTokens === 'number') {
+      this.recordUsage(inputTokens, outputTokens);
+    } else {
+      // R3-LOW-1 fallback — provider omitted (or partially-omitted)
+      // usage. Estimate from the in-band content shapes available.
+      const fallbackInput =
+        inputTokens ?? estimateTokens(stringifyPromptForEstimate(params.prompt));
+      const fallbackOutput =
+        outputTokens ?? estimateTokens(stringifyResultContentForEstimate(result.content));
+      this.recordUsage(fallbackInput, fallbackOutput);
+    }
     return result;
   };
 
@@ -182,6 +212,7 @@ export class KagentContextSafetyMiddleware {
    */
   wrapStream = async ({
     doStream,
+    params,
   }: {
     doGenerate: () => PromiseLike<LanguageModelV3GenerateResult>;
     doStream: () => PromiseLike<LanguageModelV3StreamResult>;
@@ -202,22 +233,50 @@ export class KagentContextSafetyMiddleware {
     // resulting transformed stream back to the SDK's expected
     // `LanguageModelV3StreamResult.stream` type — the wire shape is
     // unchanged; only the local TS view widened.
+    //
+    // R3-LOW-1 — when the provider omits usage on the finish chunk
+    // (or omits one of input/output), the safety-net would silently
+    // no-op. Mirror executor.ts:957-963's fallback: estimate input
+    // tokens from the request prompt and output tokens from the
+    // accumulated text-delta content seen on the stream. Buffer
+    // text-delta chunks so the estimate at finish-time has the full
+    // assistant turn to measure.
     const recordUsage = this.recordUsage.bind(this);
+    const promptText = stringifyPromptForEstimate(params.prompt);
+    let outputText = '';
     const transformed = result.stream.pipeThrough(
       new TransformStream<unknown, unknown>({
         transform(chunk, controller) {
           // Structural narrow — the `finish` variant carries `.usage`.
           // Any provider that omits usage on a finish chunk produces
-          // undefined, which `recordUsage` tolerates.
+          // undefined, which the fallback below handles.
           const c = chunk as {
             type?: string;
+            text?: string;
+            delta?: string;
             usage?: {
               inputTokens?: { total?: number };
               outputTokens?: { total?: number };
             };
           };
-          if (c?.type === 'finish' && c.usage) {
-            recordUsage(c.usage.inputTokens?.total, c.usage.outputTokens?.total);
+          if (c?.type === 'text-delta') {
+            // Provider-version-tolerant: AI SDK 6 surfaces the delta
+            // under `delta` (current) or `text` (older). Use whichever
+            // is a non-empty string. Falls through harmlessly when
+            // neither is present.
+            if (typeof c.delta === 'string') outputText += c.delta;
+            else if (typeof c.text === 'string') outputText += c.text;
+          }
+          if (c?.type === 'finish') {
+            const inputTokens = c.usage?.inputTokens?.total;
+            const outputTokens = c.usage?.outputTokens?.total;
+            if (typeof inputTokens === 'number' && typeof outputTokens === 'number') {
+              recordUsage(inputTokens, outputTokens);
+            } else {
+              const fallbackInput = inputTokens ?? estimateTokens(promptText);
+              const fallbackOutput = outputTokens ?? estimateTokens(outputText);
+              recordUsage(fallbackInput, fallbackOutput);
+            }
           }
           controller.enqueue(chunk);
         },
@@ -225,6 +284,54 @@ export class KagentContextSafetyMiddleware {
     ) as LanguageModelV3StreamResult['stream'];
     return { ...result, stream: transformed };
   };
+}
+
+/* =====================================================================
+ * Helpers — R3-LOW-1 estimate fallback. Defensive: a wide variety of
+ * `params.prompt` shapes flow through AI SDK middleware (string vs
+ * `ModelMessage[]` vs provider-specific extensions). The estimator
+ * coerces each into a stable string for `estimateTokens` (which is
+ * `Math.ceil(text.length / 4)`). Any failure to coerce returns an
+ * empty string — the estimate is then 0, mirroring the pre-fix
+ * behavior for the unrecognized case (no regression).
+ * ===================================================================== */
+
+function stringifyPromptForEstimate(prompt: unknown): string {
+  if (prompt === undefined || prompt === null) return '';
+  if (typeof prompt === 'string') return prompt;
+  if (Array.isArray(prompt)) {
+    // AI SDK's `ModelMessage[]` shape — concatenate `content` fields.
+    // Each message's `content` is either a string or an array of
+    // `ContentPart`s with `text` fields. Walk both shapes.
+    const parts: string[] = [];
+    for (const m of prompt) {
+      const msg = m as { content?: unknown };
+      if (typeof msg.content === 'string') {
+        parts.push(msg.content);
+      } else if (Array.isArray(msg.content)) {
+        for (const p of msg.content) {
+          const part = p as { text?: unknown; type?: unknown };
+          if (typeof part.text === 'string') parts.push(part.text);
+        }
+      }
+    }
+    return parts.join('\n');
+  }
+  return '';
+}
+
+function stringifyResultContentForEstimate(content: unknown): string {
+  if (content === undefined || content === null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const p of content) {
+      const part = p as { text?: unknown };
+      if (typeof part.text === 'string') parts.push(part.text);
+    }
+    return parts.join('\n');
+  }
+  return '';
 }
 
 /**
