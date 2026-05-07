@@ -314,6 +314,56 @@ describe('AgentExecutor — budget surface', () => {
     expect(result.status).toBe('completed');
     expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(8);
   });
+
+  /* =====================================================================
+   * v0.1.9 — contextWindowTokens plumbing (Piece 2 of the
+   * context-awareness slate; behavior change for safety-net + detector
+   * land in pieces 3 + 4). The interface extension MUST land here so
+   * downstream pieces have a stable RunBudget surface to read.
+   *
+   * Piece 2 only assert: when ExecutorRunInput.contextWindowTokens is
+   * set, RunBudget.contextWindowTokens reflects the value AND the loop
+   * still executes naturally — the field is interface-only at this
+   * stage; no pre-call check, no behavior change vs. v0.1.8 with the
+   * field unset.
+   * ===================================================================== */
+  it('SC4.7-piece2: input.contextWindowTokens=131072 surfaces verbatim on RunBudget', async () => {
+    const llm = makeStubLLM({ scriptedResponses: [{ content: 'final answer' }] });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+      contextWindowTokens: 131_072,
+    });
+    expect(result.budget.contextWindowTokens).toBe(131_072);
+    // No behavior change at piece 2 — loop still completes naturally.
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('final answer');
+  });
+
+  it('SC4.7-piece2: input.contextWindowTokens unset leaves RunBudget.contextWindowTokens undefined (back-compat)', async () => {
+    const llm = makeStubLLM({ scriptedResponses: [{ content: 'final answer' }] });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(result.budget.contextWindowTokens).toBeUndefined();
+    expect(result.status).toBe('completed');
+  });
+
+  it('SC4.7-piece2: contextWindowTokens composes with tokenLimit — both fields surface independently', async () => {
+    const llm = makeStubLLM({ scriptedResponses: [{ content: 'final answer' }] });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+      contextWindowTokens: 131_072,
+      tokenLimit: 50_000,
+    });
+    expect(result.budget.contextWindowTokens).toBe(131_072);
+    expect(result.budget.tokenLimit).toBe(50_000);
+  });
 });
 
 describe('AgentExecutor — dispatch and cancellation', () => {

@@ -864,6 +864,30 @@ describe('runAgentTask — runConfig precedence (WS-G)', () => {
     // wired (i.e. the runner did the composition).
     expect(spy.capturedSignal()).toBeDefined();
   });
+
+  /* =====================================================================
+   * v0.1.9 — Piece 2 of the context-awareness slate. The runner
+   * threads `PodConfig.contextWindowTokens` (set by env.ts from
+   * KAGENT_AGENT_MODEL_CONTEXT_WINDOW) onto the executor's
+   * `RunBudget.contextWindowTokens`. RunResult.budget mirrors
+   * executor.budget (per runner.ts:310), so we can assert the value
+   * round-trips end-to-end.
+   * ===================================================================== */
+  it('threads PodConfig.contextWindowTokens onto RunBudget.contextWindowTokens', async () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      contextWindowTokens: 131_072,
+    };
+    const result = await runAgentTask(cfg, { llm: scriptedLlm('done.'), sinks: [] });
+    expect(result.status).toBe('completed');
+    expect(result.budget.contextWindowTokens).toBe(131_072);
+  });
+
+  it('leaves RunBudget.contextWindowTokens undefined when PodConfig.contextWindowTokens is unset (back-compat)', async () => {
+    const result = await runAgentTask(baseConfig, { llm: scriptedLlm('done.'), sinks: [] });
+    expect(result.status).toBe('completed');
+    expect(result.budget.contextWindowTokens).toBeUndefined();
+  });
 });
 
 describe('runAgentTask — artifacts collation', () => {

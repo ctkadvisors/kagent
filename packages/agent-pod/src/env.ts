@@ -275,6 +275,20 @@ export interface PodConfig {
    * parent's own UID as the new root.
    */
   readonly rootTaskUid?: string;
+  /**
+   * v0.1.9 — model context-window size in tokens, projected by the
+   * operator from `agent.modelClasses[<class>].contextWindowTokens`
+   * (per docs/CONTEXT-AWARENESS.md §4.1) onto every spawned pod's
+   * `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` env var. The runner threads
+   * this verbatim onto `RunBudget.contextWindowTokens` so the agent
+   * loop's pre-call safety-net (piece 3) and `context_pressure_ignored`
+   * detector (piece 4) can read one source of truth.
+   *
+   * Absence is normal back-compat — modelClass entries that don't
+   * declare a window leave this undefined, and all four context-awareness
+   * pieces degrade to no-op.
+   */
+  readonly contextWindowTokens?: number;
 }
 
 /**
@@ -340,6 +354,11 @@ export function parseEnv(
   // KAGENT_BLACKBOARD_BUCKET (`kagent-kv-<root-uid>`). Undefined for
   // pre-Wave 3 deploys; spawn path treats parent UID as root then.
   const rootTaskUid = parseRootTaskUidFromBucket(env.KAGENT_BLACKBOARD_BUCKET);
+  // v0.1.9 — model context-window from operator-projected env (Piece 1
+  // of the context-awareness slate). Absence is back-compat normal;
+  // malformed values warn-and-degrade so a typo doesn't take down the
+  // pod.
+  const contextWindowTokens = parseContextWindowTokens(env.KAGENT_AGENT_MODEL_CONTEXT_WINDOW);
 
   const config: PodConfig = {
     taskId,
@@ -357,6 +376,7 @@ export function parseEnv(
     taskDepth,
     identity,
     ...(rootTaskUid !== undefined && { rootTaskUid }),
+    ...(contextWindowTokens !== undefined && { contextWindowTokens }),
   };
   return config;
 }
@@ -403,6 +423,33 @@ export function parseTaskDepth(raw: string | undefined): number {
   if (typeof raw !== 'string' || raw.length === 0) return 0;
   const n = Number(raw);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
+  return n;
+}
+
+/**
+ * v0.1.9 — parse `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` into a positive
+ * integer (the model's declared context-window size in tokens). Returns
+ * undefined for absent / empty input — back-compat normal case.
+ *
+ * Defensive: any malformed value (`'0'`, `'-1'`, `'1.5'`, `'NaN'`,
+ * non-numeric strings) logs a single console.warn and returns undefined
+ * instead of throwing — the contract from docs/CONTEXT-AWARENESS.md §7
+ * is that absence (or any failure to parse) MUST degrade to no-op for
+ * pieces 2/3/4. A typo on the operator chart should never take down a
+ * long-running AgentTask.
+ *
+ * Exported for unit tests.
+ */
+export function parseContextWindowTokens(raw: string | undefined): number | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+    console.warn(
+      `[kagent-agent-pod] KAGENT_AGENT_MODEL_CONTEXT_WINDOW='${raw}' is not a positive integer; ` +
+        `ignoring (context-awareness pieces 2/3/4 will degrade to no-op).`,
+    );
+    return undefined;
+  }
   return n;
 }
 

@@ -144,6 +144,23 @@ export interface RunBudget {
   tokenLimit?: number;
   /** Optional cap; same exit semantics as `tokenLimit`. */
   costLimitUsd?: number;
+  /**
+   * v0.1.9 — the model's context-window size in tokens, when known.
+   * Read from the `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` env var operator-side
+   * (per docs/CONTEXT-AWARENESS.md §4.1) and threaded through
+   * `runner.ts`. When undefined, pieces 3 (executor safety-net) and 4
+   * (`context_pressure_ignored` detector) are no-ops — preserving v0.1.8
+   * behavior for classes without a declared window.
+   *
+   * Distinct from `tokenLimit` (which is a per-task user cap; lower than
+   * the model window by convention). Both can be set; the safety-net
+   * (piece 3) fires on whichever is closer to being hit.
+   *
+   * Piece 2 only plumbs the value onto `RunBudget`; no pre-call check
+   * lives here yet — that lands in piece 3 alongside the
+   * `KAGENT_CONTEXT_SAFETY_THRESHOLD` env var.
+   */
+  contextWindowTokens?: number;
 }
 
 /**
@@ -189,6 +206,19 @@ export interface RunInput<TType extends string = string> {
   tokenLimit?: number;
   /** Per-run USD cost cap. Exceeding triggers `status='budget_exceeded'`. */
   costLimitUsd?: number;
+  /**
+   * v0.1.9 — the model's context-window size in tokens, when known.
+   * Mirrored verbatim onto `RunBudget.contextWindowTokens` so the loop
+   * (piece 3 safety-net) and downstream detectors (piece 4) can read it
+   * from one place. Threaded by `runner.ts` from the
+   * `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` env var the operator projects onto
+   * every spawned pod (per docs/CONTEXT-AWARENESS.md §4.1, §4.3).
+   *
+   * When undefined, all four context-awareness pieces degrade to no-op
+   * — back-compat for v0.1.8 deployments / modelClass entries without a
+   * declared window.
+   */
+  contextWindowTokens?: number;
   /** Caller-owned cancellation signal. */
   signal?: AbortSignal;
 }
@@ -434,6 +464,12 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       cumulativeCostUsd: null,
       ...(input.tokenLimit !== undefined && { tokenLimit: input.tokenLimit }),
       ...(input.costLimitUsd !== undefined && { costLimitUsd: input.costLimitUsd }),
+      // v0.1.9 piece 2 — mirror the model's context-window onto RunBudget
+      // so pieces 3 (safety-net) + 4 (detector) read one source. No
+      // pre-call check fires here yet; that lands in piece 3.
+      ...(input.contextWindowTokens !== undefined && {
+        contextWindowTokens: input.contextWindowTokens,
+      }),
     };
     const traces: TraceEntry[] = [];
     // Sequence counter as a mutable ref so `chatWithRetry` can advance it

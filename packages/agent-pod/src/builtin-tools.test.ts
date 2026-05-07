@@ -960,4 +960,89 @@ describe('get_my_context (v0.1.9)', () => {
       additionalProperties: false,
     });
   });
+
+  /* =====================================================================
+   * v0.1.9 piece 2 — `tokenUtilization` field on get_my_context output.
+   *
+   * Per docs/CONTEXT-AWARENESS.md §4.4, the tool returns a sibling
+   * `tokenUtilization: { used, modelWindow, percentage }` block. The
+   * runner injects a live "budget snapshot" thunk so values are read at
+   * tool-call time (the cumulative token totals are mutating live on
+   * RunBudget). Three back-compat-critical cases:
+   *
+   *   1. Window unset (KAGENT_AGENT_MODEL_CONTEXT_WINDOW absent):
+   *      modelWindow = null, percentage = null, used = 0 (or whatever
+   *      the live snapshot reports).
+   *   2. Window set with zero cumulative (no LLM call has fired yet):
+   *      used = 0, percentage = 0.0000.
+   *   3. Window set with non-zero cumulative: used = N,
+   *      percentage = N/window rounded to 4 decimals.
+   * ===================================================================== */
+  it('returns tokenUtilization with modelWindow=null + percentage=null when window snapshot is absent', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig(),
+      tokenUtilizationSnapshot: () => ({ used: 0, modelWindow: null }),
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const util = ctx.tokenUtilization as Record<string, unknown>;
+    expect(util.used).toBe(0);
+    expect(util.modelWindow).toBeNull();
+    expect(util.percentage).toBeNull();
+  });
+
+  it('returns tokenUtilization with percentage=0 when window set + cumulative=0', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig(),
+      tokenUtilizationSnapshot: () => ({ used: 0, modelWindow: 131_072 }),
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const util = ctx.tokenUtilization as Record<string, unknown>;
+    expect(util.used).toBe(0);
+    expect(util.modelWindow).toBe(131_072);
+    expect(util.percentage).toBe(0);
+  });
+
+  it('returns tokenUtilization with percentage=used/window rounded to 4 decimals', async () => {
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig(),
+      tokenUtilizationSnapshot: () => ({ used: 12_450, modelWindow: 131_072 }),
+    });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const util = ctx.tokenUtilization as Record<string, unknown>;
+    expect(util.used).toBe(12_450);
+    expect(util.modelWindow).toBe(131_072);
+    // 12450/131072 = 0.094978... → 0.0950 at 4-decimal rounding.
+    expect(util.percentage).toBe(0.095);
+  });
+
+  it('reads the snapshot LIVE at tool-call time (not at construction)', async () => {
+    let used = 0;
+    const tool = defineGetMyContext({
+      podConfig: buildPodConfig(),
+      tokenUtilizationSnapshot: () => ({ used, modelWindow: 100_000 }),
+    });
+    // Mutate AFTER construction — live thunk should observe the new value.
+    used = 25_000;
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const util = ctx.tokenUtilization as Record<string, unknown>;
+    expect(util.used).toBe(25_000);
+    expect(util.percentage).toBe(0.25);
+  });
+
+  it('back-compat: when no snapshot dep is supplied, tokenUtilization still surfaces with used=0 + modelWindow=null', async () => {
+    // Existing call sites that don't yet wire the snapshot must still
+    // get a well-formed payload — the tool's contract from §4.4 is
+    // "always present", not "present iff dep is wired".
+    const tool = defineGetMyContext({ podConfig: buildPodConfig() });
+    const result = await callGetMyContext(tool);
+    const ctx = parseContext(result);
+    const util = ctx.tokenUtilization as Record<string, unknown>;
+    expect(util.used).toBe(0);
+    expect(util.modelWindow).toBeNull();
+    expect(util.percentage).toBeNull();
+  });
 });

@@ -142,6 +142,57 @@ describe('parseEnv', () => {
   });
 
   /* =====================================================================
+   * v0.1.9 — KAGENT_AGENT_MODEL_CONTEXT_WINDOW parsing. The operator
+   * resolves this from `agent.modelClasses[<class>].contextWindowTokens`
+   * (per docs/CONTEXT-AWARENESS.md §4.1) and projects it onto every
+   * spawned pod. The agent-pod surfaces it on PodConfig.contextWindowTokens
+   * so `runner.ts` can thread it onto `RunBudget.contextWindowTokens`.
+   *
+   * Defensive: absence is normal (back-compat for v0.1.8 / classes that
+   * don't declare a window). Malformed values log a warn and degrade to
+   * undefined — fail-soft so a typo doesn't take down a long-running
+   * AgentTask. Only positive integers parse.
+   * ===================================================================== */
+  describe('KAGENT_AGENT_MODEL_CONTEXT_WINDOW', () => {
+    it('leaves contextWindowTokens undefined when env var is unset (back-compat)', () => {
+      const cfg = parseEnv(baseEnv);
+      expect(cfg.contextWindowTokens).toBeUndefined();
+    });
+
+    it('parses a positive integer verbatim', () => {
+      const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '131072' });
+      expect(cfg.contextWindowTokens).toBe(131_072);
+    });
+
+    it('parses small positive integer (e.g. 8192 for nemotron)', () => {
+      const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: '8192' });
+      expect(cfg.contextWindowTokens).toBe(8192);
+    });
+
+    it.each(['', '0', '-1', '1.5', 'NaN', 'one-twenty-eight'])(
+      'logs a warn and returns undefined for malformed value %s',
+      (raw) => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+          const cfg = parseEnv({ ...baseEnv, KAGENT_AGENT_MODEL_CONTEXT_WINDOW: raw });
+          expect(cfg.contextWindowTokens).toBeUndefined();
+          if (raw.length > 0) {
+            // Empty string is treated as "unset" — no warn. Anything
+            // else that fails to parse a positive integer warns once.
+            expect(warnSpy).toHaveBeenCalled();
+            const msg = warnSpy.mock.calls[0]?.[0] as string;
+            expect(msg).toContain('KAGENT_AGENT_MODEL_CONTEXT_WINDOW');
+          } else {
+            expect(warnSpy).not.toHaveBeenCalled();
+          }
+        } finally {
+          warnSpy.mockRestore();
+        }
+      },
+    );
+  });
+
+  /* =====================================================================
    * v0.4.1-blackboard — Wave 3 Blackboard sub-team.
    *
    * `KAGENT_BLACKBOARD_BUCKET=kagent-kv-<root-uid>` is stamped by the

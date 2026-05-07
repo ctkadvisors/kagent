@@ -1054,6 +1054,31 @@ export interface GetMyContextDeps {
    * never needs the raw token, and exposing it would be a footgun.
    */
   readonly capabilityBundle?: import('@kagent/capability-types').CapabilityBundle;
+  /**
+   * v0.1.9 piece 2 — live token-utilization snapshot. Returns
+   * `{ used, modelWindow }` at tool-call time so the LLM observes the
+   * cumulative input + output tokens against the model's context-window
+   * cap (per docs/CONTEXT-AWARENESS.md §4.4).
+   *
+   * Snapshot semantics (the values mutate live on `RunBudget` between
+   * iterations — a thunk lets the handler read them at the moment the
+   * tool fires, not at construction time):
+   *   - `used`: cumulativeInputTokens + cumulativeOutputTokens; always
+   *     a number. Returns 0 before any LLM call has fired.
+   *   - `modelWindow`: the model's declared window in tokens
+   *     (KAGENT_AGENT_MODEL_CONTEXT_WINDOW resolved). `null` when the
+   *     env is unset (back-compat).
+   *
+   * When the dep is omitted, the handler defaults to
+   * `() => ({ used: 0, modelWindow: null })` so the tool's output
+   * shape stays consistent with the §4.4 contract regardless of
+   * wiring state. (The contract is "always present", not "present iff
+   * dep is wired".)
+   */
+  readonly tokenUtilizationSnapshot?: () => {
+    readonly used: number;
+    readonly modelWindow: number | null;
+  };
 }
 
 /**
@@ -1089,6 +1114,28 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       if (typeof secondsRemaining === 'number' && Number.isFinite(secondsRemaining)) {
         budget.secondsRemaining = secondsRemaining;
       }
+      // v0.1.9 piece 2 — live token-utilization snapshot per
+      // docs/CONTEXT-AWARENESS.md §4.4. Read at tool-call time (NOT at
+      // construction): the cumulative tokens are mutating live on
+      // RunBudget between iterations, so a thunk-style dep is the only
+      // way the LLM gets a fresh number when it asks. Defaults to
+      // `{ used: 0, modelWindow: null }` so the field is always present
+      // (back-compat: existing callers that haven't wired the snapshot
+      // yet still get a well-formed payload).
+      const snapshot = deps.tokenUtilizationSnapshot?.() ?? { used: 0, modelWindow: null };
+      const tokenUtilization: {
+        used: number;
+        modelWindow: number | null;
+        percentage: number | null;
+      } = {
+        used: snapshot.used,
+        modelWindow: snapshot.modelWindow,
+        percentage:
+          snapshot.modelWindow !== null && snapshot.modelWindow > 0
+            ? // 4-decimal rounding per §4.4 example (12450/131072 → 0.0950).
+              Math.round((snapshot.used / snapshot.modelWindow) * 10_000) / 10_000
+            : null,
+      };
       const ctx: {
         taskUid: string;
         taskName: string;
@@ -1097,6 +1144,11 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
         parentUid?: string;
         depth: number;
         budget: { tokensRemaining?: number; secondsRemaining?: number };
+        tokenUtilization: {
+          used: number;
+          modelWindow: number | null;
+          percentage: number | null;
+        };
         capability?: {
           jti: string;
           expiresAt: number;
@@ -1114,6 +1166,7 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
         agentName: podConfig.agentName,
         depth: podConfig.taskDepth,
         budget,
+        tokenUtilization,
       };
       if (typeof parentUid === 'string' && parentUid.length > 0) {
         ctx.parentUid = parentUid;

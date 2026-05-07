@@ -277,6 +277,16 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(effectiveTokenLimit !== undefined && { tokenLimit: effectiveTokenLimit }),
     ...(effectiveCostLimit !== undefined && { costLimitUsd: effectiveCostLimit }),
     ...(effectiveMaxIter !== undefined && { maxIterations: effectiveMaxIter }),
+    // v0.1.9 piece 2 — thread the operator-projected
+    // KAGENT_AGENT_MODEL_CONTEXT_WINDOW (parsed onto config) onto
+    // RunBudget.contextWindowTokens so the executor's pre-call safety-net
+    // (piece 3) and `context_pressure_ignored` detector (piece 4) can
+    // read one source of truth. Absent = the four context-awareness
+    // pieces degrade to no-op (back-compat for v0.1.8 / classes that
+    // don't declare a window).
+    ...(config.contextWindowTokens !== undefined && {
+      contextWindowTokens: config.contextWindowTokens,
+    }),
   });
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
