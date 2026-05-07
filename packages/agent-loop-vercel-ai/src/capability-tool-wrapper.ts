@@ -81,6 +81,35 @@ export interface CapabilityCheckOpts<INPUT> {
  * Returns a NEW `Tool` (the input is not mutated). When the underlying
  * tool has no `execute` (a tool whose result is supplied separately),
  * the wrapper returns the input unchanged — there's nothing to gate.
+ *
+ * **CALLER RESPONSIBILITY — JWKS verification (R3-LOW-3).**
+ *
+ * This wrapper does NOT verify the capability JWT. It accepts an
+ * already-verified `CapabilityBundle` from `opts.bundle` and consults
+ * its `claims.<category>` patterns via `globMatchAny`. Verification
+ * (JWKS fetch + signature check + `aud`/`iss`/`exp` validation) is
+ * the CALLER's job — it must happen BEFORE the bundle reaches the
+ * wrapper. In a kagent pod the canonical verification path is
+ * `loadCapabilityOptional({ env: process.env })` from
+ * `@kagent/agent-pod`'s `cap-consumer` module — see
+ * `packages/agent-pod/src/main.ts:177-209` for the production wireup.
+ *
+ * A consumer that constructs a `CapabilityBundle` by hand, OR that
+ * forgets to invoke `loadCapabilityOptional` and instead reads the
+ * JWT body directly, defeats the substrate's capability primitive
+ * entirely. The audit-rev3 R3 §1 Component 6 surfaced this as a
+ * documentation gap; the README at
+ * `packages/agent-loop-vercel-ai/README.md` shows the verify step but
+ * the wrapper's API surface previously did not. This TSDoc is the
+ * operative contract — every caller of `wrapToolWithCapabilityCheck`
+ * MUST resolve `opts.bundle` from a verified source.
+ *
+ * Defense-in-depth (the inner factory's own cap check) still fires
+ * for substrate tools constructed via `defineSpawnChildTask` etc., so
+ * the worst case of skipping verification is "the wrapper trusts the
+ * bundle but the inner factory re-verifies its own narrow target." A
+ * caller wrapping CUSTOM tools (e.g. an HTTP-tool-provider re-emit)
+ * has NO inner check to fall back on; verification is mandatory.
  */
 export function wrapToolWithCapabilityCheck<INPUT, OUTPUT>(
   tool: Tool<INPUT, OUTPUT>,

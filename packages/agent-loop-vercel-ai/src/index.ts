@@ -70,6 +70,17 @@ export {
   type TraceSinkBridgeHandle,
 } from './trace-sink-adapter.js';
 
+/**
+ * Capability wrapper — `wrapToolWithCapabilityCheck`.
+ *
+ * IMPORTANT (R3-LOW-3): the wrapper does NOT verify the capability
+ * JWT. It consults an ALREADY-VERIFIED `CapabilityBundle` from
+ * `opts.bundle`. The caller is responsible for invoking
+ * `loadCapabilityOptional({ env: process.env })` (from
+ * `@kagent/agent-pod`'s `cap-consumer`) BEFORE constructing the
+ * bundle that flows into this wrapper. See the wrapper's own TSDoc
+ * for the full caller-responsibility contract.
+ */
 export {
   wrapToolWithCapabilityCheck,
   type CapabilityCheckOpts,
