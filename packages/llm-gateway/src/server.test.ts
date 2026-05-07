@@ -20,7 +20,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildHandler, type ServerDeps } from './server.js';
+import { buildHandler, maybeEmitIdentityHeader, type ServerDeps } from './server.js';
 import { hashApiKey } from './auth.js';
 import { AimdController } from './aimd.js';
 import { InFlightCounter } from './inflight-counter.js';
@@ -499,5 +499,76 @@ describe('POST /v1/chat/completions — touchLastUsed (H18)', () => {
     } finally {
       await booted.close();
     }
+  });
+});
+
+/* =====================================================================
+ * Audit-rev2 M7 follow-up — `X-Kagent-Identity-Verified` header
+ * emission.
+ *
+ * The agent-pod's `probeGatewayMtls` (svid-client.ts:249-298) treats
+ * the header's PRESENCE as "VERIFIED=spiffe://..." and absence as
+ * "UNVERIFIED". Per docs/GATEWAY-CONTRACT.md §4.3, the gateway-side
+ * emission is the closing of that loop. Contract:
+ *
+ *   - Header emitted ONLY when an mTLS resolver returns a non-null
+ *     SPIFFE id for the request — i.e. real handshake material.
+ *   - Header omitted when resolver is unwired (today's HTTP-only
+ *     deploy) OR when resolver returns null (no peer cert, no SAN,
+ *     unauthorized handshake). NEVER stub-emit; the agent-pod's
+ *     UNVERIFIED branch is the safe posture.
+ *
+ * Tests drive `maybeEmitIdentityHeader` directly — booting the full
+ * chat-completions success path requires real model dispatch. The
+ * helper is the seam between the resolver contract and the wire,
+ * which is what we need to lock.
+ * ===================================================================== */
+describe('maybeEmitIdentityHeader (M7 follow-up)', () => {
+  function makeRes(): ServerResponse & { _headers: Record<string, unknown> } {
+    const headers: Record<string, unknown> = {};
+    const res = {
+      _headers: headers,
+      setHeader(name: string, value: unknown): void {
+        headers[name] = value;
+      },
+      getHeader(name: string): unknown {
+        return headers[name];
+      },
+    } as unknown as ServerResponse & { _headers: Record<string, unknown> };
+    return res;
+  }
+
+  function makeReq(): IncomingMessage {
+    return {} as IncomingMessage;
+  }
+
+  it('omits the header when the resolver is undefined (HTTP-only deploy / pre-mTLS gateway)', () => {
+    const res = makeRes();
+    maybeEmitIdentityHeader(makeReq(), res, undefined);
+    expect(res.getHeader('X-Kagent-Identity-Verified')).toBeUndefined();
+  });
+
+  it('omits the header when the resolver returns null (mTLS unverified for this request)', () => {
+    const res = makeRes();
+    maybeEmitIdentityHeader(makeReq(), res, () => null);
+    expect(res.getHeader('X-Kagent-Identity-Verified')).toBeUndefined();
+  });
+
+  it('emits the resolved SPIFFE id when the resolver returns a verified identity', () => {
+    const res = makeRes();
+    const spiffeId = 'spiffe://kagent.knuteson.io/agent/researcher';
+    maybeEmitIdentityHeader(makeReq(), res, () => ({ spiffeId }));
+    expect(res.getHeader('X-Kagent-Identity-Verified')).toBe(spiffeId);
+  });
+
+  it('passes the IncomingMessage through to the resolver (so it can inspect req.socket / TLSSocket)', () => {
+    const res = makeRes();
+    const req = makeReq();
+    let captured: IncomingMessage | undefined;
+    maybeEmitIdentityHeader(req, res, (r) => {
+      captured = r;
+      return null;
+    });
+    expect(captured).toBe(req);
   });
 });

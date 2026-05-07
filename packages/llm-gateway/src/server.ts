@@ -45,6 +45,39 @@ import { createOpenAIError, type ChatCompletionRequest, type ModelListResponse }
 
 const MAX_BODY_BYTES = 64 * 1024;
 
+/**
+ * Audit-rev2 M7 follow-up — gateway-side mTLS identity resolver.
+ *
+ * The agent-pod's `probeGatewayMtls` (svid-client.ts:249-298) treats
+ * `X-Kagent-Identity-Verified` absence as "UNVERIFIED" and presence as
+ * the SPIFFE ID the gateway resolved during the mTLS handshake. The
+ * gateway-side emission was the open question in
+ * docs/GATEWAY-CONTRACT.md §4.3; this resolver closes the loop.
+ *
+ * Contract:
+ *   - The resolver inspects the IncomingMessage's transport. When the
+ *     socket is a TLSSocket AND a peer cert was actually verified
+ *     (`socket.authorized === true` AND a SPIFFE URI SAN is present),
+ *     it returns `{ spiffeId: 'spiffe://...' }`. The handler stamps
+ *     `X-Kagent-Identity-Verified: <spiffeId>` on the success response.
+ *   - When no peer cert was presented, the cert was not verified
+ *     against a trusted CA, or no SPIFFE SAN was found, the resolver
+ *     returns `null`. The handler omits the header — the agent-pod
+ *     side records "UNVERIFIED" (which is the correct posture given
+ *     the v0.4.3 substrate has not yet stood up SPIRE/mTLS in front
+ *     of the gateway in the homelab).
+ *
+ * The resolver is OPTIONAL on ServerDeps. When omitted (today's HTTP-
+ * only gateway), the handler never emits the header — the agent-pod's
+ * UNVERIFIED branch handles it.
+ *
+ * IMPORTANT: the resolver MUST NOT fabricate a SPIFFE ID for non-mTLS
+ * clients. Emitting a header without verified handshake material would
+ * be a fail-OPEN posture inversion. Tests assert the no-mTLS path
+ * never sees the header.
+ */
+export type MtlsIdentityResolver = (req: IncomingMessage) => { readonly spiffeId: string } | null;
+
 export interface ServerDeps {
   readonly modelIndex: ModelIndex;
   readonly inFlight: InFlightCounter;
@@ -71,6 +104,21 @@ export interface ServerDeps {
    * cannot mint/revoke arbitrary keys.
    */
   readonly adminReadToken?: string;
+  /**
+   * Audit-rev2 M7 follow-up — optional mTLS identity resolver. When
+   * present AND mTLS verified an SVID for the request, the handler
+   * stamps `X-Kagent-Identity-Verified: <spiffeId>` on success
+   * responses. When absent OR the resolver returns null (no verified
+   * SVID), the header is omitted — the agent-pod's probe records
+   * UNVERIFIED. NEVER stub-emit; the contract is "header iff verified
+   * SVID."
+   *
+   * v0.4.3 substrate posture: SPIFFE/SPIRE integration in front of the
+   * gateway is post-v0.4.3, so this resolver is unwired by default
+   * today. The dep is shape-only forward compat with the agent-pod
+   * side that's already parsing the header.
+   */
+  readonly mtlsIdentityResolver?: MtlsIdentityResolver;
   readonly readinessProbe: () => Promise<boolean>;
 }
 
@@ -324,9 +372,17 @@ export function buildHandler(
       });
 
       switch (result.kind) {
-        case 'dispatched':
+        case 'dispatched': {
+          // Audit-rev2 M7 follow-up — emit X-Kagent-Identity-Verified
+          // ONLY when the resolver actually verified an SVID for this
+          // request. Absence on success means the agent-pod's probe
+          // logs UNVERIFIED (per svid-client.ts:249-298). Never
+          // fabricate; the security posture depends on this header
+          // reflecting real handshake state.
+          maybeEmitIdentityHeader(req, res, deps.mtlsIdentityResolver);
           writeJson(res, 200, result.body);
           return;
+        }
         case 'at_cap':
           res.setHeader('Retry-After', String(result.retryAfterSec));
           writeJson(
@@ -460,4 +516,30 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
     'content-length': Buffer.byteLength(payload, 'utf8').toString(),
   });
   res.end(payload);
+}
+
+/**
+ * Audit-rev2 M7 follow-up — gateway-side `X-Kagent-Identity-Verified`
+ * header emitter. Stamps the header iff the resolver returns a non-null
+ * SPIFFE id for the request. Absence is the safe posture (agent-pod
+ * probe logs UNVERIFIED).
+ *
+ * Exported for unit-level tests that drive the resolver contract
+ * without booting the full chat-completions dispatch path.
+ *
+ * The header is set via `res.setHeader` BEFORE the eventual
+ * `res.writeHead(...)` in `writeJson`. Per Node http docs, setHeader-
+ * supplied values are preserved across writeHead unless writeHead's
+ * second argument supplies the same field, which `writeJson` does not
+ * for `X-Kagent-Identity-Verified`.
+ */
+export function maybeEmitIdentityHeader(
+  req: IncomingMessage,
+  res: ServerResponse,
+  resolver: MtlsIdentityResolver | undefined,
+): void {
+  if (resolver === undefined) return;
+  const identity = resolver(req);
+  if (identity === null) return;
+  res.setHeader('X-Kagent-Identity-Verified', identity.spiffeId);
 }
