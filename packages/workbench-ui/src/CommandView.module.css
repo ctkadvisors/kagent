@@ -1,0 +1,385 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * Command Center styles — TA / Warcraft 3 chrome on top of the
+ * vanilla canvas. Colors mirror scene.ts so HUD chips and event-log
+ * phase pills match the in-canvas dot color exactly.
+ */
+
+.wrapper {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  background: #050b18;
+  color: #e2e8f0;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  overflow: hidden;
+}
+
+/* ───────────────────────── Top HUD bar ───────────────────────── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: linear-gradient(180deg, #0a1628 0%, #050b18 100%);
+  border-bottom: 1px solid #1f2a44;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.backLink {
+  background: transparent;
+  color: #94a3b8;
+  border: 1px solid #1f2a44;
+  border-radius: 4px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.backLink:hover {
+  color: #e2e8f0;
+  border-color: #3b82f6;
+}
+
+.title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #fbbf24;
+}
+
+.hud {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hudTile,
+.hudTileOk,
+.hudTileBad,
+.hudTileBusy {
+  min-width: 86px;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #1f2a44;
+  border-radius: 4px;
+  background: #0b1524;
+  text-align: right;
+}
+
+.hudTileOk {
+  border-color: rgba(52, 211, 153, 0.4);
+}
+.hudTileBad {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+.hudTileBusy {
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+.hudValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.hudLabel {
+  font-size: 0.65rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.navLinks {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.navLink {
+  color: #60a5fa;
+  text-decoration: none;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.navLink:hover {
+  background: #0f1f3a;
+}
+
+/* ─────────────────────────── Body ─────────────────────────── */
+
+.body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  min-height: 0;
+}
+
+.sceneWrap {
+  position: relative;
+  background: #050b18;
+  overflow: hidden;
+}
+
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.emptyOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 0.875rem;
+  pointer-events: none;
+}
+
+/* ───────────────────── Selection panel (right) ─────────────────────── */
+
+.panel {
+  border-left: 1px solid #1f2a44;
+  background: #07111e;
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.panelTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem 0;
+  color: #e2e8f0;
+  letter-spacing: 0.02em;
+}
+
+.panelSub {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 1rem;
+}
+
+.panelEmpty,
+.panelEmpty2 {
+  color: #64748b;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.panelEmpty strong {
+  color: #94a3b8;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.panelKv {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px dashed #14213d;
+}
+
+.panelKv > span:first-child {
+  color: #64748b;
+}
+
+.panelKv > span:last-child {
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+}
+
+.panelHeading {
+  margin-top: 1rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.panelList {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0 0;
+}
+
+.panelRow {
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #14213d;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.panelRowLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: #e2e8f0;
+}
+
+.panelRowMeta {
+  font-size: 0.7rem;
+  color: #64748b;
+}
+
+.gauge {
+  height: 4px;
+  background: #14213d;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.gaugeFill {
+  height: 100%;
+  background: linear-gradient(90deg, #34d399 0%, #fbbf24 70%, #f87171 100%);
+  transition: width 0.3s ease-out;
+}
+
+.taskLink {
+  color: #60a5fa;
+  text-decoration: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.taskLink:hover {
+  text-decoration: underline;
+}
+
+.taskLinkBtn {
+  display: inline-block;
+  margin-top: 1rem;
+  padding: 0.4rem 0.7rem;
+  background: #0f1f3a;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  color: #60a5fa;
+  text-decoration: none;
+  font-size: 0.8rem;
+}
+
+.taskLinkBtn:hover {
+  background: #1e3a8a;
+  color: #fff;
+}
+
+.panelError {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 4px;
+  color: #fca5a5;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-word;
+}
+
+/* ───────────────────── Activity log (bottom) ─────────────────────── */
+
+.log {
+  border-top: 1px solid #1f2a44;
+  background: linear-gradient(180deg, #050b18 0%, #0a1628 100%);
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 0.5rem 1rem;
+}
+
+.logHeader {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.logError {
+  color: #fca5a5;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-bottom: 0.5rem;
+}
+
+.logList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.logEmpty {
+  color: #475569;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.logRow {
+  display: grid;
+  grid-template-columns: 70px 90px 220px 1fr;
+  gap: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  padding: 0.18rem 0;
+  border-bottom: 1px dashed #14213d;
+}
+
+.logAt {
+  color: #475569;
+}
+
+.logPhase {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.logTask {
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logNote {
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Phase pills shared across selection panel + activity log. */
+.phaseOk {
+  color: #34d399;
+}
+
+.phaseBad {
+  color: #f87171;
+}
+
+.phaseBusy {
+  color: #fbbf24;
+}

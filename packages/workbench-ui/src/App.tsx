@@ -16,11 +16,14 @@
  *   - `#/` (or no hash)               → TaskList
  *   - `#/tasks/<namespace>/<name>`    → TaskDetail
  *   - `#/gateway`                     → GatewayPage (substrate visibility)
+ *   - `#/cluster`                     → ClusterPage
+ *   - `#/command`                     → CommandView (RTS command center)
  */
 
 import { useEffect, useState } from 'react';
 
 import { ClusterPage } from './ClusterPage.js';
+import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
 import { TaskDetail } from './TaskDetail.js';
 import { TaskList } from './TaskList.js';
@@ -43,7 +46,11 @@ interface ClusterRoute {
   readonly kind: 'cluster';
 }
 
-type Route = DetailRoute | ListRoute | GatewayRoute | ClusterRoute;
+interface CommandRoute {
+  readonly kind: 'command';
+}
+
+type Route = DetailRoute | ListRoute | GatewayRoute | ClusterRoute | CommandRoute;
 
 function parseHash(hash: string): Route {
   // Strip leading `#` and any leading `/`. Tolerate trailing slashes.
@@ -51,6 +58,7 @@ function parseHash(hash: string): Route {
   if (clean === '') return { kind: 'list' };
   if (clean === 'gateway') return { kind: 'gateway' };
   if (clean === 'cluster') return { kind: 'cluster' };
+  if (clean === 'command') return { kind: 'command' };
   const parts = clean.split('/');
   if (parts.length === 3 && parts[0] === 'tasks') {
     const ns = parts[1];
@@ -107,6 +115,15 @@ export function App(): React.JSX.Element {
   if (route.kind === 'cluster') {
     return (
       <ClusterPage
+        onBack={() => {
+          window.location.hash = '#/';
+        }}
+      />
+    );
+  }
+  if (route.kind === 'command') {
+    return (
+      <CommandView
         onBack={() => {
           window.location.hash = '#/';
         }}
