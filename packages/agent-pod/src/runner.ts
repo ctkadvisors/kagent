@@ -269,6 +269,24 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
       : undefined;
   const signal = composeSignals(deps.signal, timeoutSignal);
 
+  // Piece 3 (CONTEXT-AWARENESS.md §4.5) — substrate-side context-window
+  // safety-net threshold. Operator chart (`agentPod.contextSafetyThreshold`)
+  // projects this onto every spawned pod's env at the
+  // KAGENT_CONTEXT_SAFETY_THRESHOLD key; default 0.95 per §4.1. Read
+  // here inline (not in env.ts) so this piece doesn't touch the env-reader
+  // surface that Piece 2 owns. Malformed / out-of-range values fall back to
+  // the default rather than throwing — the executor re-validates the
+  // resolved threshold and would surface an `InvalidConfigError` for any
+  // bogus value that did make it through.
+  //
+  // The companion `contextWindowTokens` env read
+  // (`KAGENT_AGENT_MODEL_CONTEXT_WINDOW`) is owned by Piece 2; until it
+  // lands, this threshold has no effect because the executor's safety-net
+  // is gated on `RunBudget.contextWindowTokens !== undefined`.
+  const contextSafetyThreshold = parseContextSafetyThreshold(
+    process.env.KAGENT_CONTEXT_SAFETY_THRESHOLD,
+  );
+
   const result = await executor.run({
     agentType: config.agentName,
     messages,
@@ -277,16 +295,16 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(effectiveTokenLimit !== undefined && { tokenLimit: effectiveTokenLimit }),
     ...(effectiveCostLimit !== undefined && { costLimitUsd: effectiveCostLimit }),
     ...(effectiveMaxIter !== undefined && { maxIterations: effectiveMaxIter }),
-    // v0.1.9 piece 2 — thread the operator-projected
+    // v0.1.9 — thread the operator-projected
     // KAGENT_AGENT_MODEL_CONTEXT_WINDOW (parsed onto config) onto
     // RunBudget.contextWindowTokens so the executor's pre-call safety-net
-    // (piece 3) and `context_pressure_ignored` detector (piece 4) can
-    // read one source of truth. Absent = the four context-awareness
-    // pieces degrade to no-op (back-compat for v0.1.8 / classes that
-    // don't declare a window).
+    // and the `context_pressure_ignored` detector read one source of
+    // truth. Absent = the four context-awareness pieces degrade to no-op
+    // (back-compat for v0.1.8 / classes that don't declare a window).
     ...(config.contextWindowTokens !== undefined && {
       contextWindowTokens: config.contextWindowTokens,
     }),
+    ...(contextSafetyThreshold !== undefined && { contextSafetyThreshold }),
   });
 
   const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
@@ -831,4 +849,24 @@ export async function resolveSystemPrompt(
         (err instanceof Error ? err.message : String(err)),
     );
   }
+}
+
+/**
+ * Piece 3 (CONTEXT-AWARENESS.md §4.5) — parse the
+ * `KAGENT_CONTEXT_SAFETY_THRESHOLD` env var into a float in `(0, 1]`.
+ *
+ * Returns `undefined` (so the executor applies its own default 0.95)
+ * when the env var is unset, empty, malformed, or out of range. The
+ * executor re-validates whatever we pass through; an explicit
+ * out-of-range value passed in by the operator chart would surface as
+ * `InvalidConfigError` at run time. Defensive fallback to undefined
+ * here keeps the agent-pod boot resilient to a typo'd Helm value.
+ *
+ * Exported for the runner test suite.
+ */
+export function parseContextSafetyThreshold(raw: string | undefined): number | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > 1) return undefined;
+  return n;
 }

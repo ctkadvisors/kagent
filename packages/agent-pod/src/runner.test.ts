@@ -21,6 +21,7 @@ import {
   buildLlmClient,
   collectArtifactsFromTraces,
   composeSignals,
+  parseContextSafetyThreshold,
   pickUserMessage,
   resolveToolProviders,
   runAgentTask,
@@ -939,5 +940,28 @@ describe('runAgentTask — artifacts collation', () => {
     });
     expect(result.status).toBe('completed');
     expect(result.artifacts).toEqual([ref]);
+  });
+});
+
+describe('parseContextSafetyThreshold (Piece 3 of v0.1.9 context-awareness slate)', () => {
+  it('returns undefined for unset / empty / non-numeric input', () => {
+    expect(parseContextSafetyThreshold(undefined)).toBeUndefined();
+    expect(parseContextSafetyThreshold('')).toBeUndefined();
+    expect(parseContextSafetyThreshold('abc')).toBeUndefined();
+  });
+
+  it('returns undefined for out-of-range values (defensive — executor revalidates anyway)', () => {
+    expect(parseContextSafetyThreshold('0')).toBeUndefined();
+    expect(parseContextSafetyThreshold('-0.5')).toBeUndefined();
+    expect(parseContextSafetyThreshold('1.5')).toBeUndefined();
+    expect(parseContextSafetyThreshold('NaN')).toBeUndefined();
+    expect(parseContextSafetyThreshold('Infinity')).toBeUndefined();
+  });
+
+  it('returns the parsed float for in-range values (0, 1]', () => {
+    expect(parseContextSafetyThreshold('0.95')).toBe(0.95);
+    expect(parseContextSafetyThreshold('0.5')).toBe(0.5);
+    expect(parseContextSafetyThreshold('1')).toBe(1);
+    expect(parseContextSafetyThreshold('0.001')).toBe(0.001);
   });
 });
