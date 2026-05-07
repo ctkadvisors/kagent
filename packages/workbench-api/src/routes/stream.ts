@@ -18,6 +18,17 @@
  * `/api/tasks/...` or `/api/agents` endpoint to get the projection.
  * The heartbeat is sent every 25 seconds to keep proxies (Traefik,
  * nginx-ingress) from idle-killing the connection.
+ *
+ * M16 — Per-user + global connection caps. Each connected SSE
+ * subscriber holds a long-lived TCP connection plus a SnapshotCache
+ * subscription. Without a cap, an authenticated user (or one
+ * misbehaving / spoofing client when auth is disabled) can open
+ * thousands of /api/stream sockets and exhaust both the workbench-api
+ * Pod's FD budget AND the SnapshotCache's listener fan-out (every
+ * cache mutation walks every subscriber). The cap counts ACTIVE
+ * subscribers in process-local maps; on disconnect (stream.onAbort)
+ * the slot is released. Heuristic limits (5 per user, 1000 total) are
+ * generous for the homelab posture but bounded.
  */
 
 import { streamSSE } from 'hono/streaming';
@@ -28,12 +39,38 @@ import { formatHeartbeat } from '../sse.js';
 
 const HEARTBEAT_MS = 25_000;
 
+/**
+ * Defaults — keep in sync with the audit's M16 recommendation. The
+ * homelab has at most 1-2 humans hitting the workbench at any given
+ * time; a cap of 5 leaves headroom for tab duplication / reconnect
+ * jitter without admitting a per-user DoS. The global cap of 1000
+ * sits well below the workbench-api's default FD budget (Node's
+ * default is ~1024) so we fail at the application layer with a
+ * structured 503 instead of crashing on EMFILE.
+ */
+const DEFAULT_PER_USER_LIMIT = 5;
+const DEFAULT_TOTAL_LIMIT = 1_000;
+
+const FORWARDED_USER_HEADER = 'X-Forwarded-User';
+const ANONYMOUS_USER = '<anonymous>';
+
 export interface StreamRouteDeps {
   readonly broker: SseBroker;
   /** Override `setInterval` in tests. Defaults to global. */
   readonly setInterval?: (fn: () => void, ms: number) => unknown;
   /** Override `clearInterval` in tests. Defaults to global. */
   readonly clearInterval?: (handle: unknown) => void;
+  /**
+   * M16 — Maximum concurrent SSE connections per authenticated user.
+   * Default 5. Set `0` to disable enforcement (tests / reader-only
+   * sidecars where the cap is enforced at a higher layer).
+   */
+  readonly perUserLimit?: number;
+  /**
+   * M16 — Maximum concurrent SSE connections across all users on this
+   * pod. Default 1000. Set `0` to disable enforcement.
+   */
+  readonly totalLimit?: number;
 }
 
 export function streamRoute(deps: StreamRouteDeps): Hono {
@@ -41,8 +78,67 @@ export function streamRoute(deps: StreamRouteDeps): Hono {
   const setInt = deps.setInterval ?? ((fn, ms) => setInterval(fn, ms));
   const clearInt =
     deps.clearInterval ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
+  const perUserLimit = deps.perUserLimit ?? DEFAULT_PER_USER_LIMIT;
+  const totalLimit = deps.totalLimit ?? DEFAULT_TOTAL_LIMIT;
+
+  // Process-local connection counters. Hono's auth middleware writes
+  // the authenticated user to `c.var.user`; when auth is disabled and
+  // no header is present, fall back to ANONYMOUS_USER so the per-user
+  // cap still bounds anonymous traffic from a single source.
+  let totalConnections = 0;
+  const perUserConnections = new Map<string, number>();
 
   app.get('/api/stream', (c) => {
+    // Resolve the user. When auth.ts has run, it sets `user` on the
+    // context; when auth is disabled or the request bypassed the
+    // middleware (test harnesses), we use the header directly.
+    const userVar = c.var as Record<string, unknown> | undefined;
+    const userFromVar =
+      typeof userVar?.user === 'string' && userVar.user.length > 0 ? userVar.user : null;
+    const userFromHeader = c.req.header(FORWARDED_USER_HEADER)?.trim();
+    const user =
+      userFromVar !== null
+        ? userFromVar
+        : userFromHeader !== undefined && userFromHeader.length > 0
+          ? userFromHeader
+          : ANONYMOUS_USER;
+
+    if (totalLimit > 0 && totalConnections >= totalLimit) {
+      return c.json(
+        {
+          error: 'sse-total-cap',
+          message: `workbench-api SSE total connection cap reached (limit=${String(totalLimit)})`,
+        },
+        503,
+      );
+    }
+    const userCount = perUserConnections.get(user) ?? 0;
+    if (perUserLimit > 0 && userCount >= perUserLimit) {
+      return c.json(
+        {
+          error: 'sse-per-user-cap',
+          message: `workbench-api SSE per-user connection cap reached for user (limit=${String(perUserLimit)})`,
+        },
+        429,
+      );
+    }
+
+    // Reserve the slot BEFORE entering the streamSSE handler. Hono's
+    // streamSSE returns immediately after registering the handler, so
+    // counting on first-write would race with simultaneous requests.
+    totalConnections++;
+    perUserConnections.set(user, userCount + 1);
+
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      totalConnections = Math.max(0, totalConnections - 1);
+      const next = (perUserConnections.get(user) ?? 1) - 1;
+      if (next <= 0) perUserConnections.delete(user);
+      else perUserConnections.set(user, next);
+    };
+
     return streamSSE(c, async (stream) => {
       // Fire-and-forget writeSSE that swallows post-disconnect rejections.
       // Hono rejects pending writes when the request aborts; without this
@@ -74,6 +170,7 @@ export function streamRoute(deps: StreamRouteDeps): Hono {
         stream.onAbort(() => {
           sub.unsubscribe();
           clearInt(heartbeatHandle);
+          release();
           resolve();
         });
       });
