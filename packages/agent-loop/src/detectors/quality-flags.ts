@@ -65,6 +65,21 @@ export interface ContextPressureOpts {
    * window.
    */
   spawnLookbackN?: number;
+  /**
+   * Audit-rev2 NM4 detector escape (= evidence/audit-rev2/C2.md §4
+   * NM1): the detector previously fired regardless of whether the
+   * Agent could even call `spawn_child_task` — for any Agent without
+   * spawn admit AND with `contextWindowTokens` set AND a long run,
+   * `context_pressure_ignored` flooded `status.structuralVerdict.
+   * suspicious[]` with a flag the operator could not tune away. Pass
+   * `spawnToolAdmitted: false` from the caller (the runner reads
+   * Agent.spec.tools + the implicit-when-X intent predicates) to
+   * suppress firing when the agent has no escape hatch by design
+   * (e.g. researcher agents that legitimately don't delegate). When
+   * undefined, defaults to `true` for back-compat — pre-NM4 callers
+   * that haven't updated their wireup keep the prior behavior.
+   */
+  spawnToolAdmitted?: boolean;
 }
 
 /**
@@ -113,18 +128,34 @@ export function computeQualityFlags(
  *   3. The trace contains zero `spawn_child_task` tool calls in the last
  *      N iterations (default N=3) — i.e., the agent has had three full
  *      turns under pressure and did not delegate / hand off.
+ *   4. (Audit-rev2 NM4 detector escape) `spawn_child_task` is admitted
+ *      on the Agent. When the caller passes `spawnToolAdmitted: false`,
+ *      the detector skips entirely — an agent without spawn admit has
+ *      no escape hatch BY DESIGN (e.g. researcher agents that
+ *      legitimately don't delegate), and flooding the structural
+ *      verdict with a flag the operator can't tune away is noise.
+ *      When the field is undefined, defaults to `true` for back-compat.
  *
  * Flag-only; no action. Surfaces in `status.structuralVerdict.suspicious[]`
  * so operators can identify which agent prompts are bad at self-management
- * and tune them. Per §4.6 last paragraph the detector still fires when
- * `spawn_child_task` is not in the agent's tool surface at all — that's a
- * prompt-author bug worth flagging because the agent has no escape hatch.
+ * and tune them. Pre-NM4 the detector fired even when `spawn_child_task`
+ * was not in the agent's tool surface; the audit found that produced
+ * untunable noise on legitimate non-spawning agents.
  */
 export function detectContextPressureIgnored(
   traces: readonly TraceEntry[],
   budget: Readonly<RunBudget>,
   opts: ContextPressureOpts = {},
 ): boolean {
+  // Audit-rev2 NM4 detector escape — skip when the agent has no
+  // spawn-tool admit. Caller threads the value from
+  // `Agent.spec.tools.includes('spawn_child_task') ||
+  //  hasSpawnIntent(spec)` (the same predicate the substrate
+  // tool-allowlist uses). Defaults to `true` so pre-NM4 callers that
+  // don't pass the field keep the original "fire regardless" behavior.
+  const spawnToolAdmitted = opts.spawnToolAdmitted ?? true;
+  if (!spawnToolAdmitted) return false;
+
   const window = budget.contextWindowTokens;
   if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return false;
 

@@ -45,7 +45,7 @@ import type { RunResult } from './runner.js';
 import type { ToolProvider } from '@kagent/agent-loop';
 import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 
-import { defineBlackboardTools, defineGetMyContext } from './builtin-tools.js';
+import { defineBlackboardTools } from './builtin-tools.js';
 import { definePublishEvent } from './builtin-tools-publish.js';
 import { defineSpawnChildTask } from './builtin-tools-spawn.js';
 import { defineEnsureAgentFromTemplate } from './builtin-tools-template.js';
@@ -359,6 +359,25 @@ async function main(): Promise<void> {
     config.contextWindowTokens,
   );
 
+  // Audit-rev2 NM5 — `remainingBudgetSeconds` was previously scoped
+  // inside the `if (spawnEnabled)` block (only the spawn / wait /
+  // get_my_context tools needed it). With NM5 lifting
+  // `defineGetMyContext` to a UNIVERSAL wireup inside `runAgentTask`,
+  // the runner needs the same callback regardless of `spawnEnabled`
+  // so the introspection tool reports `secondsRemaining` consistently.
+  // Lifted to module-scope (relative to `main`) so both the spawn
+  // block and `runAgentTask` see the same closure. Captures the
+  // pod-boot timestamp so elapsed math is anchored to the actual
+  // start, not the moment the spawn block runs (subtle but matters
+  // for the get_my_context tool's first call).
+  const remainingBudgetSeconds: (() => number | undefined) | undefined =
+    config.taskSpec.runConfig?.timeoutSeconds !== undefined
+      ? ((startMs: number, totalSec: number) => () => {
+          const elapsedSec = (Date.now() - startMs) / 1000;
+          return Math.max(0, totalSec - elapsedSec);
+        })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
+      : undefined;
+
   // WS-K + WS-L — wire substrate task-graph tools when the flag is on.
   // Default-OFF per AGENT-SELF-SERVICE.md §11 Q5 — opt-in via Helm
   // value `agentPod.spawnChild.enabled` flipping
@@ -391,18 +410,11 @@ async function main(): Promise<void> {
       // (back-compat with pre-Wave 3 deploys).
       ...(config.rootTaskUid !== undefined && { rootUid: config.rootTaskUid }),
     };
-    // Compute remaining wall-clock budget against the runConfig
-    // timeout so child timeouts get clamped to "what the parent could
-    // possibly outlive". The parent's own Job has the same
-    // activeDeadlineSeconds; this just keeps spawned children + wait
-    // calls from requesting more than the parent has left.
-    const remainingBudgetSeconds: (() => number | undefined) | undefined =
-      config.taskSpec.runConfig?.timeoutSeconds !== undefined
-        ? ((startMs: number, totalSec: number) => () => {
-            const elapsedSec = (Date.now() - startMs) / 1000;
-            return Math.max(0, totalSec - elapsedSec);
-          })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
-        : undefined;
+    // Audit-rev2 NM5 — `remainingBudgetSeconds` is now lifted to the
+    // outer scope (above this `if (spawnEnabled)` block) so it can
+    // also be threaded through `RunDeps.remainingBudgetSeconds` for
+    // the universally-wired `get_my_context` tool inside
+    // `resolveToolProviders`. Same callback, same closure timestamp.
     // v0.1.11 — when OTel is wired, build a `getTraceparent` callback
     // the spawn tool stamps onto child task specs.
     const getTraceparent: (() => string) | undefined = isOtelEnabled(process.env)
@@ -441,24 +453,17 @@ async function main(): Promise<void> {
       k8s,
       ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
     });
-    // v0.1.9 — get_my_context. Pure introspection, shares the same
-    // remainingBudgetSeconds callback as spawn_child_task so both
-    // tools agree on what's left.
-    const ctxDef = defineGetMyContext({
-      podConfig: config,
-      ...(capabilityBundle !== undefined && { capabilityBundle }),
-      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
-      // v0.1.9 / NB1 — wire the live token-utilization snapshot per
-      // docs/CONTEXT-AWARENESS.md §4.4. The thunk reads cumulative
-      // input + output tokens off the SAME RunBudget reference the
-      // executor mutates each iteration (captured via onBudgetReady
-      // below). When `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` is unset,
-      // modelWindow falls through as null and the §4.4 contract still
-      // surfaces a well-formed `tokenUtilization` block (with
-      // percentage=null) rather than failing.
-      tokenUtilizationSnapshot,
-    });
-    const subTools = [spawnDefs, waitChildDef, waitAllDef, ctxDef];
+    // Audit-rev2 NM5 — `get_my_context` is now wired UNIVERSALLY in
+    // `runAgentTask` (`resolveToolProviders`'s `kagent-universal-context`
+    // provider), regardless of `spawnEnabled`. Lifting it out of the
+    // `if (spawnEnabled)` block means tests driving `runAgentTask`
+    // directly with `Agent.spec.tools=['get_my_context']` no longer
+    // get "unknown built-in tool" because spawn happened to be off.
+    // The runner threads the SAME `tokenUtilizationSnapshot` and
+    // `remainingBudgetSeconds` deps through `RunDeps`, so the
+    // production observation contract (live snapshot at tool-call
+    // time) is unchanged.
+    const subTools = [spawnDefs, waitChildDef, waitAllDef];
     // WS-M — append the template tool when the operator's
     // template-server URL was injected. Trust boundary: cluster-internal
     // network only (the operator Service is ClusterIP). Tool errors
@@ -651,6 +656,15 @@ async function main(): Promise<void> {
       // `tokenUtilizationSnapshot` thunk reads cumulative tokens off
       // the SAME object the loop mutates each iteration.
       onBudgetReady,
+      // Audit-rev2 NM5 — thread the production-ready snapshot +
+      // budget-remaining thunks through to the runner's universal
+      // `get_my_context` wireup. This is what makes the v0.1.9
+      // marquee context-awareness feature work outside the
+      // spawnEnabled block (e.g. chat-only researcher agents that
+      // declare `get_my_context` in spec.tools without listing
+      // spawn).
+      tokenUtilizationSnapshot,
+      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
     });
   } catch (err) {
     // If the runner threw because we already aborted, treat it as a

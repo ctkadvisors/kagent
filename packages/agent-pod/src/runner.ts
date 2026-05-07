@@ -45,7 +45,7 @@ import {
   tryParseArtifactRefFromToolOutput,
   type ArtifactRegistry,
 } from './artifacts.js';
-import { resolveBuiltinTools } from './builtin-tools.js';
+import { defineGetMyContext, InProcessToolProvider, resolveBuiltinTools } from './builtin-tools.js';
 import type { AgentSpecEnv, PodConfig } from './env.js';
 import { agentHasArtifactInputOrOutput } from './env.js';
 import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
@@ -203,6 +203,29 @@ export interface RunDeps {
    * the callback is swallowed by the executor.
    */
   readonly onBudgetReady?: (budget: RunBudget) => void;
+  /**
+   * Audit-rev2 NM5 — `get_my_context` is `UNIVERSAL` per the substrate
+   * tool allowlist (see `runner.ts:UNIVERSAL_TOOLS`), but the
+   * production wireup previously only registered it inside main.ts's
+   * `if (spawnEnabled)` block. Tests that drove `runAgentTask`
+   * directly with `Agent.spec.tools = ['get_my_context']` got
+   * "unknown built-in tool" because the introspection tool wasn't
+   * in the registry. Lifting the registration into `runAgentTask`
+   * (universal wireup, no env flag) closes the gap.
+   *
+   * `tokenUtilizationSnapshot` and `remainingBudgetSeconds` are the
+   * deps `defineGetMyContext` reads at tool-call time. Production
+   * wires both via main.ts's `buildTokenUtilizationBridge` +
+   * remainingBudgetSeconds closure; tests inject directly. Both are
+   * optional — when omitted, `defineGetMyContext` falls through to
+   * `{ used: 0, modelWindow: null }` / `secondsRemaining: undefined`
+   * (the §4.4 contract preserves the field shape regardless).
+   */
+  readonly tokenUtilizationSnapshot?: () => {
+    readonly used: number;
+    readonly modelWindow: number | null;
+  };
+  readonly remainingBudgetSeconds?: () => number | undefined;
 }
 
 /**
@@ -367,12 +390,27 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   const pressureThreshold = parseContextPressureThresholdEnv(
     process.env.KAGENT_CONTEXT_PRESSURE_THRESHOLD,
   );
+  // Audit-rev2 NM4 detector escape — compute whether
+  // `spawn_child_task` is admitted on the Agent (matches the substrate
+  // tool-allowlist's implicit-when-X predicate). When NOT admitted,
+  // the detector skips entirely — an agent without spawn admit has no
+  // escape hatch by design (researcher / single-shot agents that
+  // legitimately don't delegate). Pre-NM4 the detector still fired in
+  // that case, flooding `status.structuralVerdict.suspicious[]` with
+  // a flag the operator could not tune away.
+  const spawnToolAdmitted =
+    (config.agentSpec.tools !== undefined && config.agentSpec.tools.includes('spawn_child_task')) ||
+    hasSpawnIntent(config.agentSpec);
+  const detectorOpts: import('@kagent/agent-loop').ContextPressureOpts = {
+    spawnToolAdmitted,
+    ...(pressureThreshold !== undefined && { pressureThreshold }),
+  };
   const flags = computeQualityFlags(
     [...result.traces],
     result.finalContent,
     userMessage,
     result.budget,
-    pressureThreshold !== undefined ? { pressureThreshold } : {},
+    detectorOpts,
   );
 
   // P3 — collate ArtifactRefs.
@@ -684,6 +722,50 @@ export function resolveToolProviders(
   if (deps.toolProviders !== undefined) return deps.toolProviders;
   const out: ToolProvider[] = [];
 
+  // Audit-rev2 NM5 — universal `get_my_context` registration. The
+  // tool is `UNIVERSAL` in the substrate-tool allowlist policy
+  // (`UNIVERSAL_TOOLS`), but production previously only registered it
+  // inside main.ts's `if (spawnEnabled)` block. Tests driving
+  // `runAgentTask` directly with `Agent.spec.tools=['get_my_context']`
+  // got "unknown built-in tool" because the introspection tool wasn't
+  // in any provider's registry. Lifting it into `resolveToolProviders`
+  // (no env flag, no spawnEnabled gate) closes the gap so the runner
+  // is internally consistent: every UNIVERSAL_TOOLS entry has a
+  // universal wireup. Tool-call deps (tokenUtilizationSnapshot,
+  // remainingBudgetSeconds) are forwarded from RunDeps; production
+  // wires them via main.ts's bridge, tests inject directly.
+  //
+  // Wired at the top of the function so its descriptor name lands in
+  // `externallyProvidedNames` BEFORE `resolveBuiltinTools` (so an
+  // Agent that lists `get_my_context` in spec.tools doesn't trip the
+  // unknown-built-in guard).
+  // NM5 — `capabilityBundle` is intentionally OMITTED from the
+  // universal wireup's `defineGetMyContext` deps. `RunDeps.capability-
+  // Bundle` is structurally narrowed to `{ claims?: { tenant?: string } }`
+  // (the only shape the runner itself reads — the X-Kagent-Tenant
+  // header on the LLM gateway client) so we can't satisfy
+  // `defineGetMyContext`'s full `CapabilityBundle` type without
+  // pulling `@kagent/capability-types` into runner.ts. The optional
+  // capability surface inside `get_my_context.capability` is a
+  // nice-to-have introspection field; production code paths that need
+  // it should drive the tool through the operator chart's full wireup
+  // (which includes the cap bundle via cap-consumer). Tests that need
+  // to assert the cap surface drive `defineGetMyContext` directly.
+  const universalContextProvider = new InProcessToolProvider({
+    id: 'kagent-universal-context',
+    tools: [
+      defineGetMyContext({
+        podConfig: config,
+        ...(deps.remainingBudgetSeconds !== undefined && {
+          remainingBudgetSeconds: deps.remainingBudgetSeconds,
+        }),
+        ...(deps.tokenUtilizationSnapshot !== undefined && {
+          tokenUtilizationSnapshot: deps.tokenUtilizationSnapshot,
+        }),
+      }),
+    ],
+  });
+
   // Collect tool names served by the substrate / blackboard / events
   // providers so resolveBuiltinTools accepts them as known when an
   // Agent.spec.tools entry references them. Without this, an Agent
@@ -694,7 +776,20 @@ export function resolveToolProviders(
   // mirrors the pattern in builtin-tools.test.ts where tests narrow
   // the same way.
   const externallyProvidedNames = new Set<string>();
-  for (const provider of [deps.spawnTools, deps.blackboardTools, deps.eventsTools]) {
+  // NM5 — include the universally-wired get_my_context up front. Note
+  // that when main.ts's spawnEnabled path also injects a substrate
+  // provider serving get_my_context, the runner sees the name twice
+  // in the dedupe set (no-op set add). We strip the duplicate by
+  // filtering the spawn provider's descriptor list against the
+  // universal registry below — only ONE registration of
+  // get_my_context survives so the executor's tool-name lookup
+  // doesn't have a doubled key.
+  for (const provider of [
+    universalContextProvider,
+    deps.spawnTools,
+    deps.blackboardTools,
+    deps.eventsTools,
+  ]) {
     if (provider === undefined) continue;
     const descriptors = provider.describeTools() as readonly { name: string }[];
     for (const descriptor of descriptors) {
@@ -717,6 +812,11 @@ export function resolveToolProviders(
     externallyProvidedNames,
   });
   if (builtin !== null) out.push(builtin);
+  // NM5 — universal context provider is always pushed, even when the
+  // agent didn't list `get_my_context`. The executor's tool-call
+  // dispatch will only invoke it if the LLM emits a tool_call with
+  // that name; presence in the registry is harmless when unused.
+  out.push(universalContextProvider);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
   // v0.4.1-blackboard
   if (deps.blackboardTools !== undefined) out.push(deps.blackboardTools);

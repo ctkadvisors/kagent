@@ -5,11 +5,9 @@
 
 import type { ChatDelta, ChatRequest, ChatResult, LLMClient } from '@kagent/agent-loop';
 import type { CapabilityBundle } from '@kagent/capability-types';
-import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
 import { EventPublisher, type EventNatsConnectionLike } from '@kagent/events';
 import { describe, expect, it } from 'vitest';
 
-import { defineGetMyContext } from './builtin-tools.js';
 import { definePublishEvent } from './builtin-tools-publish.js';
 import type { PodConfig } from './env.js';
 import {
@@ -355,26 +353,25 @@ describe('NB1 regression — tokenUtilizationSnapshot wired through production p
       cfg.contextWindowTokens,
     );
 
-    // Substrate-tools provider mirrors the in-pod-built provider from
-    // main.ts (`InProcessToolProvider({ tools: [defineGetMyContext(...)] })`).
-    const ctxDef = defineGetMyContext({
-      podConfig: cfg,
-      tokenUtilizationSnapshot,
-    });
-
-    const substrateTools = new InProcessToolProvider({
-      id: 'kagent-substrate',
-      tools: [ctxDef],
-    });
+    // Audit-rev2 NM5 — the universal `get_my_context` wireup is now
+    // owned by `runAgentTask` itself (`resolveToolProviders`'s
+    // `kagent-universal-context` provider). This test threads the
+    // production-shape `tokenUtilizationSnapshot` through `RunDeps`
+    // so the universal handler reads the same live RunBudget the
+    // executor mutates. Pre-NM5 the test built its own
+    // `kagent-substrate` provider with `defineGetMyContext`, which
+    // would now collide with the runner's universal registration.
 
     const llm = llmThatCallsGetMyContextThenFinishes();
 
     const result = await runAgentTask(cfg, {
       llm: llm.llm,
       sinks: [],
-      spawnTools: substrateTools,
       // KEY: this is the production wire-up that NB1 was missing.
       onBudgetReady,
+      // NM5 — production-equivalent thread of the live snapshot
+      // through the universal provider's deps.
+      tokenUtilizationSnapshot,
     });
 
     // Sanity — both LLM round-trips fired, the tool was called.
@@ -524,21 +521,19 @@ describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) 
     const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(
       cfg.contextWindowTokens,
     );
-    const ctxDef = defineGetMyContext({
-      podConfig: cfg,
-      tokenUtilizationSnapshot,
-    });
-    const substrateTools = new InProcessToolProvider({
-      id: 'kagent-substrate',
-      tools: [ctxDef],
-    });
+
+    // Audit-rev2 NM5 — universal `get_my_context` wireup is owned by
+    // `runAgentTask`. Pre-NM5 the test built its own kagent-substrate
+    // provider with `defineGetMyContext`, which would now collide
+    // with the runner's universal registration. Production threads
+    // `tokenUtilizationSnapshot` via `RunDeps`; same here.
 
     const llm = llmThatCallsGetMyContextTwiceThenFinishes();
     const result = await runAgentTask(cfg, {
       llm: llm.llm,
       sinks: [],
-      spawnTools: substrateTools,
       onBudgetReady,
+      tokenUtilizationSnapshot,
     });
 
     expect(result.status).toBe('completed');

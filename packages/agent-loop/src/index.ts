@@ -178,4 +178,4 @@ export type {
  * the homelab-orchestrator chat-server harness). See the per-function
  * JSDoc and docs/HARNESS-LESSONS.md for the failure modes they catch.
  */
-export { computeQualityFlags, detectRefusal } from './detectors/index.js';
+export { computeQualityFlags, type ContextPressureOpts, detectRefusal } from './detectors/index.js';

@@ -397,5 +397,43 @@ describe('computeQualityFlags', () => {
       const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
       expect(flags).not.toContain('context_pressure_ignored');
     });
+
+    /*
+     * Audit-rev2 NM4 detector escape — when `spawnToolAdmitted: false`
+     * is threaded through opts, the detector skips entirely. This is
+     * the "researcher-agent has no spawn admit by design" path —
+     * pre-NM4 the detector flooded `structuralVerdict.suspicious[]`
+     * with a flag the operator could not tune away. Default-on
+     * (`undefined`) preserves the prior behavior for legacy callers.
+     */
+    it('NM4 escape — does NOT fire when spawnToolAdmitted=false (no escape hatch by design)', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      const b = budget(800, 100, 1000); // 0.9 utilization, would normally fire
+      const flagsDefault = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flagsDefault).toContain('context_pressure_ignored');
+
+      const flagsEscape = computeQualityFlags(traces, 'final answer', 'do work', b, {
+        spawnToolAdmitted: false,
+      });
+      expect(flagsEscape).not.toContain('context_pressure_ignored');
+    });
+
+    it('NM4 escape — fires when spawnToolAdmitted=true (explicit opt-in matches default)', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      const b = budget(800, 100, 1000);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b, {
+        spawnToolAdmitted: true,
+      });
+      expect(flags).toContain('context_pressure_ignored');
+    });
+
+    it('NM4 escape — undefined spawnToolAdmitted defaults to true (back-compat)', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      const b = budget(800, 100, 1000);
+      // Pre-NM4 caller — no spawnToolAdmitted field in opts. Behaves
+      // identically to setting it to true.
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b, {});
+      expect(flags).toContain('context_pressure_ignored');
+    });
   });
 });
