@@ -28,8 +28,15 @@ import {
 } from '@kubernetes/client-node';
 
 import type { AimdController } from './aimd.js';
+import { normalizeBounds } from './bounds.js';
 import type { ModelIndex } from './model-index.js';
 import type { ModelEndpoint } from './types.js';
+
+// Re-export so existing importers of `normalizeBounds` from
+// `./model-watch.js` keep working. The canonical home is `./bounds.js`
+// (extracted in C3-REV3-H1 to share the clamp with `model-index.ts`
+// and `admin-routes.ts` without dragging the K8s client deps along).
+export { normalizeBounds };
 
 const KAGENT_GROUP = 'kagent.knuteson.io';
 const KAGENT_VERSION = 'v1alpha1';
@@ -152,31 +159,6 @@ export function createModelEndpointWatch(
     stop(): Promise<void> {
       return informer.stop();
     },
-  };
-}
-
-/**
- * Project a CR's `spec.inFlight.{seed,max}` + `spec.minSafe` into the
- * AIMD-controller bounds shape, applying the audit-B5 floor of 1 to
- * `minSafe`. Nullish-coalescing alone is NOT enough — `?? 1` only
- * substitutes for `null`/`undefined`, not `0`, so a CR with
- * `spec.minSafe: 0` would slip through and let the multiplicative-
- * decrease floor stay at 0 (which combined with `floor(cap/2)` would
- * leave the cap pinned at 0 indefinitely after the first 429/error).
- *
- * We clamp at watch time so the rest of the gateway code (router,
- * AIMD controller, admin/capacity surface) can assume `bounds.minSafe
- * >= 1` as an invariant.
- */
-export function normalizeBounds(ep: ModelEndpoint): {
-  seed: number;
-  max: number;
-  minSafe: number;
-} {
-  return {
-    seed: ep.spec.inFlight.seed,
-    max: ep.spec.inFlight.max,
-    minSafe: Math.max(1, ep.spec.minSafe ?? 1),
   };
 }
 

@@ -356,4 +356,61 @@ describe('route', () => {
     // After the first updateBounds, the fresh entry seeds to spec.seed (1).
     expect(deps.aimd.currentCap('m', 'http://x')).toBe(1);
   });
+
+  /* =====================================================================
+   * C3-REV3-H1 — full attack reproduction. A CR with `spec.minSafe: 0`
+   * was already clamped at watch time, but the router calls
+   * `aimd.updateBounds` with `lookup.minSafe` on EVERY request. If
+   * `ModelIndex.lookup()` returns the unclamped value, the first
+   * request after watch-time normalization overwrites the clamp.
+   * Subsequent `onError` calls would then halve the cap toward 0,
+   * pinning the (model, endpoint) at zero capacity (DoS).
+   *
+   * Post-fix: lookup itself clamps via `normalizeBounds`, so
+   * `aimd.state.bounds.minSafe` stays at 1 across the request, and
+   * `onError` floors at 1.
+   * ===================================================================== */
+
+  it('lookup-time clamp prevents the router-path B5 bypass (C3-REV3-H1)', async () => {
+    // Construct a CR that simulates a malicious / misconfigured spec.
+    const malicious: ModelEndpoint = {
+      ...modelEp('m', 4, 2),
+      spec: { ...modelEp('m', 4, 2).spec, minSafe: 0 },
+    };
+    const deps = buildDeps(malicious);
+    // Sanity: lookup must already report the clamped floor.
+    const lookup = deps.modelIndex.lookup('m');
+    expect(lookup?.minSafe).toBe(1);
+
+    // Drive a request through. The router's `aimd.updateBounds` must
+    // be fed the clamped value, NOT 0.
+    const provider = new FakeProvider('mock', () =>
+      Promise.resolve({
+        response: chatResponse(),
+        inputTokens: 1,
+        outputTokens: 1,
+        latencyMs: 1,
+      }),
+    );
+    await route(deps, {
+      requestId: 'r-c3rev3h1-1',
+      request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
+      apiKeyPrefix: null,
+      taskUid: null,
+      agentName: null,
+      providerOverride: provider,
+    });
+
+    // Now hammer the controller with errors — without the lookup-time
+    // clamp, the cap would collapse toward 0. With the clamp, it
+    // floors at minSafe = 1.
+    for (let i = 0; i < 10; i++) {
+      deps.aimd.onError('m', 'http://x');
+    }
+    expect(deps.aimd.currentCap('m', 'http://x')).toBe(1);
+
+    // Snapshot's bounds.minSafe is the load-bearing invariant.
+    const snap = deps.aimd.snapshot().find((s) => s.model === 'm');
+    expect(snap?.minSafe).toBe(1);
+  });
 });

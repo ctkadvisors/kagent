@@ -18,6 +18,7 @@ import type { IncomingMessage } from 'node:http';
 
 import type { AimdController } from './aimd.js';
 import { hashApiKey } from './auth.js';
+import { normalizeBounds } from './bounds.js';
 import type { InFlightCounter } from './inflight-counter.js';
 import type { ModelIndex } from './model-index.js';
 import type { ApiKeyAdminRow, ApiKeyRepo, RevokeResult } from './db/api-keys.js';
@@ -172,15 +173,20 @@ export function buildCapacityResponse(
     const cap = aimd.currentCap(model, url);
     const inflight = inFlight.current(model, url);
     const snap = aimd.snapshot().find((s) => s.model === model && s.endpoint === url);
+    // C3-REV3-H1 — funnel through `normalizeBounds` so the displayed
+    // `minSafe` matches the AIMD-enforced floor (>= 1). A CR with
+    // `spec.minSafe: 0` is clamped to 1 in the response, so operators
+    // see the value the controller actually uses, not the raw spec.
+    const bounds = normalizeBounds(ep);
     rows.push({
       model,
       endpoint: url,
       backendKind: ep.spec.backendKind,
       inFlight: inflight,
       currentCap: cap,
-      seed: ep.spec.inFlight.seed,
-      max: ep.spec.inFlight.max,
-      minSafe: ep.spec.minSafe ?? 1,
+      seed: bounds.seed,
+      max: bounds.max,
+      minSafe: bounds.minSafe,
       recentP50Ms: snap?.recentP50Ms ?? null,
     });
   }

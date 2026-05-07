@@ -132,4 +132,46 @@ Validate values at template time. Currently guards two trapdoors:
 {{- fail "kagent-operator: agentPod.blackboard.failOpen=true requires agentPod.blackboard.acknowledgeUnsafe=true. The fail-open posture grants every spawned agent-pod cluster-wide blackboard read+write (claims.blackboard = {read: ['*'], write: ['*']}). Refusing to render — set acknowledgeUnsafe=true ONLY as a deliberate, time-boxed escape hatch (e.g. bootstrap / dev clusters with no cap-issuer wired). See packages/operator/charts/kagent-operator/values.yaml agentPod.blackboard and evidence/audit-rev2/W3-Pod-REPORT.md §5 'M12 follow-up'." -}}
 {{- end -}}
 {{- end -}}
+{{/*
+  Audit-rev3 C1-CONFIG — supervision.maxEscalationDepth chart-level guard.
+
+  `supervision.maxEscalationDepth` is forwarded onto the operator deployment
+  as `KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH`. The operator's
+  `resolveMaxEscalationDepth` rejects negative / zero / non-integer values
+  with a warn-log AND falls back to the substrate default (8). The fallback
+  is a foot-gun shaped exactly like NH3's silent-disable: an operator who
+  sets `0` to "disable" the cap (or `-1` to mean "no limit") gets the
+  opposite of what they expect (cap silently re-defaults to 8).
+
+  Catch the misconfig at chart-render time before the env is stamped onto
+  the operator. Per supervision-router.ts:resolveMaxEscalationDepth:
+
+    * maxEscalationDepth MUST be a positive integer.
+        - <=0 silently re-defaults to 8 in the operator (masks the misconfig).
+        - non-integer / NaN re-defaults to 8 in the operator.
+        - "no limit" is NOT supported — express a high cap (e.g. 2147483647)
+          if a deep tree is intentional.
+
+  Same pattern as the contextSafetyThreshold / contextPressureThreshold
+  validators above. See evidence/audit-rev3/C1.md C1-CONFIG for rationale.
+*/}}
+{{- if hasKey .Values "supervision" -}}
+{{- $sup := .Values.supervision -}}
+{{- if hasKey $sup "maxEscalationDepth" -}}
+{{- $depth := $sup.maxEscalationDepth -}}
+{{/* Helm/YAML parses unquoted integers as float64; accept any numeric and
+   verify it's a whole positive number. Reject strings, bools, nil. */}}
+{{- if or (kindIs "invalid" $depth) (not (or (kindIs "float64" $depth) (kindIs "int" $depth) (kindIs "int64" $depth))) -}}
+{{- fail (printf "kagent-operator: supervision.maxEscalationDepth must be a positive integer (got %v of type %s) — non-numeric values silently re-default to 8 in the operator, masking the misconfig. See evidence/audit-rev3/C1.md C1-CONFIG" $depth (kindOf $depth)) -}}
+{{- end -}}
+{{- $depthF := $depth | float64 -}}
+{{- if le $depthF 0.0 -}}
+{{- fail (printf "kagent-operator: supervision.maxEscalationDepth must be a positive integer (got %v) — values <=0 silently re-default to 8 in the operator, masking the misconfig. \"No limit\" is NOT supported; use a high sentinel (e.g. 2147483647) if a deep tree is intentional. See evidence/audit-rev3/C1.md C1-CONFIG" $depth) -}}
+{{- end -}}
+{{- $depthI := $depth | int -}}
+{{- if ne (printf "%v" $depthF) (printf "%v" (float64 $depthI)) -}}
+{{- fail (printf "kagent-operator: supervision.maxEscalationDepth must be an integer (got %v) — fractional values silently re-default to 8 in the operator, masking the misconfig. See evidence/audit-rev3/C1.md C1-CONFIG" $depth) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

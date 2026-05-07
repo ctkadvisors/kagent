@@ -32,6 +32,7 @@
  * same CR, just a re-emission.
  */
 
+import { normalizeBounds } from './bounds.js';
 import type { ModelEndpoint } from './types.js';
 
 export interface ModelLookup {
@@ -135,16 +136,26 @@ export class ModelIndex {
     return [...this.map.values()].map((e) => e.endpoint);
   }
 
-  /** Lookup by the OpenAI request's `model` field. */
+  /**
+   * Lookup by the OpenAI request's `model` field.
+   *
+   * C3-REV3-H1 — bounds projection funnels through `normalizeBounds`
+   * so the AIMD `minSafe >= 1` invariant is preserved on the router's
+   * read path. Without the clamp here, the router would call
+   * `aimd.updateBounds` with the raw spec value on every request,
+   * overwriting the watch-time normalization for any CR carrying
+   * `spec.minSafe: 0` and restoring the original B5 DoS.
+   */
   lookup(model: string): ModelLookup | null {
     const entry = this.map.get(model);
     if (entry === undefined) return null;
     const ep = entry.endpoint;
+    const bounds = normalizeBounds(ep);
     return {
       endpoint: ep,
-      seed: ep.spec.inFlight.seed,
-      max: ep.spec.inFlight.max,
-      minSafe: ep.spec.minSafe ?? 1,
+      seed: bounds.seed,
+      max: bounds.max,
+      minSafe: bounds.minSafe,
     };
   }
 }

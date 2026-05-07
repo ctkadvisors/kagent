@@ -178,6 +178,36 @@ describe('buildCapacityResponse', () => {
     expect(r.rows[1]?.model).toBe('b');
     expect(r.rows[1]?.currentCap).toBe(2);
   });
+
+  /* =====================================================================
+   * C3-REV3-H1 — admin-display read site of `spec.minSafe`. Display-
+   * only (no AIMD write), but a misleading `0` would have operators
+   * believing the floor is 0 when AIMD enforces 1. Funnel through
+   * `normalizeBounds` so the displayed value matches reality.
+   * ===================================================================== */
+
+  it('clamps spec.minSafe=0 in /admin/capacity rows (C3-REV3-H1)', () => {
+    const malicious: ModelEndpoint = {
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'ModelEndpoint',
+      metadata: { name: 'm' },
+      spec: {
+        model: 'm',
+        backendKind: 'mock',
+        backendUrl: 'http://x',
+        inFlight: { seed: 2, max: 4 },
+        minSafe: 0,
+      },
+    };
+    const idx = new ModelIndex();
+    idx.upsert(malicious);
+    const r = buildCapacityResponse(
+      idx,
+      new InFlightCounter(),
+      new AimdController({ seed: 1, max: 4, minSafe: 1 }),
+    );
+    expect(r.rows[0]?.minSafe).toBe(1);
+  });
 });
 
 describe('parseUsageQuery', () => {

@@ -53,6 +53,28 @@ describe('ModelIndex', () => {
     expect(idx.lookup('m')?.minSafe).toBe(2);
   });
 
+  /* =====================================================================
+   * C3-REV3-H1 (rev3) — `ModelIndex.lookup()` is the router-path read
+   * site of `spec.minSafe`. The B5 fix originally clamped the value
+   * only at watch time (`normalizeBounds` in `model-watch.ts`); the
+   * router calls `aimd.updateBounds` with the lookup-returned value
+   * on every request, which would overwrite the watch-time clamp
+   * for any CR carrying `spec.minSafe: 0`. The lookup MUST itself
+   * funnel through the same clamp.
+   * ===================================================================== */
+
+  it('clamps spec.minSafe=0 to 1 on lookup (C3-REV3-H1 router-path regression)', () => {
+    const idx = new ModelIndex();
+    idx.upsert(ep('m', { minSafe: 0 }));
+    expect(idx.lookup('m')?.minSafe).toBe(1);
+  });
+
+  it('clamps a negative spec.minSafe to 1 on lookup (C3-REV3-H1)', () => {
+    const idx = new ModelIndex();
+    idx.upsert(ep('m', { minSafe: -3 }));
+    expect(idx.lookup('m')?.minSafe).toBe(1);
+  });
+
   it('replaceAll wipes prior entries before writing new ones', () => {
     const idx = new ModelIndex();
     idx.upsert(ep('a'));
