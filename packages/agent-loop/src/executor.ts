@@ -147,13 +147,14 @@ export interface RunBudget {
   /**
    * v0.1.9 / context-awareness slate (docs/CONTEXT-AWARENESS.md §4.3).
    *
-   * The model's context-window size in tokens, when known. Read from the
-   * `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` env var operator-side and threaded
-   * through agent-pod's runner. When undefined, the substrate-side
-   * safety-net (Piece 3, `chatWithRetry` pre-call check) and the
-   * `context_pressure_ignored` detector (Piece 4) are no-ops — preserving
-   * v0.1.8 behavior for classes whose chart entry omits
-   * `contextWindowTokens`.
+   * The model's context-window size in tokens, when known. Read
+   * operator-side from `agent.modelClasses[<class>].contextWindowTokens`,
+   * projected onto the agent-pod via `KAGENT_AGENT_MODEL_CONTEXT_WINDOW`,
+   * and threaded through `runner.ts` into the executor. When undefined,
+   * the substrate-side safety-net (Piece 3, `chatWithRetry` pre-call
+   * check) and the `context_pressure_ignored` detector (Piece 4) are
+   * no-ops — preserving v0.1.8 behavior for classes whose chart entry
+   * omits `contextWindowTokens`.
    *
    * Distinct from `tokenLimit` (which is a per-task user cap conventionally
    * set lower than the model window). Both can be set; the safety-net

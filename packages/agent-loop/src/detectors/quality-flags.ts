@@ -19,16 +19,65 @@
  *   4. truncated_synthesis — output_tokens hit the cap AND content doesn't
  *      end on sentence-terminating punctuation. Catches CF-gateway-compat
  *      reporting `stop_reason: end_turn` instead of `length`.
+ *   5. context_pressure_ignored — v0.1.9 context-awareness slate. Fires
+ *      when cumulative tokens crossed the operator-tunable pressure
+ *      threshold AND the agent did NOT hand off via `spawn_child_task`
+ *      in the last N iterations. See docs/CONTEXT-AWARENESS.md §4.6.
  */
 
+import type { RunBudget } from '../executor.js';
 import type { TraceEntry } from '../trace.js';
 
 const TRUNCATION_MIN_OUTPUT_TOKENS = 200;
 const TRUNCATION_MIN_CONTENT_LEN = 200;
 
 /**
- * Run all four detectors against the trace + final assistant message +
- * originating user prompt. Returns an array of flag ids (possibly empty).
+ * Default detector knobs for `context_pressure_ignored`. Match the
+ * Helm-chart defaults documented in `docs/CONTEXT-AWARENESS.md` §4.1
+ * so a callsite that omits the opts gets the same behavior the operator
+ * would observe with stock chart values.
+ */
+const DEFAULT_PRESSURE_THRESHOLD = 0.7;
+const DEFAULT_SPAWN_LOOKBACK_N = 3;
+/**
+ * Tool name the substrate's spawn primitive registers under. Matches the
+ * literal in `packages/agent-pod/src/builtin-tools-spawn.ts`.
+ */
+const SPAWN_CHILD_TOOL_NAME = 'spawn_child_task';
+
+/**
+ * Optional knobs for the `context_pressure_ignored` detector. Wired
+ * through `computeQualityFlags` so the agent-pod runner can read the
+ * `KAGENT_CONTEXT_PRESSURE_THRESHOLD` env at boot and pass it down
+ * without modifying the detector module.
+ */
+export interface ContextPressureOpts {
+  /**
+   * Utilization fraction at or above which the detector starts firing
+   * when `spawn_child_task` is absent from the lookback window.
+   * Defaults to {@link DEFAULT_PRESSURE_THRESHOLD} (0.7).
+   */
+  pressureThreshold?: number;
+  /**
+   * Number of trailing iterations to scan for a `spawn_child_task`
+   * tool call before flagging. Defaults to {@link DEFAULT_SPAWN_LOOKBACK_N}
+   * (3) — a typical "the agent had three full turns to act and didn't"
+   * window.
+   */
+  spawnLookbackN?: number;
+}
+
+/**
+ * Run every detector against the trace + final assistant message +
+ * originating user prompt + (optional) per-run budget snapshot. Returns
+ * an array of flag ids (possibly empty).
+ *
+ * The `budget` and `opts` parameters are optional so legacy callers that
+ * only care about the trace-shape detectors (F1/F2/F3/refusal/synthesis)
+ * keep working unchanged. The `context_pressure_ignored` detector is the
+ * only flag that consults `budget`; when `budget` is omitted or its
+ * `contextWindowTokens` field is unset, the detector is a no-op and the
+ * other flags fire identically to v0.1.8.
  *
  * Pure function; no I/O. Designed to run as run-end middleware inside
  * `@kagent/agent-loop`.
@@ -37,13 +86,96 @@ export function computeQualityFlags(
   traces: TraceEntry[],
   finalContent: string | null,
   userPrompt: string,
+  budget?: Readonly<RunBudget>,
+  opts: ContextPressureOpts = {},
 ): string[] {
   const flags: string[] = [];
   if (computeSynthesisLowYield(traces, finalContent)) flags.push('synthesis_low_yield');
   if (detectMethodologyFabrication(traces, finalContent)) flags.push('methodology_fabrication');
   if (detectToolUseOmission(traces, userPrompt)) flags.push('tool_use_omission');
   if (detectTruncatedSynthesis(traces, finalContent)) flags.push('truncated_synthesis');
+  if (budget !== undefined && detectContextPressureIgnored(traces, budget, opts)) {
+    flags.push('context_pressure_ignored');
+  }
   return flags;
+}
+
+/**
+ * `context_pressure_ignored` — Piece 4 of the v0.1.9 context-awareness
+ * slate (`docs/CONTEXT-AWARENESS.md` §4.6).
+ *
+ * Fires when ALL of the following hold:
+ *   1. The model's context window is known (`budget.contextWindowTokens`
+ *      is a positive number — operator opted into the slate by populating
+ *      `agent.modelClasses[<class>].contextWindowTokens` in the chart).
+ *   2. Cumulative tokens (`cumulativeInputTokens + cumulativeOutputTokens`)
+ *      have crossed the pressure threshold (default 0.7).
+ *   3. The trace contains zero `spawn_child_task` tool calls in the last
+ *      N iterations (default N=3) — i.e., the agent has had three full
+ *      turns under pressure and did not delegate / hand off.
+ *
+ * Flag-only; no action. Surfaces in `status.structuralVerdict.suspicious[]`
+ * so operators can identify which agent prompts are bad at self-management
+ * and tune them. Per §4.6 last paragraph the detector still fires when
+ * `spawn_child_task` is not in the agent's tool surface at all — that's a
+ * prompt-author bug worth flagging because the agent has no escape hatch.
+ */
+export function detectContextPressureIgnored(
+  traces: readonly TraceEntry[],
+  budget: Readonly<RunBudget>,
+  opts: ContextPressureOpts = {},
+): boolean {
+  const window = budget.contextWindowTokens;
+  if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return false;
+
+  const used = budget.cumulativeInputTokens + budget.cumulativeOutputTokens;
+  const utilization = used / window;
+  const threshold = opts.pressureThreshold ?? DEFAULT_PRESSURE_THRESHOLD;
+  if (utilization < threshold) return false;
+
+  const lookbackN = opts.spawnLookbackN ?? DEFAULT_SPAWN_LOOKBACK_N;
+  const lastNToolNames = collectToolNamesFromLastNIterations(traces, lookbackN);
+  if (lastNToolNames.has(SPAWN_CHILD_TOOL_NAME)) return false;
+
+  return true;
+}
+
+/**
+ * Walk the trace and return the set of tool names called within the last
+ * `n` iterations, where an iteration is the slice of trace entries
+ * starting at one `iteration_boundary` and ending at the next (or end of
+ * trace). Defensive: when no `iteration_boundary` entries are present
+ * (legacy traces or pre-loop emission), treats the entire trace as one
+ * iteration so the detector still has something to inspect.
+ */
+function collectToolNamesFromLastNIterations(
+  traces: readonly TraceEntry[],
+  n: number,
+): Set<string> {
+  const boundaryIndices: number[] = [];
+  for (let i = 0; i < traces.length; i++) {
+    if (traces[i]?.trace_type === 'iteration_boundary') {
+      boundaryIndices.push(i);
+    }
+  }
+
+  // Determine the start index of the lookback window in the flat trace.
+  let windowStartIdx: number;
+  if (boundaryIndices.length === 0) {
+    windowStartIdx = 0;
+  } else {
+    const firstWindowBoundaryAt = Math.max(0, boundaryIndices.length - n);
+    windowStartIdx = boundaryIndices[firstWindowBoundaryAt] ?? 0;
+  }
+
+  const names = new Set<string>();
+  for (let i = windowStartIdx; i < traces.length; i++) {
+    const entry = traces[i];
+    if (entry?.trace_type === 'tool_call' && typeof entry.tool_name === 'string') {
+      names.add(entry.tool_name);
+    }
+  }
+  return names;
 }
 
 /**

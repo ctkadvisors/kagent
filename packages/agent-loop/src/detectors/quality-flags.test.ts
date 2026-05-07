@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { RunBudget } from '../executor.js';
 import type { TraceEntry } from '../trace.js';
 import { computeQualityFlags } from './quality-flags.js';
 
@@ -44,6 +45,29 @@ function tool(
     tool_input: input,
     tool_output: output,
     is_error: isError,
+  };
+}
+function boundary(iteration: number, sequence: number): TraceEntry {
+  return {
+    schema_version: '1',
+    run_id: 'r1',
+    sequence,
+    trace_type: 'iteration_boundary',
+    timestamp_ms: 0,
+    latency_ms: 0,
+    iteration,
+  };
+}
+function budget(
+  cumulativeInputTokens: number,
+  cumulativeOutputTokens: number,
+  contextWindowTokens?: number,
+): RunBudget {
+  return {
+    cumulativeInputTokens,
+    cumulativeOutputTokens,
+    cumulativeCostUsd: null,
+    ...(contextWindowTokens !== undefined && { contextWindowTokens }),
   };
 }
 
@@ -263,5 +287,115 @@ describe('computeQualityFlags', () => {
     expect(flags).toContain('methodology_fabrication');
     expect(flags).toContain('tool_use_omission');
     expect(flags).toContain('truncated_synthesis');
+  });
+
+  describe('context_pressure_ignored', () => {
+    /**
+     * Build a 4-iteration trace with a single tool call per iteration.
+     * Iteration 0..3 covers the standard "agent did stuff for 4 turns".
+     * The last 3 iterations (1, 2, 3) are the lookback window for the
+     * default N=3.
+     */
+    function fourIterTrace(toolNames: readonly [string, string, string, string]): TraceEntry[] {
+      const traces: TraceEntry[] = [];
+      let seq = 0;
+      for (let i = 0; i < 4; i++) {
+        traces.push(boundary(i, seq++));
+        traces.push(llm(20, 'doing work', seq++));
+        traces.push(tool(toolNames[i] ?? 'web_search', '{}', 'result'.repeat(10), false, seq++));
+      }
+      return traces;
+    }
+
+    it('fires when cumulative tokens are past the pressure threshold and no spawn in last N=3 iterations', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      // 750 of 1000 = 0.75 utilization, > 0.7 threshold
+      const b = budget(500, 250, 1000);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).toContain('context_pressure_ignored');
+    });
+
+    it('does NOT fire when utilization is under the pressure threshold', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      // 600 of 1000 = 0.6 utilization, < 0.7 threshold
+      const b = budget(400, 200, 1000);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).not.toContain('context_pressure_ignored');
+    });
+
+    it('does NOT fire when the agent self-managed via spawn_child_task in the lookback window', () => {
+      // Iteration N-1 (the second-to-last, idx 2) called spawn_child_task.
+      const traces = fourIterTrace(['web_search', 'web_search', 'spawn_child_task', 'web_search']);
+      const b = budget(500, 250, 1000);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).not.toContain('context_pressure_ignored');
+    });
+
+    it('does NOT fire when contextWindowTokens is unset (back-compat)', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      // 10000 cumulative but no window declared at all → no-op.
+      const b = budget(8000, 2000); // contextWindowTokens unset
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).not.toContain('context_pressure_ignored');
+    });
+
+    it('does NOT fire when no budget is provided at all (preserves legacy callsite)', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work');
+      expect(flags).not.toContain('context_pressure_ignored');
+    });
+
+    it('fires when the spawn_child_task tool was never admitted (no spawn anywhere in the trace)', () => {
+      // Section §4.6 last paragraph: even when the prompt-author never
+      // wired spawn_child_task into the agent's tool surface, the
+      // detector still fires because the agent has no escape hatch and
+      // that's a prompt-author bug worth flagging.
+      const traces = fourIterTrace(['web_search', 'fetch_url', 'web_search', 'fetch_url']);
+      const b = budget(800, 100, 1000); // 0.9 utilization
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).toContain('context_pressure_ignored');
+    });
+
+    it('fires when a spawn_child_task call exists but is OUTSIDE the lookback window', () => {
+      // Iteration 0 (oldest) called spawn; iterations 1..3 (the last
+      // N=3) had no spawn. Detector should fire.
+      const traces = fourIterTrace(['spawn_child_task', 'web_search', 'web_search', 'web_search']);
+      const b = budget(500, 250, 1000);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).toContain('context_pressure_ignored');
+    });
+
+    it('honors a custom pressureThreshold via opts override', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      // 600/1000 = 0.6 utilization. Below default 0.7, but above 0.5.
+      const b = budget(400, 200, 1000);
+      const flagsDefault = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flagsDefault).not.toContain('context_pressure_ignored');
+      const flagsCustom = computeQualityFlags(traces, 'final answer', 'do work', b, {
+        pressureThreshold: 0.5,
+      });
+      expect(flagsCustom).toContain('context_pressure_ignored');
+    });
+
+    it('honors a custom spawnLookbackN — N=1 ignores spawns in older iterations', () => {
+      // Iteration 2 spawned (second-to-last). Default N=3 sees it →
+      // does NOT fire. With N=1, the lookback only inspects iteration
+      // 3 (the last), which has no spawn → fires.
+      const traces = fourIterTrace(['web_search', 'web_search', 'spawn_child_task', 'web_search']);
+      const b = budget(500, 250, 1000);
+      const flagsDefault = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flagsDefault).not.toContain('context_pressure_ignored');
+      const flagsTight = computeQualityFlags(traces, 'final answer', 'do work', b, {
+        spawnLookbackN: 1,
+      });
+      expect(flagsTight).toContain('context_pressure_ignored');
+    });
+
+    it('does NOT fire when contextWindowTokens is zero (defensive — avoid divide-by-zero)', () => {
+      const traces = fourIterTrace(['web_search', 'web_search', 'web_search', 'web_search']);
+      const b = budget(500, 250, 0);
+      const flags = computeQualityFlags(traces, 'final answer', 'do work', b);
+      expect(flags).not.toContain('context_pressure_ignored');
+    });
   });
 });

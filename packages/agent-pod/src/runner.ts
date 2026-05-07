@@ -307,7 +307,23 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(contextSafetyThreshold !== undefined && { contextSafetyThreshold }),
   });
 
-  const flags = computeQualityFlags([...result.traces], result.finalContent, userMessage);
+  // v0.1.9 context-awareness — Piece 4 detector knob. Read the
+  // operator-tunable pressure threshold (default 0.7) from env so the
+  // chart value `agentPod.contextPressureThreshold` reaches the
+  // `context_pressure_ignored` detector in `quality-flags.ts`. The
+  // window itself rides on `result.budget.contextWindowTokens` set by
+  // Piece 2's env plumbing; when unset (legacy / pre-v0.1.9) the
+  // detector is a no-op regardless of threshold.
+  const pressureThreshold = parseContextPressureThresholdEnv(
+    process.env.KAGENT_CONTEXT_PRESSURE_THRESHOLD,
+  );
+  const flags = computeQualityFlags(
+    [...result.traces],
+    result.finalContent,
+    userMessage,
+    result.budget,
+    pressureThreshold !== undefined ? { pressureThreshold } : {},
+  );
 
   // P3 — collate ArtifactRefs.
   //
@@ -368,6 +384,27 @@ export function mergeArtifactSources(
     if (!byUri.has(ref.uri)) byUri.set(ref.uri, ref);
   }
   return [...byUri.values()];
+}
+
+/**
+ * v0.1.9 context-awareness — parse `KAGENT_CONTEXT_PRESSURE_THRESHOLD`
+ * into a float in `(0, 1]`. Returns undefined when:
+ *   - The env is unset / empty.
+ *   - The value is not a finite number.
+ *   - The value is outside the `(0, 1]` range.
+ *
+ * Caller treats undefined as "use the detector's built-in default" (0.7).
+ * Defensive — a malformed env value silently falls back to the default
+ * rather than failing the run; the detector is observation-only and
+ * misconfiguration here should not trip an AgentTask. Exported for the
+ * unit-test suite.
+ */
+export function parseContextPressureThresholdEnv(raw: string | undefined): number | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  if (n <= 0 || n > 1) return undefined;
+  return n;
 }
 
 /**

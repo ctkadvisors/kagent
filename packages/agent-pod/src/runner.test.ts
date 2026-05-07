@@ -21,6 +21,7 @@ import {
   buildLlmClient,
   collectArtifactsFromTraces,
   composeSignals,
+  parseContextPressureThresholdEnv,
   parseContextSafetyThreshold,
   pickUserMessage,
   resolveToolProviders,
@@ -963,5 +964,32 @@ describe('parseContextSafetyThreshold (Piece 3 of v0.1.9 context-awareness slate
     expect(parseContextSafetyThreshold('0.5')).toBe(0.5);
     expect(parseContextSafetyThreshold('1')).toBe(1);
     expect(parseContextSafetyThreshold('0.001')).toBe(0.001);
+  });
+});
+
+describe('parseContextPressureThresholdEnv (v0.1.9 context-awareness Piece 4)', () => {
+  it('returns undefined when env is unset (caller falls back to detector default)', () => {
+    expect(parseContextPressureThresholdEnv(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined when env is the empty string', () => {
+    expect(parseContextPressureThresholdEnv('')).toBeUndefined();
+  });
+
+  it('parses a valid float in (0, 1]', () => {
+    expect(parseContextPressureThresholdEnv('0.5')).toBe(0.5);
+    expect(parseContextPressureThresholdEnv('0.85')).toBe(0.85);
+    expect(parseContextPressureThresholdEnv('1')).toBe(1);
+  });
+
+  it('returns undefined for non-numeric input (defensive — bad config does not fail run)', () => {
+    expect(parseContextPressureThresholdEnv('not-a-number')).toBeUndefined();
+  });
+
+  it('returns undefined for out-of-range values (caller falls back to detector default)', () => {
+    expect(parseContextPressureThresholdEnv('0')).toBeUndefined();
+    expect(parseContextPressureThresholdEnv('-0.5')).toBeUndefined();
+    expect(parseContextPressureThresholdEnv('1.5')).toBeUndefined();
+    expect(parseContextPressureThresholdEnv('NaN')).toBeUndefined();
   });
 });

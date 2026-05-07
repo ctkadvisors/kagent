@@ -12,5 +12,9 @@
  * returns, before the result envelope is published over A2A.
  */
 
-export { computeQualityFlags } from './quality-flags.js';
+export {
+  computeQualityFlags,
+  detectContextPressureIgnored,
+  type ContextPressureOpts,
+} from './quality-flags.js';
 export { detectRefusal } from './refusal.js';
