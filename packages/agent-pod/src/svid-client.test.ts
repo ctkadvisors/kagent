@@ -224,4 +224,46 @@ describe('probeGatewayMtls', () => {
     });
     expect(calledHeaders['X-Kagent-Identity-Probe']).toBe('optional');
   });
+
+  /*
+   * Audit-rev2 M7 — extract `X-Kagent-Identity-Verified` from the
+   * response. When present, the probe carries `identityVerifiedHeader`
+   * with the gateway-resolved SPIFFE ID. When absent, the probe is
+   * OPTIMISTIC and the result lacks the field — callers log
+   * "mtlsSupported: true (UNVERIFIED)" and audit emissions flag the
+   * connection as unverified until the gateway team's contract decision
+   * lands (docs/GATEWAY-CONTRACT.md §4.3).
+   */
+  it('M7 — propagates X-Kagent-Identity-Verified header on probe response', async () => {
+    const result = await probeGatewayMtls({
+      handle: makeHandle(),
+      baseUrl: 'https://gateway.example.com',
+      fetchImpl: () =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: {
+            get: (name: string): string | null =>
+              name.toLowerCase() === 'x-kagent-identity-verified'
+                ? 'spiffe://kagent.knuteson.io/agent/researcher'
+                : null,
+          },
+        }),
+    });
+    expect(result.mtlsSupported).toBe(true);
+    expect(result.reason).toBe('handshake-ok');
+    expect(result.identityVerifiedHeader).toBe('spiffe://kagent.knuteson.io/agent/researcher');
+    expect(result.detail).toContain('VERIFIED=spiffe://');
+  });
+
+  it('M7 — omits identityVerifiedHeader when gateway did not emit the verification header (UNVERIFIED path)', async () => {
+    const result = await probeGatewayMtls({
+      handle: makeHandle(),
+      baseUrl: 'https://gateway.example.com',
+      fetchImpl: () => Promise.resolve(okResponse(200)),
+    });
+    expect(result.mtlsSupported).toBe(true);
+    expect(result.identityVerifiedHeader).toBeUndefined();
+    expect(result.detail).toContain('UNVERIFIED');
+  });
 });

@@ -57,6 +57,56 @@ import { runAgentTask } from './runner.js';
 import { buildStatusPatch, makeCustomObjectsApi, writeStatus } from './status.js';
 
 /**
+ * Audit-rev2 M10 — milliseconds the SIGTERM grace flush waits before
+ * forcibly writing a best-effort `Failed` status patch. Callers (the
+ * shutdown handler) schedule the flush via `setTimeout(...).unref()`
+ * so the timer doesn't prevent normal exit when the runner unwinds
+ * before the deadline. 25_000 ms (25s) leaves margin under K8s's
+ * default `terminationGracePeriodSeconds=30` so the patch lands
+ * before SIGKILL fires. Exported for unit tests + downstream
+ * consumers that want to coordinate similar deadlines.
+ */
+export const GRACE_FLUSH_DEADLINE_MS = 25_000;
+
+/**
+ * Audit-rev2 M10 — best-effort grace-flush implementation. Builds a
+ * `phase: 'Failed'` status patch and writes it through the K8s status
+ * API, swallowing any thrown errors. Called from the SIGTERM handler
+ * when the runner hasn't unwound by `GRACE_FLUSH_DEADLINE_MS`. Pure
+ * I/O wrapper — exported so the unit-test suite can drive the same
+ * code path without spawning a process.
+ */
+export async function scheduleSigtermGraceFlush(
+  config: PodConfig,
+  signalName: NodeJS.Signals,
+): Promise<void> {
+  try {
+    const api = makeCustomObjectsApi();
+    await writeStatus(
+      config,
+      {
+        phase: 'Failed',
+        error: `cancelled: ${signalName} grace-flush — runner did not unwind within ${String(GRACE_FLUSH_DEADLINE_MS)}ms`,
+        completedAt: new Date().toISOString(),
+        structuralVerdict: { suspicious: [] },
+      },
+      api,
+    );
+    console.warn(
+      `[kagent-agent-pod] grace-flush: wrote Failed status patch after ${signalName} ` +
+        `(runner did not unwind in ${String(GRACE_FLUSH_DEADLINE_MS)}ms)`,
+    );
+  } catch (err) {
+    // Best-effort: lost the race already. Don't throw out of the
+    // setTimeout callback (would crash the unrefed timer's host
+    // process or get swallowed silently).
+    console.error(
+      `[kagent-agent-pod] grace-flush: writeStatus failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
  * Internal shape that captures the steps the SIGTERM/SIGINT handler
  * must perform. Pure data — `buildShutdownPlan` returns it; main wires
  * the steps to real I/O. Splitting it out lets us unit-test the
@@ -275,6 +325,21 @@ async function main(): Promise<void> {
       `[kagent-agent-pod] received ${signal} — aborting executor + patching Failed/cancelled`,
     );
     shutdownController.abort();
+
+    // Audit-rev2 M10 — SIGTERM grace flush. The normal shutdown path
+    // is: abort → runner unwinds → main writes status. If the runner
+    // hangs (e.g. blocked on a non-abort-aware sleep, hung downstream
+    // call, or a fatal already-in-flight K8s patch retry), the kubelet
+    // SIGKILLs us at terminationGracePeriodSeconds and the AgentTask
+    // stays pinned in `Dispatched`. The grace-flush schedules a
+    // best-effort writeStatus(Failed) at GRACE_FLUSH_DEADLINE_MS so
+    // operator-visible terminal state is reached even when the runner
+    // can't unwind. Best-effort: any throw from the patch is swallowed
+    // (we already lost; just keep the pod alive long enough for
+    // closeAuditPublisher / otelShutdown to flush).
+    setTimeout(() => {
+      void scheduleSigtermGraceFlush(config, signal);
+    }, GRACE_FLUSH_DEADLINE_MS).unref();
   };
 
   process.on('SIGTERM', onSignal);
@@ -450,10 +515,34 @@ async function main(): Promise<void> {
         bucket: bbBucket,
         natsUrl: bbNatsUrl,
       });
+      // Audit-rev2 M12 (= evidence/audit-rev2/C2.md §1 row M12): when
+      // `KAGENT_BLACKBOARD_FAIL_OPEN=true` is set, every blackboard
+      // operation gets `read: ['*'], write: ['*']` — cluster-wide
+      // unrestricted access, regardless of the operator-minted cap
+      // bundle's claims. This is intentional for development /
+      // bootstrap clusters that haven't wired the cap-issuer yet, but
+      // production deploys must NEVER fall through this path silently.
+      // Emit a single boot-time WARN naming the override + the
+      // consequence so an operator scanning logs sees the wide-open
+      // posture immediately. The Helm-side gate (`acknowledgeUnsafe:
+      // true` opt-in) is W3-Operator scope; this commit lands the
+      // pod-side WARN as defense-in-depth.
       const failOpenBlackboard =
         process.env.KAGENT_BLACKBOARD_FAIL_OPEN === 'true'
           ? { read: ['*'], write: ['*'] }
           : undefined;
+      if (failOpenBlackboard !== undefined) {
+        console.warn(
+          '[kagent-agent-pod] SECURITY: KAGENT_BLACKBOARD_FAIL_OPEN=true is set — ' +
+            'blackboard claims defaulted to {read: [*], write: [*]} for this pod. ' +
+            'Every blackboard tool call admits cluster-wide unrestricted access. ' +
+            'This bypasses the cap-bundle ACL surface and MUST NOT be used in ' +
+            "production. Set agentPod.blackboard.failOpen=false (the operator chart's " +
+            'default) to remove this override; pair the dev override with ' +
+            'agentPod.blackboard.acknowledgeUnsafe=true once the W3-Operator chart ' +
+            'gate lands so Helm refuses install without explicit consent.',
+        );
+      }
       const blackboardClaim = capabilityBundle?.claims.blackboard ?? failOpenBlackboard;
       const defs = defineBlackboardTools({
         client,

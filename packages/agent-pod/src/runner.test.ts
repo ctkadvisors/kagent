@@ -21,6 +21,7 @@ import {
   buildLlmClient,
   collectArtifactsFromTraces,
   composeSignals,
+  DEFAULT_TASK_TIMEOUT_SECONDS,
   parseContextPressureThresholdEnv,
   parseContextSafetyThreshold,
   pickUserMessage,
@@ -865,6 +866,30 @@ describe('runAgentTask — runConfig precedence (WS-G)', () => {
     // fresh signal produced by AbortSignal.any. Just assert one was
     // wired (i.e. the runner did the composition).
     expect(spy.capturedSignal()).toBeDefined();
+  });
+
+  /*
+   * Audit-rev2 M10 — when neither runConfig.timeoutSeconds nor the
+   * deprecated top-level timeoutSeconds is declared, the runner stamps
+   * DEFAULT_TASK_TIMEOUT_SECONDS so every admitted task has a wall-clock
+   * ceiling AND an AbortSignal-driven cancellation path the SIGTERM
+   * handler can observe. Previously absent timeouts produced
+   * `timeoutSignal=undefined` and the pod could hang on a stuck LLM
+   * call until the kubelet's activeDeadlineSeconds fired.
+   */
+  it('M10 — stamps DEFAULT_TASK_TIMEOUT_SECONDS when neither runConfig.timeoutSeconds nor timeoutSeconds is set', async () => {
+    expect(DEFAULT_TASK_TIMEOUT_SECONDS).toBeGreaterThan(0);
+    const cfg: PodConfig = {
+      ...baseConfig,
+      // BOTH timeout knobs explicitly absent.
+      taskSpec: { ...baseConfig.taskSpec, runConfig: undefined, timeoutSeconds: undefined },
+    };
+    const spy = spyLlm();
+    const result = await runAgentTask(cfg, { llm: spy.llm, sinks: [] });
+    expect(result.status).toBe('completed');
+    // Default fired -> a signal IS wired, where previously it would have been undefined.
+    expect(spy.capturedSignal()).toBeDefined();
+    expect(spy.capturedSignal()?.aborted).toBe(false);
   });
 
   /* =====================================================================

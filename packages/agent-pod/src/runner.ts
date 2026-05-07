@@ -94,6 +94,18 @@ export interface RunResult {
 }
 
 /**
+ * Audit-rev2 M10 — substrate-side default wall-clock timeout when
+ * `runConfig.timeoutSeconds` (and the deprecated top-level
+ * `timeoutSeconds`) are both absent. 1800s = 30 minutes — generous
+ * enough for typical research / summarization workloads, short enough
+ * that a hung LLM call doesn't pin the pod for hours. Operators with
+ * legitimately long-running flows set the field explicitly. Exported
+ * for the runner test suite + downstream consumers that want to read
+ * the same default (e.g. job-spec validation).
+ */
+export const DEFAULT_TASK_TIMEOUT_SECONDS = 1800;
+
+/**
  * Test-injection seam — overrides any of the otherwise-defaulted
  * collaborators. Production caller passes nothing.
  *
@@ -272,7 +284,23 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // falling back to the deprecated top-level `timeoutSeconds`.
   // `runConfig.timeoutSeconds` wins on conflict (per CRD docstring).
   const rc = config.taskSpec.runConfig;
-  const effectiveTimeoutSeconds = rc?.timeoutSeconds ?? config.taskSpec.timeoutSeconds;
+  // Audit-rev2 M10 (= evidence/audit-rev2/C2.md §1 row M10): when no
+  // timeout is declared on the task, stamp the substrate default
+  // (`DEFAULT_TASK_TIMEOUT_SECONDS`) at admission time. Previously
+  // `effectiveTimeoutSeconds === undefined` meant the pod could hang
+  // indefinitely on a stuck LLM call (waiting only for the kubelet's
+  // activeDeadlineSeconds to fire — which is set by the operator's
+  // job-spec to the same task timeout, so an absent timeout there
+  // produced no clean shutdown either). Stamping a default ensures
+  // every admitted task has a wall-clock ceiling AND surfaces an
+  // AbortSignal-driven cancellation path the SIGTERM handler can
+  // observe. Operators that need a longer ceiling set
+  // `runConfig.timeoutSeconds` explicitly.
+  const declaredTimeoutSeconds = rc?.timeoutSeconds ?? config.taskSpec.timeoutSeconds;
+  const effectiveTimeoutSeconds =
+    typeof declaredTimeoutSeconds === 'number' && declaredTimeoutSeconds > 0
+      ? declaredTimeoutSeconds
+      : DEFAULT_TASK_TIMEOUT_SECONDS;
   const effectiveTokenLimit = rc?.tokenLimit;
   const effectiveCostLimit = rc?.costLimitUsd;
   const effectiveMaxIter = rc?.maxIterations;
@@ -284,10 +312,7 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // caller-supplied `deps.signal` (used by main.ts's SIGTERM
   // controller) via Node 22 native `AbortSignal.any` so EITHER source
   // can cancel the run.
-  const timeoutSignal =
-    typeof effectiveTimeoutSeconds === 'number' && effectiveTimeoutSeconds > 0
-      ? AbortSignal.timeout(effectiveTimeoutSeconds * 1000)
-      : undefined;
+  const timeoutSignal = AbortSignal.timeout(effectiveTimeoutSeconds * 1000);
   const signal = composeSignals(deps.signal, timeoutSignal);
 
   // Piece 3 (CONTEXT-AWARENESS.md §4.5) — substrate-side context-window

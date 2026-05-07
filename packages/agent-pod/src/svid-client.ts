@@ -228,6 +228,24 @@ export interface ProbeGatewayMtlsResult {
     | 'tls-error'
     | 'fetch-failed'
     | 'fetch-rejected';
+  /**
+   * Audit-rev2 M7 (= evidence/audit-rev2/C2.md §1 row M7): the probe
+   * is structurally OPTIMISTIC. A successful TLS handshake is NOT
+   * proof the gateway honored our client cert (one-way TLS gateways
+   * complete the handshake while ignoring the cert). When this flag
+   * is `true`, the gateway emitted the `X-Kagent-Identity-Verified`
+   * response header and the runner can trust mTLS is end-to-end.
+   * When `false` (and `mtlsSupported=true`), the runner should log
+   * the probe at WARN with `mtlsSupported: true (UNVERIFIED)` so
+   * operators see the discoverability gap; audit emissions should
+   * use the same flag to distinguish verified from optimistic.
+   *
+   * The header value, when present, carries the SPIFFE ID the
+   * gateway resolved (e.g. `spiffe://kagent.knuteson.io/agent/<name>`).
+   * Tracking until the gateway team's contract decision lands
+   * (docs/GATEWAY-CONTRACT.md §4.3 open question).
+   */
+  readonly identityVerifiedHeader?: string;
   /** Trace-friendly detail string. May be empty. */
   readonly detail: string;
 }
@@ -241,10 +259,21 @@ export interface ProbeGatewayMtlsResult {
  *
  * v0.4.3 limitation (DOCUMENTED): we cannot reliably distinguish
  * "gateway ignored our cert" from "gateway accepted our cert" without
- * a richer protocol. The probe is OPTIMISTIC: when the GET succeeds,
- * we assume mTLS is supported. The real-world fall-back path is the
+ * a richer protocol. The probe is OPTIMISTIC: when the GET succeeds
+ * AND the gateway does NOT emit the `X-Kagent-Identity-Verified`
+ * header, the result carries `mtlsSupported=true` /
+ * `identityVerifiedHeader=undefined`. Callers should log
+ * "mtlsSupported: true (UNVERIFIED)" on this path so operators
+ * see the discoverability gap. The real-world fall-back path is the
  * gateway responding 426 Upgrade Required or 401 with a body
  * indicating "bearer required" — both signal the runner to fall back.
+ *
+ * Audit-rev2 M7 (= evidence/audit-rev2/C2.md §1 row M7): when the
+ * gateway DOES emit `X-Kagent-Identity-Verified: spiffe://...` (the
+ * outcome of GATEWAY-CONTRACT.md §4.3's open question), the probe
+ * propagates the header on `identityVerifiedHeader` so the runner can
+ * promote the WARN to a structured INFO and audit emissions can flag
+ * the connection as VERIFIED.
  */
 export async function probeGatewayMtls(
   input: ProbeGatewayMtlsInput,
@@ -283,10 +312,20 @@ export async function probeGatewayMtls(
         detail: `gateway returned 426 (Upgrade Required) — bearer-only`,
       };
     }
+    // Audit-rev2 M7: extract the optional verification header. When
+    // present, the runner can promote the WARN to a structured INFO
+    // and audit emissions flag the connection as VERIFIED. When
+    // absent, the probe is OPTIMISTIC and the caller should log
+    // "mtlsSupported: true (UNVERIFIED)".
+    const verified = response.headers.get('X-Kagent-Identity-Verified') ?? undefined;
+    const verifiedSuffix =
+      typeof verified === 'string' && verified.length > 0 ? ` VERIFIED=${verified}` : ' UNVERIFIED';
     return {
       mtlsSupported: true,
       reason: 'handshake-ok',
-      detail: `probe ${probeUrl} -> ${response.status}`,
+      detail: `probe ${probeUrl} -> ${response.status}${verifiedSuffix}`,
+      ...(typeof verified === 'string' &&
+        verified.length > 0 && { identityVerifiedHeader: verified }),
     };
   } catch (err) {
     // Network / TLS error — handshake rejected.
