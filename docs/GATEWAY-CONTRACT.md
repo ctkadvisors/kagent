@@ -84,6 +84,81 @@ kagent stamps the following headers on every outbound `/v1/chat/completions` cal
 
 Gateway **MUST NOT** echo `Authorization` in any response body, log line, or trace attribute.
 
+### 3.1 `X-Kagent-*` headers are ADVISORY, not authoritative (audit-rev2 L15)
+
+The `X-Kagent-Task-UID`, `X-Kagent-Agent`, and (post-v0.5.0)
+`X-Kagent-Tenant` headers are **advisory attribution metadata, not
+authentication or authorisation primitives.** Concretely:
+
+- They are stamped by the agent-pod from environment variables
+  (`KAGENT_TASK_ID`, `KAGENT_AGENT_NAME`, etc.) which the operator
+  injects from the AgentTask / Agent CR. The pod itself controls
+  the bytes that go on the wire.
+- The gateway accepts them from **every** caller that holds a valid
+  `Authorization` bearer (or a valid mTLS SVID, post-v0.4.3).
+  Anyone with a gateway API key can set these headers to any value
+  — including a counterparty's task UID or agent name — without
+  triggering any rejection at the gateway layer. They are a
+  **client claim**, not a verified identity.
+- The gateway records these headers verbatim into its
+  `usage_records` rows (the
+  `packages/llm-gateway/src/headers.ts:parseKagentHeaders` path) so
+  cross-system attribution joins (Langfuse trace ↔ AgentTask ↔
+  usage row) work in the cooperative-actor case.
+- An adversary with any valid gateway key can mis-attribute their
+  usage to an arbitrary `X-Kagent-Agent` / `X-Kagent-Task-UID`
+  string. The gateway has no out-of-band channel to verify the
+  pairing of (bearer token → claimed task UID).
+
+**Authoritative authentication** is `Authorization` (the bearer
+token, scoped per §4.2's per-Agent key model when v0.3+ ships) or
+the mTLS SVID (§4.3, post-v0.4.3). Those are the mechanisms the
+gateway **MUST** use to make access-control decisions. The
+`X-Kagent-*` headers are the diagnostic-grade metadata layered on
+top.
+
+**Implementation guidance for kagent-compatible gateways:**
+
+- **DO** record the `X-Kagent-*` headers in usage rows / traces /
+  metrics for cooperative-actor attribution.
+- **DO** treat differing `X-Kagent-*` claims under the same
+  bearer token as a routine cardinality fact, not a security
+  alert. (One key per agent in v0.1; one key per Agent in v0.3+
+  caps cardinality at one expected agent name.)
+- **DO NOT** make access-control, tenant-routing, quota, or
+  audit-completeness decisions on the basis of these headers
+  alone. A claim that a request belongs to tenant X must be
+  verified through the Authorization → Key → Tenant lookup
+  the gateway already owns; the header is for join-key purposes
+  only.
+- **MAY** expose a per-key option to *scope* attribution: e.g.
+  reject `X-Kagent-Agent` values not on the key's whitelist. This
+  is a defence in depth; the contract does not require it.
+- **SHOULD** treat a request that omits these headers identically
+  to one that includes them — the OSS / non-kagent caller path
+  must keep working (those rows simply persist with NULL
+  attribution).
+
+**Implementation guidance for kagent itself (substrate side):**
+
+- **DO** send these headers from the agent-pod on every outbound
+  call — they're cheap and the cooperative-attribution case is
+  the dominant one.
+- **DO NOT** treat the gateway's recorded values as evidence in
+  audit chains that cross trust boundaries. The substrate's own
+  audit path (`auditEmit` → AgentTask `status.events`) is the
+  load-bearing audit channel; gateway usage rows are observability,
+  not attestation.
+- **MAY** strip / overwrite these headers in middleware for any
+  agent considered untrusted — the gateway will accept whatever
+  the substrate decides to send.
+
+This advisory framing is intentional: the contract optimises for
+cross-system joins under cooperative-actor assumptions, NOT for
+adversarial attribution. The substrate's authorisation primitives
+(capabilities, supervision tree, A2A authorities) live one layer
+up; the gateway is downstream of those decisions.
+
 ---
 
 ## 4. Authentication
