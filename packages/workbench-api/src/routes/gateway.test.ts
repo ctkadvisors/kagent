@@ -78,6 +78,19 @@ describe('parsePatchInFlightBody', () => {
     expect(() => parsePatchInFlightBody({ minSafe: 257 })).toThrow(/minSafe/);
   });
 
+  // Regression — B5: PATCH with `minSafe: 0` is a permanent-DoS one-shot
+  // (AIMD halves cap, and `Math.max(0, floor(cap/2))` clamps at 0
+  // indefinitely once the cap reaches 0). The PATCH route MUST reject
+  // it; the watch-time clamp in model-watch.ts catches a CR-edited
+  // bypass.
+  it('rejects minSafe=0 (B5 regression)', () => {
+    expect(() => parsePatchInFlightBody({ minSafe: 0 })).toThrow(/minSafe/);
+  });
+
+  it('accepts minSafe=1 as the lowest legal value', () => {
+    expect(parsePatchInFlightBody({ minSafe: 1 })).toEqual({ minSafe: 1 });
+  });
+
   it('rejects seed > max', () => {
     expect(() => parsePatchInFlightBody({ seed: 16, max: 8 })).toThrow(/must be ≤ max/);
   });

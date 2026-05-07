@@ -80,11 +80,7 @@ export function createModelEndpointWatch(
   const apply = (ep: ModelEndpoint): void => {
     if (!isModelEndpoint(ep)) return;
     modelIndex.upsert(ep);
-    aimd.updateBounds(ep.spec.model, ep.spec.backendUrl, {
-      seed: ep.spec.inFlight.seed,
-      max: ep.spec.inFlight.max,
-      minSafe: ep.spec.minSafe ?? 1,
-    });
+    aimd.updateBounds(ep.spec.model, ep.spec.backendUrl, normalizeBounds(ep));
   };
 
   informer.on('add', apply);
@@ -108,6 +104,31 @@ export function createModelEndpointWatch(
     stop(): Promise<void> {
       return informer.stop();
     },
+  };
+}
+
+/**
+ * Project a CR's `spec.inFlight.{seed,max}` + `spec.minSafe` into the
+ * AIMD-controller bounds shape, applying the audit-B5 floor of 1 to
+ * `minSafe`. Nullish-coalescing alone is NOT enough — `?? 1` only
+ * substitutes for `null`/`undefined`, not `0`, so a CR with
+ * `spec.minSafe: 0` would slip through and let the multiplicative-
+ * decrease floor stay at 0 (which combined with `floor(cap/2)` would
+ * leave the cap pinned at 0 indefinitely after the first 429/error).
+ *
+ * We clamp at watch time so the rest of the gateway code (router,
+ * AIMD controller, admin/capacity surface) can assume `bounds.minSafe
+ * >= 1` as an invariant.
+ */
+export function normalizeBounds(ep: ModelEndpoint): {
+  seed: number;
+  max: number;
+  minSafe: number;
+} {
+  return {
+    seed: ep.spec.inFlight.seed,
+    max: ep.spec.inFlight.max,
+    minSafe: Math.max(1, ep.spec.minSafe ?? 1),
   };
 }
 

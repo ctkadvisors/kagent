@@ -82,12 +82,22 @@ const KAGENT_GROUP = 'kagent.knuteson.io';
 const KAGENT_VERSION = 'v1alpha1';
 const MODEL_ENDPOINT_PLURAL = 'modelendpoints';
 
-/** Bounds we accept on PATCH — mirrors ModelEndpoint CRD validation. */
+/** Bounds we accept on PATCH — mirrors ModelEndpoint CRD validation.
+ *
+ * `MIN_SAFE_MIN` is 1 (NOT 0) — a `minSafe: 0` would let the AIMD
+ * controller halve the cap to zero on a single error and never recover
+ * (ceiling(0/2) === 0; additive increase from 0 is one-per-clean-window
+ * which is fine but the multiplicative-decrease floor stays at 0
+ * indefinitely, permanently throttling the (model, backend) pair). See
+ * audit B5 — a PATCH with `minSafe: 0` is a one-shot DoS for the lifetime
+ * of the gateway Pod. The model-watch path applies the same floor at
+ * CR-watch time so a hand-edited CR with `spec.minSafe: 0` is also
+ * clamped before reaching `aimd.updateBounds`. */
 const SEED_MIN = 1;
 const SEED_MAX = 256;
 const MAX_MIN = 1;
 const MAX_MAX = 1024;
-const MIN_SAFE_MIN = 0;
+const MIN_SAFE_MIN = 1;
 const MIN_SAFE_MAX = 256;
 
 interface CapacityResponse {
