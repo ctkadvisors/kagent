@@ -332,4 +332,211 @@ describe('AgentExecutor — 429 retry policy', () => {
     expect(recordedSleeps).toEqual([200]);
     expect(recordedRequests).toHaveLength(1); // only the first attempt
   });
+
+  /* ===================================================================
+   * NH2 (audit-rev2 C2 §3) — Retry-After cap + abort-interruptible sleep.
+   * =================================================================== */
+
+  it('NH2-A: Retry-After: 600 (10 min) is CAPPED at 30s', async () => {
+    const recordedSleeps: number[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [
+        new LLMClientHttpError(429, 'at cap', undefined, 600), // 10 minutes — adversarial / misbehaving gateway
+        { content: 'ok' },
+      ],
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: {
+        maxRetries: 2,
+        backoffSchedule: [200, 800, 3200],
+        sleep: (ms) => {
+          recordedSleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.status).toBe('completed');
+    // Pre-fix: recordedSleeps = [600_000]. Post-fix: clamped to 30_000.
+    expect(recordedSleeps).toEqual([30_000]);
+    const llmTraces = result.traces.filter((t) => t.trace_type === 'llm_call');
+    expect(llmTraces[1]?.retry_backoff_ms).toBe(30_000);
+  });
+
+  it('NH2-A: Retry-After: 3600 (1 hour) is CAPPED at 30s', async () => {
+    const recordedSleeps: number[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [new LLMClientHttpError(429, 'at cap', undefined, 3600), { content: 'ok' }],
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: {
+        maxRetries: 2,
+        backoffSchedule: [200, 800, 3200],
+        sleep: (ms) => {
+          recordedSleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(recordedSleeps).toEqual([30_000]);
+  });
+
+  it('NH2-A: Retry-After at exactly 30s passes through unchanged', async () => {
+    const recordedSleeps: number[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [new LLMClientHttpError(429, 'at cap', undefined, 30), { content: 'ok' }],
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: {
+        maxRetries: 2,
+        backoffSchedule: [200, 800, 3200],
+        sleep: (ms) => {
+          recordedSleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(recordedSleeps).toEqual([30_000]);
+  });
+
+  it('NH2-A: Retry-After under 30s is NOT artificially capped (5s pass-through)', async () => {
+    const recordedSleeps: number[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [new LLMClientHttpError(429, 'at cap', undefined, 5), { content: 'ok' }],
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: {
+        maxRetries: 2,
+        backoffSchedule: [200, 800, 3200],
+        sleep: (ms) => {
+          recordedSleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(recordedSleeps).toEqual([5_000]);
+  });
+
+  it('NH2-B: SIGTERM mid-sleep produces immediate abort throw (sleep does not wait its full duration)', async () => {
+    const recordedSleeps: number[] = [];
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const controller = new AbortController();
+    let sleepResolveDelayMs: number | undefined;
+    const llm = makeStubLLM({
+      scriptedChat: [new LLMClientHttpError(429, 'at cap'), { content: 'should not be reached' }],
+      recordedRequests,
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: {
+        maxRetries: 2,
+        backoffSchedule: [60_000, 800, 3200], // 60s default — would burn the kubelet's grace period
+        // Inject a long-running fake sleep, then abort externally.
+        // The sleepWithAbort race MUST resolve via the abort path,
+        // not by waiting for this fake to settle.
+        sleep: (ms) => {
+          recordedSleeps.push(ms);
+          // Schedule the abort on the microtask queue so the abort
+          // event fires AFTER `sleepWithAbort` has registered its
+          // 'abort' listener.
+          queueMicrotask(() => controller.abort());
+          // Return a promise that does NOT resolve quickly —
+          // simulating "the timer would have waited 60s." If
+          // sleepWithAbort waits for THIS to resolve, the run loop
+          // will hang for 60s. The race against abort MUST win first.
+          return new Promise<void>((resolve) => {
+            const t = setTimeout(() => {
+              sleepResolveDelayMs = 60_000;
+              resolve();
+            }, 60_000);
+            // Defensive: vitest will time out at 5s; tear down the
+            // timer if the controller signals at the test scope.
+            controller.signal.addEventListener('abort', () => {
+              clearTimeout(t);
+              // Do NOT resolve here — that would defeat the point.
+              // Let the race resolve via sleepWithAbort's own abort
+              // listener. We just clean up the timer so it doesn't
+              // keep the event loop alive after the test.
+            });
+          });
+        },
+      },
+    });
+    const startMs = Date.now();
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    const elapsedMs = Date.now() - startMs;
+    expect(result.status).toBe('cancelled');
+    // The abort must have unwound the run loop in well under 1s
+    // (in practice, microtask-time). If the sleep was non-interruptible,
+    // elapsedMs would approach 60_000 and the test would time out.
+    expect(elapsedMs).toBeLessThan(1000);
+    // The injected fake's timer never fired (its resolve callback
+    // never ran). If sleepResolveDelayMs were set, sleepWithAbort
+    // would have waited for the fake to finish.
+    expect(sleepResolveDelayMs).toBeUndefined();
+    // Only the first chat() ran — the retry was aborted.
+    expect(recordedRequests).toHaveLength(1);
+    expect(recordedSleeps).toEqual([60_000]);
+  });
+
+  it('NH2-B: existing 429/backoff tests still pass — abort-aware sleep is back-compat with non-aborting flows', async () => {
+    // Smoke regression: the standard "single 429 → success" path
+    // still records the configured backoff and produces 2 LLM
+    // traces. If sleepWithAbort accidentally short-circuited the
+    // happy path, this test would catch it.
+    const recordedSleeps: number[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [new LLMClientHttpError(429, 'at cap'), { content: 'ok' }],
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: {
+        maxRetries: 2,
+        backoffSchedule: [200, 800, 3200],
+        sleep: (ms) => {
+          recordedSleeps.push(ms);
+          return Promise.resolve();
+        },
+      },
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('ok');
+    expect(recordedSleeps).toEqual([200]);
+  });
 });

@@ -57,6 +57,7 @@ import {
   NoLLMClientError,
   InvalidConfigError,
   LLMClientHttpError,
+  LLMClientAbortError,
 } from './errors.js';
 import { randomUUID } from 'node:crypto';
 
@@ -77,6 +78,20 @@ const DEFAULT_BACKOFF_SCHEDULE: readonly number[] = [200, 800, 3200];
 
 /** Default retry cap — original attempt + 2 retries = 3 round-trips worst-case. */
 const DEFAULT_MAX_RETRIES = 2;
+
+/**
+ * Upper bound on a per-attempt backoff sleep — covers both
+ * `Retry-After` values and (defensively) the local schedule.
+ *
+ * Rationale (audit-rev2 C2 §3 NH2): a gateway returning
+ * `Retry-After: 600` (10 minutes) or `Retry-After: 3600` (1 hour)
+ * — whether through misconfiguration, queue-spillover, or
+ * adversarial intent — must not be allowed to wedge a pod for that
+ * duration. 30s is comfortably below typical `terminationGracePeriodSeconds`
+ * (60–120s) and well above the gateway's default backoff window
+ * (~3.2s tail). Set in ms to match the rest of the schedule.
+ */
+const RETRY_AFTER_MAX_MS = 30_000;
 
 /**
  * Retry policy applied around every `LLMClient.chat()` call.
@@ -366,13 +381,83 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
    * `Retry-After` from the upstream wins when present. The schedule clamps
    * to its last entry when callers ask for an attempt beyond the table —
    * defensive rather than throwing on a config mismatch.
+   *
+   * NH2 (audit-rev2 C2 §3) — `Retry-After` is also CAPPED at
+   * `RETRY_AFTER_MAX_MS` (30s). A misbehaving or adversarial gateway that
+   * returns `Retry-After: 600` (10 minutes) or `Retry-After: 3600` (1 hour)
+   * must not be allowed to wedge the pod for the full duration. The cap
+   * preserves the gateway's preferred pacing for normal values
+   * (sub-30s) while bounding worst-case sleep latency. `Retry-After: 0`
+   * remains honored verbatim per the existing immediate-retry contract.
    */
   private pickBackoffMs(attemptIdx: number, retryAfterSec: number | undefined): number {
     if (retryAfterSec !== undefined) {
-      return Math.max(0, Math.floor(retryAfterSec * 1000));
+      return Math.min(Math.max(0, Math.floor(retryAfterSec * 1000)), RETRY_AFTER_MAX_MS);
     }
     const i = Math.min(attemptIdx - 1, this.backoffSchedule.length - 1);
     return this.backoffSchedule[Math.max(0, i)] ?? 0;
+  }
+
+  /**
+   * Sleep `ms` milliseconds, but resolve EARLY if `signal` aborts.
+   *
+   * NH2 (audit-rev2 C2 §3) — the prior implementation
+   * (`await this.sleep(backoffMs)`) blocked for the full duration
+   * regardless of abort. A SIGTERM landing mid-sleep had to wait for
+   * the timer to fire before the post-sleep `signal.aborted` check
+   * could surface the cancellation, and at gateway-supplied
+   * `Retry-After` values approaching `terminationGracePeriodSeconds`
+   * the kubelet would SIGKILL the pod before the abort path could
+   * unwind to the run loop's `cancelled` downgrade.
+   *
+   * Implementation: race the configured sleep against an `'abort'`
+   * event on `signal`. The injected `this.sleep` (defaulted to
+   * setTimeout-Promise; tests inject a fake) still drives the timer
+   * arm; the abort arm wins immediately when the signal fires
+   * mid-sleep. Listener is cleaned up on either resolution path so a
+   * still-pending sleep doesn't leak a listener after abort.
+   *
+   * Resolution semantics: this method always resolves (never rejects)
+   * — the caller is responsible for the post-sleep abort check and
+   * the typed throw. This mirrors the existing
+   * `await this.sleep(ms); if (signal.aborted) throw err;` pattern.
+   */
+  private async sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+    // Always invoke the injected sleep so the configured/test-fake
+    // implementation observes the call (the existing test pattern
+    // records `sleep(ms)` invocations to assert backoff sequences,
+    // including the `Retry-After: 0 → recordedSleeps: [0]` contract).
+    // The race against `signal` runs in parallel; whichever resolves
+    // first wins.
+    if (signal.aborted) {
+      // Pre-aborted: still call the injected sleep so tests record
+      // the attempt, but do not wait for its completion. The caller's
+      // post-sleep `signal.aborted` check surfaces the abort
+      // immediately on the next tick.
+      void this.sleep(ms);
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const onAbort = (): void => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      // Drive the timer arm via the injected sleep so tests retain
+      // the deterministic "fire backoffs without burning wall clock"
+      // pattern. Errors from the injected fake (shouldn't happen in
+      // practice) are swallowed — the post-sleep abort check is the
+      // authoritative signal.
+      void this.sleep(ms).then(() => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      });
+    });
   }
 
   /**
@@ -501,16 +586,30 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         bookkeeping.traces.push(errEntry);
         await this.emitToSinks(errEntry);
 
-        // Sleep before the retry. Honor abort during sleep so a SIGTERM
-        // landing mid-backoff doesn't burn the full window before
-        // surfacing as cancelled.
-        await this.sleep(backoffMs);
+        // Sleep before the retry. NH2 (audit-rev2 C2 §3) — sleep is
+        // ABORT-INTERRUPTIBLE: a SIGTERM landing mid-backoff resolves
+        // immediately via `sleepWithAbort`'s race against the abort
+        // event. Without this, a `Retry-After: 30` sleep with SIGTERM
+        // at second 5 would wait the full 30s before surfacing,
+        // burning through the kubelet's
+        // `terminationGracePeriodSeconds` and SIGKILL-ing before the
+        // status patch could land. The 30s ceiling on
+        // `pickBackoffMs` (RETRY_AFTER_MAX_MS) bounds the worst case
+        // even in the no-abort scenario.
+        await this.sleepWithAbort(backoffMs, llmCtx.abortSignal);
         if (llmCtx.abortSignal.aborted) {
-          // Surface as the original 429 error so the run loop's catch
-          // arm sees it through the existing `signal.aborted` check
-          // and downgrades to status='cancelled'. Throwing the
-          // captured `err` keeps the cause chain intact.
-          throw err;
+          // Throw a typed abort error so the retry loop unwinds
+          // cleanly. The run loop's outer catch (executor.ts run-loop
+          // catch arm) checks `signal.aborted` and downgrades to
+          // `status='cancelled'` regardless of the thrown class —
+          // `LLMClientAbortError` makes the abort intent explicit in
+          // the error chain (and in the failed-trace's `error`
+          // field). The cause is the captured 429 so debug history
+          // points to "gave up the retry due to abort," not "abort
+          // happened spontaneously."
+          const abortErr = new LLMClientAbortError();
+          (abortErr as unknown as { cause?: unknown }).cause = err;
+          throw abortErr;
         }
 
         lastBackoffMs = backoffMs;
