@@ -29,6 +29,7 @@ turns that into a clear, actionable error rather than a silent race. */}}
 {{- if and .Values.capabilities.enabled (not .Values.capabilities.signingSecretName) }}
 {{- fail "kagent-operator: capabilities.enabled=true requires capabilities.signingSecretName" }}
 {{- end }}
+{{- include "kagent-operator.validateValues" . -}}
 
 apiVersion: apps/v1
 kind: Deployment
