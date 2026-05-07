@@ -3,11 +3,20 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { describe, expect, it } from 'vitest';
+import type { CustomObjectsApi } from '@kubernetes/client-node';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createArtifactRegistry } from './artifacts.js';
+import type { PodConfig } from './env.js';
 import type { RunResult } from './runner.js';
-import { buildArtifactsOnlyPatch, buildStatusPatch } from './status.js';
+import {
+  buildArtifactsOnlyPatch,
+  buildJsonPatchOps,
+  buildStatusPatch,
+  isPreconditionFailed,
+  writeStatus,
+  type StatusPatch,
+} from './status.js';
 
 const baseResult: RunResult = {
   runId: 'task-uid-1',
@@ -226,5 +235,270 @@ describe('buildArtifactsOnlyPatch', () => {
     const patch = buildArtifactsOnlyPatch(refs);
     (patch.artifacts as { uri: string }[] | undefined)?.push({ uri: 'leaked' });
     expect(refs).toHaveLength(1);
+  });
+});
+
+/* =====================================================================
+ * Audit C2 H8 — JSON Patch with `test` op precondition.
+ *
+ * Two writers race for the AgentTask status.phase transition to
+ * terminal: the agent-pod (after the loop unwinds) and the operator's
+ * job-watch (when the kubelet reports Job Failed first). Pre-fix
+ * last-writer-wins clobbered Completed with Failed. The fix: each
+ * writer attempts a JSON-Patch with a `test` op asserting status.phase
+ * is still non-terminal. On 412 Precondition Failed, the writer drops
+ * silently — terminal-already is the right end state.
+ * ===================================================================== */
+
+describe('buildJsonPatchOps (H8)', () => {
+  const completedPatch: StatusPatch = {
+    phase: 'Completed',
+    result: { content: 'done' },
+    completedAt: '2026-04-26T10:00:00.000Z',
+    structuralVerdict: { suspicious: [] },
+  };
+
+  it('emits a test op as the first operation, asserting expected pre-terminal phase', () => {
+    const ops = buildJsonPatchOps(completedPatch, 'Dispatched');
+    expect(ops[0]).toEqual({ op: 'test', path: '/status/phase', value: 'Dispatched' });
+  });
+
+  it('uses RFC 6902 add ops (not replace) so missing status subresource works', () => {
+    const ops = buildJsonPatchOps(completedPatch, 'Dispatched');
+    for (const op of ops.slice(1)) {
+      expect(op.op).toBe('add');
+    }
+  });
+
+  it('writes phase, completedAt, result, structuralVerdict for Completed', () => {
+    const ops = buildJsonPatchOps(completedPatch, 'Dispatched');
+    const paths = ops.map((o) => o.path);
+    expect(paths).toContain('/status/phase');
+    expect(paths).toContain('/status/completedAt');
+    expect(paths).toContain('/status/result');
+    expect(paths).toContain('/status/structuralVerdict');
+  });
+
+  it('writes error instead of result for Failed', () => {
+    const ops = buildJsonPatchOps(
+      {
+        phase: 'Failed',
+        error: 'boom',
+        completedAt: '2026-04-26T10:00:00.000Z',
+        structuralVerdict: { suspicious: [] },
+      },
+      'Dispatched',
+    );
+    const paths = ops.map((o) => o.path);
+    expect(paths).toContain('/status/error');
+    expect(paths).not.toContain('/status/result');
+  });
+
+  it('omits artifacts op when patch.artifacts is undefined', () => {
+    const ops = buildJsonPatchOps(completedPatch, 'Dispatched');
+    const paths = ops.map((o) => o.path);
+    expect(paths).not.toContain('/status/artifacts');
+  });
+
+  it('includes artifacts op when patch.artifacts is set', () => {
+    const ops = buildJsonPatchOps(
+      {
+        ...completedPatch,
+        artifacts: [{ uri: 'pvc://kagent-artifacts/uid/x.md', mediaType: 'text/markdown' }],
+      },
+      'Dispatched',
+    );
+    const paths = ops.map((o) => o.path);
+    expect(paths).toContain('/status/artifacts');
+  });
+});
+
+describe('isPreconditionFailed (H8)', () => {
+  it('returns true for code=412', () => {
+    const err = Object.assign(new Error('precondition failed'), { code: 412 });
+    expect(isPreconditionFailed(err)).toBe(true);
+  });
+
+  it('returns false for 409 Conflict — must propagate, not be swallowed', () => {
+    const err = Object.assign(new Error('conflict'), { code: 409 });
+    expect(isPreconditionFailed(err)).toBe(false);
+  });
+
+  it('returns false for 422 Unprocessable Entity — must propagate, not be swallowed', () => {
+    const err = Object.assign(new Error('invalid'), { code: 422 });
+    expect(isPreconditionFailed(err)).toBe(false);
+  });
+
+  it('returns false for 500 Server Error', () => {
+    const err = Object.assign(new Error('boom'), { code: 500 });
+    expect(isPreconditionFailed(err)).toBe(false);
+  });
+
+  it('returns false for plain Errors with no code property', () => {
+    expect(isPreconditionFailed(new Error('not http'))).toBe(false);
+  });
+
+  it('returns false for null / undefined / non-objects', () => {
+    expect(isPreconditionFailed(null)).toBe(false);
+    expect(isPreconditionFailed(undefined)).toBe(false);
+    expect(isPreconditionFailed('string err')).toBe(false);
+    expect(isPreconditionFailed(42)).toBe(false);
+  });
+});
+
+describe('writeStatus (H8) — JSON Patch with test op + 412 swallowing', () => {
+  const podConfig: Pick<PodConfig, 'taskNamespace' | 'taskName'> = {
+    taskNamespace: 'default',
+    taskName: 'task-1',
+  };
+
+  const completedPatch: StatusPatch = {
+    phase: 'Completed',
+    result: { content: 'done' },
+    completedAt: '2026-04-26T10:00:00.000Z',
+    structuralVerdict: { suspicious: [] },
+  };
+
+  function makeMockApi(impl: (req: unknown, opts: unknown) => Promise<unknown>): CustomObjectsApi {
+    return {
+      patchNamespacedCustomObjectStatus: vi.fn(impl),
+    } as unknown as CustomObjectsApi;
+  }
+
+  it('non-terminal-state attempt → 200 → succeeds (single roundtrip when Dispatched test passes)', async () => {
+    let calls = 0;
+    const api = makeMockApi(() => {
+      calls += 1;
+      return Promise.resolve({ status: { phase: 'Completed' } });
+    });
+    await writeStatus(podConfig as PodConfig, completedPatch, api);
+    expect(calls).toBe(1);
+  });
+
+  it('uses Content-Type: application/json-patch+json (NOT merge-patch)', async () => {
+    // setHeaderOptions returns an opaque middleware-shaped object whose
+    // headers aren't reflected on a JSON.stringify. Drive the middleware
+    // explicitly to assert the header it injects on outgoing requests.
+    let recordedOpts: { middleware?: ReadonlyArray<{ pre?: (ctx: unknown) => unknown }> } = {};
+    const api = makeMockApi((_req, opts) => {
+      recordedOpts = opts as typeof recordedOpts;
+      return Promise.resolve({});
+    });
+    await writeStatus(podConfig as PodConfig, completedPatch, api);
+    expect(Array.isArray(recordedOpts.middleware)).toBe(true);
+    // Build a fake RequestContext, run each middleware's `pre` hook, and
+    // capture the Content-Type header it sets. This mirrors how the
+    // generated client-node API plumbs `Configuration.middleware` into
+    // request building.
+    const headers: Record<string, string> = {};
+    const fakeCtx = {
+      setHeaderParam(name: string, value: string) {
+        headers[name] = value;
+      },
+    };
+    for (const mw of recordedOpts.middleware ?? []) {
+      const out = mw.pre?.(fakeCtx);
+      // RxJS observables are returned by middleware.pre — drive the
+      // synchronous emission by subscribing.
+      const maybeObservable = out as { subscribe?: (cb: (ctx: unknown) => void) => unknown };
+      if (typeof maybeObservable?.subscribe === 'function') {
+        maybeObservable.subscribe(() => undefined);
+      }
+    }
+    expect(headers['Content-Type']).toBe('application/json-patch+json');
+    expect(headers['Content-Type']).not.toContain('merge-patch+json');
+  });
+
+  it('sends a body with the test op as the first array entry (RFC 6902)', async () => {
+    let recordedReq: { body?: unknown } = {};
+    const api = makeMockApi((req) => {
+      recordedReq = req as { body?: unknown };
+      return Promise.resolve({});
+    });
+    await writeStatus(podConfig as PodConfig, completedPatch, api);
+    expect(Array.isArray(recordedReq.body)).toBe(true);
+    const body = recordedReq.body as Array<{ op?: string; path?: string }>;
+    expect(body[0]?.op).toBe('test');
+    expect(body[0]?.path).toBe('/status/phase');
+  });
+
+  it('terminal-state attempt → 412 → swallowed (no throw, no infinite retry)', async () => {
+    // Both Dispatched + Pending tests fail with 412 → another writer
+    // already terminalized. Drop silently.
+    let calls = 0;
+    const api = makeMockApi(() => {
+      calls += 1;
+      return Promise.reject(
+        Object.assign(new Error('precondition failed: status.phase != ...'), { code: 412 }),
+      );
+    });
+    // Must NOT throw.
+    await writeStatus(podConfig as PodConfig, completedPatch, api);
+    // Two attempts: Dispatched, then Pending. Both 412 → drop.
+    expect(calls).toBe(2);
+  });
+
+  it('Dispatched test fails 412, Pending test succeeds → succeeds without throwing', async () => {
+    // Edge case: the apiserver hasn't yet seen the dispatcher's
+    // promotion to Dispatched — phase is still Pending. First test op
+    // (Dispatched) returns 412; second (Pending) succeeds.
+    let calls = 0;
+    const api = makeMockApi((req) => {
+      calls += 1;
+      const body = (req as { body?: Array<{ op: string; value: unknown }> }).body ?? [];
+      const testOp = body[0];
+      if (testOp?.op === 'test' && testOp.value === 'Dispatched') {
+        return Promise.reject(Object.assign(new Error('precondition failed'), { code: 412 }));
+      }
+      return Promise.resolve({});
+    });
+    await writeStatus(podConfig as PodConfig, completedPatch, api);
+    expect(calls).toBe(2);
+  });
+
+  it('412 differentiation — 409 Conflict propagates (NOT swallowed)', async () => {
+    const api = makeMockApi(() =>
+      Promise.reject(Object.assign(new Error('conflict on resourceVersion'), { code: 409 })),
+    );
+    await expect(writeStatus(podConfig as PodConfig, completedPatch, api)).rejects.toThrow(
+      /conflict/,
+    );
+  });
+
+  it('412 differentiation — 422 Unprocessable Entity propagates (NOT swallowed)', async () => {
+    const api = makeMockApi(() =>
+      Promise.reject(Object.assign(new Error('invalid'), { code: 422 })),
+    );
+    await expect(writeStatus(podConfig as PodConfig, completedPatch, api)).rejects.toThrow(
+      /invalid/,
+    );
+  });
+
+  it('412 differentiation — 500 Server Error propagates', async () => {
+    const api = makeMockApi(() => Promise.reject(Object.assign(new Error('boom'), { code: 500 })));
+    await expect(writeStatus(podConfig as PodConfig, completedPatch, api)).rejects.toThrow(/boom/);
+  });
+
+  it('network error (no code property) propagates', async () => {
+    const api = makeMockApi(() => Promise.reject(new Error('ECONNREFUSED')));
+    await expect(writeStatus(podConfig as PodConfig, completedPatch, api)).rejects.toThrow(
+      /ECONNREFUSED/,
+    );
+  });
+
+  it('logs (does not throw) when both pre-terminal phases return 412', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const api = makeMockApi(() =>
+        Promise.reject(Object.assign(new Error('precondition failed'), { code: 412 })),
+      );
+      await writeStatus(podConfig as PodConfig, completedPatch, api);
+      const messages = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('status patch dropped');
+      expect(messages).toContain('default/task-1');
+      expect(messages).toContain('412');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
