@@ -13,7 +13,7 @@
  * for v1 single-tenant, but the right reflex).
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 
 import type { AimdController } from './aimd.js';
@@ -29,18 +29,40 @@ export interface AdminAuthResult {
   readonly message?: string;
 }
 
+/**
+ * H14 — domain-separation HMAC key for the admin-token compare path.
+ *
+ * The previous implementation early-returned `403` whenever
+ * `supplied.length !== expectedToken.length`, which leaked the
+ * expected token's exact byte length via response timing. The fix
+ * swaps the raw-byte compare for a fixed-width HMAC-SHA256 digest of
+ * each side: both inputs collapse to 32 bytes, so `timingSafeEqual`
+ * never has a length-mismatch fast path to leak information through.
+ *
+ * The HMAC key itself does not need to be secret — its only role is
+ * to prevent length-extension and to bind the digest to this code
+ * path so a digest captured here can't be replayed elsewhere. It is
+ * a constant string for code-search clarity.
+ */
+const ADMIN_TOKEN_HMAC_KEY = 'kagent-llm-gateway/admin-token/v1';
+
+function hmacToken(value: string): Buffer {
+  return createHmac('sha256', ADMIN_TOKEN_HMAC_KEY).update(value).digest();
+}
+
 export function adminAuth(req: IncomingMessage, expectedToken: string): AdminAuthResult {
   const auth = req.headers.authorization;
   if (typeof auth !== 'string' || auth.length === 0) {
     return { ok: false, statusCode: 401, message: 'missing authorization header' };
   }
   const supplied = auth.startsWith('Bearer ') ? auth.slice(7) : auth;
-  if (supplied.length !== expectedToken.length) {
-    return { ok: false, statusCode: 403, message: 'admin token mismatch' };
-  }
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(expectedToken);
-  if (!timingSafeEqual(a, b)) {
+  // H14 — compare digests of equal length (32 bytes) to remove the
+  // length-mismatch early-return. We DO NOT short-circuit on
+  // `supplied.length === 0`; the hmac compare below handles that
+  // uniformly with all other mismatched inputs.
+  const suppliedDigest = hmacToken(supplied);
+  const expectedDigest = hmacToken(expectedToken);
+  if (!timingSafeEqual(suppliedDigest, expectedDigest)) {
     return { ok: false, statusCode: 403, message: 'admin token mismatch' };
   }
   return { ok: true };

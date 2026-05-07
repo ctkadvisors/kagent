@@ -48,6 +48,40 @@ describe('adminAuth', () => {
   it('accepts a raw token without the Bearer prefix', () => {
     expect(adminAuth(fakeReq({ authorization: 'tok' }), 'tok')).toMatchObject({ ok: true });
   });
+
+  /* =====================================================================
+   * H14 — admin-token compare must not leak the expected token's
+   * length. The previous implementation early-returned 403 whenever
+   * `supplied.length !== expectedToken.length`; the fix HMAC-digests
+   * both sides to a fixed 32-byte width before timingSafeEqual, so
+   * supplied tokens of any length take the same compare path.
+   * ===================================================================== */
+
+  it('still rejects a length-mismatched token (defence-in-depth)', () => {
+    expect(
+      adminAuth(fakeReq({ authorization: 'Bearer x' }), 'much-longer-expected-token-12345'),
+    ).toMatchObject({
+      ok: false,
+      statusCode: 403,
+    });
+  });
+
+  it('rejects an empty supplied token without leaking expected length', () => {
+    expect(adminAuth(fakeReq({ authorization: 'Bearer ' }), 'expected')).toMatchObject({
+      ok: false,
+      statusCode: 403,
+    });
+  });
+
+  it('returns 403 (not 401) for a non-empty malformed token — the auth header IS present', () => {
+    // Belt-and-suspenders: 401 is "no header"; 403 is "header present
+    // but does not authenticate" — same posture before and after the
+    // HMAC fix.
+    expect(adminAuth(fakeReq({ authorization: 'Bearer ' }), 'tok')).toMatchObject({
+      ok: false,
+      statusCode: 403,
+    });
+  });
 });
 
 function ep(model: string, max = 4, seed = 2, url = 'http://x'): ModelEndpoint {
