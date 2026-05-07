@@ -18,15 +18,49 @@
  * archived `lambda/providers/bedrock-provider.ts`, and unblock in
  * `provider-factory.ts`. Tracked in the v0.2 deferred list.
  *
- * TODO: wire actual @aws-sdk/client-bedrock-runtime path when a
- * cloud-deployer needs Bedrock (out of homelab scope for v1).
+ * Audit-rev2 L12 — admission posture: a runtime throw is a
+ * misconfiguration that surfaces only when the first request lands.
+ * The ideal fix is operator-side admission rejecting
+ * `ModelEndpoint.spec.backendKind: bedrock` until the adapter is
+ * implemented. That admission lives in operator scope (CRD + watch),
+ * not gateway scope; see operator's W5 stream. As a defence in depth
+ * within the gateway itself:
+ *   - the error message below names the missing adapter explicitly
+ *     so logs / 500 bodies are unambiguously attributable;
+ *   - `model-watch.ts` warns at observation time when a CR with
+ *     `backendKind: bedrock` is loaded into the index, so an operator
+ *     debugging "why is my Bedrock CR failing?" sees a structured
+ *     diagnostic before any traffic arrives;
+ *   - `docs/MODEL-ROUTING.md` §6.1 documents the v1 gap.
+ *
+ * Tracked: GitHub issue "bedrock-backend: implement SigV4 adapter"
+ * (filed in the v0.2 milestone).
  */
 
 import { BaseProvider } from './base-provider.js';
 import type { ProviderRequest, ProviderResponse, StreamingProviderResponse } from '../types.js';
 
+/**
+ * Sentinel error name allowing call-sites (router, conformance probe,
+ * tests) to discriminate the not-implemented case from genuine
+ * upstream failures without string-matching the message.
+ */
+export const BEDROCK_NOT_IMPLEMENTED_ERROR_NAME = 'BedrockNotImplementedError';
+
 const NOT_IMPL_MESSAGE =
-  'bedrock backend is registered but not enabled in v1 — see packages/llm-gateway/src/providers/bedrock-provider.ts';
+  'bedrock backend is registered in BackendKind for type-exhaustiveness ' +
+  'but the SigV4 adapter is not implemented in v1 of @kagent/llm-gateway. ' +
+  'Set ModelEndpoint.spec.backendKind to one of {ollama, localai, openai, ' +
+  'anthropic, groq, exo, cloudflare, mock}, or add the @aws-sdk/client-' +
+  'bedrock-runtime adapter (see packages/llm-gateway/src/providers/' +
+  'bedrock-provider.ts header for the re-enable recipe).';
+
+class BedrockNotImplementedError extends Error {
+  override readonly name = BEDROCK_NOT_IMPLEMENTED_ERROR_NAME;
+  constructor() {
+    super(NOT_IMPL_MESSAGE);
+  }
+}
 
 export class BedrockProvider extends BaseProvider {
   readonly name = 'bedrock' as const;
@@ -38,12 +72,12 @@ export class BedrockProvider extends BaseProvider {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async chatCompletion(_request: ProviderRequest): Promise<ProviderResponse> {
-    throw new Error(NOT_IMPL_MESSAGE);
+    throw new BedrockNotImplementedError();
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async chatCompletionStream(_request: ProviderRequest): Promise<StreamingProviderResponse> {
-    throw new Error(NOT_IMPL_MESSAGE);
+    throw new BedrockNotImplementedError();
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

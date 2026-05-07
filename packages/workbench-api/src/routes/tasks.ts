@@ -260,8 +260,25 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
         };
         return c.json(body, 403);
       }
+      // Audit-rev2 L17 — do NOT echo the underlying K8s API error
+      // text to authenticated callers. Apiserver error messages can
+      // include internal hostnames, RBAC rule names, network paths,
+      // and (rarely) cluster-cert SANs. Keep the user-facing body
+      // generic and log the full error structurally so operators
+      // still have the diagnostic.
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error(
+        '[workbench-api] POST /api/tasks — unhandled K8s API error',
+        JSON.stringify({
+          namespace,
+          name,
+          targetAgent: req.targetAgent,
+          status: status ?? null,
+          message: detail,
+        }),
+      );
       const body: CreateTaskErrorBody = {
-        error: `K8s API call failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: 'internal error processing task creation; see workbench-api logs',
       };
       return c.json(body, 500);
     }

@@ -332,6 +332,61 @@ changes.
 The migration is **mechanical** (`yq` one-liner per file). The PR
 description in the Phase 4 commit links back to this table.
 
+### 6.2 Backend support matrix — what `ModelEndpoint.spec.backendKind` accepts in v1
+
+The `ModelEndpoint` CRD's `backendKind` field is the union of all
+provider implementations the gateway *could* route to. Not every
+member of that union is implemented in `@kagent/llm-gateway` v1 —
+the field is intentionally exhaustive at the CRD layer so adding a
+backend later does not require a CRD migration. Today (v1):
+
+| `backendKind`  | Status            | Notes                                                                                       |
+|----------------|-------------------|---------------------------------------------------------------------------------------------|
+| `ollama`       | implemented       | Homelab path; default for `192.168.68.73:11434`-style targets.                              |
+| `localai`      | implemented       | OpenAI-compat shim path.                                                                    |
+| `openai`       | implemented       | Direct OpenAI API.                                                                          |
+| `anthropic`    | implemented       | Direct Anthropic API.                                                                       |
+| `groq`         | implemented       | Groq Cloud.                                                                                 |
+| `exo`          | implemented       | Self-hosted multi-node `exo` mesh.                                                          |
+| `cloudflare`   | implemented       | Cloudflare AI Gateway / Workers AI.                                                         |
+| `mock`         | implemented       | Test path; never use in production.                                                         |
+| `bedrock`      | **stub only**     | Audit L12 — adapter is not wired in v1. CR loads, gateway warns at observation time, requests fail with `BedrockNotImplementedError`. See note below. |
+
+**Bedrock — what to expect (audit-rev2 L12):**
+
+The `BedrockProvider` class in
+`packages/llm-gateway/src/providers/bedrock-provider.ts` exists so
+the `BackendKind` union and `provider-factory` exhaustiveness check
+stay honest at compile time. The chat methods throw
+`BedrockNotImplementedError` (`name === 'BedrockNotImplementedError'`)
+on every invocation. To re-enable Bedrock for a cloud deployer:
+
+1. Add `@aws-sdk/client-bedrock-runtime` to `packages/llm-gateway/package.json`.
+2. Replace the three throw-bodies in `bedrock-provider.ts` with the
+   SigV4-signed POSTs from the archived
+   `lambda/providers/bedrock-provider.ts` reference.
+3. The provider-factory dispatch already routes `'bedrock'` → `BedrockProvider`;
+   no factory change is needed.
+
+Until then, the gateway provides defence in depth on an
+otherwise-undetectable misconfiguration:
+
+- `model-watch.ts` logs a structured `console.warn` on the first
+  observation of any `ModelEndpoint` whose `spec.backendKind` is
+  `bedrock` (`[llm-gateway] ModelEndpoint observed with backendKind=bedrock ...`).
+  This fires at boot for any Bedrock CR already in the cluster and
+  on first observation of any new one. Operators see the gap before
+  any traffic arrives.
+- The runtime error message names the missing adapter, the file path,
+  and the alternative backends, so a 500 surfaced to a caller is
+  unambiguously attributable.
+
+The load-bearing fix is operator-side admission: rejecting
+`backendKind: bedrock` at CR admission time so a misconfigured
+manifest never reaches the cluster. That work lives in the operator
+(see `docs/AUDIT-2026-05-06-rev2-PUNCHLIST.md` and the W5-Operator
+stream).
+
 ---
 
 ## 7. Forward-compat — alternatives considered

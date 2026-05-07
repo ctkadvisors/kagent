@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { V1Job, V1Pod } from '@kubernetes/client-node';
 
 import { API_GROUP_VERSION, type Agent, type AgentTask } from '@kagent/dto';
@@ -699,6 +699,42 @@ describe('tasksRoute', () => {
       body: '{not-json',
     });
     expect(res.status).toBe(400);
+  });
+
+  // Audit-rev2 L17 — the catch-all 500 path must not leak the
+  // underlying K8s API error string. The diagnostic stays in stderr
+  // (logged structurally), the response body is a generic message.
+  it('returns sanitized 500 body on unmapped K8s error — does not leak err.message', async () => {
+    const cache = new SnapshotCache();
+    // Use a status code that is NOT 409/404/403 (the structured branches).
+    const fake = makeFakeCustomApi({ throwStatus: 500 });
+    // Squelch the diagnostic stderr to keep test output clean while
+    // still asserting it fired with the structured fields.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = tasksRoute({
+      cache,
+      customApi: fake.api,
+      defaultNamespace: 'kagent-system',
+    });
+    const res = await app.request('/api/tasks', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ targetAgent: 'smoke-test', originalUserMessage: 'hi' }),
+    });
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { readonly error: string };
+    // The user-facing body is generic.
+    expect(body.error).toBe('internal error processing task creation; see workbench-api logs');
+    // It does NOT carry the raw err.message ("mock K8s status 500").
+    expect(body.error).not.toContain('mock K8s status');
+    expect(body.error).not.toContain('K8s API call failed');
+    // The structured diagnostic IS logged (so operators can still
+    // debug from logs).
+    expect(errSpy).toHaveBeenCalled();
+    const logCall = errSpy.mock.calls[0]?.join(' ') ?? '';
+    expect(logCall).toContain('POST /api/tasks');
+    expect(logCall).toContain('mock K8s status 500');
+    errSpy.mockRestore();
   });
 
   it('rejects reserved kagent.knuteson.io/* labels', async () => {

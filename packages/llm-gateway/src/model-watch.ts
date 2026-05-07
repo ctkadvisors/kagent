@@ -77,8 +77,35 @@ export function createModelEndpointWatch(
   const watchPath = `/apis/${KAGENT_GROUP}/${KAGENT_VERSION}/namespaces/${encodeURIComponent(opts.namespace)}/${PLURAL}`;
   const informer = makeInformer<ModelEndpoint>(kc, watchPath, listFn);
 
+  // Audit-rev2 L12 — track which (namespace/name) bedrock CRs we've
+  // already warned about so a steady-state cluster doesn't spam the
+  // log on every informer resync.
+  const warnedBedrockIdentities = new Set<string>();
+
   const apply = (ep: ModelEndpoint): void => {
     if (!isModelEndpoint(ep)) return;
+    if (ep.spec.backendKind === 'bedrock') {
+      // L12 — boot-time / observation-time diagnostic. The Bedrock
+      // adapter is a stub in v1; loading a CR that points at it
+      // means the first request will throw `BedrockNotImplementedError`
+      // at runtime. Surface that as a structured warn-line at watch
+      // time so an operator debugging a misconfiguration sees the
+      // gap before any traffic arrives. Operator-side admission
+      // (W5-Operator) is the load-bearing fix; this is a defence
+      // in depth from the gateway's vantage point.
+      const identity = `${ep.metadata.namespace ?? '<no-ns>'}/${ep.metadata.name}`;
+      if (!warnedBedrockIdentities.has(identity)) {
+        warnedBedrockIdentities.add(identity);
+        console.warn(
+          `[llm-gateway] ModelEndpoint observed with backendKind=bedrock ` +
+            `(${identity}, model=${ep.spec.model}); the Bedrock adapter is ` +
+            `not implemented in v1 of @kagent/llm-gateway. Requests routed ` +
+            `to this CR will fail with BedrockNotImplementedError. See ` +
+            `docs/MODEL-ROUTING.md §6.1 + packages/llm-gateway/src/providers/` +
+            `bedrock-provider.ts for the re-enable recipe.`,
+        );
+      }
+    }
     const result = modelIndex.upsert(ep);
     if (result.kind === 'collision') {
       // M20 — two CRs claiming the same `spec.model` is a
