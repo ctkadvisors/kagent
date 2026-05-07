@@ -103,6 +103,48 @@ RUN node -e "require('fs').accessSync('packages/agent-pod/dist/main.js')"
 # Drop devDeps (tsx, vitest, etc.) from node_modules.
 RUN pnpm install --frozen-lockfile --prod
 
+# L11 (audit-rev2 C3 §1) — slim the artifact that the runtime stage
+# copies in. The previous COPY shipped the entire /repo tree
+# (including every package's `src/` with co-located `*.test.ts`
+# fixtures, vitest configs, eslint configs, scripts/, build-only
+# tsconfigs, and per-package `coverage/` if it had been generated).
+# None of those are used at runtime — `node dist/main.js` resolves
+# only through the dist/ outputs and the workspace-prod node_modules.
+#
+# Removed from each `packages/*/`:
+#   - src/                     (TS source + co-located tests)
+#   - *.test.ts / *.test.js    (defense-in-depth; src removal is
+#                                already enough but cheap to add)
+#   - __fixtures__/            (test data + sample SVIDs / cap JWTs)
+#   - vitest.config.{ts,js}    (dev-only; prod uses no test runner)
+#   - eslint.config.js         (dev-only; prod runs no linter)
+#   - tsconfig*.json           (dev-only; prod runs plain `node`)
+#   - .tsbuildinfo             (incremental build state)
+#   - coverage/                (test-run artifacts; never present
+#                                in clean builds, removed defensively)
+# Plus repo-root scripts/ and tsconfig.base.json (build-only helpers).
+#
+# `dist/` and `package.json` per package are KEPT — those plus the
+# pruned workspace `node_modules/` are exactly what `node` needs at
+# resolve time. The trust boundary is unchanged: `node:node` still
+# owns everything, the entrypoint is unchanged, and the
+# `rewrite-exports-to-dist.mjs` pass already aimed every workspace
+# symlink at `dist/*.js`.
+RUN find /repo/packages -mindepth 2 -maxdepth 2 -type d -name src -prune -exec rm -rf {} + \
+ && find /repo/packages -type d -name __fixtures__ -prune -exec rm -rf {} + \
+ && find /repo/packages -type d -name coverage -prune -exec rm -rf {} + \
+ && find /repo/packages -mindepth 2 -maxdepth 2 -type f \( \
+        -name 'vitest.config.ts' \
+        -o -name 'vitest.config.js' \
+        -o -name 'eslint.config.js' \
+        -o -name 'tsconfig.json' \
+        -o -name 'tsconfig.eslint.json' \
+        -o -name '.tsbuildinfo' \
+    \) -delete \
+ && find /repo/packages -name '*.test.ts' -delete \
+ && find /repo/packages -name '*.test.js' -delete \
+ && rm -rf /repo/scripts /repo/tsconfig.base.json
+
 # ---------------------------------------------------------------------
 # Stage 2: runtime — Node 22. Originally Bun (per CLAUDE.md
 # "Bun is the runtime, both for the operator and inside agent pods"),

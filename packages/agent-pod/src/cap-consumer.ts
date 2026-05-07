@@ -50,6 +50,55 @@ export const DEFAULT_CAP_JWT_FILE = '/var/kagent/cap/cap.jwt';
  * at `/.well-known/jwks.json`. The chart's `kagent-template`
  * ClusterIP Service fronts the operator pod's port; the agent-pod
  * reaches it by service name.
+ *
+ * --- Trust-assumption note (audit-rev2 C2 §1 L2) ---
+ *
+ * The default scheme is `http://`, NOT `https://`. This is INTENTIONAL
+ * and the trust boundary that justifies it must be understood before
+ * tightening:
+ *
+ *   1. The URL resolves only inside the cluster
+ *      (`*.svc.cluster.local`). It is not reachable from outside the
+ *      cluster network and never makes a network hop off the node's
+ *      Pod-CIDR.
+ *
+ *   2. The chart's NetworkPolicy
+ *      (`packages/operator/charts/kagent-operator/templates/networkpolicy.yaml`)
+ *      restricts ingress to the template-server port to pods carrying
+ *      a kagent-managed label. A foreign workload on the same cluster
+ *      cannot pose as the template-server.
+ *
+ *   3. The agent-pod is mounted with a kagent-issued ServiceAccount
+ *      token. Cross-namespace impersonation requires either Cluster-
+ *      level RBAC compromise (out of scope for this default) OR
+ *      breaking the apiserver — both of which already game-over the
+ *      JWKS path with or without TLS.
+ *
+ *   4. JWKS is a PUBLIC key set by definition. An eavesdropper on the
+ *      in-cluster wire learns nothing they could not also learn from
+ *      pulling the operator chart.
+ *
+ * The ACTIVE trust boundary is therefore "in-cluster network policy +
+ * ServiceAccount token + apiserver-rooted RBAC", not TLS. The
+ * substrate inherits the same posture used by the kube-apiserver's
+ * own ServiceAccount-token-projected default mount path
+ * (`/var/run/secrets/kubernetes.io/serviceaccount/`).
+ *
+ * If you tunnel the JWKS endpoint OUT of the cluster (e.g. external
+ * agent-pods talking back to a hub-cluster operator), you MUST
+ * override `KAGENT_CAP_JWKS_URL` to an `https://` value AND ensure
+ * the responding host has a chain-valid certificate — the in-cluster
+ * trust assumption no longer applies.
+ *
+ * Migrating the in-cluster default to `https://` requires:
+ *   - the operator template-server to terminate TLS (today it serves
+ *     plain HTTP on `:8081`),
+ *   - the chart to mount a CA bundle the agent-pod's `fetch()` will
+ *     trust against the in-cluster CN, and
+ *   - resolving the Bun TLS / undici parity issue noted in CLAUDE.md
+ *     §Conventions if Bun is reinstated as the runtime.
+ *
+ * Tracked as a v0.2 hardening item; the default stays HTTP for v0.1.
  */
 export const DEFAULT_JWKS_URL =
   'http://kagent-template.kagent-system.svc.cluster.local:8081/.well-known/jwks.json';
