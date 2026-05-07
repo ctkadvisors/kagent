@@ -212,13 +212,27 @@ agent:
     reasoner-default:        { model: 'anthropic/claude-3-7-sonnet-latest' }
 ```
 
-The chart projects this map into a ConfigMap mounted at
-`/etc/kagent/model-classes.yaml`. The operator loads it at boot via
-`packages/operator/src/config/model-classes.ts`, watches for
-ConfigMap updates (kubectl-friendly hot-reload — same pattern the
-audit-stream config uses), and panic-rejects malformed entries
-loudly (operator boot fail → restart → fail again; the chart's
-`helm install --wait` smoke test catches this in CI).
+The chart projects this map into the operator deployment's pod env
+as `KAGENT_AGENT_MODEL_CLASSES_JSON` (a JSON-encoded blob, see
+`packages/operator/charts/kagent-operator/templates/deployment.yaml`).
+The operator parses it once at boot via `parseModelClassesEnv`
+(`packages/operator/src/main.ts:206`) and panic-rejects malformed
+entries loudly (operator boot fail → restart → fail again; the
+chart's `helm install --wait` smoke test catches this in CI).
+
+> **No hot-reload.** Updates to `agent.modelClasses` require an
+> operator pod restart via `helm upgrade` and the operator
+> deployment rollout. There is no ConfigMap watch, no SIGHUP
+> handler, and no `templates/configmap-model-classes.yaml` —
+> the env-baked-at-boot path is the only path. In-flight Job pods
+> continue using the value baked into their env at spawn time and
+> are unaffected by chart upgrades; only newly-dispatched pods see
+> the new map. See `docs/CONTEXT-AWARENESS.md §7` for the same
+> caveat applied to `contextWindowTokens`.
+>
+> A ConfigMap-watch path (matching the audit-stream config pattern)
+> is queued as a separate v0.2 task; the chart-values shape is
+> already forward-compatible with it.
 
 ---
 
@@ -440,11 +454,12 @@ manifest. That's the substrate primitive earning its keep.
 - `packages/operator/src/crds/agent.ts` — Agent Zod schema (add `modelClass`).
 - `packages/operator/charts/kagent-operator/crds/agent.yaml` — OpenAPI schema (add `modelClass` + `oneOf` for at-least-one-of-(model, modelClass)).
 - `packages/operator/src/job-spec.ts` — wire resolution before env-var emission.
-- `packages/operator/src/config/model-classes.ts` — new module, ConfigMap loader.
-- `packages/operator/charts/kagent-operator/values.yaml` — new `agent.modelClasses` map.
-- `packages/operator/charts/kagent-operator/templates/configmap-model-classes.yaml` — new ConfigMap template.
+- `packages/operator/src/main.ts:206` (`parseModelClassesEnv`) — parses `KAGENT_AGENT_MODEL_CLASSES_JSON` once at boot. NOT a ConfigMap watcher; rolls forward via operator pod restart on `helm upgrade`.
+- `packages/operator/charts/kagent-operator/values.yaml` — `agent.modelClasses` map (Helm values, projected to operator env).
+- `packages/operator/charts/kagent-operator/templates/deployment.yaml` — stamps the map into `KAGENT_AGENT_MODEL_CLASSES_JSON` on the operator pod.
 - `examples/rc-pilot/01-agents.yaml` — Phase 4 migration target (per §6.1).
 - `../new_localai/k8s-kustomized/overlays/production/kagent/demo-resources.yaml` — Phase 4 migration target (per §6.1).
 - `docs/SUBSTRATE-V1.md` §3.1 — Agent primitive (this field is additive).
 - `docs/RESILIENT-CONTRACTS.md` §1.2 — the nemotron tool-call drift evidence motivating the orchestrator move.
+- `docs/CONTEXT-AWARENESS.md §7` — same Helm-upgrade-bakes-at-spawn semantics for `contextWindowTokens`.
 - `docs/ROADMAP.md` Wave 0 — the v0.1.8 slot this lands in.
