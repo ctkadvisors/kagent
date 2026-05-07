@@ -760,7 +760,7 @@ export function buildBuiltinToolRegistry(
   // ArtifactRef the runner forwards into RunResult.artifacts (which the
   // operator's status patch threads into AgentTask.status.artifacts).
   //
-  // env knobs (resolved per call so a test can override either):
+  // env knobs (resolved AT BOOT — Audit-rev2 M8):
   //   - KAGENT_ARTIFACTS_DIR        (operator-injected; required to enable)
   //   - KAGENT_ARTIFACT_PVC_NAME    (operator-injected; required to enable)
   //   - KAGENT_ARTIFACT_MAX_BYTES   (default 25 MiB)
@@ -770,9 +770,28 @@ export function buildBuiltinToolRegistry(
   // `tool_error: write_artifact: artifact storage is disabled (...)` so
   // the LLM gets a clean failure rather than a write to an unmounted
   // path. Mirrors the Helm chart's default-OFF posture.
+  //
+  // Audit-rev2 M8 (= evidence/audit-rev2/C2.md §1 row M8): previously
+  // `resolveWriterEnvOrDisabled` was called inside the handler on every
+  // tool invocation. A misconfigured operator chart (e.g. PVC name
+  // unset) wouldn't surface until the LLM made its first
+  // write_artifact call — sometimes minutes into a long run. Lifting
+  // the resolution into buildBuiltinToolRegistry surfaces misconfig at
+  // BOOT, in the same WARN/ENABLED log group as the other tool wireups,
+  // so operators see "artifact storage is disabled (...)" in the
+  // pod-startup logs instead of mid-run tool errors. The resolved env
+  // is closed over by the handler — no per-call re-resolution.
   const writer = opts.writeArtifact ?? writeArtifactToDisk;
   const clock = opts.now ?? ((): Date => new Date());
   const registry = opts.artifactRegistry;
+  const writerEnv = resolveWriterEnvOrDisabled(env);
+  if ('disabled' in writerEnv) {
+    console.warn(
+      `[kagent-agent-pod] write_artifact: storage disabled (${writerEnv.reason}) — ` +
+        `tool will refuse non-inline writes for this pod's lifetime. ` +
+        `Set agentPod.artifactStorage.enabled=true in the operator chart to wire the PVC.`,
+    );
+  }
   const writeArtifact = defineInProcessTool({
     name: 'write_artifact',
     description:
@@ -824,7 +843,12 @@ export function buildBuiltinToolRegistry(
       // an unmounted path (which would silently land bytes on the
       // ephemeral container FS). The reason carries the env var name +
       // a Helm-values pointer so operators can self-service the fix.
-      const resolved = resolveWriterEnvOrDisabled(env);
+      //
+      // Audit-rev2 M8: env was lifted into `buildBuiltinToolRegistry`
+      // closure (see `writerEnv` declaration at the top of this fn).
+      // The handler closes over the boot-time resolution; misconfig
+      // surfaces at boot, not on first call.
+      const resolved = writerEnv;
       if ('disabled' in resolved) {
         // Inline path is still admissible — it doesn't touch the FS,
         // and the substrate contract for `inline://` is "bytes live in

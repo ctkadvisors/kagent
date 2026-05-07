@@ -166,6 +166,56 @@ describe('PvcCasBackend round-trip', () => {
     const read = await backend.read(uri);
     expect(read.byteLength).toBe(0);
   });
+
+  /*
+   * Audit-rev2 M9 — fstat-first read path. A blob whose on-disk size
+   * exceeds the configured cap refuses BEFORE allocating the full
+   * buffer. Defense-in-depth alongside the read_artifact tool's
+   * 8 MiB cap so a misuse of the backend (e.g. a future tool that
+   * forgot to check size) can't pin the pod on a giant read.
+   */
+  describe('M9 — fstat-first read cap', () => {
+    it('refuses to read a blob larger than the configured cap', async () => {
+      // 1 KiB cap — small enough to test cheaply.
+      const backend = new PvcCasBackend(mount, { maxReadBytes: 1024 });
+      const big = Buffer.alloc(2048, 0xab); // 2 KiB > 1 KiB cap
+      const { uri } = await backend.write(big, 'big.bin');
+      await expect(backend.read(uri)).rejects.toThrow(
+        /cas-backend: refusing to read .* exceeds the per-read cap of 1024 bytes/,
+      );
+    });
+
+    it('admits reads at or below the cap', async () => {
+      const backend = new PvcCasBackend(mount, { maxReadBytes: 1024 });
+      const small = Buffer.from('within budget');
+      const { uri } = await backend.write(small, 'small.txt');
+      const read = await backend.read(uri);
+      expect(read.byteLength).toBe(small.byteLength);
+    });
+
+    it('uses 8 MiB default cap when not configured', async () => {
+      // We don't actually allocate 8 MiB; just verify the constructor
+      // path defaults the cap and a small blob round-trips. The
+      // refusal path is covered by the explicit-cap test above.
+      const backend = new PvcCasBackend(mount);
+      const small = Buffer.from('default-cap probe');
+      const { uri } = await backend.write(small, 'probe.txt');
+      const read = await backend.read(uri);
+      expect(read.byteLength).toBe(small.byteLength);
+    });
+
+    it('rejects non-positive maxReadBytes at construction', () => {
+      expect(() => new PvcCasBackend(mount, { maxReadBytes: 0 })).toThrow(
+        /maxReadBytes must be a positive integer/,
+      );
+      expect(() => new PvcCasBackend(mount, { maxReadBytes: -1 })).toThrow(
+        /maxReadBytes must be a positive integer/,
+      );
+      expect(() => new PvcCasBackend(mount, { maxReadBytes: 1.5 })).toThrow(
+        /maxReadBytes must be a positive integer/,
+      );
+    });
+  });
 });
 
 describe('S3CasBackend stub', () => {

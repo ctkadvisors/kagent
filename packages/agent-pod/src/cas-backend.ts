@@ -41,6 +41,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -189,6 +190,20 @@ export function casShardPath(root: string, hash: string): string {
  * ===================================================================== */
 
 /**
+ * Default per-read byte ceiling for {@link PvcCasBackend.read}. Mirrors
+ * the `read_artifact` tool's `READ_ARTIFACT_MAX_BYTES` (8 MiB) so the
+ * substrate's read pipeline has a single effective ceiling.
+ *
+ * Audit-rev2 M9 (= evidence/audit-rev2/C2.md §1 row M9): previously
+ * `read()` called `readFileSync(path)` unconditionally, allocating the
+ * full Buffer before any size check. A 1 GiB blob on the PVC would
+ * pin the entire pod for the read regardless of whether the caller
+ * was about to refuse it. fstat-first means we know the size before
+ * allocating; oversized reads refuse with a structured error.
+ */
+export const READ_BYTES_DEFAULT_MAX = 8 * 1024 * 1024;
+
+/**
  * PVC-backed CAS implementation. Bytes land at
  * `<mountPath>/cas/sha256/<first-2-hex>/<remaining-62-hex>`. Writes are
  * atomic (`<path>.tmp` + `renameSync`); reads verify
@@ -206,12 +221,29 @@ export function casShardPath(root: string, hash: string): string {
  */
 export class PvcCasBackend implements CasBackend {
   private readonly mountPath: string;
+  private readonly maxReadBytes: number;
 
-  constructor(mountPath: string) {
+  constructor(mountPath: string, options: { maxReadBytes?: number } = {}) {
     if (typeof mountPath !== 'string' || mountPath.length === 0) {
       throw new Error('PvcCasBackend: mountPath required');
     }
     this.mountPath = mountPath;
+    // Audit-rev2 M9: per-read size cap, defense-in-depth alongside the
+    // tool-layer cap. Defaults to READ_BYTES_DEFAULT_MAX but kept
+    // overridable so a future operator value (e.g. agentPod.casReadMaxBytes)
+    // can lift it for legitimate large-blob workloads without touching
+    // the tool layer.
+    const requested = options.maxReadBytes;
+    if (requested !== undefined) {
+      if (!Number.isFinite(requested) || !Number.isInteger(requested) || requested <= 0) {
+        throw new Error(
+          `PvcCasBackend: maxReadBytes must be a positive integer (got ${String(requested)})`,
+        );
+      }
+      this.maxReadBytes = requested;
+    } else {
+      this.maxReadBytes = READ_BYTES_DEFAULT_MAX;
+    }
   }
 
   /** Resolve the on-disk path for a hash; exposed for the GC controller's tests. */
@@ -232,6 +264,23 @@ export class PvcCasBackend implements CasBackend {
   async read(uri: string): Promise<Uint8Array> {
     const { hash } = parseCasUri(uri);
     const path = casShardPath(this.mountPath, hash);
+
+    // Audit-rev2 M9 (= evidence/audit-rev2/C2.md §1 row M9): fstat
+    // BEFORE readFileSync so we know the on-disk size without
+    // allocating the buffer first. A blob larger than this backend's
+    // configured cap refuses with a structured `cas-backend:` error;
+    // the caller (read_artifact tool) re-wraps as `read_artifact:`.
+    // Defense-in-depth alongside the tool-layer cap (which now sees
+    // the same refusal earlier in the call chain).
+    const stat = statSync(path);
+    if (stat.size > this.maxReadBytes) {
+      throw new Error(
+        `cas-backend: refusing to read "${uri}" — on-disk size ${String(stat.size)} bytes ` +
+          `exceeds the per-read cap of ${String(this.maxReadBytes)} bytes ` +
+          `(fetch via spec.inputs[] mountPath instead, or raise the cap if this is intentional)`,
+      );
+    }
+
     const bytes = readFileSync(path);
     const computed = hashBytes(bytes);
     if (computed !== hash) {

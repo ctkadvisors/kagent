@@ -840,3 +840,85 @@ describe('spawn_child_task — capability narrowing (v0.3.0)', () => {
     expect(resultText(result)).not.toContain('policy_denied');
   });
 });
+
+/*
+ * Audit-rev2 M6 — defense-in-depth: when a capability bundle is mounted
+ * AND `Agent.spec.allowedChildAgents` is non-empty, the legacy list
+ * still enforces. Previously a cap with `claims.spawn = ['*']` bypassed
+ * the GitOps-controlled list entirely. Both narrowings now compose.
+ *
+ * The "cap-only deploy" path (both legacy lists empty) is preserved by
+ * the `allow.size > 0 || allowTemplates.size > 0` gate — only enforce
+ * legacy lists when the operator declared them. The pre-existing tests
+ * in "capability narrowing (v0.3.0)" cover that branch.
+ */
+describe('spawn_child_task — M6 defense-in-depth: cap + allowedChildAgents both enforce', () => {
+  const wildcardCap = {
+    iss: 'kagent.knuteson.io/operator',
+    sub: 'task-uid:parent',
+    aud: ['kagent-substrate'] as const,
+    exp: 9_999_999_999,
+    jti: 'cap-wildcard',
+    claims: { spawn: ['*'] }, // permissive cap
+  };
+
+  it('refuses target NOT in allowedChildAgents even when cap.claims.spawn=[*] admits it', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      // Narrow GitOps-controlled list — operator wants ONLY 'summarizer'.
+      parentAgentSpec: buildSpec({ allowedChildAgents: ['summarizer'] }),
+      k8s,
+      parentCapability: wildcardCap,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'evil-tool', // wildcard cap admits, allowedChildAgents does not
+      originalUserMessage: 'rogue',
+    });
+    // Defense-in-depth: legacy list enforces in addition to cap.
+    expect(resultText(result)).toContain('policy_denied');
+    expect(resultText(result)).toContain('allowedChildAgents');
+    expect(k8s.creates.length).toBe(0);
+  });
+
+  it('admits target in BOTH cap and allowedChildAgents (composes correctly)', async () => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: ['summarizer'] }),
+      k8s,
+      parentCapability: wildcardCap,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'go',
+    });
+    expect(k8s.creates.length).toBe(1);
+    expect(k8s.creates[0]?.targetAgent).toBe('summarizer');
+    expect(resultText(result)).not.toContain('policy_denied');
+  });
+
+  it('preserves cap-only deploy path: empty allowedChildAgents + cap admits', async () => {
+    // Re-asserts the v0.3.0 deprecation-shim behavior — both lists
+    // empty + cap is sole authority. Same as the existing
+    // "admits a spawn target that matches cap.claims.spawn (glob)"
+    // test, but pinned here so the M6 fix doesn't accidentally
+    // regress it.
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [], allowedChildTemplates: [] }),
+      k8s,
+      parentCapability: wildcardCap,
+    });
+    const result = await callSpawn(provider, {
+      agentName: 'whatever',
+      originalUserMessage: 'go',
+    });
+    expect(k8s.creates.length).toBe(1);
+    expect(resultText(result)).not.toContain('policy_denied');
+  });
+});

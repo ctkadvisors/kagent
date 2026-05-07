@@ -279,19 +279,37 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
       // Guardrail 2 — both allowlists empty/unset = fail-closed.
       // Skipped when capability bundle is mounted (capability claims
       // are the substrate's authority surface in v0.3.0; the legacy
-      // allowedChildAgents fields are deprecated).
+      // allowedChildAgents fields are deprecated, AND a cap-only
+      // deploy intentionally leaves the lists empty so the cap claim
+      // is the sole authority).
       if (parentCap === undefined && allow.size === 0 && allowTemplates.size === 0) {
         throw new Error(
           `policy_denied: agent "${deps.parentAgentName}" has no allowedChildAgents (set Agent.spec.allowedChildAgents or Agent.spec.allowedChildTemplates in GitOps to permit children)`,
         );
       }
 
-      // Guardrail 3 — name must match either legacy list. SKIPPED
-      // when the parent has a capability bundle (v0.3.0-capabilities
-      // makes the cap claims the authority surface; the legacy
-      // allowedChildAgents/allowedChildTemplates fields are
-      // deprecated for one release per WAVES.md §4.1 deliverable 6).
-      if (parentCap === undefined && !allow.has(args.agentName)) {
+      // Guardrail 3 — name must match either legacy list.
+      //
+      // Audit-rev2 M6 (= evidence/audit-rev2/C2.md §1 row M6): when a
+      // capability bundle was mounted, the previous version of this
+      // code skipped Guardrail 3 entirely — meaning a cap with
+      // `claims.spawn = ['*']` bypassed the GitOps-controlled
+      // `Agent.spec.allowedChildAgents` list, even when that list was
+      // narrow. That defeats the purpose of having allowedChildAgents
+      // at all when a permissive cap exists.
+      //
+      // Defense-in-depth fix: ALSO enforce allowedChildAgents /
+      // allowedChildTemplates when the parent has a cap, BUT ONLY when
+      // those lists are non-empty. The "cap-only deploy" pattern (both
+      // lists intentionally empty, cap is the sole authority) is
+      // preserved by the `allow.size > 0 || allowTemplates.size > 0`
+      // gate — only enforce the legacy lists when the operator
+      // declared them. Both narrowing rules apply: cap claims AND
+      // allowedChild* lists must each admit the target name.
+      const enforceLegacyLists =
+        parentCap === undefined || allow.size > 0 || allowTemplates.size > 0;
+
+      if (enforceLegacyLists && !allow.has(args.agentName)) {
         let admittedByTemplate = false;
         if (allowTemplates.size > 0) {
           const target = await deps.k8s.getAgentByName(deps.parent.namespace, args.agentName);
