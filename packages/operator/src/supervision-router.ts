@@ -126,8 +126,16 @@ export interface SupervisionRouterDeps {
    * `parent-task-uid` label matches the given UID. Production wiring
    * supplies this from the same AgentTask informer the rest of the
    * operator uses; tests pass a captured array.
+   *
+   * C1-SIB-2 — REQUIRED on the type. Earlier versions made this
+   * optional and `listSiblings` returned `[]` when the dep was absent;
+   * tests that omitted it silently exercised a degenerate sibling-list
+   * case. Production has always wired the closure
+   * (`main.ts:listChildrenForParent`), so the optional shape was a
+   * test-only foot-gun. Required here so the compiler enforces the
+   * production wiring at every callsite.
    */
-  readonly listChildrenForParent?: (parentUid: string, namespace: string) => readonly AgentTask[];
+  readonly listChildrenForParent: (parentUid: string, namespace: string) => readonly AgentTask[];
   /**
    * Informer-cache reader: returns the AgentTask with the given UID
    * (any namespace the informer is watching). Production wiring threads
@@ -138,6 +146,18 @@ export interface SupervisionRouterDeps {
    * (legacy LIST path remains correct).
    */
   readonly getTaskByUid?: (uid: string) => AgentTask | undefined;
+  /**
+   * C1-SIB-1 — Agent informer-cache reader. Returns the Agent CR for
+   * the given (namespace, name), or undefined on a cache miss. When
+   * wired, `fetchAgent` consults this before falling back to a direct
+   * `customApi.getNamespacedCustomObject` call. Production threads a
+   * closure backed by the operator's existing admission-side Agent
+   * informer cache; tests may leave it unset (the direct-API fallback
+   * keeps the router correct under cold cache + unit-test conditions).
+   *
+   * Same pattern as M2's `getTaskByUid` fix.
+   */
+  readonly getAgentByName?: (namespace: string, name: string) => Agent | undefined;
   /**
    * M22 — resolve a task's concrete Agent name. The infra-fault audit
    * path runs BEFORE the parent + agent are resolved, so the
@@ -308,7 +328,7 @@ export async function routeFailureForSupervision(
  * is far beyond any realistic homelab/single-tenant agent tree.
  *
  * Operators can override via `KAGENT_SUPERVISION_MAX_ESCALATION_DEPTH`
- * (Helm value `agentPod.supervision.maxEscalationDepth`). Bad values
+ * (Helm value `supervision.maxEscalationDepth`). Bad values
  * (negative, NaN, non-integer, zero) fall back to the default with a
  * warn-log so a typo can't silently disable the cap.
  */
@@ -499,6 +519,22 @@ async function fetchAgent(deps: SupervisionRouterDeps, parent: AgentTask): Promi
   const targetAgent = parent.spec.targetAgent;
   if (typeof targetAgent !== 'string' || targetAgent.length === 0) return null;
   const namespace = parent.metadata.namespace ?? 'default';
+
+  // C1-SIB-1 — informer-cache fast path. M2 fixed `fetchParentTask` and
+  // `fetchTaskByUid`; this fix completes the trio. When `getAgentByName`
+  // is wired (production threads a closure backed by the existing
+  // admission-side Agent informer cache), look up the Agent in the
+  // local cache before falling back to a direct API call. The direct
+  // call stays as the cold-cache + unit-test fallback so the router
+  // stays correct under any wiring.
+  if (deps.getAgentByName !== undefined) {
+    const cached = deps.getAgentByName(namespace, targetAgent);
+    if (cached !== undefined) return cached;
+    // Cache miss — informer hasn't seen this name yet (e.g., race
+    // with an apiserver write the informer hasn't reflected). Fall
+    // through to the direct GET.
+  }
+
   try {
     /* eslint-disable @typescript-eslint/no-unsafe-assignment */
     const res = await deps.customApi.getNamespacedCustomObject({
@@ -525,7 +561,8 @@ function listSiblings(
   parentUid: string,
   namespace: string,
 ): readonly SiblingTask[] {
-  if (deps.listChildrenForParent === undefined) return [];
+  // C1-SIB-2 — `listChildrenForParent` is required on the type; no
+  // optional-chain or `=== undefined` defensive branch needed.
   return deps.listChildrenForParent(parentUid, namespace).map(taskToSibling);
 }
 

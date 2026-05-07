@@ -780,6 +780,15 @@ interface AdmissionWiring {
   stop(): Promise<void>;
   /** Exposed for tests + diagnostic logging — not invoked by main(). */
   reconciler: AdmissionReconciler;
+  /**
+   * C1-SIB-1 — Agent informer-cache reader exposed so the supervision
+   * router can short-circuit its `fetchAgent` direct-API call. Returns
+   * undefined on cache miss (informer hasn't synced yet). Only present
+   * when admission wiring is constructed (admissionControlEnabled=true);
+   * if admission is disabled, `supervisionRouterDeps.getAgentByName`
+   * stays unset and the router falls through to the direct API call.
+   */
+  getAgentByName: (namespace: string, name: string) => Agent | undefined;
 }
 
 interface BuildAdmissionWiringInput {
@@ -1015,6 +1024,11 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
       }
     },
     reconciler,
+    // C1-SIB-1 — Agent informer-cache reader for supervision-router.
+    getAgentByName: (namespace, name) => {
+      const a = agentInformer.get(name, namespace);
+      return a !== undefined && isAgent(a) ? a : undefined;
+    },
   };
 }
 
@@ -1973,6 +1987,18 @@ async function main(): Promise<void> {
     return undefined;
   };
 
+  // C1-SIB-1 — Agent informer cache reader holder. The admissionWiring
+  // is constructed below (gated on admissionControlEnabled), and the
+  // supervision-router-deps are constructed BEFORE the wiring exists,
+  // so we plumb a mutable holder. When admission wiring is built, it
+  // populates `agentCacheHolder.get`; supervision-router reads through
+  // the closure on every call. While the holder is unset (admission
+  // disabled, or before wiring start), `fetchAgent` falls through to
+  // the direct API call (legacy path stays correct).
+  const agentCacheHolder: {
+    get?: (namespace: string, name: string) => Agent | undefined;
+  } = {};
+
   const supervisionAuditHolder: { hooks?: SupervisionAuditHooks } = {};
   const supervisionRouterDeps: SupervisionRouterDeps = {
     customApi,
@@ -1983,6 +2009,11 @@ async function main(): Promise<void> {
     // `fetchParentTask` and `fetchTaskByUid` consult this before
     // falling back to the unbounded LIST.
     getTaskByUid,
+    // C1-SIB-1 — Agent informer cache reader. Threaded through a
+    // mutable holder because admission wiring (which owns the Agent
+    // informer) is constructed AFTER this deps object. When wired,
+    // `fetchAgent` short-circuits the direct API call.
+    getAgentByName: (namespace, name) => agentCacheHolder.get?.(namespace, name),
     // M22 — capability-targeted infra-fault audits no longer stamp ''.
     resolveAgentName: resolveAgentNameForTask,
     get audit(): SupervisionAuditHooks | undefined {
@@ -2567,6 +2598,15 @@ async function main(): Promise<void> {
         ...(agentPodMaxDepth !== undefined && { maxDepth: agentPodMaxDepth }),
       })
     : undefined;
+
+  // C1-SIB-1 — Once admission wiring exists, populate the holder so
+  // supervision-router's fetchAgent short-circuits via the informer
+  // cache instead of issuing a direct API call per supervision
+  // reconcile. When admission is disabled the holder stays unset and
+  // the router falls through to the direct GET (legacy path).
+  if (admissionWiring !== undefined) {
+    agentCacheHolder.get = admissionWiring.getAgentByName;
+  }
 
   // === M21 — substrate health server ===
   // Boot the `/healthz` + `/metrics` HTTP server before the informers

@@ -318,6 +318,34 @@ export async function reconcileAgentTask(
     return { action: 'skipped', reason: `phase=${phase}` };
   }
 
+  // C2R3-LOW-1 — ensure `status.phase = Pending` BEFORE any downstream
+  // work (Agent resolution, Job creation, capability mint, dispatch).
+  // The agent-pod's status writeback uses RFC-6902 JSON Patch with a
+  // `test` op on `/status/phase`; if a brand-new task arrives at the
+  // pod with `status.phase` unset, the test op returns 412 and the
+  // status update is silently dropped. Patching `Pending` here makes
+  // the invariant unconditional and survives an operator crash mid-
+  // dispatch (the patch is idempotent — re-firing on a re-reconcile
+  // is a no-op because nextPhase rejects same-phase transitions).
+  // Best-effort: a failed patch leaves us proceeding with dispatch,
+  // and the next informer event will retry.
+  if (phase === undefined) {
+    try {
+      await patchStatusWithRetry(task, deps.customApi, (current) => {
+        if (current.status?.phase !== undefined) return null;
+        return {
+          phase: 'Pending',
+          observedGeneration: current.metadata.generation ?? 0,
+        };
+      });
+    } catch (err) {
+      console.error(
+        `[kagent-operator] failed to seed status.phase=Pending for ${task.metadata.namespace ?? 'default'}/${task.metadata.name ?? '?'}; proceeding with dispatch:`,
+        err,
+      );
+    }
+  }
+
   // Step 2 — resolve target Agent.
   const registry = deps.capabilityRegistry ?? new StubCapabilityRegistry();
   let agent: Agent;

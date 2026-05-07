@@ -139,13 +139,16 @@ describe('reconcileAgentTask — typed-input admission validation', () => {
     expect(result.reason).toContain('corpus');
     // Job NEVER created.
     expect(deps.mocks.batchApi.createNamespacedJob).not.toHaveBeenCalled();
-    // Status patched with Failed reason.
+    // Status patched with Failed reason. C2R3-LOW-1 — `phase=Pending` is
+    // seeded at the head of reconcile, so the Failed patch is NOT
+    // necessarily the first call. Find it.
     expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
-    const patchCall = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
-      body: { status: { phase: string; error: string } };
-    };
-    expect(patchCall.body.status.phase).toBe('Failed');
-    expect(patchCall.body.status.error).toContain('InvalidInputs');
+    const allCalls = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls as Array<
+      [{ body: { status: { phase: string; error?: string } } }]
+    >;
+    const failedCall = allCalls.find((c) => c[0].body.status.phase === 'Failed');
+    expect(failedCall).toBeDefined();
+    expect(failedCall?.[0].body.status.error).toContain('InvalidInputs');
     // Audit emitted.
     expect(emitContractViolated).toHaveBeenCalledTimes(1);
     expect(emitContractViolated.mock.calls[0][0]).toMatchObject({
@@ -257,13 +260,16 @@ describe('reconcileAgentTask — idempotency-key dedupe', () => {
     expect(result.action).toBe('idempotent-replay');
     expect(deps.mocks.batchApi.createNamespacedJob).not.toHaveBeenCalled();
     expect(emitTaskDeduped).toHaveBeenCalledTimes(1);
-    // Verify the status patch carried the cached outputs + Completed phase.
+    // Verify a status patch carried the cached outputs + Completed phase.
+    // C2R3-LOW-1 — `phase=Pending` is seeded at the head of reconcile so
+    // the Completed patch is not necessarily the first call. Find it.
     expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalled();
-    const patchCall = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls[0][0] as {
-      body: { status: { phase: string; outputs?: { name: string; ref: string }[] } };
-    };
-    expect(patchCall.body.status.phase).toBe('Completed');
-    expect(patchCall.body.status.outputs).toEqual([
+    const allCalls = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls as Array<
+      [{ body: { status: { phase: string; outputs?: { name: string; ref: string }[] } } }]
+    >;
+    const completedCall = allCalls.find((c) => c[0].body.status.phase === 'Completed');
+    expect(completedCall).toBeDefined();
+    expect(completedCall?.[0].body.status.outputs).toEqual([
       { name: 'digest', ref: 'pvc://prior/digest.md' },
     ]);
   });

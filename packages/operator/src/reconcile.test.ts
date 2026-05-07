@@ -592,11 +592,17 @@ describe('reconcileAgentTask — admission control (LLM-gateway bundle)', () => 
       admissionControlEnabled: true,
     });
     await reconcileAgentTask(task, deps);
-    // Status patch is the LAST step of the dispatch path; it gates on
-    // the un-suspend success. Skipping un-suspend means status stays
-    // Pending — the admission reconciler will mark Dispatched when it
-    // un-suspends.
-    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    // Status NEVER reaches Dispatched on the admission-pending path —
+    // the admission reconciler is the only writer that may mark
+    // Dispatched. We DO seed `phase=Pending` at the head of the
+    // dispatch path (C2R3-LOW-1) so the agent-pod's RFC-6902
+    // status patch precondition passes; assert no `Dispatched` patch
+    // was issued.
+    const patches = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls;
+    for (const call of patches) {
+      const body = (call[0] as { body: { status?: { phase?: string } } }).body;
+      expect(body.status?.phase).not.toBe('Dispatched');
+    }
   });
 
   it('still publishes the dispatch envelope to the bus', async () => {
@@ -961,8 +967,15 @@ describe('reconcileAgentTask — WS-F dispatch ordering races', () => {
     const result = await reconcileAgentTask(task, deps);
     expect(result.action).toBe('failed');
     expect(result.reason).toMatch(/unsuspend failed/);
-    // Status NOT marked Failed (we want a relist to retry, not a sticky terminal).
-    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    // Status NOT marked Failed (we want a relist to retry, not a sticky
+    // terminal). C2R3-LOW-1 — `phase=Pending` IS seeded at the head of
+    // the dispatch path; assert no Failed/Dispatched patch was issued.
+    const patches = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls;
+    for (const call of patches) {
+      const body = (call[0] as { body: { status?: { phase?: string } } }).body;
+      expect(body.status?.phase).not.toBe('Failed');
+      expect(body.status?.phase).not.toBe('Dispatched');
+    }
     expect(consoleErr).toHaveBeenCalledWith(
       expect.stringContaining('failed to unsuspend Job'),
       expect.anything(),
