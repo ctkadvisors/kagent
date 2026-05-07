@@ -1165,6 +1165,54 @@ describe('buildJobSpec — ConfigMap mount (v0.2.0 default)', () => {
   });
 });
 
+/* =====================================================================
+ * Audit-rev2 M11 follow-up — Pod template `kagent.knuteson.io/spec-source`
+ * annotation.
+ *
+ * The agent-pod's `parseEnv` recognizes `'configmap' | 'env-json' | 'mixed'`
+ * (per packages/agent-pod/src/env.ts:305) and stamps the choice on
+ * process.env.KAGENT_SPEC_SOURCE / OTel attribute / boot log. The
+ * operator-side annotation closes the observability loop so on-call can
+ * read the path off `kubectl describe pod` without exec'ing into the pod.
+ *
+ * The annotation is stamped at Job-create time on the Pod template
+ * metadata, NOT the Job metadata, because what we care about is the
+ * pod's spec-mount path. The 'mixed' case (one ConfigMap + one env-JSON
+ * resolution at parse time) is intentionally not stampable here — the
+ * operator commits to one path per Job. Mixed is a partial-mount edge
+ * case the agent-pod surfaces with a runtime WARN.
+ * ===================================================================== */
+describe('buildJobSpec — kagent.knuteson.io/spec-source annotation (audit-rev2 M11 follow-up)', () => {
+  it('default (useConfigMap implicit) stamps spec-source=configmap on the Pod template', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    const annotations = job.spec?.template?.metadata?.annotations ?? {};
+    expect(annotations['kagent.knuteson.io/spec-source']).toBe('configmap');
+  });
+
+  it('explicit useConfigMap: true stamps spec-source=configmap', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { useConfigMap: true });
+    const annotations = job.spec?.template?.metadata?.annotations ?? {};
+    expect(annotations['kagent.knuteson.io/spec-source']).toBe('configmap');
+  });
+
+  it('useConfigMap: false (env-JSON fallback) stamps spec-source=env-json', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, { useConfigMap: false });
+    const annotations = job.spec?.template?.metadata?.annotations ?? {};
+    expect(annotations['kagent.knuteson.io/spec-source']).toBe('env-json');
+  });
+
+  it('annotation lives on the POD template, not the Job-level metadata', () => {
+    // The Pod is the substrate the agent-pod runs in; its annotations
+    // are what `kubectl describe pod` shows. Job-level annotations are
+    // a different surface (admission-policy, GitOps reconcilers).
+    const job = buildJobSpec(sampleAgent, sampleTask);
+    expect(job.metadata?.annotations?.['kagent.knuteson.io/spec-source']).toBeUndefined();
+    expect(job.spec?.template?.metadata?.annotations?.['kagent.knuteson.io/spec-source']).toBe(
+      'configmap',
+    );
+  });
+});
+
 describe('buildArtifactMounts (Wave 1 / CAS)', () => {
   function agentWith(inputs?: Agent['spec']['inputs'], outputs?: Agent['spec']['outputs']): Agent {
     return {

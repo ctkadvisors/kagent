@@ -917,6 +917,25 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
           'kagent.knuteson.io/task': task.metadata.name ?? '',
           'kagent.knuteson.io/managed-by': 'kagent-operator',
         },
+        // Audit-rev2 M11 follow-up — stamp the spec-source path onto the
+        // Pod template's annotations at Job-creation time so observability
+        // tooling (`kubectl describe pod`, K8s informers, log scrapers
+        // joined to Pod metadata) can answer "which spec-mount path did
+        // this pod take?" without exec'ing into the pod to read
+        // process.env.KAGENT_SPEC_SOURCE. Mirrors the values the agent-
+        // pod's parseEnv assigns to PodConfig.specSource (per
+        // packages/agent-pod/src/env.ts:305 + :415):
+        //   `'configmap'`  — agent.spec + task.spec mounted at
+        //                    /var/kagent/config/{agent,task}.spec.json
+        //                    (v0.2.0+ default; useConfigMap !== false).
+        //   `'env-json'`   — fallback to KAGENT_AGENT_SPEC + KAGENT_TASK_SPEC
+        //                    (v0.1 / explicit useConfigMap: false).
+        // The 'mixed' edge case the agent-pod recognizes at runtime
+        // (one source ConfigMap, the other env-JSON) is not stampable
+        // here — the operator commits to one path per Job-create.
+        annotations: {
+          'kagent.knuteson.io/spec-source': useConfigMap ? 'configmap' : 'env-json',
+        },
       },
       spec: {
         restartPolicy: 'Never',
