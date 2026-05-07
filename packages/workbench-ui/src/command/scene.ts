@@ -31,6 +31,13 @@
 import type { CommandSnapshot } from './state.js';
 import type { LayoutResult } from './layout.js';
 import type { TaskSummary } from '../types.js';
+import {
+  defaultAgentShape,
+  drawVoxelShape,
+  factionColor,
+  gatewayShape,
+  shapeScreenBounds,
+} from './voxel.js';
 
 export interface SelectionRef {
   readonly kind: 'agent' | 'gateway' | 'task' | null;
@@ -49,12 +56,9 @@ export interface HitMap {
 const COLOR_BG = '#08111f';
 const COLOR_GRID = 'rgba(82, 124, 188, 0.08)';
 const COLOR_GATEWAY = '#fbbf24';
-const COLOR_GATEWAY_FILL = '#1e293b';
 const COLOR_BELT = 'rgba(148, 163, 184, 0.18)';
 const COLOR_BELT_HOT = 'rgba(251, 191, 36, 0.45)';
 const COLOR_BELT_BUILDING = 'rgba(34, 211, 238, 0.5)';
-const COLOR_AGENT_FILL = '#0f1f3a';
-const COLOR_AGENT_BORDER = '#3b82f6';
 const COLOR_AGENT_BORDER_BUSY = '#fbbf24';
 const COLOR_AGENT_BORDER_FAILED = '#ef4444';
 const COLOR_AGENT_TEXT = '#e2e8f0';
@@ -64,20 +68,8 @@ const COLOR_TASK_PENDING = '#60a5fa';
 const COLOR_TASK_DISPATCHED = '#fbbf24';
 const COLOR_TASK_COMPLETED = '#34d399';
 const COLOR_TASK_FAILED = '#f87171';
-const COLOR_SELECT_RING = '#22d3ee';
 
-// Construction-phase palette — the WC3/TA "building rises" feel.
-// Cyan + teal so it reads visually distinct from the steady-state
-// blue/amber/red border colors.
-const COLOR_BUILD_BORDER = '#22d3ee';
-const COLOR_BUILD_FILL = 'rgba(15, 31, 58, 0.35)';
-const COLOR_BUILD_SCANLINE = 'rgba(34, 211, 238, 0.85)';
-const COLOR_BUILD_GRID = 'rgba(34, 211, 238, 0.18)';
-const COLOR_BUILD_FLASH = 'rgba(255, 255, 255, 0.95)';
-
-const AGENT_W = 140;
-const AGENT_H = 56;
-const GATEWAY_R = 48;
+const GATEWAY_HIT_R = 70; // circular click hit-test radius around the voxel HQ
 const TASK_R = 5;
 
 /** Build-out animation duration for an agent structure. */
@@ -139,6 +131,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
       selection.kind === 'agent' && selection.key === pos.key,
       progress,
       nowMs,
+      pos.faction,
     );
     agentRects.set(pos.key, rect);
   }
@@ -158,7 +151,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
 
   return {
     agentRects,
-    gateway: { x: layout.gateway.x, y: layout.gateway.y, r: GATEWAY_R },
+    // Voxel HQ is anchored at (gateway.x, gateway.y + 22) per drawGateway;
+    // hit-test as a circle a bit larger than the projected footprint.
+    gateway: { x: layout.gateway.x, y: layout.gateway.y + 22, r: GATEWAY_HIT_R },
     taskSprites,
   };
 }
@@ -268,243 +263,114 @@ function drawAgentBuilding(
   selected: boolean,
   buildProg: number,
   nowMs: number,
+  namespace: string,
 ): AgentRect {
-  const rx = pos.x - AGENT_W / 2;
-  const ry = pos.y - AGENT_H / 2;
+  // Spire color signals phase: red on recent failures, amber when busy,
+  // cyan when idle. Drives the top-most voxel of the structure.
+  const spireColor =
+    failed > 0 ? COLOR_AGENT_BORDER_FAILED : inFlight > 0 ? COLOR_AGENT_BORDER_BUSY : '#22d3ee';
 
-  // ───────── Construction phase: outline + scanline-sweep + grid ─────────
+  // Per-namespace faction color for the body voxels.
+  const body = factionColor(namespace);
+  const shape = defaultAgentShape(body);
+
+  // Center the voxel structure on (pos.x, pos.y). Voxel rises from
+  // ground upward; we want pos.y to be the BASE of the structure
+  // (z=0 footprint plane) so labels can sit underneath.
+  const cx = pos.x;
+  const cy = pos.y + 6; // small downward bias so the structure sits centered visually
+
+  // Early construction phase (p < 0.06): cyan placement marker only.
+  if (buildProg < 0.06) {
+    drawPlacementMarker(ctx, cx, cy, shape.footprint.w, shape.footprint.d, nowMs);
+    const bounds = shapeScreenBounds(shape, cx, cy);
+    return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
+  }
+
+  // Voxel rise — the shape function filters voxels by build height.
+  drawVoxelShape(ctx, shape, {
+    cx,
+    cy,
+    buildProgress: buildProg,
+    spireColor,
+    selected,
+    busyPulse: buildProg >= 1 ? inFlight : 0,
+    nowMs,
+  });
+
+  // Construction-phase progress label below the structure.
+  const bounds = shapeScreenBounds(shape, cx, cy);
   if (buildProg < 1) {
-    drawAgentConstruction(ctx, rx, ry, name, modelLabel, buildProg, nowMs);
-    return { x: rx, y: ry, w: AGENT_W, h: AGENT_H };
-  }
-
-  // ───────── Steady-state render (build complete) ─────────
-
-  // Drop shadow plate.
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-  roundRect(ctx, rx + 3, ry + 3, AGENT_W, AGENT_H, 6);
-  ctx.fill();
-
-  // Body.
-  ctx.fillStyle = COLOR_AGENT_FILL;
-  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
-  ctx.fill();
-
-  // Border — color tracks load.
-  let borderColor = COLOR_AGENT_BORDER;
-  if (failed > 0) borderColor = COLOR_AGENT_BORDER_FAILED;
-  else if (inFlight > 0) borderColor = COLOR_AGENT_BORDER_BUSY;
-  ctx.strokeStyle = borderColor;
-  ctx.lineWidth = selected ? 3 : 2;
-  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
-  ctx.stroke();
-
-  // Brief white-flash at the end of construction (~280ms after
-  // buildProg crosses 1.0). nowMs - (firstSeen + BUILD_MS) ∈ [0, FLASH_MS]
-  // is the flash window. We can't access firstSeen here but `buildProg`
-  // saturates at 1; we synthesize a "just-completed" check by rendering
-  // an extra glow when buildProg is exactly 1 AND a global RAF tick
-  // catches it within the flash window. Since drawScene clamps progress
-  // at 1, we use a separate `flashRemaining` channel computed below.
-  // To keep the function signature simple, we render a faint
-  // brightness boost based on a stored last-completion marker passed
-  // by the caller via a side-channel. Here we approximate with a
-  // border-glow when (now mod 5000) is close to (firstSeen + BUILD_MS).
-  // Caller-side: drawScene supplies a fresh nowMs each frame, so a
-  // structure that *just* completed will have buildProg == 1 the very
-  // first frame after completion; we detect that by checking if
-  // 1 - prevBuildProg was > 0 — but we don't track prevBuildProg here.
-  // Pragmatic compromise: skip the per-structure flash here; the
-  // construction overlay fades to clean steady-state on its own.
-
-  // Selection ring.
-  if (selected) {
-    ctx.strokeStyle = COLOR_SELECT_RING;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
-    roundRect(ctx, rx - 4, ry - 4, AGENT_W + 8, AGENT_H + 8, 8);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Name (top line).
-  ctx.fillStyle = COLOR_AGENT_TEXT;
-  ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText(truncate(name, 18), rx + 10, ry + 8);
-
-  // Model badge (bottom line).
-  ctx.fillStyle = COLOR_AGENT_SUB;
-  ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
-  ctx.fillText(truncate(shortenModel(modelLabel), 22), rx + 10, ry + 26);
-
-  // In-flight badge top-right.
-  if (inFlight > 0) {
-    ctx.fillStyle = COLOR_AGENT_BORDER_BUSY;
-    ctx.beginPath();
-    ctx.arc(rx + AGENT_W - 12, ry + 12, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#0b1220';
-    ctx.font = '700 9px ui-sans-serif';
+    ctx.fillStyle = '#22d3ee';
+    ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(String(inFlight), rx + AGENT_W - 12, ry + 9);
-  }
-
-  return { x: rx, y: ry, w: AGENT_W, h: AGENT_H };
-}
-
-/**
- * RTS-style "building rises" rendering. Phases:
- *
- *   p < 0.08  — placement marker only (corner brackets, ground stub).
- *   0.08–0.92 — bottom-up scanline sweep; lower portion solid, upper
- *               wireframe with cyan grid; sweep line pulses.
- *   0.92–1.0  — flash transition; brightness boost; converges to the
- *               steady-state palette.
- */
-function drawAgentConstruction(
-  ctx: CanvasRenderingContext2D,
-  rx: number,
-  ry: number,
-  name: string,
-  modelLabel: string,
-  p: number,
-  nowMs: number,
-): void {
-  const pe = easeOutCubic(p);
-
-  // ── Phase 1: placement-marker corner brackets (always visible during build).
-  ctx.strokeStyle = COLOR_BUILD_BORDER;
-  ctx.lineWidth = 1.5;
-  const bracket = 10;
-  drawCornerBrackets(ctx, rx, ry, AGENT_W, AGENT_H, bracket);
-
-  if (p < 0.08) {
-    // Tiny pulsing ground stub at the center of where the building will rise.
-    const pulse = (Math.sin(nowMs / 120) + 1) / 2;
-    ctx.fillStyle = `rgba(34, 211, 238, ${String(0.4 + pulse * 0.4)})`;
-    ctx.beginPath();
-    ctx.arc(rx + AGENT_W / 2, ry + AGENT_H / 2, 3 + pulse * 2, 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-
-  // ── Phase 2: bottom-up fill sweep.
-  const fillH = AGENT_H * pe; // height of "completed" portion from bottom
-  const fillY = ry + (AGENT_H - fillH);
-
-  // Faint full-body backplate so we can read the building shape even
-  // before fill rises.
-  ctx.fillStyle = COLOR_BUILD_FILL;
-  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
-  ctx.fill();
-
-  // Solid filled portion (bottom-up).
-  ctx.save();
-  ctx.beginPath();
-  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
-  ctx.clip();
-  ctx.fillStyle = COLOR_AGENT_FILL;
-  ctx.fillRect(rx, fillY, AGENT_W, fillH);
-  ctx.restore();
-
-  // Construction grid: faint horizontal lines every 8px in the
-  // unfilled portion. Reads as "wireframe under construction."
-  ctx.strokeStyle = COLOR_BUILD_GRID;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let y = ry + 4; y < fillY; y += 8) {
-    ctx.moveTo(rx + 4, y);
-    ctx.lineTo(rx + AGENT_W - 4, y);
-  }
-  ctx.stroke();
-
-  // Scanline at the fill front — bright, slightly pulsing.
-  if (p > 0.05 && p < 0.97) {
-    const pulse = (Math.sin(nowMs / 90) + 1) / 2;
-    ctx.strokeStyle = COLOR_BUILD_SCANLINE;
-    ctx.shadowColor = COLOR_BUILD_SCANLINE;
-    ctx.shadowBlur = 6 + pulse * 4;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(rx + 2, fillY);
-    ctx.lineTo(rx + AGENT_W - 2, fillY);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-  }
-
-  // Outer construction border. Solid below the scanline, dashed above.
-  ctx.strokeStyle = COLOR_BUILD_BORDER;
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([3, 3]);
-  roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Phase 3: terminal flash near completion.
-  if (p > 0.92) {
-    const flashStrength = (p - 0.92) / 0.08; // [0, 1]
-    ctx.strokeStyle = COLOR_BUILD_FLASH;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = COLOR_BUILD_FLASH;
-    ctx.shadowBlur = 8 * flashStrength;
-    roundRect(ctx, rx, ry, AGENT_W, AGENT_H, 6);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-  }
-
-  // Construction-phase labels — name (faded), model, and progress %.
-  // Name only renders once enough fill is up to read it.
-  if (p > 0.4) {
-    const nameAlpha = Math.min(1, (p - 0.4) / 0.3);
-    ctx.fillStyle = `rgba(226, 232, 240, ${String(nameAlpha)})`;
-    ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif';
-    ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText(truncate(name, 18), rx + 10, ry + 8);
-  }
-  if (p > 0.6) {
-    const modelAlpha = Math.min(1, (p - 0.6) / 0.3);
-    ctx.fillStyle = `rgba(148, 163, 184, ${String(modelAlpha)})`;
-    ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(truncate(shortenModel(modelLabel), 22), rx + 10, ry + 26);
+    ctx.fillText(`▣ ${String(Math.round(buildProg * 100))}%`, cx, bounds.y + bounds.h + 14);
+    return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
   }
 
-  // Progress label below the structure.
-  ctx.fillStyle = COLOR_BUILD_BORDER;
-  ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  // Steady-state name plate beneath the structure.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillText(`▣ ${String(Math.round(p * 100))}%`, rx + AGENT_W / 2, ry + AGENT_H + 4);
+  ctx.fillStyle = COLOR_AGENT_TEXT;
+  ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillText(truncate(name, 18), cx, bounds.y + bounds.h + 4);
+  ctx.fillStyle = COLOR_AGENT_SUB;
+  ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText(truncate(shortenModel(modelLabel), 22), cx, bounds.y + bounds.h + 18);
+
+  // In-flight count badge floats above the spire.
+  if (inFlight > 0) {
+    const above = bounds.y - 8;
+    ctx.fillStyle = COLOR_AGENT_BORDER_BUSY;
+    ctx.beginPath();
+    ctx.arc(cx, above, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0b1220';
+    ctx.font = '700 10px ui-sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(inFlight), cx, above);
+  }
+
+  return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
 }
 
-function drawCornerBrackets(
+function drawPlacementMarker(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
+  cx: number,
+  cy: number,
   w: number,
-  h: number,
-  size: number,
+  d: number,
+  nowMs: number,
 ): void {
+  // Pulsing iso diamond on the ground plane.
+  const pulse = (Math.sin(nowMs / 140) + 1) / 2;
+  ctx.strokeStyle = `rgba(34, 211, 238, ${String(0.5 + pulse * 0.4)})`;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([3, 3]);
+  // Diamond corners at z=0 in voxel coords, projected manually.
+  const COS30 = Math.sqrt(3) / 2;
+  const SIN30 = 0.5;
+  const VS = 10;
+  const corners = [
+    { dx: (-w / 2 - -d / 2) * VS * COS30, dy: (-w / 2 + -d / 2) * VS * SIN30 },
+    { dx: (w / 2 - -d / 2) * VS * COS30, dy: (w / 2 + -d / 2) * VS * SIN30 },
+    { dx: (w / 2 - d / 2) * VS * COS30, dy: (w / 2 + d / 2) * VS * SIN30 },
+    { dx: (-w / 2 - d / 2) * VS * COS30, dy: (-w / 2 + d / 2) * VS * SIN30 },
+  ];
   ctx.beginPath();
-  // Top-left
-  ctx.moveTo(x, y + size);
-  ctx.lineTo(x, y);
-  ctx.lineTo(x + size, y);
-  // Top-right
-  ctx.moveTo(x + w - size, y);
-  ctx.lineTo(x + w, y);
-  ctx.lineTo(x + w, y + size);
-  // Bottom-right
-  ctx.moveTo(x + w, y + h - size);
-  ctx.lineTo(x + w, y + h);
-  ctx.lineTo(x + w - size, y + h);
-  // Bottom-left
-  ctx.moveTo(x + size, y + h);
-  ctx.lineTo(x, y + h);
-  ctx.lineTo(x, y + h - size);
+  ctx.moveTo(cx + corners[0]!.dx, cy + corners[0]!.dy);
+  for (let i = 1; i < corners.length; i++) {
+    ctx.lineTo(cx + corners[i]!.dx, cy + corners[i]!.dy);
+  }
+  ctx.closePath();
   ctx.stroke();
+  ctx.setLineDash([]);
+  // Center stub.
+  ctx.fillStyle = `rgba(34, 211, 238, ${String(0.4 + pulse * 0.5)})`;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2 + pulse * 2, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function drawGateway(
@@ -515,113 +381,54 @@ function drawGateway(
   selected: boolean,
   buildProg: number,
 ): void {
-  const r = GATEWAY_R;
+  const shape = gatewayShape();
+  const cx = center.x;
+  // Voxel HQ is taller than agent buildings — anchor the BASE plane
+  // a touch higher than `center.y` so the structure visually centers
+  // on the canvas center rather than rising entirely below it.
+  const cy = center.y + 22;
 
-  // ─────────── Construction phase: hex rises from center ───────────
-  if (buildProg < 1) {
-    const pe = easeOutCubic(buildProg);
-
-    // Sweeping cyan circle expanding outward to where the hex will be.
-    ctx.strokeStyle = COLOR_BUILD_BORDER;
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
+  // Pulsing aura ring beneath the structure (steady-state only).
+  if (buildProg >= 1) {
+    const pulse = (Math.sin(nowMs / 600) + 1) / 2;
+    ctx.strokeStyle = `rgba(251, 191, 36, ${String(0.15 + pulse * 0.3)})`;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(center.x, center.y, r + 8, 0, Math.PI * 2);
+    ctx.arc(cx, cy + 4, GATEWAY_HIT_R + pulse * 4, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Hexagon outline grows with progress (radius scaled by pe).
-    const rNow = Math.max(6, r * pe);
-    ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
-      const px = center.x + Math.cos(a) * rNow;
-      const py = center.y + Math.sin(a) * rNow;
-      if (i === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-    ctx.fillStyle = COLOR_BUILD_FILL;
-    ctx.fill();
-    ctx.strokeStyle = COLOR_BUILD_BORDER;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = COLOR_BUILD_BORDER;
-    ctx.shadowBlur = 12 * pe;
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Construction grid inside the hex (faint cyan scanlines).
-    if (buildProg > 0.2) {
-      ctx.save();
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
-        const px = center.x + Math.cos(a) * rNow;
-        const py = center.y + Math.sin(a) * rNow;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.clip();
-      ctx.strokeStyle = COLOR_BUILD_GRID;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let y = center.y - rNow; y < center.y + rNow; y += 6) {
-        ctx.moveTo(center.x - rNow, y);
-        ctx.lineTo(center.x + rNow, y);
-      }
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Build label.
-    ctx.fillStyle = COLOR_BUILD_BORDER;
-    ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`▣ HQ ${String(Math.round(buildProg * 100))}%`, center.x, center.y + r + 12);
-    return;
   }
 
-  // ─────────── Steady-state render ───────────
+  // Voxel HQ.
+  drawVoxelShape(ctx, shape, {
+    cx,
+    cy,
+    buildProgress: buildProg,
+    spireColor: '#fde68a',
+    selected,
+    busyPulse: buildProg >= 1 && modelCount > 0 ? modelCount : 0,
+    nowMs,
+  });
 
-  // Pulsing accent ring.
-  const pulse = (Math.sin(nowMs / 600) + 1) / 2;
-  ctx.strokeStyle = `rgba(251, 191, 36, ${String(0.15 + pulse * 0.25)})`;
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(center.x, center.y, r + 12 + pulse * 4, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Hexagon body.
-  ctx.beginPath();
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
-    const px = center.x + Math.cos(a) * r;
-    const py = center.y + Math.sin(a) * r;
-    if (i === 0) ctx.moveTo(px, py);
-    else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fillStyle = COLOR_GATEWAY_FILL;
-  ctx.fill();
-  ctx.strokeStyle = selected ? COLOR_SELECT_RING : COLOR_GATEWAY;
-  ctx.lineWidth = selected ? 3 : 2;
-  ctx.stroke();
-
-  // Label.
-  ctx.fillStyle = COLOR_GATEWAY;
-  ctx.font = '700 12px ui-sans-serif';
+  // Label below the structure.
+  const bounds = shapeScreenBounds(shape, cx, cy);
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('GATEWAY', center.x, center.y - 6);
-  ctx.fillStyle = COLOR_AGENT_SUB;
-  ctx.font = '10px ui-monospace';
-  ctx.fillText(
-    modelCount > 0 ? `${String(modelCount)} models` : 'no models',
-    center.x,
-    center.y + 10,
-  );
+  ctx.textBaseline = 'top';
+  if (buildProg < 1) {
+    ctx.fillStyle = '#22d3ee';
+    ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText(`▣ HQ ${String(Math.round(buildProg * 100))}%`, cx, bounds.y + bounds.h + 6);
+  } else {
+    ctx.fillStyle = COLOR_GATEWAY;
+    ctx.font = '700 12px ui-sans-serif';
+    ctx.fillText('GATEWAY', cx, bounds.y + bounds.h + 4);
+    ctx.fillStyle = COLOR_AGENT_SUB;
+    ctx.font = '10px ui-monospace';
+    ctx.fillText(
+      modelCount > 0 ? `${String(modelCount)} models` : 'no models',
+      cx,
+      bounds.y + bounds.h + 18,
+    );
+  }
 }
 
 /**
@@ -757,27 +564,6 @@ function countFailedRecentFor(snapshot: CommandSnapshot, agentKey: string, nowMs
     if (Number.isNaN(c) || nowMs - c < RECENT_MS) n++;
   }
   return n;
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-): void {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
 }
 
 function truncate(s: string, max: number): string {
