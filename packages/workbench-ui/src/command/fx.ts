@@ -75,6 +75,20 @@ export type Fx =
       readonly startedAt: number;
       readonly durationMs: number;
       readonly color: string;
+    }
+  | {
+      /**
+       * Sharp red rectangular flash painted over an agent's footprint —
+       * "the structure took a hit." Sized via w/h so the overlay
+       * matches the building silhouette regardless of voxel shape.
+       */
+      readonly kind: 'damage';
+      readonly x: number;
+      readonly y: number;
+      readonly w: number;
+      readonly h: number;
+      readonly startedAt: number;
+      readonly durationMs: number;
     };
 
 export class FxLayer {
@@ -186,6 +200,15 @@ export function drawFx(
       ctx.arc(f.x, f.y + lift, 2.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
+    } else if (f.kind === 'damage') {
+      // Sharp red flash over the structure — sells the hit.
+      // Bright at peak, fades to nothing.
+      const alpha = (1 - t) * 0.6;
+      ctx.fillStyle = withAlpha('#ef4444', alpha);
+      ctx.fillRect(f.x - f.w / 2, f.y - f.h, f.w, f.h);
+      ctx.strokeStyle = withAlpha('#fecaca', (1 - t) * 0.95);
+      ctx.lineWidth = 2 / cameraZoom;
+      ctx.strokeRect(f.x - f.w / 2, f.y - f.h, f.w, f.h);
     }
     // `flash` is rendered separately by drawFxScreen — it ignores camera.
   }

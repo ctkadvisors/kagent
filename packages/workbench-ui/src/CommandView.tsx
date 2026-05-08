@@ -112,6 +112,15 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   // Recent in-flight count, refreshed each frame so the gateway-steam
   // emit rate scales with live cluster load.
   const liveInFlightRef = useRef<number>(0);
+  // Screen-shake state. `startMs` is wallclock; `intensityPx` is the
+  // peak shake amplitude in CSS pixels at start. Shake decays linearly
+  // over `durationMs` and the per-frame offset is rand-driven within
+  // the live amplitude.
+  const shakeRef = useRef<{ startMs: number; intensityPx: number; durationMs: number }>({
+    startMs: 0,
+    intensityPx: 0,
+    durationMs: 0,
+  });
 
   // Per-key first-seen wallclock — drives the build-out animation.
   const firstSeenRef = useRef<Map<string, number>>(new Map());
@@ -326,6 +335,33 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           ? { x0: drag.startX, y0: drag.startY, x1: drag.curX, y1: drag.curY }
           : null;
 
+      // Compute live shake offset from the active shake event. Decays
+      // linearly to zero; jitters along x/y independently.
+      let shakeX = 0;
+      let shakeY = 0;
+      const sh = shakeRef.current;
+      if (sh.intensityPx > 0 && sh.durationMs > 0) {
+        const age = now - sh.startMs;
+        if (age < sh.durationMs) {
+          const decay = 1 - age / sh.durationMs;
+          const amp = sh.intensityPx * decay;
+          shakeX = (Math.random() - 0.5) * 2 * amp;
+          shakeY = (Math.random() - 0.5) * 2 * amp;
+        } else {
+          // Expired — clear so the live ref is cheap to read.
+          sh.intensityPx = 0;
+        }
+      }
+
+      // Mood: 0..1 derived from in-flight + recent failures.
+      // 8 in-flight + 0 fails = 0.5; 0 in-flight + 3 fails = ~0.7;
+      // sustained heavy failure cluster = 1.0.
+      const recentFailCount = recentFailuresRef.current.filter((t) => now - t < 30_000).length;
+      const moodFactor = Math.min(
+        1,
+        inFlightCount / 16 + recentFailCount * 0.18,
+      );
+
       hitMapRef.current = drawScene(ctx, {
         snapshot,
         layout,
@@ -336,6 +372,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         viewport: { w, h },
         fx: fxRef.current.list(),
         marquee,
+        shake: { x: shakeX, y: shakeY },
+        mood: moodFactor,
       });
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -419,6 +457,19 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             durationMs: 700,
             maxRadius: 80,
           });
+          // Damage flash overlaid on the agent footprint.
+          fxRef.current.emit({
+            kind: 'damage',
+            x: agentPos.x,
+            y: agentPos.y + 6,
+            w: 56,
+            h: 70,
+            startedAt: now,
+            durationMs: 320,
+          });
+          // Small targeted shake — felt at the structure level only,
+          // gentler than the cluster-klaxon shake below.
+          shakeRef.current = { startMs: now, intensityPx: 2, durationMs: 200 };
         }
         // Failure cluster: 3+ failures within 30s → klaxon + edge flash
         // + auto-pan camera to the centroid of recently-failed agents
@@ -434,6 +485,9 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             durationMs: 1_400,
             intensity: 0.55,
           });
+          // Heavy cluster-level shake — overrides any in-flight mild
+          // shake from the individual failure that triggered this branch.
+          shakeRef.current = { startMs: now, intensityPx: 6, durationMs: 380 };
           setAlertText(`failure cluster: ${String(recent30s.length)} fails / 30s`);
           window.setTimeout(() => setAlertText(null), 4_000);
           // Compute centroid of recently-failed agent positions and
@@ -915,6 +969,104 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   // HUD numbers.
   const hud = useMemo(() => deriveHud(snapshot), [snapshot]);
 
+  // ───────────────────────── Demo / trigger-incident handler ─────────────────────────
+  // Synthesize a 3-failure cluster on three random agents — fires the
+  // same FX/sound/shake/auto-pan paths a real cluster would. Useful
+  // for demoing the visuals without an actual cluster failure.
+  const triggerDemoIncident = useCallback((): void => {
+    const layout = layoutRef.current;
+    if (layout === null) return;
+    sound.unlock();
+    const positions = Array.from(layout.agents.values());
+    if (positions.length === 0) return;
+    // Pick up to 3 distinct agents — random subset.
+    const shuffled = positions.slice().sort(() => Math.random() - 0.5);
+    const targets = shuffled.slice(0, Math.min(3, shuffled.length));
+    targets.forEach((p, i) => {
+      const fireAt = i * 280;
+      window.setTimeout(() => {
+        const now = Date.now();
+        sound.taskFailed();
+        recentFailuresRef.current.push(now);
+        recentFailuresRef.current = recentFailuresRef.current.filter((t) => now - t < 60_000);
+        fxRef.current.emit({
+          kind: 'smoke',
+          x: p.x,
+          y: p.y + 8,
+          startedAt: now,
+          durationMs: 4_000,
+        });
+        fxRef.current.emit({
+          kind: 'shockwave',
+          x: p.x,
+          y: p.y - 4,
+          color: '#ef4444',
+          startedAt: now,
+          durationMs: 700,
+          maxRadius: 80,
+        });
+        fxRef.current.emit({
+          kind: 'damage',
+          x: p.x,
+          y: p.y + 6,
+          w: 56,
+          h: 70,
+          startedAt: now,
+          durationMs: 320,
+        });
+        shakeRef.current = { startMs: now, intensityPx: 2, durationMs: 200 };
+
+        // After the third failure, fire the cluster path.
+        if (i === targets.length - 1) {
+          window.setTimeout(() => {
+            const t2 = Date.now();
+            sound.klaxon();
+            lastKlaxonAtRef.current = t2;
+            fxRef.current.emit({
+              kind: 'flash',
+              color: '#7f1d1d',
+              startedAt: t2,
+              durationMs: 1_400,
+              intensity: 0.55,
+            });
+            shakeRef.current = { startMs: t2, intensityPx: 6, durationMs: 380 };
+            setAlertText('demo incident — synthetic cluster');
+            window.setTimeout(() => setAlertText(null), 4_000);
+
+            // Auto-pan to centroid.
+            const wrapper = wrapperRef.current;
+            if (wrapper !== null) {
+              const rect = wrapper.getBoundingClientRect();
+              let cx = 0;
+              let cy = 0;
+              for (const tp of targets) {
+                cx += tp.x;
+                cy += tp.y;
+              }
+              cx /= targets.length;
+              cy /= targets.length;
+              const target = centerOnWorld(
+                cameraRef.current,
+                cx,
+                cy,
+                { w: rect.width, h: rect.height },
+                1.4,
+              );
+              easeCameraTo(
+                cameraRef.current,
+                target.offsetX,
+                target.offsetY,
+                target.zoom,
+                900,
+                t2,
+              );
+            }
+          }, 200);
+        }
+      }, fireAt);
+    });
+  }, []);
+
   // Recently-failed agent keys (last 60s) for minimap red highlighting.
   const failedAgentKeys = useMemo<ReadonlySet<string>>(() => {
     const out = new Set<string>();
@@ -973,6 +1125,14 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           <HudTile label="Selected" value={String(selection.keys.size)} />
         </div>
         <div className={styles.navLinks}>
+          <button
+            type="button"
+            className={styles.demoButton}
+            onClick={triggerDemoIncident}
+            title="Synthesize a 3-failure cluster — exercises every FX path."
+          >
+            ⚠ demo
+          </button>
           <button
             type="button"
             className={styles.navLink}

@@ -70,7 +70,6 @@ export interface HitMap {
   readonly taskSprites: ReadonlyMap<string, { x: number; y: number }>;
 }
 
-const COLOR_BG = '#070d18';
 const COLOR_GRID = 'rgba(82, 200, 124, 0.07)';
 const COLOR_GRID_FINE = 'rgba(82, 200, 124, 0.035)';
 const COLOR_GATEWAY = '#fbbf24';
@@ -108,15 +107,44 @@ interface SceneInputs {
   readonly fx: readonly Fx[];
   /** Drag-marquee box (screen space) when active. */
   readonly marquee: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** Screen-shake offset in CSS pixels — applied AFTER background fill. */
+  readonly shake: { x: number; y: number };
+  /**
+   * Mood factor [0, 1] — 0 = calm (cool slate), 1 = incident (warm
+   * crimson). Drives the canvas background tint so the operator's
+   * peripheral sense of cluster health updates without reading text.
+   */
+  readonly mood: number;
 }
 
 export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): HitMap {
-  const { snapshot, layout, selection, nowMs, firstSeen, camera, viewport, fx, marquee } = inputs;
+  const {
+    snapshot,
+    layout,
+    selection,
+    nowMs,
+    firstSeen,
+    camera,
+    viewport,
+    fx,
+    marquee,
+    shake,
+    mood,
+  } = inputs;
 
-  // ── Background fill (screen space) ──
+  // ── Background fill (screen space) — mood-tinted slate. ──
+  // Lerp between calm slate (0,0,0 mood) and incident crimson (mood=1)
+  // by interpolating r/g/b independently. Each component spends most
+  // of its dynamic range in the upper half of mood so a few quiet
+  // failures don't over-color the world.
   ctx.save();
-  ctx.fillStyle = COLOR_BG;
+  ctx.fillStyle = moodBgColor(mood);
   ctx.fillRect(0, 0, viewport.w, viewport.h);
+
+  // ── Screen shake — translate the entire scene relative to the
+  // background fill. Tiny edge-bleed at the perimeter is acceptable
+  // for the impact it lends to klaxon events.
+  ctx.translate(shake.x, shake.y);
 
   // ── Apply camera transform — everything below draws in world coords ──
   ctx.translate(camera.offsetX, camera.offsetY);
@@ -672,6 +700,10 @@ function drawTaskUnits(
   nowMs: number,
 ): Map<string, { x: number; y: number }> {
   const sprites = new Map<string, { x: number; y: number }>();
+  // Trail samples: 5 ghost dots backward at 90ms cadence, fading.
+  const TRAIL_STEPS = 5;
+  const TRAIL_STEP_MS = 90;
+
   for (const t of snapshot.tasks.values()) {
     const agentKey = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : null;
     const pos = agentKey !== null ? layout.agents.get(agentKey) : undefined;
@@ -682,6 +714,23 @@ function drawTaskUnits(
     sprites.set(`${t.namespace}/${t.name}`, xy);
 
     const color = colorForPhase(t.phase);
+
+    // Vapor trail — sample positionForTask backward in time. Idle
+    // (wobbling) sprites still produce trails but they collapse onto
+    // the current point, which is fine.
+    for (let i = TRAIL_STEPS; i >= 1; i--) {
+      const past = positionForTask(t, layout.gateway, pos, nowMs - i * TRAIL_STEP_MS);
+      if (past === null) continue;
+      const a = (1 - i / TRAIL_STEPS) * 0.55;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(past.x, past.y, Math.max(1.2, TASK_R - i * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Lead dot — full bright with glow.
     ctx.fillStyle = color;
     ctx.shadowColor = color;
     ctx.shadowBlur = 8;
@@ -791,4 +840,19 @@ function easeOutCubic(t: number): number {
 
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
+ * Compute the canvas background color from the mood factor. Calm =
+ * #070d18 (slate), incident = #1a0a14 (warm crimson). Sub-linear
+ * curve on each channel so light loads tint subtly and only severe
+ * incidents feel red.
+ */
+function moodBgColor(mood: number): string {
+  const m = Math.max(0, Math.min(1, mood));
+  const k = Math.pow(m, 1.4); // ease-in: subtle until things get bad
+  const r = Math.round(7 + (26 - 7) * k);
+  const g = Math.round(13 + (10 - 13) * k);
+  const b = Math.round(24 + (20 - 24) * k);
+  return `rgb(${String(r)}, ${String(g)}, ${String(b)})`;
 }
