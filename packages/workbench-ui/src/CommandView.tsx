@@ -836,6 +836,30 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       keys: next,
       focus: { kind: hit.kind, key: hit.key },
     });
+    // Voice-line on single-agent select. Phrase reflects current state.
+    if (!e.shiftKey && hit.kind === 'agent') {
+      let inFlight = 0;
+      let failed = 0;
+      const now = Date.now();
+      for (const t of snapshot.tasks.values()) {
+        const k = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : '';
+        if (k !== hit.key) continue;
+        if (t.phase === 'Pending' || t.phase === 'Dispatched') inFlight++;
+        if (t.phase === 'Failed') {
+          const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+          if (Number.isNaN(c) || now - c < 60_000) failed++;
+        }
+      }
+      const phrase =
+        failed >= 2
+          ? 'Damage report.'
+          : inFlight > 0
+            ? 'Working.'
+            : 'Standing by.';
+      sound.speakLine(phrase);
+    } else if (!e.shiftKey && hit.kind === 'gateway') {
+      sound.speakLine('Gateway online.');
+    }
   };
 
   const onCanvasWheel = (e: React.WheelEvent<HTMLCanvasElement>): void => {
@@ -945,6 +969,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           <HudTile label="Failed (1h)" value={String(hud.failedRecent)} accent="bad" />
           <HudTile label="Models" value={String(hud.modelCount)} />
           <HudTile label="Tokens / min" value={hud.tokensPerMin} />
+          <HudTile label="Cost / hr (est)" value={hud.costPerHr} />
           <HudTile label="Selected" value={String(selection.keys.size)} />
         </div>
         <div className={styles.navLinks}>
@@ -1009,28 +1034,31 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
               popover={popover}
               snapshot={snapshot}
               onClose={() => setPopover(null)}
-              onDispatch={(prompt) => {
-                void dispatchToTargets(popover.targetAgents, prompt, snapshot.agents).then(
-                  (result) => {
-                    setPopover(null);
-                    if (result.failures.length === 0) {
-                      sound.dispatch();
-                      setAlertText(
-                        `${String(result.successes)} ${
-                          result.successes === 1 ? 'task' : 'tasks'
-                        } dispatched`,
-                      );
-                    } else {
-                      sound.taskFailed();
-                      setAlertText(
-                        `dispatch: ${String(result.successes)} ok / ${String(
-                          result.failures.length,
-                        )} failed — ${String(result.failures[0])}`,
-                      );
-                    }
-                    window.setTimeout(() => setAlertText(null), 4_000);
-                  },
-                );
+              onDispatch={(prompt, count) => {
+                void dispatchToTargets(
+                  popover.targetAgents,
+                  prompt,
+                  snapshot.agents,
+                  count,
+                ).then((result) => {
+                  setPopover(null);
+                  if (result.failures.length === 0) {
+                    sound.dispatch();
+                    setAlertText(
+                      `${String(result.successes)} ${
+                        result.successes === 1 ? 'task' : 'tasks'
+                      } dispatched`,
+                    );
+                  } else {
+                    sound.taskFailed();
+                    setAlertText(
+                      `dispatch: ${String(result.successes)} ok / ${String(
+                        result.failures.length,
+                      )} failed — ${String(result.failures[0])}`,
+                    );
+                  }
+                  window.setTimeout(() => setAlertText(null), 4_000);
+                });
               }}
             />
           ) : null}
@@ -1086,18 +1114,28 @@ async function dispatchToTargets(
   targetKeys: readonly string[],
   prompt: string,
   agents: ReadonlyMap<string, AgentSummaryRow>,
+  count: number,
 ): Promise<DispatchResult> {
   const out: DispatchResult = { successes: 0, failures: [] };
+  // Build the (target × count) cross-product up front so we issue each
+  // POST in parallel — fastest path; the operator's admission control
+  // is already designed for burst inflow.
+  const jobs: { ns: string; name: string }[] = [];
+  for (const key of targetKeys) {
+    const a = agents.get(key);
+    const [ns, name] = splitKey(key);
+    const targetAgent = a?.name ?? name;
+    const namespace = a?.namespace ?? ns;
+    for (let i = 0; i < count; i++) {
+      jobs.push({ ns: namespace, name: targetAgent });
+    }
+  }
   await Promise.all(
-    targetKeys.map(async (key) => {
-      const a = agents.get(key);
-      const [ns, name] = splitKey(key);
-      const targetAgent = a?.name ?? name;
-      const namespace = a?.namespace ?? ns;
+    jobs.map(async ({ ns, name }) => {
       try {
         await createTask({
-          targetAgent,
-          namespace,
+          targetAgent: name,
+          namespace: ns,
           originalUserMessage: prompt,
         });
         out.successes++;
@@ -1151,6 +1189,30 @@ interface DerivedHud {
   readonly modelCount: number;
   readonly tokensPerMin: string;
   readonly callsPerMin: string;
+  /** Heuristic $/hr based on per-model rates (see modelRate()). */
+  readonly costPerHr: string;
+}
+
+/**
+ * Per-model $/M-tokens heuristic. Workers-AI is functionally zero on
+ * the homelab (Cloudflare bills based on Neuron consumption, not
+ * passthrough). Anthropic / OpenAI / Mistral get rough public pricing.
+ * If the model isn't matched, we fall back to a tiny non-zero rate so
+ * the operator at least sees movement on the cost meter.
+ */
+function modelRate(model: string): number {
+  const m = model.toLowerCase();
+  if (m.includes('workers-ai') || m.includes('@cf/')) return 0.0;
+  if (m.includes('claude-3-5') || m.includes('claude-sonnet-4') || m.includes('claude-opus'))
+    return 3.0;
+  if (m.includes('claude')) return 1.5;
+  if (m.includes('gpt-4o-mini')) return 0.25;
+  if (m.includes('gpt-4o')) return 2.5;
+  if (m.includes('gpt-4')) return 10.0;
+  if (m.includes('llama-3.3-70b')) return 0.4;
+  if (m.includes('llama-4-scout') || m.includes('llama-4')) return 0.1;
+  if (m.includes('mistral')) return 0.2;
+  return 0.05; // conservative default
 }
 
 function deriveHud(snapshot: ReturnType<typeof useCommandSnapshot>): DerivedHud {
@@ -1169,19 +1231,24 @@ function deriveHud(snapshot: ReturnType<typeof useCommandSnapshot>): DerivedHud 
   }
   let calls = 0;
   let tokens = 0;
+  let costPerMin = 0;
   const WINDOW_MS = 60_000;
   for (const u of snapshot.gatewayUsage) {
     const at = u.occurredAt !== undefined ? Date.parse(u.occurredAt) : NaN;
     if (Number.isNaN(at) || now - at > WINDOW_MS) continue;
     calls += 1;
-    tokens += (u.inputTokens || 0) + (u.outputTokens || 0);
+    const t = (u.inputTokens || 0) + (u.outputTokens || 0);
+    tokens += t;
+    costPerMin += (t / 1_000_000) * modelRate(u.model);
   }
+  const costPerHr = costPerMin * 60;
   return {
     inFlight,
     completedRecent,
     failedRecent,
     modelCount: snapshot.gatewayCapacity.length,
     tokensPerMin: tokens > 0 ? compactNumber(tokens) : '0',
+    costPerHr: costPerHr > 0 ? `$${costPerHr.toFixed(2)}` : '$0.00',
     callsPerMin: String(calls),
   };
 }
@@ -1600,7 +1667,7 @@ interface DispatchPopoverViewProps {
   readonly popover: DispatchPopover;
   readonly snapshot: ReturnType<typeof useCommandSnapshot>;
   readonly onClose: () => void;
-  readonly onDispatch: (prompt: string) => void;
+  readonly onDispatch: (prompt: string, count: number) => void;
 }
 
 function DispatchPopoverView({
@@ -1610,6 +1677,7 @@ function DispatchPopoverView({
   onDispatch,
 }: DispatchPopoverViewProps): React.JSX.Element {
   const [prompt, setPrompt] = useState<string>(popover.defaultPrompt);
+  const [count, setCount] = useState<number>(1);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     inputRef.current?.focus();
@@ -1618,7 +1686,7 @@ function DispatchPopoverView({
 
   // Clamp position so the popover stays inside the viewport.
   const W = 320;
-  const H = 220;
+  const H = 250;
   const PAD = 12;
   const x = Math.min(popover.screenX + PAD, window.innerWidth - W - PAD);
   const y = Math.min(popover.screenY + PAD, window.innerHeight - H - PAD);
@@ -1628,18 +1696,24 @@ function DispatchPopoverView({
     return a?.name ?? k.split('/')[1] ?? k;
   });
 
+  const totalTasks = popover.targetAgents.length * count;
+
   return (
     <div
       className={styles.dispatchPopover}
       style={{ left: `${String(x)}px`, top: `${String(y)}px`, width: `${String(W)}px` }}
     >
       <div className={styles.dispatchHeader}>
-        <span>Dispatch ({String(popover.targetAgents.length)})</span>
+        <span>
+          Dispatch ({String(popover.targetAgents.length)})
+          {count > 1 ? <> · queue {String(count)}×</> : null}
+        </span>
         <button type="button" onClick={onClose} aria-label="cancel">
           ✕
         </button>
       </div>
-      <div className={styles.dispatchTargets}>{targetLabels.slice(0, 4).join(', ')}
+      <div className={styles.dispatchTargets}>
+        {targetLabels.slice(0, 4).join(', ')}
         {targetLabels.length > 4 ? `, +${String(targetLabels.length - 4)}` : ''}
       </div>
       <textarea
@@ -1650,7 +1724,7 @@ function DispatchPopoverView({
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            onDispatch(prompt);
+            onDispatch(prompt, count);
           } else if (e.key === 'Escape') {
             e.preventDefault();
             onClose();
@@ -1659,6 +1733,20 @@ function DispatchPopoverView({
         rows={4}
         placeholder="prompt — ⌘↩ / Ctrl-↩ to dispatch, Esc to cancel"
       />
+      <div className={styles.dispatchQueueRow}>
+        <span className={styles.dispatchQueueLabel}>queue</span>
+        {[1, 2, 3, 5].map((n) => (
+          <button
+            key={n}
+            type="button"
+            className={n === count ? styles.dispatchQueueBtnActive : styles.dispatchQueueBtn}
+            onClick={() => setCount(n)}
+          >
+            {String(n)}×
+          </button>
+        ))}
+        <span className={styles.dispatchTotal}>= {String(totalTasks)} tasks</span>
+      </div>
       <div className={styles.dispatchActions}>
         <button type="button" className={styles.dispatchCancel} onClick={onClose}>
           cancel
@@ -1667,7 +1755,7 @@ function DispatchPopoverView({
           type="button"
           className={styles.dispatchSubmit}
           onClick={() => {
-            onDispatch(prompt);
+            onDispatch(prompt, count);
           }}
         >
           dispatch ▶

@@ -137,7 +137,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     const inFlight = countInFlightFor(snapshot, pos.key);
     const agentProgress = buildProgress(firstSeen.get(pos.key), nowMs, BUILD_MS);
     const beltProgress = Math.min(gatewayProgress, agentProgress);
-    drawBelt(ctx, layout.gateway, pos, inFlight, beltProgress);
+    drawBelt(ctx, layout.gateway, pos, inFlight, beltProgress, nowMs);
   }
 
   // Agent structures.
@@ -306,6 +306,7 @@ function drawBelt(
   to: { x: number; y: number },
   inFlight: number,
   buildProg: number,
+  nowMs: number,
 ): void {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
@@ -358,6 +359,41 @@ function drawBelt(
   drawVia(ctx, from.x, from.y, traceColor);
   drawVia(ctx, corner.x, corner.y, traceColor);
   drawVia(ctx, to.x, to.y, traceColor);
+
+  // Belt-pulse: small bright dots traveling gateway → agent along the
+  // L-path while in-flight. More dots = more concurrent calls. Each
+  // dot is staggered by phase so the train is visually evenly spaced.
+  if (inFlight > 0) {
+    const seg1Len = horizontalFirst ? Math.abs(dx) : Math.abs(dy);
+    const seg2Len = horizontalFirst ? Math.abs(dy) : Math.abs(dx);
+    const totalLen = seg1Len + seg2Len;
+    const speedPxPerSec = 220;
+    const period = totalLen / speedPxPerSec; // seconds for one trip
+    const dotCount = Math.min(4, inFlight);
+    for (let i = 0; i < dotCount; i++) {
+      const phase = i / dotCount;
+      const t = (nowMs / 1000 / period + phase) % 1;
+      const drawn = totalLen * t;
+      let px: number;
+      let py: number;
+      if (drawn <= seg1Len) {
+        const tt = seg1Len === 0 ? 0 : drawn / seg1Len;
+        px = horizontalFirst ? from.x + dx * tt : from.x;
+        py = horizontalFirst ? from.y : from.y + dy * tt;
+      } else {
+        const tt = seg2Len === 0 ? 0 : (drawn - seg1Len) / seg2Len;
+        px = horizontalFirst ? corner.x : corner.x + dx * tt;
+        py = horizontalFirst ? corner.y + dy * tt : corner.y;
+      }
+      ctx.fillStyle = '#fde68a';
+      ctx.shadowColor = '#fbbf24';
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(px, py, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
 }
 
 function drawVia(ctx: CanvasRenderingContext2D, x: number, y: number, ringColor: string): void {
@@ -396,7 +432,13 @@ function drawAgentBuilding(
   const body = factionColor(namespace);
   const shape = agentShapeForRole(body, tools);
   const cx = pos.x;
-  const cy = pos.y + 6;
+  // Idle bob — subtle vertical wobble when fully built and not busy,
+  // so the world feels alive even between dispatches. Phase varies per
+  // agent so neighbours don't bob in unison.
+  const idleAndBuilt = buildProg >= 1 && inFlight === 0 && failed === 0;
+  const bobPhase = (pos.x * 0.013 + pos.y * 0.017) % (Math.PI * 2);
+  const bob = idleAndBuilt ? Math.sin(nowMs / 720 + bobPhase) * 1.4 : 0;
+  const cy = pos.y + 6 + bob;
 
   if (buildProg < 0.06) {
     drawPlacementMarker(ctx, cx, cy, shape.footprint.w, shape.footprint.d, nowMs);

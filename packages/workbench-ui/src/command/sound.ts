@@ -73,6 +73,43 @@ export class SoundEngine {
     this.beep({ freq: 1200, type: 'square', dur: 0.05, peak: 0.12 });
   }
 
+  /**
+   * Speak a short command-acknowledgement line via Web Speech API.
+   * Lowest-effort "voice line on selection" — the Synth API ships with
+   * every browser and needs zero TTS infrastructure. Voice tone is
+   * deep + slightly slowed so it reads as "agent reporting in" rather
+   * than "browser screen reader." Throttled to one per 2.5s to avoid
+   * spamming on rapid Tab cycles.
+   */
+  private lastSpokeAt = 0;
+  speakLine(phrase: string): void {
+    if (this.muted) return;
+    if (typeof window === 'undefined') return;
+    const synth = window.speechSynthesis as SpeechSynthesis | undefined;
+    if (synth === undefined) return;
+    const now = performance.now();
+    if (now - this.lastSpokeAt < 2_500) return;
+    this.lastSpokeAt = now;
+    // Cancel any pending utterance so "Working" doesn't queue behind
+    // an earlier "Standing by."
+    synth.cancel();
+    const utter = new SpeechSynthesisUtterance(phrase);
+    utter.rate = 0.92;
+    utter.pitch = 0.55;
+    utter.volume = 0.6;
+    // Pick the most "command"-feeling voice if available — bias toward
+    // English variants with male-leaning timbre. If no preferred voice
+    // is found the system default is used (still works fine).
+    const voices = synth.getVoices();
+    const preferred = voices.find(
+      (v) =>
+        /Daniel|Alex|Fred|Google UK English Male|Microsoft David/i.test(v.name) &&
+        v.lang.startsWith('en'),
+    );
+    if (preferred !== undefined) utter.voice = preferred;
+    synth.speak(utter);
+  }
+
   /** Soft 800 Hz thump — task accepted, command issued. */
   dispatch(): void {
     this.beep({ freq: 220, type: 'sine', dur: 0.18, peak: 0.22 });
