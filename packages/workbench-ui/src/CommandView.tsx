@@ -36,23 +36,28 @@ import { computeLayout } from './command/layout.js';
 import type { AgentNode, LayoutResult } from './command/layout.js';
 import {
   applyBookmark,
+  centerOnWorld,
+  easeCameraTo,
   makeCamera,
   panFromEdge,
   panFromKeys,
   resetCamera,
   screenToWorld,
   snapshotBookmark,
+  tickTween,
   ZOOM_STEP,
   zoomAt,
   type Camera,
 } from './command/camera.js';
 import { FxLayer } from './command/fx.js';
+import { Minimap } from './command/Minimap.js';
 import { drawScene, type SelectionRef, type SelectionState } from './command/scene.js';
 import type { HitMap } from './command/scene.js';
 import { sound } from './command/sound.js';
 import { DRAG_ACTIVATE_PX, makeInputState } from './command/input.js';
 import type { InputState } from './command/input.js';
 import { useCommandSnapshot } from './command/state.js';
+import { factionColor } from './command/voxel.js';
 import type { ActivityEvent } from './command/state.js';
 import type { AgentSummaryRow, TaskSummary } from './types.js';
 import styles from './CommandView.module.css';
@@ -78,6 +83,11 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const [alertText, setAlertText] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
   const [hintsOpen, setHintsOpen] = useState<boolean>(false);
+  // Wrapper size in CSS px — driven by fitCanvas() inside the RAF loop;
+  // updated only on resize so we don't churn React every frame. The
+  // Minimap consumes this to draw the camera-viewport rect at correct
+  // proportions.
+  const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>({ w: 800, h: 500 });
   // Bumped from any imperative camera/input mutation that needs the
   // top HUD (e.g. Selected count) to redraw immediately.
   const [, forceRender] = useState<number>(0);
@@ -96,6 +106,12 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const seenEventsRef = useRef<Set<string>>(new Set());
   const lastKlaxonAtRef = useRef<number>(0);
   const recentFailuresRef = useRef<number[]>([]); // wallclock ms of recent Failed events
+  // Atmospheric particle scheduling — last-emit timestamps per source.
+  const lastGatewaySteamMsRef = useRef<number>(0);
+  const lastAgentSmokeMsRef = useRef<Map<string, number>>(new Map());
+  // Recent in-flight count, refreshed each frame so the gateway-steam
+  // emit rate scales with live cluster load.
+  const liveInFlightRef = useRef<number>(0);
 
   // Per-key first-seen wallclock — drives the build-out animation.
   const firstSeenRef = useRef<Map<string, number>>(new Map());
@@ -143,6 +159,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     let lastBoundsKey = '';
     let lastNodeKey = '';
 
+    let lastViewportW = 0;
+    let lastViewportH = 0;
     const fitCanvas = (): { w: number; h: number } => {
       const rect = wrapper.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -157,6 +175,14 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       } else {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
+      // Push viewport size to React state ONLY when it changes — keeps
+      // the Minimap re-rendering in sync with resizes without churning
+      // a setState per frame.
+      if (w !== lastViewportW || h !== lastViewportH) {
+        lastViewportW = w;
+        lastViewportH = h;
+        setViewportSize({ w, h });
+      }
       return { w, h };
     };
 
@@ -166,6 +192,10 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       lastFrameMsRef.current = now;
 
       const { w, h } = fitCanvas();
+
+      // Tween advance first — user input below cancels the tween if
+      // it's active, so direct pan/zoom always wins.
+      tickTween(cameraRef.current, now);
 
       // Pan camera from held keys + edge-scroll.
       panFromKeys(cameraRef.current, inputRef.current.keys, dt);
@@ -228,6 +258,61 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       } else {
         for (const n of agentNodes) {
           if (!fs.has(n.key)) fs.set(n.key, now);
+        }
+      }
+
+      // ── Live in-flight count, used by atmospherics emission rate ──
+      let inFlightCount = 0;
+      for (const t of snapshot.tasks.values()) {
+        if (t.phase === 'Pending' || t.phase === 'Dispatched') inFlightCount++;
+      }
+      liveInFlightRef.current = inFlightCount;
+
+      // ── Atmospherics ─────────────────────────────────────────────
+      //
+      // Gateway smokestack: emit one steam puff at an interval that
+      // tightens with load. Idle = 1.4s between puffs; saturated
+      // (8+ in-flight) = 280ms — feels like the gateway is "running
+      // hot." Puff origin sits on top of the HQ spire.
+      const stackPeriod = Math.max(280, 1400 - inFlightCount * 140);
+      if (now - lastGatewaySteamMsRef.current >= stackPeriod) {
+        const wobble = Math.sin(now / 600) * 4;
+        fxRef.current.emit({
+          kind: 'steam',
+          x: layout.gateway.x + wobble,
+          y: layout.gateway.y - 50, // above the HQ spire
+          startedAt: now,
+          durationMs: 2_400,
+        });
+        lastGatewaySteamMsRef.current = now;
+      }
+
+      // Persistent weak smoke on agents with active recent failures —
+      // a subtle ongoing reminder long after the initial smoke pillar
+      // expires. One puff per (1.5s + 0.4s × successive-failure-count)
+      // until the agent settles.
+      const smokeMap = lastAgentSmokeMsRef.current;
+      for (const pos of layout.agents.values()) {
+        let recentFailures = 0;
+        for (const t of snapshot.tasks.values()) {
+          const k = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : '';
+          if (k !== pos.key) continue;
+          if (t.phase !== 'Failed') continue;
+          const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+          if (!Number.isNaN(c) && now - c < 60_000) recentFailures++;
+        }
+        if (recentFailures === 0) continue;
+        const period = Math.max(900, 1800 - recentFailures * 200);
+        const last = smokeMap.get(pos.key) ?? 0;
+        if (now - last >= period) {
+          fxRef.current.emit({
+            kind: 'steam',
+            x: pos.x + (Math.random() - 0.5) * 6,
+            y: pos.y - 8,
+            startedAt: now,
+            durationMs: 2_200,
+          });
+          smokeMap.set(pos.key, now);
         }
       }
 
@@ -297,6 +382,21 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             durationMs: 900,
           });
         }
+        // Coin-sparks at the Gateway HQ — every Completed run rains
+        // a few yellow particles over the spire so heavy-throughput
+        // periods visibly "shower gold" at the centre of the map.
+        if (layout !== null) {
+          for (let i = 0; i < 4; i++) {
+            fxRef.current.emit({
+              kind: 'sparks',
+              x: layout.gateway.x + (i - 1.5) * 6,
+              y: layout.gateway.y - 30 - Math.random() * 6,
+              color: '#fbbf24',
+              startedAt: now + i * 60,
+              durationMs: 700,
+            });
+          }
+        }
       } else if (ev.phase === 'Failed') {
         sound.taskFailed();
         recentFailuresRef.current.push(now);
@@ -320,7 +420,9 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             maxRadius: 80,
           });
         }
-        // Failure cluster: 3+ failures within 30s → klaxon + edge flash.
+        // Failure cluster: 3+ failures within 30s → klaxon + edge flash
+        // + auto-pan camera to the centroid of recently-failed agents
+        // so the operator's eyes land on the hot zone immediately.
         const recent30s = recentFailuresRef.current.filter((t) => now - t < 30_000);
         if (recent30s.length >= 3 && now - lastKlaxonAtRef.current > 8_000) {
           sound.klaxon();
@@ -334,6 +436,45 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           });
           setAlertText(`failure cluster: ${String(recent30s.length)} fails / 30s`);
           window.setTimeout(() => setAlertText(null), 4_000);
+          // Compute centroid of recently-failed agent positions and
+          // ease the camera there at zoom 1.4 for context-rich framing.
+          if (layout !== null) {
+            const wrapper = wrapperRef.current;
+            const pts: { x: number; y: number }[] = [];
+            for (const t of snapshot.tasks.values()) {
+              if (t.phase !== 'Failed' || t.targetAgent === undefined) continue;
+              const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+              if (Number.isNaN(c) || now - c >= 30_000) continue;
+              const ap = layout.agents.get(`${t.namespace}/${t.targetAgent}`);
+              if (ap !== undefined) pts.push({ x: ap.x, y: ap.y });
+            }
+            if (pts.length > 0 && wrapper !== null) {
+              let cx = 0;
+              let cy = 0;
+              for (const p of pts) {
+                cx += p.x;
+                cy += p.y;
+              }
+              cx /= pts.length;
+              cy /= pts.length;
+              const rect = wrapper.getBoundingClientRect();
+              const target = centerOnWorld(
+                cameraRef.current,
+                cx,
+                cy,
+                { w: rect.width, h: rect.height },
+                1.4,
+              );
+              easeCameraTo(
+                cameraRef.current,
+                target.offsetX,
+                target.offsetY,
+                target.zoom,
+                900,
+                now,
+              );
+            }
+          }
         }
       } else if (ev.phase === 'Dispatched') {
         sound.dispatch();
@@ -534,12 +675,25 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     sound.click();
     const pos = layout.agents.get(next);
     if (pos !== undefined) {
-      // Pan camera to put the agent near the screen center.
+      // Ease camera so the agent lands near the screen centre — gives
+      // the eye a satisfying glide instead of an abrupt teleport.
       const wrapper = wrapperRef.current;
       if (wrapper !== null) {
         const rect = wrapper.getBoundingClientRect();
-        cameraRef.current.offsetX = rect.width / 2 - pos.x * cameraRef.current.zoom;
-        cameraRef.current.offsetY = rect.height / 2 - pos.y * cameraRef.current.zoom;
+        const target = centerOnWorld(
+          cameraRef.current,
+          pos.x,
+          pos.y,
+          { w: rect.width, h: rect.height },
+        );
+        easeCameraTo(
+          cameraRef.current,
+          target.offsetX,
+          target.offsetY,
+          target.zoom,
+          400,
+          Date.now(),
+        );
       }
     }
     setSelection({
@@ -737,6 +891,45 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   // HUD numbers.
   const hud = useMemo(() => deriveHud(snapshot), [snapshot]);
 
+  // Recently-failed agent keys (last 60s) for minimap red highlighting.
+  const failedAgentKeys = useMemo<ReadonlySet<string>>(() => {
+    const out = new Set<string>();
+    const now = Date.now();
+    for (const t of snapshot.tasks.values()) {
+      if (t.phase !== 'Failed' || t.targetAgent === undefined) continue;
+      const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+      if (Number.isNaN(c) || now - c < 60_000) {
+        out.add(`${t.namespace}/${t.targetAgent}`);
+      }
+    }
+    return out;
+  }, [snapshot.tasks]);
+
+  // Minimap-jump handler: ease the camera so (worldX, worldY) lands
+  // at the screen center.
+  const jumpCameraTo = useCallback(
+    (worldX: number, worldY: number): void => {
+      const wrapper = wrapperRef.current;
+      if (wrapper === null) return;
+      const rect = wrapper.getBoundingClientRect();
+      const target = centerOnWorld(
+        cameraRef.current,
+        worldX,
+        worldY,
+        { w: rect.width, h: rect.height },
+      );
+      easeCameraTo(
+        cameraRef.current,
+        target.offsetX,
+        target.offsetY,
+        target.zoom,
+        300,
+        Date.now(),
+      );
+    },
+    [],
+  );
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.topbar}>
@@ -841,9 +1034,26 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
               }}
             />
           ) : null}
+
+          <Minimap
+            layout={layoutRef.current}
+            camera={cameraRef.current}
+            viewport={viewportSize}
+            failedAgents={failedAgentKeys}
+            onJumpTo={jumpCameraTo}
+          />
         </div>
 
-        <SelectionPanel snapshot={snapshot} selection={selection.focus} />
+        <SelectionPanel
+          snapshot={snapshot}
+          selectionState={selection}
+          onFocusKey={(key) => {
+            setSelection({
+              keys: selection.keys,
+              focus: { kind: key === 'gateway' ? 'gateway' : 'agent', key },
+            });
+          }}
+        />
       </div>
 
       <ActivityLog events={snapshot.events} error={snapshot.error} />
@@ -984,10 +1194,29 @@ function compactNumber(n: number): string {
 
 interface SelectionPanelProps {
   readonly snapshot: ReturnType<typeof useCommandSnapshot>;
-  readonly selection: SelectionRef;
+  readonly selectionState: SelectionState;
+  readonly onFocusKey: (key: string) => void;
 }
 
-function SelectionPanel({ snapshot, selection }: SelectionPanelProps): React.JSX.Element {
+function SelectionPanel({
+  snapshot,
+  selectionState,
+  onFocusKey,
+}: SelectionPanelProps): React.JSX.Element {
+  const selection = selectionState.focus;
+  const multi = selectionState.keys.size > 1;
+
+  if (multi) {
+    return (
+      <MultiSelectPanel
+        snapshot={snapshot}
+        selectedKeys={selectionState.keys}
+        focusKey={selection.key}
+        onFocusKey={onFocusKey}
+      />
+    );
+  }
+
   if (selection.kind === null) {
     return (
       <aside className={styles.panel}>
@@ -1037,6 +1266,90 @@ function SelectionPanel({ snapshot, selection }: SelectionPanelProps): React.JSX
     return <TaskPanel snapshot={snapshot} taskKey={selection.key} />;
   }
   return <aside className={styles.panel} />;
+}
+
+/**
+ * Right-panel render when 2+ structures are selected. Shows a portrait
+ * grid: one tile per agent, faction-colored, initial as glyph, with the
+ * focused tile highlighted. Click a tile to refocus the inspector.
+ * Per-tile mini stats: in-flight count + recent failure count from
+ * snapshot.tasks (no extra fetches).
+ */
+function MultiSelectPanel({
+  snapshot,
+  selectedKeys,
+  focusKey,
+  onFocusKey,
+}: {
+  readonly snapshot: ReturnType<typeof useCommandSnapshot>;
+  readonly selectedKeys: ReadonlySet<string>;
+  readonly focusKey: string | null;
+  readonly onFocusKey: (key: string) => void;
+}): React.JSX.Element {
+  const now = Date.now();
+  const sortedKeys = Array.from(selectedKeys).sort();
+  const tiles = sortedKeys.map((key) => {
+    const a = snapshot.agents.get(key);
+    let inFlight = 0;
+    let failedRecent = 0;
+    for (const t of snapshot.tasks.values()) {
+      const k = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : '';
+      if (k !== key) continue;
+      if (t.phase === 'Pending' || t.phase === 'Dispatched') inFlight++;
+      if (t.phase === 'Failed') {
+        const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+        if (Number.isNaN(c) || now - c < 60_000) failedRecent++;
+      }
+    }
+    const display = a?.name ?? key.split('/')[1] ?? key;
+    const ns = a?.namespace ?? key.split('/')[0] ?? '';
+    return { key, display, ns, inFlight, failedRecent };
+  });
+  const totalInFlight = tiles.reduce((n, t) => n + t.inFlight, 0);
+  const totalFailed = tiles.reduce((n, t) => n + t.failedRecent, 0);
+
+  return (
+    <aside className={styles.panel}>
+      <h2 className={styles.panelTitle}>Selected ({selectedKeys.size})</h2>
+      <div className={styles.panelSub}>
+        {totalInFlight} in flight · {totalFailed} failed (1m)
+      </div>
+      <div className={styles.portraitGrid}>
+        {tiles.map((t) => {
+          const focused = t.key === focusKey;
+          const cls = focused ? styles.portraitFocused : styles.portrait;
+          const initial = (t.display[0] ?? '?').toUpperCase();
+          return (
+            <button
+              key={t.key}
+              type="button"
+              className={cls}
+              onClick={() => onFocusKey(t.key)}
+              title={`${t.display} · ${t.ns}`}
+            >
+              <span
+                className={styles.portraitGlyph}
+                style={{ backgroundColor: factionColor(t.ns) }}
+              >
+                {initial}
+              </span>
+              <span className={styles.portraitName}>{t.display}</span>
+              <span className={styles.portraitMeta}>
+                {t.inFlight > 0 ? <span className={styles.portraitBusy}>●{t.inFlight}</span> : null}
+                {t.failedRecent > 0 ? (
+                  <span className={styles.portraitFailed}>✕{t.failedRecent}</span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className={styles.panelHint}>
+        Right-click anywhere on the canvas to dispatch the same prompt to all selected.
+        Click a portrait above to focus a single agent.
+      </div>
+    </aside>
+  );
 }
 
 function AgentPanel({

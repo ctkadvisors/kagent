@@ -437,19 +437,54 @@ function drawAgentBuilding(
   ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.fillText(truncate(shortenModel(modelLabel), 22), cx, bounds.y + bounds.h + 18);
 
+  // Health bar — RTS-game HP. Drains red as recent failures accumulate
+  // (each failure removes 20% HP; 5 failures = critical). Always
+  // rendered so the operator has an at-a-glance vitality reading
+  // even on idle structures (full green = healthy).
+  drawAgentHealthBar(ctx, cx, bounds.y - 12, failed);
+
+  // In-flight count badge: small disc next to the HP bar's right edge.
   if (inFlight > 0) {
-    const above = bounds.y - 8;
+    const above = bounds.y - 12;
     ctx.fillStyle = COLOR_AGENT_BORDER_BUSY;
     ctx.beginPath();
-    ctx.arc(cx, above, 7, 0, Math.PI * 2);
+    ctx.arc(cx + 26, above, 7, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#0b1220';
     ctx.font = '700 10px ui-sans-serif';
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(inFlight), cx, above);
+    ctx.fillText(String(inFlight), cx + 26, above);
   }
 
   return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
+}
+
+/**
+ * RTS-style HP bar centered horizontally on (cx, y). Each recent
+ * failure docks 20% HP; 5+ failures pin the bar to a small red sliver
+ * + flashing border. Idle structure → full green.
+ */
+function drawAgentHealthBar(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  y: number,
+  failed: number,
+): void {
+  const W = 40;
+  const H = 4;
+  const x = cx - W / 2;
+  const hp = Math.max(0.05, 1 - failed * 0.2);
+  // Background slot.
+  ctx.fillStyle = '#0b1220';
+  ctx.fillRect(x, y - H / 2, W, H);
+  ctx.strokeStyle = '#1f2a44';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y - H / 2 + 0.5, W - 1, H - 1);
+  // Fill.
+  const fillColor = hp > 0.6 ? '#34d399' : hp > 0.3 ? '#fbbf24' : '#f87171';
+  ctx.fillStyle = fillColor;
+  ctx.fillRect(x + 1, y - H / 2 + 1, (W - 2) * hp, H - 2);
 }
 
 /**

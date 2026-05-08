@@ -1,0 +1,32 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ */
+
+.minimap {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background: rgba(7, 13, 24, 0.92);
+  border: 1px solid #1f2a44;
+  border-radius: 4px;
+  padding: 4px 4px 6px 4px;
+  z-index: 8;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+}
+
+.label {
+  font-size: 0.6rem;
+  color: #fbbf24;
+  letter-spacing: 0.18em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  margin-bottom: 3px;
+  padding-left: 2px;
+}
+
+.canvas {
+  display: block;
+  cursor: crosshair;
+  border-radius: 2px;
+}

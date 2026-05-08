@@ -669,3 +669,89 @@ button.navLink {
   cursor: pointer;
   font: inherit;
 }
+
+/* ───────────────────── Multi-select portrait grid ─────────────────────── */
+
+.portraitGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 6px;
+  margin: 0.5rem 0 0.75rem 0;
+}
+
+.portrait,
+.portraitFocused {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 5px;
+  background: #0a1628;
+  border: 1px solid #1f2a44;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  color: #cbd5e1;
+  min-width: 0;
+}
+
+.portrait:hover {
+  border-color: #475569;
+}
+
+.portraitFocused {
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.4) inset, 0 0 10px rgba(251, 191, 36, 0.2);
+}
+
+.portraitGlyph {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f8fafc;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.portraitName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 70px;
+  color: #cbd5e1;
+  text-align: center;
+}
+
+.portraitMeta {
+  display: flex;
+  gap: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+}
+
+.portraitBusy {
+  color: #fbbf24;
+}
+
+.portraitFailed {
+  color: #f87171;
+}
+
+.panelHint {
+  font-size: 0.72rem;
+  color: #64748b;
+  line-height: 1.4;
+  background: #050b18;
+  border: 1px dashed #1f2a44;
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+  margin-top: 0.5rem;
+}

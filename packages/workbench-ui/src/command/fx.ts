@@ -50,6 +50,31 @@ export type Fx =
       readonly y: number;
       readonly startedAt: number;
       readonly durationMs: number;
+    }
+  | {
+      /**
+       * Single rising steam puff — emit one of these per gateway-stack
+       * tick (rate ∝ TPM), and they aggregate into a continuous plume.
+       * Lighter and slower than a smoke pillar.
+       */
+      readonly kind: 'steam';
+      readonly x: number;
+      readonly y: number;
+      readonly startedAt: number;
+      readonly durationMs: number;
+    }
+  | {
+      /**
+       * Single coin-spark — Completed task at the gateway. Yellow,
+       * short-lived, slight upward drift. Stack visually with rapid
+       * Completions to convey "the gold is flowing."
+       */
+      readonly kind: 'sparks';
+      readonly x: number;
+      readonly y: number;
+      readonly startedAt: number;
+      readonly durationMs: number;
+      readonly color: string;
     };
 
 export class FxLayer {
@@ -140,6 +165,27 @@ export function drawFx(
         ctx.arc(x, y, 2, 0, Math.PI * 2);
         ctx.fill();
       }
+    } else if (f.kind === 'steam') {
+      // One rising puff — accelerates upward, expands, fades.
+      const lift = -t * 70;
+      const drift = Math.sin(t * 6 + f.startedAt * 0.001) * 8;
+      const r = 4 + t * 14;
+      const alpha = (1 - t) * 0.35;
+      ctx.fillStyle = withAlpha('#9aa6b8', alpha);
+      ctx.beginPath();
+      ctx.arc(f.x + drift, f.y + lift, r, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (f.kind === 'sparks') {
+      // Single short-lived coin-spark with slight gravity arc.
+      const lift = -t * 24 + t * t * 30; // up then settle
+      const alpha = (1 - t) * 0.9;
+      ctx.fillStyle = withAlpha(f.color, alpha);
+      ctx.shadowColor = f.color;
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y + lift, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
     }
     // `flash` is rendered separately by drawFxScreen — it ignores camera.
   }
