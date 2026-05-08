@@ -7,30 +7,35 @@
  * Canvas 2D scene renderer for the Command view.
  *
  * The renderer is a plain function — it takes the latest snapshot +
- * canvas context + frame timestamp and paints the scene. There's no
- * scene graph; we redraw every frame because the scene size is small
+ * canvas context + frame timestamp and paints the scene. No scene
+ * graph; we redraw every frame because the scene size is small
  * (dozens of structures + units) and 2D canvas at 60fps handles this
  * trivially.
  *
  * Visual language is deliberately Total-Annihilation / Warcraft-3-shaped:
  *
  *   - Dark navy background with a faint isometric-feeling grid.
- *   - Gateway = central hexagon with a thick border, pulsing accent ring.
- *   - Agent buildings = rectangular structures with a model badge,
- *     name, and a green/yellow/red status dot for in-flight load.
+ *   - Gateway = central voxel HQ with a thick border, pulsing aura.
+ *   - Agent buildings = voxel structures with hazard rings.
  *   - Faction territory = soft tinted polygon under each namespace's
  *     agents (the WC3 "minor faction" feel).
  *   - Tasks = small colored sprites that travel along belts. Phase
  *     drives sprite color (Pending=blue, Dispatched=yellow, Completed=
- *     green, Failed=red). Task animation is a sine-eased journey
- *     gateway → agent → gateway over the task's lifetime.
+ *     green, Failed=red).
+ *   - Build queue stacks: ghost diamonds above each agent show count
+ *     of in-flight tasks beyond the wobbling primary sprite.
+ *   - FX layer: smoke pillars / shockwaves / cheer sparks for events.
  *   - Hit-test rectangles per agent + the gateway are tracked separately
- *     so click handlers can resolve a click to a structure.
+ *     so click handlers can resolve a click to a structure. Hit map
+ *     is in WORLD coordinates — caller must invert the camera transform
+ *     before comparing.
  */
 
 import type { CommandSnapshot } from './state.js';
 import type { LayoutResult } from './layout.js';
 import type { TaskSummary } from '../types.js';
+import type { Camera } from './camera.js';
+import { drawFx, drawFxScreen, type Fx } from './fx.js';
 import {
   agentShapeForRole,
   drawHazardRing,
@@ -40,24 +45,33 @@ import {
   shapeScreenBounds,
 } from './voxel.js';
 
+/** Single-selection ref — used by the right-hand panel to pick what to detail. */
 export interface SelectionRef {
   readonly kind: 'agent' | 'gateway' | 'task' | null;
   readonly key: string | null;
 }
 
+/**
+ * Multi-selection state — the Set of selected agent keys (+ optional
+ * `gateway`) drives canvas highlighting; the `focus` ref drives the
+ * right-hand inspector panel.
+ */
+export interface SelectionState {
+  readonly keys: ReadonlySet<string>;
+  readonly focus: SelectionRef;
+}
+
 export interface HitMap {
-  /** Per-agent screen-space bounds for click hit-testing. */
+  /** Per-agent screen-space bounds in WORLD coords (caller inverts camera). */
   readonly agentRects: ReadonlyMap<string, { x: number; y: number; w: number; h: number }>;
-  /** Gateway hex bounding box. */
+  /** Gateway hit-circle in WORLD coords. */
   readonly gateway: { x: number; y: number; r: number };
-  /** Task sprites currently visible — for click-through to detail. */
+  /** Task sprites currently visible in WORLD coords. */
   readonly taskSprites: ReadonlyMap<string, { x: number; y: number }>;
 }
 
 const COLOR_BG = '#070d18';
-/** Major grid line — every 100px, the "rail" pitch. */
 const COLOR_GRID = 'rgba(82, 200, 124, 0.07)';
-/** Minor grid line — every 20px, the GRID_SNAP_PX from layout. */
 const COLOR_GRID_FINE = 'rgba(82, 200, 124, 0.035)';
 const COLOR_GATEWAY = '#fbbf24';
 const COLOR_BELT = 'rgba(148, 163, 184, 0.18)';
@@ -72,44 +86,52 @@ const COLOR_TASK_PENDING = '#60a5fa';
 const COLOR_TASK_DISPATCHED = '#fbbf24';
 const COLOR_TASK_COMPLETED = '#34d399';
 const COLOR_TASK_FAILED = '#f87171';
+const COLOR_QUEUE_GHOST = 'rgba(96, 165, 250, 0.55)';
+const COLOR_MARQUEE_FILL = 'rgba(34, 211, 238, 0.07)';
+const COLOR_MARQUEE_BORDER = 'rgba(34, 211, 238, 0.6)';
 
-const GATEWAY_HIT_R = 70; // circular click hit-test radius around the voxel HQ
+const GATEWAY_HIT_R = 70;
 const TASK_R = 5;
-
-/** Build-out animation duration for an agent structure. */
 const BUILD_MS = 1500;
-/** Gateway gets a longer dramatic build-in (HQ structure). */
 const GATEWAY_BUILD_MS = 2200;
 
 interface SceneInputs {
   readonly snapshot: CommandSnapshot;
   readonly layout: LayoutResult;
-  readonly selection: SelectionRef;
+  readonly selection: SelectionState;
   readonly nowMs: number;
-  /**
-   * Per-key first-seen wallclock. Drives the build-out animation —
-   * `progress = (nowMs - firstSeen) / BUILD_MS`. Keys are agent
-   * `${ns}/${name}` plus the literal `gateway` for the HQ.
-   */
   readonly firstSeen: ReadonlyMap<string, number>;
+  readonly camera: Camera;
+  /** Canvas size in CSS pixels (NOT device pixels). */
+  readonly viewport: { w: number; h: number };
+  /** Active ephemeral effects. */
+  readonly fx: readonly Fx[];
+  /** Drag-marquee box (screen space) when active. */
+  readonly marquee: { x0: number; y0: number; x1: number; y1: number } | null;
 }
 
 export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): HitMap {
-  const { width, height } = ctx.canvas;
-  const { snapshot, layout, selection, nowMs, firstSeen } = inputs;
+  const { snapshot, layout, selection, nowMs, firstSeen, camera, viewport, fx, marquee } = inputs;
 
-  // Background + grid.
+  // ── Background fill (screen space) ──
+  ctx.save();
   ctx.fillStyle = COLOR_BG;
-  ctx.fillRect(0, 0, width, height);
-  drawGrid(ctx, width, height);
+  ctx.fillRect(0, 0, viewport.w, viewport.h);
 
-  // Faction tint — a soft polygon hugging each namespace's agents.
+  // ── Apply camera transform — everything below draws in world coords ──
+  ctx.translate(camera.offsetX, camera.offsetY);
+  ctx.scale(camera.zoom, camera.zoom);
+
+  // Compute the visible world rect so the grid covers the full viewport
+  // even when the user has panned/zoomed.
+  const worldL = -camera.offsetX / camera.zoom;
+  const worldT = -camera.offsetY / camera.zoom;
+  const worldR = (viewport.w - camera.offsetX) / camera.zoom;
+  const worldB = (viewport.h - camera.offsetY) / camera.zoom;
+
+  drawGrid(ctx, worldL, worldT, worldR, worldB, camera.zoom);
   drawFactionTints(ctx, layout);
 
-  // Belts (gateway → each agent), drawn first so structures sit on top.
-  // Belts adopt the construction palette while either endpoint is still
-  // building, so the line "extends" visually before the destination
-  // structure rises.
   const gatewayProgress = buildProgress(firstSeen.get('gateway'), nowMs, GATEWAY_BUILD_MS);
   for (const pos of layout.agents.values()) {
     const inFlight = countInFlightFor(snapshot, pos.key);
@@ -125,6 +147,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     const inFlight = countInFlightFor(snapshot, pos.key);
     const failed = countFailedRecentFor(snapshot, pos.key, nowMs);
     const progress = buildProgress(firstSeen.get(pos.key), nowMs, BUILD_MS);
+    const isSelected = selection.keys.has(pos.key);
     const rect = drawAgentBuilding(
       ctx,
       pos,
@@ -132,7 +155,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
       a?.model ?? a?.modelClass ?? '—',
       inFlight,
       failed,
-      selection.kind === 'agent' && selection.key === pos.key,
+      isSelected,
       progress,
       nowMs,
       pos.faction,
@@ -141,65 +164,106 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     agentRects.set(pos.key, rect);
   }
 
-  // Gateway HQ (last among structures so its glow sits on top).
+  // Gateway HQ.
   drawGateway(
     ctx,
     layout.gateway,
     snapshot.gatewayCapacity.length,
     nowMs,
-    selection.kind === 'gateway',
+    selection.keys.has('gateway'),
     gatewayProgress,
   );
 
-  // Task units travel on belts.
+  // Task sprites.
   const taskSprites = drawTaskUnits(ctx, snapshot, layout, nowMs);
+
+  // Build-queue stacks: floats of ghost diamonds above busy structures.
+  for (const pos of layout.agents.values()) {
+    const queueDepth = countInFlightFor(snapshot, pos.key);
+    if (queueDepth <= 1) continue;
+    const a = snapshot.agents.get(pos.key);
+    drawBuildQueueStack(
+      ctx,
+      pos,
+      agentShapeForRole(factionColor(pos.faction), a?.tools),
+      queueDepth - 1,
+      nowMs,
+    );
+  }
+
+  // Ephemeral world-space FX.
+  drawFx(ctx, fx, nowMs, viewport, camera.zoom);
+
+  ctx.restore();
+
+  // ── Screen-space overlays ──
+  // Edge flashes (ignore camera).
+  drawFxScreen(ctx, fx, nowMs, viewport);
+
+  // Drag-marquee selection box (always screen-space).
+  if (marquee !== null) {
+    const x = Math.min(marquee.x0, marquee.x1);
+    const y = Math.min(marquee.y0, marquee.y1);
+    const w = Math.abs(marquee.x1 - marquee.x0);
+    const h = Math.abs(marquee.y1 - marquee.y0);
+    ctx.fillStyle = COLOR_MARQUEE_FILL;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = COLOR_MARQUEE_BORDER;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+    ctx.setLineDash([]);
+  }
 
   return {
     agentRects,
-    // Voxel HQ is anchored at (gateway.x, gateway.y + 22) per drawGateway;
-    // hit-test as a circle a bit larger than the projected footprint.
     gateway: { x: layout.gateway.x, y: layout.gateway.y + 22, r: GATEWAY_HIT_R },
     taskSprites,
   };
 }
 
-/**
- * PCB-style two-tier grid: faint 20px minor lines (matches the
- * GRID_SNAP_PX in layout.ts) + slightly stronger 100px major rails.
- * Reads as "circuit substrate" rather than "graph paper."
- */
-function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  // Minor grid (20px).
+function drawGrid(
+  ctx: CanvasRenderingContext2D,
+  l: number,
+  t: number,
+  r: number,
+  b: number,
+  zoom: number,
+): void {
+  // Snap range outward to nearest 100 so the grid lines look "anchored."
+  const xMin = Math.floor(l / 20) * 20;
+  const xMax = Math.ceil(r / 20) * 20;
+  const yMin = Math.floor(t / 20) * 20;
+  const yMax = Math.ceil(b / 20) * 20;
+
   ctx.strokeStyle = COLOR_GRID_FINE;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1 / zoom;
   ctx.beginPath();
-  for (let x = 0; x <= w; x += 20) {
-    ctx.moveTo(x + 0.5, 0);
-    ctx.lineTo(x + 0.5, h);
+  for (let x = xMin; x <= xMax; x += 20) {
+    ctx.moveTo(x + 0.5, yMin);
+    ctx.lineTo(x + 0.5, yMax);
   }
-  for (let y = 0; y <= h; y += 20) {
-    ctx.moveTo(0, y + 0.5);
-    ctx.lineTo(w, y + 0.5);
+  for (let y = yMin; y <= yMax; y += 20) {
+    ctx.moveTo(xMin, y + 0.5);
+    ctx.lineTo(xMax, y + 0.5);
   }
   ctx.stroke();
 
-  // Major grid (100px) — a "rail" every 5 minor cells.
   ctx.strokeStyle = COLOR_GRID;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1 / zoom;
   ctx.beginPath();
-  for (let x = 0; x <= w; x += 100) {
-    ctx.moveTo(x + 0.5, 0);
-    ctx.lineTo(x + 0.5, h);
+  for (let x = xMin; x <= xMax; x += 100) {
+    ctx.moveTo(x + 0.5, yMin);
+    ctx.lineTo(x + 0.5, yMax);
   }
-  for (let y = 0; y <= h; y += 100) {
-    ctx.moveTo(0, y + 0.5);
-    ctx.lineTo(w, y + 0.5);
+  for (let y = yMin; y <= yMax; y += 100) {
+    ctx.moveTo(xMin, y + 0.5);
+    ctx.lineTo(xMax, y + 0.5);
   }
   ctx.stroke();
 }
 
 function drawFactionTints(ctx: CanvasRenderingContext2D, layout: LayoutResult): void {
-  // Group agent positions by faction.
   const byFaction = new Map<string, { x: number; y: number }[]>();
   for (const pos of layout.agents.values()) {
     const list = byFaction.get(pos.faction);
@@ -208,7 +272,6 @@ function drawFactionTints(ctx: CanvasRenderingContext2D, layout: LayoutResult): 
   }
   for (const points of byFaction.values()) {
     if (points.length < 2) continue;
-    // Convex-ish hull approximation: sort by angle around centroid.
     let cx = 0;
     let cy = 0;
     for (const p of points) {
@@ -223,8 +286,6 @@ function drawFactionTints(ctx: CanvasRenderingContext2D, layout: LayoutResult): 
     ctx.fillStyle = COLOR_FACTION_TINT;
     ctx.beginPath();
     sorted.forEach((p, i) => {
-      // Inflate each point outward from centroid so the polygon hugs
-      // the structures from below.
       const dx = p.x - cx;
       const dy = p.y - cy;
       const len = Math.hypot(dx, dy) || 1;
@@ -239,13 +300,6 @@ function drawFactionTints(ctx: CanvasRenderingContext2D, layout: LayoutResult): 
   }
 }
 
-/**
- * Manhattan-routed PCB trace from gateway to agent. Two segments
- * meeting at a right angle — pick the corner direction based on
- * which axis has greater separation, so the bend lands at the
- * "wider" side of the L. Glowing copper-tone via pads sit at both
- * endpoints; in-flight tasks heat the trace amber.
- */
 function drawBelt(
   ctx: CanvasRenderingContext2D,
   from: { x: number; y: number },
@@ -253,18 +307,12 @@ function drawBelt(
   inFlight: number,
   buildProg: number,
 ): void {
-  // Compute the L-shape corner: turn at whichever axis covers more
-  // distance, so the bend is closer to the gateway-side and the long
-  // run extends out toward the agent. This reads cleanly as "bus →
-  // branch."
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const horizontalFirst = Math.abs(dx) >= Math.abs(dy);
   const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
 
   if (buildProg < 1) {
-    // Animate the L-shape extending in two phases: corner first
-    // (proportional to first segment), then to the agent.
     const eased = easeOutCubic(buildProg);
     const seg1Len = horizontalFirst ? Math.abs(dx) : Math.abs(dy);
     const seg2Len = horizontalFirst ? Math.abs(dy) : Math.abs(dx);
@@ -298,7 +346,6 @@ function drawBelt(
     return;
   }
 
-  // Steady-state PCB trace — copper-tone idle, amber when in-flight.
   const traceColor = inFlight > 0 ? COLOR_BELT_HOT : COLOR_BELT;
   ctx.strokeStyle = traceColor;
   ctx.lineWidth = inFlight > 0 ? 1.75 : 1.25;
@@ -308,13 +355,11 @@ function drawBelt(
   ctx.lineTo(to.x, to.y);
   ctx.stroke();
 
-  // Via pads: small glowing circles at both endpoints + the bend.
   drawVia(ctx, from.x, from.y, traceColor);
   drawVia(ctx, corner.x, corner.y, traceColor);
   drawVia(ctx, to.x, to.y, traceColor);
 }
 
-/** PCB via — small pad with a brighter center dot. */
 function drawVia(ctx: CanvasRenderingContext2D, x: number, y: number, ringColor: string): void {
   ctx.fillStyle = ringColor;
   ctx.beginPath();
@@ -346,39 +391,23 @@ function drawAgentBuilding(
   namespace: string,
   tools: readonly string[] | undefined,
 ): AgentRect {
-  // Spire color signals phase: red on recent failures, amber when busy,
-  // cyan when idle. Drives the top-most voxel of the structure.
   const spireColor =
     failed > 0 ? COLOR_AGENT_BORDER_FAILED : inFlight > 0 ? COLOR_AGENT_BORDER_BUSY : '#22d3ee';
-
-  // Per-namespace faction color for the body voxels — muted industrial
-  // palette per voxel.ts. Distinguishing between agents in the same
-  // faction comes from the SHAPE variant (orchestrator twin-tower /
-  // fabricator smokestack / default ziggurat) rather than color alone.
   const body = factionColor(namespace);
   const shape = agentShapeForRole(body, tools);
-
-  // Center the voxel structure on (pos.x, pos.y). Voxel rises from
-  // ground upward; we want pos.y to be the BASE of the structure
-  // (z=0 footprint plane) so labels can sit underneath.
   const cx = pos.x;
-  const cy = pos.y + 6; // small downward bias so the structure sits centered visually
+  const cy = pos.y + 6;
 
-  // Early construction phase (p < 0.06): cyan placement marker only.
   if (buildProg < 0.06) {
     drawPlacementMarker(ctx, cx, cy, shape.footprint.w, shape.footprint.d, nowMs);
     const bounds = shapeScreenBounds(shape, cx, cy);
     return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
   }
 
-  // Hazard-stripe ring on the ground. Drawn BEFORE the voxel structure
-  // so the building sits on top of it. RA2 War Factory / Construction
-  // Yard ground markings.
   if (buildProg >= 0.3) {
     drawHazardRing(ctx, cx, cy, shape.footprint.w, shape.footprint.d);
   }
 
-  // Voxel rise — the shape function filters voxels by build height.
   drawVoxelShape(ctx, shape, {
     cx,
     cy,
@@ -389,7 +418,6 @@ function drawAgentBuilding(
     nowMs,
   });
 
-  // Construction-phase progress label below the structure.
   const bounds = shapeScreenBounds(shape, cx, cy);
   if (buildProg < 1) {
     ctx.fillStyle = '#22d3ee';
@@ -400,7 +428,6 @@ function drawAgentBuilding(
     return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
   }
 
-  // Steady-state name plate beneath the structure.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillStyle = COLOR_AGENT_TEXT;
@@ -410,7 +437,6 @@ function drawAgentBuilding(
   ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.fillText(truncate(shortenModel(modelLabel), 22), cx, bounds.y + bounds.h + 18);
 
-  // In-flight count badge floats above the spire.
   if (inFlight > 0) {
     const above = bounds.y - 8;
     ctx.fillStyle = COLOR_AGENT_BORDER_BUSY;
@@ -426,6 +452,47 @@ function drawAgentBuilding(
   return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
 }
 
+/**
+ * Render N stacked ghost diamonds above the agent's spire — visualizes
+ * queue depth past the primary in-flight task. Capped at 5 visible
+ * diamonds; overflow shows as "+N" text.
+ */
+function drawBuildQueueStack(
+  ctx: CanvasRenderingContext2D,
+  pos: { x: number; y: number },
+  shape: ReturnType<typeof agentShapeForRole>,
+  depth: number,
+  nowMs: number,
+): void {
+  const bounds = shapeScreenBounds(shape, pos.x, pos.y + 6);
+  const visible = Math.min(5, depth);
+  const overflow = depth - visible;
+  const baseY = bounds.y - 22;
+  for (let i = 0; i < visible; i++) {
+    const y = baseY - i * 9;
+    const pulse = (Math.sin(nowMs / 220 + i * 0.4) + 1) / 2;
+    ctx.fillStyle = `rgba(96, 165, 250, ${String((0.4 + pulse * 0.4).toFixed(2))})`;
+    ctx.beginPath();
+    ctx.moveTo(pos.x, y - 4);
+    ctx.lineTo(pos.x + 5, y);
+    ctx.lineTo(pos.x, y + 4);
+    ctx.lineTo(pos.x - 5, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = COLOR_QUEUE_GHOST;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  if (overflow > 0) {
+    const y = baseY - visible * 9 - 4;
+    ctx.fillStyle = COLOR_QUEUE_GHOST;
+    ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`+${String(overflow)}`, pos.x, y);
+  }
+}
+
 function drawPlacementMarker(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -434,12 +501,10 @@ function drawPlacementMarker(
   d: number,
   nowMs: number,
 ): void {
-  // Pulsing iso diamond on the ground plane.
   const pulse = (Math.sin(nowMs / 140) + 1) / 2;
   ctx.strokeStyle = `rgba(34, 211, 238, ${String(0.5 + pulse * 0.4)})`;
   ctx.lineWidth = 1.5;
   ctx.setLineDash([3, 3]);
-  // Diamond corners at z=0 in voxel coords, projected manually.
   const COS30 = Math.sqrt(3) / 2;
   const SIN30 = 0.5;
   const VS = 10;
@@ -457,7 +522,6 @@ function drawPlacementMarker(
   ctx.closePath();
   ctx.stroke();
   ctx.setLineDash([]);
-  // Center stub.
   ctx.fillStyle = `rgba(34, 211, 238, ${String(0.4 + pulse * 0.5)})`;
   ctx.beginPath();
   ctx.arc(cx, cy, 2 + pulse * 2, 0, Math.PI * 2);
@@ -474,12 +538,8 @@ function drawGateway(
 ): void {
   const shape = gatewayShape();
   const cx = center.x;
-  // Voxel HQ is taller than agent buildings — anchor the BASE plane
-  // a touch higher than `center.y` so the structure visually centers
-  // on the canvas center rather than rising entirely below it.
   const cy = center.y + 22;
 
-  // Pulsing aura ring beneath the structure (steady-state only).
   if (buildProg >= 1) {
     const pulse = (Math.sin(nowMs / 600) + 1) / 2;
     ctx.strokeStyle = `rgba(251, 191, 36, ${String(0.15 + pulse * 0.3)})`;
@@ -489,7 +549,6 @@ function drawGateway(
     ctx.stroke();
   }
 
-  // Voxel HQ.
   drawVoxelShape(ctx, shape, {
     cx,
     cy,
@@ -500,7 +559,6 @@ function drawGateway(
     nowMs,
   });
 
-  // Label below the structure.
   const bounds = shapeScreenBounds(shape, cx, cy);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -522,11 +580,6 @@ function drawGateway(
   }
 }
 
-/**
- * Compute build progress in [0, 1]. Clamps if `firstSeen` is missing
- * (defensive — return 1 so a structure that somehow lacks a first-seen
- * stamp still renders cleanly rather than getting stuck mid-build).
- */
 function buildProgress(firstSeen: number | undefined, nowMs: number, durationMs: number): number {
   if (firstSeen === undefined) return 1;
   const elapsed = nowMs - firstSeen;
@@ -563,12 +616,6 @@ function drawTaskUnits(
   return sprites;
 }
 
-/**
- * Position a task sprite along the gateway↔agent belt based on phase
- * + age. Pending/Dispatched: traveling outbound from gateway → agent.
- * Completed: orbiting the agent (returning home, then idle). Failed:
- * stuck near the agent flashing.
- */
 function positionForTask(
   t: TaskSummary,
   gateway: { x: number; y: number },
@@ -580,8 +627,6 @@ function positionForTask(
   const completed = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
 
   if (phase === 'Pending' || phase === 'Dispatched') {
-    // Travel from gateway → agent over a 4s outbound window. After
-    // arrival, hold near the agent with a small wobble (in-flight).
     const ageMs = Number.isNaN(created) ? 1500 : Math.max(0, nowMs - created);
     const TRAVEL_MS = 4_000;
     const travel = Math.min(1, ageMs / TRAVEL_MS);
@@ -592,17 +637,13 @@ function positionForTask(
         y: gateway.y + (agent.y - gateway.y) * eased,
       };
     }
-    // Wobble at the agent.
     const wobble = Math.sin(nowMs / 200) * 6;
     return { x: agent.x + wobble, y: agent.y - 18 };
   }
   if (phase === 'Completed') {
-    // Travel back from agent → gateway over 3s after completion. After
-    // that, hide (the SSE stream will eventually drop the task from
-    // the cache or the user will refetch).
     const since = Number.isNaN(completed) ? 0 : Math.max(0, nowMs - completed);
     const RETURN_MS = 3_000;
-    if (since > RETURN_MS + 2_000) return null; // settled, don't render
+    if (since > RETURN_MS + 2_000) return null;
     const t01 = Math.min(1, since / RETURN_MS);
     const eased = easeInOutCubic(t01);
     return {
@@ -611,8 +652,6 @@ function positionForTask(
     };
   }
   if (phase === 'Failed') {
-    // Pulse near the agent with a red glow handled by the caller's
-    // color. Position is a small jitter to sell "broken."
     const j = Math.sin(nowMs / 120) * 4;
     return { x: agent.x + j, y: agent.y - 18 - j };
   }
@@ -662,13 +701,6 @@ function truncate(s: string, max: number): string {
   return `${s.slice(0, max - 1)}…`;
 }
 
-/**
- * Strip the LiteLLM provider prefix + cluster path so badges stay
- * legible inside the 140px-wide agent body. Examples:
- *   workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct → llama-4-scout
- *   workers-ai/@cf/meta/llama-3.3-70b-instruct        → llama-3.3-70b
- *   nemotron-3-nano:4b                                → nemotron-3-nano:4b
- */
 function shortenModel(model: string): string {
   if (model === '—') return model;
   const tail = model.split('/').pop() ?? model;
