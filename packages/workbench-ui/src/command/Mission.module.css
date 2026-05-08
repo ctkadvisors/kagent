@@ -1,0 +1,172 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * Mission tour overlay — visual style mirrors .hotkeyCard from
+ * CommandView.module.css (dark navy panel, amber accent, monospace),
+ * but anchored to the bottom-left of the canvas so it lives alongside
+ * the hotkey strip without obscuring the play surface.
+ */
+
+/* ───────────────────── Mission card (bottom-left of canvas) ───────────────────── */
+
+.card {
+  position: absolute;
+  bottom: 56px; /* clear the bottom-centre .hotkeyStrip */
+  left: 16px;
+  min-width: 280px;
+  max-width: 360px;
+  background: #0a1628;
+  border: 1px solid #1f2a44;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(251, 191, 36, 0.08);
+  z-index: 8; /* above .hotkeyStrip (5), below .alertTicker (10) */
+  pointer-events: auto;
+  animation: missionEnter 240ms ease-out;
+}
+
+@keyframes missionEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  gap: 0.6rem;
+}
+
+.title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #fbbf24;
+}
+
+.skipButton {
+  background: transparent;
+  color: #64748b;
+  border: 1px solid #1f2a44;
+  border-radius: 3px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.65rem;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.skipButton:hover {
+  color: #cbd5e1;
+  border-color: #334155;
+}
+
+.goal {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: #e2e8f0;
+  margin-bottom: 0.55rem;
+}
+
+.hintRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+}
+
+.kbd {
+  background: #14213d;
+  color: #fbbf24;
+  border: 1px solid #1f2a44;
+  border-radius: 3px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+}
+
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 0.2rem;
+}
+
+.dotPending,
+.dotActive,
+.dotDone {
+  width: 10px;
+  height: 4px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.dotPending {
+  background: #1f2a44;
+}
+
+.dotActive {
+  background: #fbbf24;
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.55);
+  animation: missionPulse 1.4s ease-in-out infinite;
+}
+
+.dotDone {
+  background: #4ade80;
+}
+
+@keyframes missionPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ───────────────────── Completion banner (flash + final) ───────────────────── */
+
+.completeBanner {
+  font-size: 0.95rem;
+  color: #4ade80;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.2rem;
+  animation: completeFlash 700ms ease-out;
+}
+
+.checkmark {
+  color: #4ade80;
+  font-weight: bold;
+  text-shadow: 0 0 12px rgba(74, 222, 128, 0.7);
+}
+
+@keyframes completeFlash {
+  0% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  35% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}

@@ -1,0 +1,141 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * Replay overlay styles — DOM ghost sprites + per-replay banner +
+ * the small "↻ replay" button used inside the AgentPanel. The visual
+ * idiom matches the rest of the Command Center: dark slate base,
+ * cyan/amber accents, dashed outlines to read as "phantom" rather
+ * than live traffic.
+ */
+
+/* ───────────────────── Ghost task sprite ───────────────────── */
+
+.sprite {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 7;
+  /* Dashed outline is the primary "ghost" cue. Live sprites are
+   * solid filled circles painted on canvas; replay sprites are
+   * hollow with a dashed border. */
+  background: transparent;
+  border: 2px dashed currentColor;
+  box-shadow: 0 0 8px currentColor, inset 0 0 4px currentColor;
+  transition: background-color 80ms linear, color 80ms linear;
+  /* A small inner dot via an inset box-shadow gives it some weight
+   * while still reading as a ghost — solid sprites are denser. */
+}
+
+.sprite::after {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 4px;
+  margin: 3px auto 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.spritePending {
+  color: #60a5fa;
+}
+.spriteDispatched {
+  color: #fbbf24;
+}
+.spriteCompleted {
+  color: #34d399;
+}
+.spriteFailed {
+  color: #f87171;
+}
+
+/* ───────────────────── Per-replay banner ───────────────────── */
+
+.banner {
+  position: absolute;
+  transform: translate(-50%, 0);
+  background: rgba(7, 13, 24, 0.92);
+  border: 1px dashed rgba(34, 211, 238, 0.55);
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 8;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.bannerIcon {
+  color: #67e8f9;
+  font-weight: 700;
+}
+
+.bannerLabel {
+  color: #67e8f9;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.bannerSep {
+  color: #475569;
+}
+
+.bannerAgent {
+  color: #e2e8f0;
+}
+
+.bannerTime {
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────── Replay button (inside AgentPanel) ─────────────── */
+
+.replayBtn,
+.replayBtnDisabled {
+  background: rgba(34, 211, 238, 0.12);
+  color: #67e8f9;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.replayBtn:hover {
+  background: rgba(34, 211, 238, 0.25);
+  border-color: #22d3ee;
+}
+
+.replayBtn:active {
+  transform: translateY(1px);
+}
+
+.replayBtnDisabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.replayBtnIcon {
+  font-size: 0.85rem;
+  line-height: 1;
+}

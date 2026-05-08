@@ -172,6 +172,18 @@
   letter-spacing: 0.02em;
 }
 
+.panelTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.panelTitleRow .panelTitle {
+  margin: 0;
+  flex: 1;
+}
+
 .panelSub {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.75rem;

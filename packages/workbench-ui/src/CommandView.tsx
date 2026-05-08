@@ -51,9 +51,18 @@ import {
 } from './command/camera.js';
 import { FxLayer } from './command/fx.js';
 import { Minimap } from './command/Minimap.js';
+import { MissionOverlay } from './command/Mission.js';
+import {
+  findMostRecentTerminalTask,
+  ReplayButton,
+  ReplayOverlay,
+  useReplay,
+} from './command/Replay.js';
+import type { ReplayController } from './command/Replay.js';
 import { drawScene, type SelectionRef, type SelectionState } from './command/scene.js';
 import type { HitMap } from './command/scene.js';
 import { sound } from './command/sound.js';
+import { TaskActionMenu } from './command/TaskActionMenu.js';
 import { DRAG_ACTIVATE_PX, makeInputState } from './command/input.js';
 import type { InputState } from './command/input.js';
 import { useCommandSnapshot } from './command/state.js';
@@ -80,6 +89,11 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     focus: { kind: null, key: null },
   });
   const [popover, setPopover] = useState<DispatchPopover | null>(null);
+  const [taskActionMenu, setTaskActionMenu] = useState<{
+    readonly taskKey: string;
+    readonly screenX: number;
+    readonly screenY: number;
+  } | null>(null);
   const [alertText, setAlertText] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
   const [thrumMuted, setThrumMuted] = useState<boolean>(false);
@@ -87,6 +101,15 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const [audioReady, setAudioReady] = useState<boolean>(false);
   const [filterFailed, setFilterFailed] = useState<boolean>(false);
   const [hoveredAgentKey, setHoveredAgentKey] = useState<string | null>(null);
+  // Mission overlay derives completion from these. They mirror state we
+  // already track but as scalar React state so the overlay re-renders
+  // when conditions change. See packages/workbench-ui/src/command/Mission.tsx.
+  const [anyPanKeyHeld, setAnyPanKeyHeld] = useState<boolean>(false);
+  const [lastDragSelectCount, setLastDragSelectCount] = useState<number>(0);
+  const [bookmarkSavedSlot5, setBookmarkSavedSlot5] = useState<boolean>(false);
+  const [bookmarkRecalledSlot5, setBookmarkRecalledSlot5] = useState<boolean>(false);
+  // Replay manager — per-agent ghost-task playback. See command/Replay.tsx.
+  const replay = useReplay();
   // Wrapper size in CSS px — driven by fitCanvas() inside the RAF loop;
   // updated only on resize so we don't churn React every frame. The
   // Minimap consumes this to draw the camera-viewport rect at correct
@@ -370,6 +393,10 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         inFlightCount / 16 + recentFailCount * 0.18,
       );
 
+      // Advance replay manager — fires per-replay FX at lifecycle slot
+      // boundaries (dispatch chime at 400ms, outcome FX at 600ms, etc.).
+      replay.tick(now, fxRef.current);
+
       // Derive bookmark-with-world-centre map. Each saved bookmark
       // recorded the camera transform; reverse-project the viewport
       // centre at that transform back into world space so the chip
@@ -410,7 +437,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       window.removeEventListener('resize', onResize);
     };
-  }, [agentNodes, snapshot, selection, filterFailed]);
+  }, [agentNodes, snapshot, selection, filterFailed, replay]);
 
   // ───────────────────────── Sound + FX from events ─────────────────────────
   useEffect(() => {
@@ -609,14 +636,31 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       if (!audioReady) setAudioReady(true);
       const k = e.key.toLowerCase();
       const keys = inputRef.current.keys;
-      if (k === 'w') keys.w = true;
-      else if (k === 'a') keys.a = true;
-      else if (k === 's') keys.s = true;
-      else if (k === 'd') keys.d = true;
-      else if (e.key === 'ArrowUp') keys.up = true;
-      else if (e.key === 'ArrowLeft') keys.left = true;
-      else if (e.key === 'ArrowDown') keys.down = true;
-      else if (e.key === 'ArrowRight') keys.right = true;
+      if (k === 'w') {
+        keys.w = true;
+        setAnyPanKeyHeld(true);
+      } else if (k === 'a') {
+        keys.a = true;
+        setAnyPanKeyHeld(true);
+      } else if (k === 's') {
+        keys.s = true;
+        setAnyPanKeyHeld(true);
+      } else if (k === 'd') {
+        keys.d = true;
+        setAnyPanKeyHeld(true);
+      } else if (e.key === 'ArrowUp') {
+        keys.up = true;
+        setAnyPanKeyHeld(true);
+      } else if (e.key === 'ArrowLeft') {
+        keys.left = true;
+        setAnyPanKeyHeld(true);
+      } else if (e.key === 'ArrowDown') {
+        keys.down = true;
+        setAnyPanKeyHeld(true);
+      } else if (e.key === 'ArrowRight') {
+        keys.right = true;
+        setAnyPanKeyHeld(true);
+      }
       else if (e.key === ' ') {
         sound.unlock();
         sound.click();
@@ -673,12 +717,14 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           sound.click();
           setAlertText(`bookmark ${e.key} saved`);
           window.setTimeout(() => setAlertText(null), 1_400);
+          if (slot === 5) setBookmarkSavedSlot5(true);
         } else {
           // Recall bookmark.
           const b = inputRef.current.bookmarks.get(slot);
           if (b !== undefined) {
             applyBookmark(cameraRef.current, b);
             sound.click();
+            if (slot === 5) setBookmarkRecalledSlot5(true);
           }
         }
       }
@@ -696,6 +742,11 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       else if (e.key === 'ArrowLeft') keys.left = false;
       else if (e.key === 'ArrowDown') keys.down = false;
       else if (e.key === 'ArrowRight') keys.right = false;
+      // Recompute the held-pan-key flag from the live ref so a stuck
+      // flag from blur or focus loss can't outlive the actual key state.
+      const anyHeld =
+        keys.w || keys.a || keys.s || keys.d || keys.up || keys.left || keys.down || keys.right;
+      setAnyPanKeyHeld(anyHeld);
     };
 
     const onBlur = (): void => {
@@ -703,6 +754,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       const keys = inputRef.current.keys;
       keys.w = keys.a = keys.s = keys.d = false;
       keys.up = keys.left = keys.down = keys.right = false;
+      setAnyPanKeyHeld(false);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -900,6 +952,9 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         keys: merged,
         focus: pickFocus(merged),
       });
+      // Mission 3 — record the marquee size so the tour can detect
+      // that the operator has multi-selected via drag.
+      setLastDragSelectCount(newKeys.size);
       bump();
       return;
     }
@@ -965,6 +1020,17 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     const cam = cameraRef.current;
     const wpt = screenToWorld(cam, sx, sy);
     const hit = hitTestWorld(wpt.x, wpt.y);
+
+    // Right-click on a task sprite → open the per-task action menu
+    // instead of the dispatch popover. Tasks aren't valid dispatch
+    // targets (you dispatch to agents, not to other tasks), so this
+    // branch is exclusive of the agent/gateway/empty cases below.
+    if (hit !== null && hit.kind === 'task') {
+      sound.click();
+      setPopover(null);
+      setTaskActionMenu({ taskKey: hit.key, screenX: sx, screenY: sy });
+      return;
+    }
 
     // Determine target agents: if the right-click landed on an agent,
     // include that one. Otherwise dispatch to current selection of agents.
@@ -1280,6 +1346,20 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             </div>
           ) : null}
 
+          <MissionOverlay
+            signals={{
+              selectionCount: Array.from(selection.keys).filter((k) => k !== 'gateway').length,
+              anyPanKeyHeld,
+              lastDragSelectCount,
+              dispatchOpen: popover !== null,
+              bookmarkSavedSlot5,
+              bookmarkRecalledSlot5,
+            }}
+            onComplete={() => {
+              /* tour finished — component persists localStorage itself */
+            }}
+          />
+
           <div className={styles.hotkeyStrip}>
             <kbd>WASD</kbd>pan
             <kbd>wheel</kbd>zoom
@@ -1335,6 +1415,21 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             />
           ) : null}
 
+          {taskActionMenu !== null ? (
+            <TaskActionMenu
+              taskKey={taskActionMenu.taskKey}
+              screenX={taskActionMenu.screenX}
+              screenY={taskActionMenu.screenY}
+              onClose={() => setTaskActionMenu(null)}
+              onAlert={(msg) => {
+                setAlertText(msg);
+                window.setTimeout(() => setAlertText(null), 4_000);
+              }}
+            />
+          ) : null}
+
+          <ReplayOverlay replays={replay.replays} camera={cameraRef.current} />
+
           <Minimap
             layout={layoutRef.current}
             camera={cameraRef.current}
@@ -1347,6 +1442,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         <SelectionPanel
           snapshot={snapshot}
           selectionState={selection}
+          layout={layoutRef.current}
+          replay={replay}
           onFocusKey={(key) => {
             setSelection({
               keys: selection.keys,
@@ -1535,12 +1632,16 @@ interface SelectionPanelProps {
   readonly snapshot: ReturnType<typeof useCommandSnapshot>;
   readonly selectionState: SelectionState;
   readonly onFocusKey: (key: string) => void;
+  readonly layout: LayoutResult | null;
+  readonly replay: ReplayController;
 }
 
 function SelectionPanel({
   snapshot,
   selectionState,
   onFocusKey,
+  layout,
+  replay,
 }: SelectionPanelProps): React.JSX.Element {
   const selection = selectionState.focus;
   const multi = selectionState.keys.size > 1;
@@ -1599,7 +1700,14 @@ function SelectionPanel({
     );
   }
   if (selection.kind === 'agent' && selection.key !== null) {
-    return <AgentPanel snapshot={snapshot} agentKey={selection.key} />;
+    return (
+      <AgentPanel
+        snapshot={snapshot}
+        agentKey={selection.key}
+        layout={layout}
+        replay={replay}
+      />
+    );
   }
   if (selection.kind === 'task' && selection.key !== null) {
     return <TaskPanel snapshot={snapshot} taskKey={selection.key} />;
@@ -1766,9 +1874,13 @@ function HoverPreview({
 function AgentPanel({
   snapshot,
   agentKey,
+  layout,
+  replay,
 }: {
   readonly snapshot: ReturnType<typeof useCommandSnapshot>;
   readonly agentKey: string;
+  readonly layout: LayoutResult | null;
+  readonly replay: ReplayController;
 }): React.JSX.Element {
   const a: AgentSummaryRow | undefined = snapshot.agents.get(agentKey);
   const inFlight: TaskSummary[] = [];
@@ -1781,9 +1893,37 @@ function AgentPanel({
   }
   recent.sort((x, y) => Date.parse(y.completedAt ?? '') - Date.parse(x.completedAt ?? ''));
 
+  const replayableTask = findMostRecentTerminalTask(snapshot.tasks, agentKey);
+  const agentPos = layout?.agents.get(agentKey);
+  const canReplay = replayableTask !== undefined && agentPos !== undefined && layout !== null;
+  const onReplay = (): void => {
+    if (!canReplay || layout === null || agentPos === undefined || replayableTask === undefined) {
+      return;
+    }
+    sound.unlock();
+    sound.click();
+    replay.start({
+      detail: replayableTask,
+      gateway: layout.gateway,
+      agent: { x: agentPos.x, y: agentPos.y },
+      agentLabel: a?.name ?? agentKey.split('/')[1] ?? agentKey,
+    });
+  };
+
   return (
     <aside className={styles.panel}>
-      <h2 className={styles.panelTitle}>{a?.name ?? agentKey}</h2>
+      <div className={styles.panelTitleRow}>
+        <h2 className={styles.panelTitle}>{a?.name ?? agentKey}</h2>
+        <ReplayButton
+          disabled={!canReplay}
+          onClick={onReplay}
+          title={
+            canReplay && replayableTask !== undefined
+              ? `Re-play "${replayableTask.name}" (${String(replayableTask.phase)}) at 4× speed.`
+              : 'No completed/failed task to replay for this agent yet.'
+          }
+        />
+      </div>
       <div className={styles.panelSub}>{a?.namespace ?? agentKey.split('/')[0]}</div>
       <div className={styles.panelKv}>
         <span>Model</span>
