@@ -889,3 +889,90 @@ button.navLink {
     box-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
   }
 }
+
+/* ───────────────────── Replay button (topbar) ─────────────────────── */
+
+.replayButton,
+.replayButtonDisabled {
+  background: rgba(34, 211, 238, 0.12);
+  color: #67e8f9;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  border-radius: 4px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.replayButton:hover {
+  background: rgba(34, 211, 238, 0.25);
+  border-color: #22d3ee;
+}
+
+.replayButtonDisabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ───────────────────── Hover preview card ─────────────────────── */
+
+.hoverPreview {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  background: rgba(7, 13, 24, 0.96);
+  border: 1px solid #1f2a44;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  color: #cbd5e1;
+  pointer-events: none;
+  z-index: 9;
+  min-width: 130px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+}
+
+.hoverName {
+  font-weight: 700;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hoverSub {
+  color: #64748b;
+  font-size: 0.66rem;
+  margin-bottom: 4px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hoverStatLine {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.7rem;
+  padding: 1px 0;
+}
+
+.hoverStatLine > span:first-child {
+  color: #64748b;
+}
+
+.hoverHpOk {
+  color: #34d399;
+}
+
+.hoverHpWarn {
+  color: #fbbf24;
+}
+
+.hoverHpBad {
+  color: #f87171;
+  font-weight: 700;
+}

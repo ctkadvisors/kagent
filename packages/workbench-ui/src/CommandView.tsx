@@ -82,9 +82,11 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const [popover, setPopover] = useState<DispatchPopover | null>(null);
   const [alertText, setAlertText] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
+  const [thrumMuted, setThrumMuted] = useState<boolean>(false);
   const [hintsOpen, setHintsOpen] = useState<boolean>(false);
   const [audioReady, setAudioReady] = useState<boolean>(false);
   const [filterFailed, setFilterFailed] = useState<boolean>(false);
+  const [hoveredAgentKey, setHoveredAgentKey] = useState<string | null>(null);
   // Wrapper size in CSS px — driven by fitCanvas() inside the RAF loop;
   // updated only on resize so we don't churn React every frame. The
   // Minimap consumes this to draw the camera-viewport rect at correct
@@ -123,6 +125,10 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     intensityPx: 0,
     durationMs: 0,
   });
+  // Snapshot of agent positions involved in the most recent failure
+  // cluster — fed by the event-diff effect and the demo button. The
+  // "↻ replay" topbar action re-fires every FX path against these.
+  const lastIncidentRef = useRef<{ x: number; y: number }[]>([]);
 
   // Per-key first-seen wallclock — drives the build-out animation.
   const firstSeenRef = useRef<Map<string, number>>(new Map());
@@ -518,6 +524,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
               const ap = layout.agents.get(`${t.namespace}/${t.targetAgent}`);
               if (ap !== undefined) pts.push({ x: ap.x, y: ap.y });
             }
+            // Snapshot for the replay button.
+            if (pts.length > 0) lastIncidentRef.current = pts.slice();
             if (pts.length > 0 && wrapper !== null) {
               let cx = 0;
               let cy = 0;
@@ -845,10 +853,18 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         drag.activated = true;
       }
     }
+    // Hover hit-test for the floating preview tooltip. We only update
+    // React state when the hovered key actually changes, so this is
+    // cheap on every mousemove despite firing dozens of times per second.
+    const wpt = screenToWorld(cameraRef.current, sx, sy);
+    const hit = hitTestWorld(wpt.x, wpt.y);
+    const newHover = hit !== null && hit.kind === 'agent' ? hit.key : null;
+    if (newHover !== hoveredAgentKey) setHoveredAgentKey(newHover);
   };
 
   const onCanvasMouseLeave = (): void => {
     inputRef.current.mouse.inside = false;
+    if (hoveredAgentKey !== null) setHoveredAgentKey(null);
   };
 
   const onCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>): void => {
@@ -989,19 +1005,19 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   // HUD numbers.
   const hud = useMemo(() => deriveHud(snapshot), [snapshot]);
 
-  // ───────────────────────── Demo / trigger-incident handler ─────────────────────────
-  // Synthesize a 3-failure cluster on three random agents — fires the
-  // same FX/sound/shake/auto-pan paths a real cluster would. Useful
-  // for demoing the visuals without an actual cluster failure.
-  const triggerDemoIncident = useCallback((): void => {
-    const layout = layoutRef.current;
-    if (layout === null) return;
+  // ───────────────────────── Incident playback (demo + replay) ─────────────────────────
+  /**
+   * Synthesize a failure cluster against an explicit set of world
+   * positions. Used by both the demo button (random agents) and the
+   * replay button (positions saved from the last real cluster).
+   */
+  const playIncidentAt = useCallback((targets: readonly { x: number; y: number }[]): void => {
+    if (targets.length === 0) return;
     sound.unlock();
-    const positions = Array.from(layout.agents.values());
-    if (positions.length === 0) return;
-    // Pick up to 3 distinct agents — random subset.
-    const shuffled = positions.slice().sort(() => Math.random() - 0.5);
-    const targets = shuffled.slice(0, Math.min(3, shuffled.length));
+    if (!audioReady) setAudioReady(true);
+    // Save to the replay slot so the same incident can be re-played
+    // again without losing the original target list.
+    lastIncidentRef.current = targets.slice();
     targets.forEach((p, i) => {
       const fireAt = i * 280;
       window.setTimeout(() => {
@@ -1085,7 +1101,31 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         }
       }, fireAt);
     });
-  }, []);
+  }, [audioReady]);
+
+  /** Demo button — picks 3 random agents and fires playIncidentAt. */
+  const triggerDemoIncident = useCallback((): void => {
+    const layout = layoutRef.current;
+    if (layout === null) return;
+    const positions = Array.from(layout.agents.values());
+    if (positions.length === 0) return;
+    const shuffled = positions.slice().sort(() => Math.random() - 0.5);
+    const targets = shuffled
+      .slice(0, Math.min(3, shuffled.length))
+      .map((p) => ({ x: p.x, y: p.y }));
+    playIncidentAt(targets);
+  }, [playIncidentAt]);
+
+  /** Replay button — re-fires against the most recent cluster's positions. */
+  const replayLastIncident = useCallback((): void => {
+    const last = lastIncidentRef.current;
+    if (last.length === 0) {
+      setAlertText('no recent incident to replay');
+      window.setTimeout(() => setAlertText(null), 1_400);
+      return;
+    }
+    playIncidentAt(last);
+  }, [playIncidentAt]);
 
   // Recently-failed agent keys (last 60s) for minimap red highlighting.
   const failedAgentKeys = useMemo<ReadonlySet<string>>(() => {
@@ -1163,6 +1203,32 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             title="Synthesize a 3-failure cluster — exercises every FX path."
           >
             ⚠ demo
+          </button>
+          <button
+            type="button"
+            className={
+              lastIncidentRef.current.length === 0
+                ? styles.replayButtonDisabled
+                : styles.replayButton
+            }
+            onClick={replayLastIncident}
+            title="Re-fire the last cluster's FX against the same agents."
+          >
+            ↻ replay
+          </button>
+          <button
+            type="button"
+            className={styles.navLink}
+            onClick={() => {
+              sound.unlock();
+              if (!audioReady) setAudioReady(true);
+              const next = !thrumMuted;
+              sound.setThrumMuted(next);
+              setThrumMuted(next);
+            }}
+            title="Silence the ambient bass thrum (UI sounds + voice still play)."
+          >
+            {thrumMuted ? '〜 thrum off' : '〜 thrum'}
           </button>
           <button
             type="button"
@@ -1257,6 +1323,15 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
                   window.setTimeout(() => setAlertText(null), 4_000);
                 });
               }}
+            />
+          ) : null}
+
+          {hoveredAgentKey !== null && layoutRef.current !== null ? (
+            <HoverPreview
+              agentKey={hoveredAgentKey}
+              snapshot={snapshot}
+              layout={layoutRef.current}
+              camera={cameraRef.current}
             />
           ) : null}
 
@@ -1613,6 +1688,78 @@ function MultiSelectPanel({
         Click a portrait above to focus a single agent.
       </div>
     </aside>
+  );
+}
+
+/**
+ * Floating preview card that follows the hovered agent's voxel
+ * position. Pure read; no clicks, no commitments. Disappears the
+ * moment the cursor moves off the structure.
+ */
+function HoverPreview({
+  agentKey,
+  snapshot,
+  layout,
+  camera,
+}: {
+  readonly agentKey: string;
+  readonly snapshot: ReturnType<typeof useCommandSnapshot>;
+  readonly layout: LayoutResult;
+  readonly camera: Camera;
+}): React.JSX.Element | null {
+  const pos = layout.agents.get(agentKey);
+  if (pos === undefined) return null;
+  const a = snapshot.agents.get(agentKey);
+  const now = Date.now();
+  let inFlight = 0;
+  let failed = 0;
+  let completed = 0;
+  for (const t of snapshot.tasks.values()) {
+    const k = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : '';
+    if (k !== agentKey) continue;
+    if (t.phase === 'Pending' || t.phase === 'Dispatched') inFlight++;
+    if (t.phase === 'Failed') {
+      const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+      if (Number.isNaN(c) || now - c < 60_000) failed++;
+    }
+    if (t.phase === 'Completed') {
+      const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+      if (!Number.isNaN(c) && now - c < 60 * 60 * 1000) completed++;
+    }
+  }
+  // Project agent world position to canvas-CSS-pixel space.
+  const screenX = pos.x * camera.zoom + camera.offsetX;
+  const screenY = pos.y * camera.zoom + camera.offsetY;
+  const hp = Math.max(0.05, 1 - failed * 0.2);
+  return (
+    <div
+      className={styles.hoverPreview}
+      style={{
+        left: `${String(Math.round(screenX))}px`,
+        top: `${String(Math.round(screenY - 90))}px`,
+      }}
+    >
+      <div className={styles.hoverName}>{a?.name ?? agentKey}</div>
+      <div className={styles.hoverSub}>{a?.namespace ?? agentKey.split('/')[0]}</div>
+      <div className={styles.hoverStatLine}>
+        <span>HP</span>
+        <span className={hp > 0.6 ? styles.hoverHpOk : hp > 0.3 ? styles.hoverHpWarn : styles.hoverHpBad}>
+          {String(Math.round(hp * 100))}%
+        </span>
+      </div>
+      <div className={styles.hoverStatLine}>
+        <span>flying</span>
+        <span>{String(inFlight)}</span>
+      </div>
+      <div className={styles.hoverStatLine}>
+        <span>done (1h)</span>
+        <span>{String(completed)}</span>
+      </div>
+      <div className={styles.hoverStatLine}>
+        <span>fail (1m)</span>
+        <span className={failed > 0 ? styles.hoverHpBad : ''}>{String(failed)}</span>
+      </div>
+    </div>
   );
 }
 

@@ -68,6 +68,30 @@ export class SoundEngine {
     return this.muted;
   }
 
+  /**
+   * Mute only the ambient bass thrum while keeping UI clicks, chimes,
+   * voice lines, and klaxons audible. Useful in shared offices where
+   * the continuous low-end is more disruptive than the discrete events.
+   */
+  private thrumMuted = false;
+  setThrumMuted(thrumMuted: boolean): void {
+    this.thrumMuted = thrumMuted;
+    if (this.thrumGain !== null && this.ctx !== null) {
+      const t = this.ctx.currentTime;
+      this.thrumGain.gain.cancelScheduledValues(t);
+      // setThrum() will reapply the correct gain on the next call;
+      // here we just snap to zero so the change is immediate.
+      this.thrumGain.gain.linearRampToValueAtTime(
+        thrumMuted ? 0 : this.thrumGain.gain.value,
+        t + 0.3,
+      );
+    }
+  }
+
+  isThrumMuted(): boolean {
+    return this.thrumMuted;
+  }
+
   /** Soft 1.2 kHz tick — UI selection. */
   click(): void {
     this.beep({ freq: 1200, type: 'square', dur: 0.05, peak: 0.12 });
@@ -193,7 +217,10 @@ export class SoundEngine {
     }
     const t = this.ctx.currentTime;
     this.thrumGain.gain.cancelScheduledValues(t);
-    this.thrumGain.gain.linearRampToValueAtTime(this.muted ? 0 : target, t + 0.5);
+    this.thrumGain.gain.linearRampToValueAtTime(
+      this.muted || this.thrumMuted ? 0 : target,
+      t + 0.5,
+    );
   }
 
   /** Quick beep helper — single oscillator with attack/decay envelope. */
