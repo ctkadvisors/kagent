@@ -53,8 +53,11 @@ export interface HitMap {
   readonly taskSprites: ReadonlyMap<string, { x: number; y: number }>;
 }
 
-const COLOR_BG = '#08111f';
-const COLOR_GRID = 'rgba(82, 124, 188, 0.08)';
+const COLOR_BG = '#070d18';
+/** Major grid line — every 100px, the "rail" pitch. */
+const COLOR_GRID = 'rgba(82, 200, 124, 0.07)';
+/** Minor grid line — every 20px, the GRID_SNAP_PX from layout. */
+const COLOR_GRID_FINE = 'rgba(82, 200, 124, 0.035)';
 const COLOR_GATEWAY = '#fbbf24';
 const COLOR_BELT = 'rgba(148, 163, 184, 0.18)';
 const COLOR_BELT_HOT = 'rgba(251, 191, 36, 0.45)';
@@ -158,16 +161,35 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
   };
 }
 
+/**
+ * PCB-style two-tier grid: faint 20px minor lines (matches the
+ * GRID_SNAP_PX in layout.ts) + slightly stronger 100px major rails.
+ * Reads as "circuit substrate" rather than "graph paper."
+ */
 function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  ctx.strokeStyle = COLOR_GRID;
+  // Minor grid (20px).
+  ctx.strokeStyle = COLOR_GRID_FINE;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  const step = 40;
-  for (let x = 0; x <= w; x += step) {
+  for (let x = 0; x <= w; x += 20) {
     ctx.moveTo(x + 0.5, 0);
     ctx.lineTo(x + 0.5, h);
   }
-  for (let y = 0; y <= h; y += step) {
+  for (let y = 0; y <= h; y += 20) {
+    ctx.moveTo(0, y + 0.5);
+    ctx.lineTo(w, y + 0.5);
+  }
+  ctx.stroke();
+
+  // Major grid (100px) — a "rail" every 5 minor cells.
+  ctx.strokeStyle = COLOR_GRID;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= w; x += 100) {
+    ctx.moveTo(x + 0.5, 0);
+    ctx.lineTo(x + 0.5, h);
+  }
+  for (let y = 0; y <= h; y += 100) {
     ctx.moveTo(0, y + 0.5);
     ctx.lineTo(w, y + 0.5);
   }
@@ -215,6 +237,13 @@ function drawFactionTints(ctx: CanvasRenderingContext2D, layout: LayoutResult): 
   }
 }
 
+/**
+ * Manhattan-routed PCB trace from gateway to agent. Two segments
+ * meeting at a right angle — pick the corner direction based on
+ * which axis has greater separation, so the bend lands at the
+ * "wider" side of the L. Glowing copper-tone via pads sit at both
+ * endpoints; in-flight tasks heat the trace amber.
+ */
 function drawBelt(
   ctx: CanvasRenderingContext2D,
   from: { x: number; y: number },
@@ -222,28 +251,77 @@ function drawBelt(
   inFlight: number,
   buildProg: number,
 ): void {
+  // Compute the L-shape corner: turn at whichever axis covers more
+  // distance, so the bend is closer to the gateway-side and the long
+  // run extends out toward the agent. This reads cleanly as "bus →
+  // branch."
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const horizontalFirst = Math.abs(dx) >= Math.abs(dy);
+  const corner = horizontalFirst ? { x: to.x, y: from.y } : { x: from.x, y: to.y };
+
   if (buildProg < 1) {
-    // Belt is "extending" — drawn from gateway outward up to the
-    // current build progress. Dashed cyan in the construction palette.
+    // Animate the L-shape extending in two phases: corner first
+    // (proportional to first segment), then to the agent.
     const eased = easeOutCubic(buildProg);
-    const ex = from.x + (to.x - from.x) * eased;
-    const ey = from.y + (to.y - from.y) * eased;
+    const seg1Len = horizontalFirst ? Math.abs(dx) : Math.abs(dy);
+    const seg2Len = horizontalFirst ? Math.abs(dy) : Math.abs(dx);
+    const totalLen = seg1Len + seg2Len;
+    const drawn = totalLen * eased;
+    let mid: { x: number; y: number };
+    let endpoint: { x: number; y: number };
+    if (drawn <= seg1Len) {
+      mid = from;
+      const t = seg1Len === 0 ? 0 : drawn / seg1Len;
+      endpoint = horizontalFirst
+        ? { x: from.x + dx * t, y: from.y }
+        : { x: from.x, y: from.y + dy * t };
+    } else {
+      mid = corner;
+      const t = seg2Len === 0 ? 0 : (drawn - seg1Len) / seg2Len;
+      endpoint = horizontalFirst
+        ? { x: corner.x, y: corner.y + dy * t }
+        : { x: corner.x + dx * t, y: corner.y };
+    }
     ctx.strokeStyle = COLOR_BELT_BUILDING;
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(from.x, from.y);
-    ctx.lineTo(ex, ey);
+    if (mid !== from) ctx.lineTo(corner.x, corner.y);
+    ctx.lineTo(endpoint.x, endpoint.y);
     ctx.stroke();
     ctx.setLineDash([]);
+    drawVia(ctx, from.x, from.y, COLOR_BELT_BUILDING);
     return;
   }
-  ctx.strokeStyle = inFlight > 0 ? COLOR_BELT_HOT : COLOR_BELT;
-  ctx.lineWidth = inFlight > 0 ? 2 : 1;
+
+  // Steady-state PCB trace — copper-tone idle, amber when in-flight.
+  const traceColor = inFlight > 0 ? COLOR_BELT_HOT : COLOR_BELT;
+  ctx.strokeStyle = traceColor;
+  ctx.lineWidth = inFlight > 0 ? 1.75 : 1.25;
   ctx.beginPath();
   ctx.moveTo(from.x, from.y);
+  ctx.lineTo(corner.x, corner.y);
   ctx.lineTo(to.x, to.y);
   ctx.stroke();
+
+  // Via pads: small glowing circles at both endpoints + the bend.
+  drawVia(ctx, from.x, from.y, traceColor);
+  drawVia(ctx, corner.x, corner.y, traceColor);
+  drawVia(ctx, to.x, to.y, traceColor);
+}
+
+/** PCB via — small pad with a brighter center dot. */
+function drawVia(ctx: CanvasRenderingContext2D, x: number, y: number, ringColor: string): void {
+  ctx.fillStyle = ringColor;
+  ctx.beginPath();
+  ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#1a2336';
+  ctx.beginPath();
+  ctx.arc(x, y, 1, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 interface AgentRect {

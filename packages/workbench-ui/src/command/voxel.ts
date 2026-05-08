@@ -28,8 +28,13 @@
  * faces don't overlap each other).
  */
 
-/** Pixels per voxel side. 10 reads cleanly at homelab cluster sizes. */
-export const VOXEL_SIZE = 10;
+/**
+ * Pixels per voxel side. 7 keeps structures compact enough to fit
+ * 25-35 agents on a 1080p canvas without label collisions while still
+ * reading as chunky voxel cubes. (Was 10 — too dominant; reading the
+ * cluster as a whole was harder than reading any one structure.)
+ */
+export const VOXEL_SIZE = 7;
 const COS30 = Math.sqrt(3) / 2; // 0.866
 const SIN30 = 0.5;
 

@@ -74,10 +74,31 @@ function seedToUnit(seed: number): number {
   return (seed >>> 8) / 0x01000000;
 }
 
-const RING_BASE = 180; // px from gateway to first ring
-const RING_STEP = 110; // px between rings
-const PER_RING = 6; // agents per ring before stepping out
-const FACTION_ARC = Math.PI / 2; // radians a single faction spans
+/**
+ * Circuit-board layout — each faction occupies a contiguous angular sector
+ * around the gateway. Agents inside a sector lay out on a polar grid
+ * (one or more rings, indexed by the number of agents in the faction).
+ *
+ *   - SECTOR_GUTTER_FRAC: leave 12% of the sector angle empty between
+ *     adjacent factions so trace lanes don't merge across factions.
+ *   - GRID_SNAP_PX: round agent positions to this multiple so the
+ *     resulting layout reads as a grid rather than free-form polar.
+ *     Manhattan trace routing depends on this — endpoints aligned to
+ *     a grid produce clean L-shape segments instead of jagged paths.
+ *   - RING_BASE / RING_STEP: keep the inner ring well clear of the
+ *     gateway HQ (which now has a 5×5 voxel footprint) and the
+ *     outer rings well clear of each other (so labels never collide).
+ */
+const RING_BASE = 240;
+const RING_STEP = 140;
+const PER_RING = 6;
+const SECTOR_GUTTER_FRAC = 0.12;
+const MIN_FACTION_ARC = Math.PI * 0.45; // 81° — single-faction floor
+const GRID_SNAP_PX = 20;
+
+function snap(n: number): number {
+  return Math.round(n / GRID_SNAP_PX) * GRID_SNAP_PX;
+}
 
 export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds): LayoutResult {
   const cx = bounds.width / 2;
@@ -93,21 +114,42 @@ export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds
       list.push(a);
     }
   }
-  // Stable iteration: alphabetize namespaces so factions don't shuffle.
   const factionNames = Array.from(byFaction.keys()).sort((a, b) => a.localeCompare(b));
+
+  // ── Sector assignment ──
+  // Each faction gets a contiguous angular sector. Sector centers are
+  // chosen by hash(namespace) for stability across reloads. With N
+  // factions, each gets 360°/N of the circle minus a small gutter.
+  const N = factionNames.length;
+  const sectorArc = N === 0 ? Math.PI * 2 : (Math.PI * 2) / N;
+  const factionArc = Math.max(MIN_FACTION_ARC, sectorArc * (1 - SECTOR_GUTTER_FRAC));
+
+  // Hash-driven faction → sector-index assignment so the same set of
+  // namespaces always lands in the same compass arrangement.
+  type FactionEntry = { ns: string; hash: number };
+  const factionsByHash: FactionEntry[] = factionNames
+    .map((ns) => ({ ns, hash: hash32(ns) }))
+    .sort((a, b) => a.hash - b.hash);
 
   const positions = new Map<string, AgentPosition>();
   const factionMeta = new Map<string, { angle: number; count: number }>();
 
-  for (const ns of factionNames) {
-    // Arc center angle hashed from namespace. Two stable, well-known
-    // namespaces always land at the same compass bearing.
-    const arcCenter = seedToUnit(hash32(ns)) * Math.PI * 2;
+  for (let fi = 0; fi < factionsByHash.length; fi++) {
+    const entry = factionsByHash[fi];
+    if (entry === undefined) continue;
+    const { ns } = entry;
+    // Sector center: equally spaced around the circle, with a global
+    // phase offset hashed from the cluster's faction set. The offset
+    // keeps the layout from always landing the same way relative to
+    // the canvas (e.g., faction 0 always at 3 o'clock would feel
+    // arbitrary; offsetting by a hash makes it look intentional).
+    const phase = N > 0 ? (seedToUnit(hash32(factionNames.join('|'))) - 0.5) * sectorArc : 0;
+    const sectorCenter = phase + (fi / Math.max(1, N)) * Math.PI * 2;
+
     const list = byFaction.get(ns) ?? [];
-    // Sort within faction by name so per-faction order is stable too.
     const sorted = list.slice().sort((a, b) => a.name.localeCompare(b.name));
 
-    factionMeta.set(ns, { angle: arcCenter, count: sorted.length });
+    factionMeta.set(ns, { angle: sectorCenter, count: sorted.length });
 
     for (let i = 0; i < sorted.length; i++) {
       const node = sorted[i];
@@ -115,13 +157,11 @@ export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds
       const ring = Math.floor(i / PER_RING);
       const inRing = i % PER_RING;
       const ringSize = Math.min(PER_RING, sorted.length - ring * PER_RING);
-      // Spread within the faction arc; if only one agent in a ring,
-      // place it at arc center.
-      const t = ringSize === 1 ? 0 : (inRing / Math.max(1, ringSize - 1) - 0.5) * FACTION_ARC;
-      const angle = arcCenter + t;
+      const t = ringSize === 1 ? 0 : (inRing / Math.max(1, ringSize - 1) - 0.5) * factionArc;
+      const angle = sectorCenter + t;
       const radius = RING_BASE + ring * RING_STEP;
-      const x = cx + Math.cos(angle) * radius;
-      const y = cy + Math.sin(angle) * radius;
+      const x = snap(cx + Math.cos(angle) * radius);
+      const y = snap(cy + Math.sin(angle) * radius);
       positions.set(node.key, {
         key: node.key,
         x,
@@ -133,7 +173,7 @@ export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds
   }
 
   return {
-    gateway: { x: cx, y: cy },
+    gateway: { x: snap(cx), y: snap(cy) },
     agents: positions,
     factions: factionMeta,
   };
