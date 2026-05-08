@@ -89,8 +89,8 @@ function seedToUnit(seed: number): number {
  *     gateway HQ (which now has a 5×5 voxel footprint) and the
  *     outer rings well clear of each other (so labels never collide).
  */
-const RING_BASE = 240;
-const RING_STEP = 140;
+const RING_BASE = 290;
+const RING_STEP = 170;
 const PER_RING = 6;
 const SECTOR_GUTTER_FRAC = 0.12;
 const MIN_FACTION_ARC = Math.PI * 0.45; // 81° — single-faction floor

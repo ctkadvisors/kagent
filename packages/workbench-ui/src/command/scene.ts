@@ -32,7 +32,8 @@ import type { CommandSnapshot } from './state.js';
 import type { LayoutResult } from './layout.js';
 import type { TaskSummary } from '../types.js';
 import {
-  defaultAgentShape,
+  agentShapeForRole,
+  drawHazardRing,
   drawVoxelShape,
   factionColor,
   gatewayShape,
@@ -135,6 +136,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
       progress,
       nowMs,
       pos.faction,
+      a?.tools,
     );
     agentRects.set(pos.key, rect);
   }
@@ -342,15 +344,19 @@ function drawAgentBuilding(
   buildProg: number,
   nowMs: number,
   namespace: string,
+  tools: readonly string[] | undefined,
 ): AgentRect {
   // Spire color signals phase: red on recent failures, amber when busy,
   // cyan when idle. Drives the top-most voxel of the structure.
   const spireColor =
     failed > 0 ? COLOR_AGENT_BORDER_FAILED : inFlight > 0 ? COLOR_AGENT_BORDER_BUSY : '#22d3ee';
 
-  // Per-namespace faction color for the body voxels.
+  // Per-namespace faction color for the body voxels — muted industrial
+  // palette per voxel.ts. Distinguishing between agents in the same
+  // faction comes from the SHAPE variant (orchestrator twin-tower /
+  // fabricator smokestack / default ziggurat) rather than color alone.
   const body = factionColor(namespace);
-  const shape = defaultAgentShape(body);
+  const shape = agentShapeForRole(body, tools);
 
   // Center the voxel structure on (pos.x, pos.y). Voxel rises from
   // ground upward; we want pos.y to be the BASE of the structure
@@ -363,6 +369,13 @@ function drawAgentBuilding(
     drawPlacementMarker(ctx, cx, cy, shape.footprint.w, shape.footprint.d, nowMs);
     const bounds = shapeScreenBounds(shape, cx, cy);
     return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
+  }
+
+  // Hazard-stripe ring on the ground. Drawn BEFORE the voxel structure
+  // so the building sits on top of it. RA2 War Factory / Construction
+  // Yard ground markings.
+  if (buildProg >= 0.3) {
+    drawHazardRing(ctx, cx, cy, shape.footprint.w, shape.footprint.d);
   }
 
   // Voxel rise — the shape function filters voxels by build height.

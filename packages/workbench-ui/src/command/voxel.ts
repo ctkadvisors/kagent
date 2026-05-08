@@ -29,12 +29,12 @@
  */
 
 /**
- * Pixels per voxel side. 7 keeps structures compact enough to fit
- * 25-35 agents on a 1080p canvas without label collisions while still
- * reading as chunky voxel cubes. (Was 10 — too dominant; reading the
- * cluster as a whole was harder than reading any one structure.)
+ * Pixels per voxel side. 9 keeps structures substantial (the RA2-base
+ * reference is the visual target — beefy industrial buildings, not
+ * crowded miniatures) while still letting 25-30 agents fit on a 1080p
+ * canvas given the wider ring spacing in layout.ts.
  */
-export const VOXEL_SIZE = 7;
+export const VOXEL_SIZE = 9;
 const COS30 = Math.sqrt(3) / 2; // 0.866
 const SIN30 = 0.5;
 
@@ -310,6 +310,65 @@ function drawFootprintRing(
   ctx.setLineDash([]);
 }
 
+/**
+ * RA2-style hazard-stripe ring around a structure's ground footprint.
+ * Yellow-and-black diagonal "DO NOT CROSS" border that you see at the
+ * base of every Construction Yard / War Factory.
+ *
+ * Implementation: draw a series of small alternating-color quads
+ * along each of the 4 footprint edges in iso projection. The
+ * diagonal stripe pattern emerges naturally from the iso angle.
+ */
+export function drawHazardRing(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  w: number,
+  d: number,
+): void {
+  const STRIPE_COUNT_PER_EDGE = 8;
+  const RING_WIDTH = 0.35; // voxel units, outward from footprint
+  const HALF_W = w / 2;
+  const HALF_D = d / 2;
+
+  // 4 edges, each from corner to corner. For each edge, walk in
+  // STRIPE_COUNT segments, alternating yellow/black.
+  type Edge = { from: [number, number]; to: [number, number]; outward: [number, number] };
+  const edges: Edge[] = [
+    { from: [-HALF_W, -HALF_D], to: [HALF_W, -HALF_D], outward: [0, -RING_WIDTH] },
+    { from: [HALF_W, -HALF_D], to: [HALF_W, HALF_D], outward: [RING_WIDTH, 0] },
+    { from: [HALF_W, HALF_D], to: [-HALF_W, HALF_D], outward: [0, RING_WIDTH] },
+    { from: [-HALF_W, HALF_D], to: [-HALF_W, -HALF_D], outward: [-RING_WIDTH, 0] },
+  ];
+
+  for (const edge of edges) {
+    const [x0, y0] = edge.from;
+    const [x1, y1] = edge.to;
+    const [ox, oy] = edge.outward;
+    for (let s = 0; s < STRIPE_COUNT_PER_EDGE; s++) {
+      const t0 = s / STRIPE_COUNT_PER_EDGE;
+      const t1 = (s + 1) / STRIPE_COUNT_PER_EDGE;
+      const ax = x0 + (x1 - x0) * t0;
+      const ay = y0 + (y1 - y0) * t0;
+      const bx = x0 + (x1 - x0) * t1;
+      const by = y0 + (y1 - y0) * t1;
+      // Quad: inner edge (a, b) → outer edge (a+outward, b+outward).
+      const pa = projectIso(ax, ay, 0);
+      const pb = projectIso(bx, by, 0);
+      const pc = projectIso(bx + ox, by + oy, 0);
+      const pd = projectIso(ax + ox, ay + oy, 0);
+      ctx.fillStyle = s % 2 === 0 ? '#fbbf24' : '#1a1a1a';
+      ctx.beginPath();
+      ctx.moveTo(cx + pa.sx, cy + pa.sy);
+      ctx.lineTo(cx + pb.sx, cy + pb.sy);
+      ctx.lineTo(cx + pc.sx, cy + pc.sy);
+      ctx.lineTo(cx + pd.sx, cy + pd.sy);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+}
+
 /* =====================================================================
  * Color helpers — hex parsing, lighten/darken, faction palette.
  * ===================================================================== */
@@ -346,21 +405,23 @@ function darken(hex: string, amount: number): string {
 }
 
 /**
- * Faction color from namespace. Hashes namespace name + uses a
- * fixed palette (so the colors read as deliberate "factions" — RA2
- * Allies-blue / Soviets-red / Yuri-purple — rather than randomly
- * assigned). Falls back through the palette in hash order, so the
- * same namespace always lands on the same color across reloads.
+ * Industrial-muted palette inspired by the RA2 base reference render.
+ * Steel-grey / military-olive / rust-orange / deep-slate hues — the
+ * structures should read as factories and warehouses on a concrete
+ * pad, not as RGB-saturated faction icons. Differentiation between
+ * factions is intentionally subtle here; per-agent ROLE drives the
+ * shape variant (twin-tower / smokestack / ziggurat) which gives
+ * stronger visual identity than color alone.
  */
 const FACTION_PALETTE: readonly string[] = [
-  '#3b82f6', // Allied blue
-  '#dc2626', // Soviet red
-  '#8b5cf6', // Yuri purple
-  '#10b981', // Forest green
-  '#f59e0b', // Sand
-  '#0ea5e9', // Sky
-  '#ec4899', // Pink
-  '#14b8a6', // Teal
+  '#3a5a78', // steel blue
+  '#7c6f4a', // military olive
+  '#7c3a3a', // rust orange
+  '#5a4a3a', // dark bronze
+  '#3a4a5a', // deep slate
+  '#475569', // cool slate-600
+  '#56574c', // muted khaki
+  '#6b3f3f', // brick
 ];
 
 function hash32(str: string): number {
@@ -402,10 +463,13 @@ const BASE_COLOR = '#475569'; // slate-600 — concrete base
 const SPIRE_DEFAULT = '#22d3ee'; // cyan accent
 
 /**
- * Build the default agent shape with a faction-colored body.
+ * Build the default agent shape with a faction-colored body —
+ * generic 3×3×5 ziggurat with central spire. Used for agents that
+ * have no distinguishing tools (pure summarizer / verifier roles).
  */
 export function defaultAgentShape(bodyColor: string): VoxelShape {
   const voxels: Voxel[] = [];
+  const accent = lighten(bodyColor, 0.18);
 
   // Base layer (z=0): 3x3 concrete.
   for (let x = 0; x < 3; x++) {
@@ -421,11 +485,13 @@ export function defaultAgentShape(bodyColor: string): VoxelShape {
       }
     }
   }
-  // Top layer (z=3): 3x3 minus center.
+  // Top layer (z=3): 3x3 minus center, accent-tinted (an "upper deck"
+  // band — gives industrial roof articulation without breaking
+  // silhouette).
   for (let x = 0; x < 3; x++) {
     for (let y = 0; y < 3; y++) {
       if (x === 1 && y === 1) continue;
-      voxels.push({ x, y, z: 3, color: bodyColor });
+      voxels.push({ x, y, z: 3, color: accent });
     }
   }
   // Spire (z=4): single voxel at center.
@@ -435,6 +501,143 @@ export function defaultAgentShape(bodyColor: string): VoxelShape {
     footprint: { w: 3, d: 3, h: 5 },
     voxels,
   };
+}
+
+/**
+ * Orchestrator silhouette: 4×3 footprint with twin towers rising from
+ * a shared base. Used for agents that have `spawn_child_task` —
+ * "command complex" feel, two pillars channelling flow outward.
+ *
+ *   Top:        ╔═══╗ ═══╗     ╔═══╗ . . . ╔═══╗     (twin spire)
+ *               ║ T ║ . . ║     ║ ⊞ ║ . . . ║ ⊞ ║
+ *   Mid:        ║ ▓ ║ ▓ ▓ ║     ║ ▓ ║ ▓ ▓ ▓ ║ ▓ ║
+ *   Base:       ▓▓▓▓ concrete pad ▓▓▓▓
+ */
+export function orchestratorAgentShape(bodyColor: string): VoxelShape {
+  const voxels: Voxel[] = [];
+  const accent = lighten(bodyColor, 0.2);
+
+  // Base (z=0): 4x3 concrete pad.
+  for (let x = 0; x < 4; x++) {
+    for (let y = 0; y < 3; y++) {
+      voxels.push({ x, y, z: 0, color: BASE_COLOR });
+    }
+  }
+  // Mid body z=1: full 4×3 in body color.
+  for (let x = 0; x < 4; x++) {
+    for (let y = 0; y < 3; y++) {
+      voxels.push({ x, y, z: 1, color: bodyColor });
+    }
+  }
+  // Mid body z=2: connecting bridge — 4×3 minus the gap-row middle.
+  for (let x = 0; x < 4; x++) {
+    for (let y = 0; y < 3; y++) {
+      // Cut a "courtyard" between the towers — leaves x=1,2 at y=1
+      // hollow so the two towers read as separate.
+      if ((x === 1 || x === 2) && y === 1) continue;
+      voxels.push({ x, y, z: 2, color: bodyColor });
+    }
+  }
+  // Twin towers z=3,4: x=0 and x=3 only, full y=0..2.
+  for (let z = 3; z <= 4; z++) {
+    for (const tx of [0, 3]) {
+      for (let y = 0; y < 3; y++) {
+        voxels.push({ x: tx, y, z, color: bodyColor });
+      }
+    }
+  }
+  // Tower caps z=5: accent-colored tops.
+  for (const tx of [0, 3]) {
+    for (let y = 0; y < 3; y++) {
+      if (y !== 1) continue; // single cap voxel per tower
+      voxels.push({ x: tx, y, z: 5, color: accent });
+    }
+  }
+  // Central command spire z=5: bridges the towers symbolically.
+  voxels.push({ x: 1, y: 1, z: 3, color: accent });
+  voxels.push({ x: 2, y: 1, z: 3, color: accent });
+  // Spire tops.
+  voxels.push({ x: 0, y: 1, z: 6, color: SPIRE_DEFAULT });
+  voxels.push({ x: 3, y: 1, z: 6, color: SPIRE_DEFAULT });
+
+  return {
+    footprint: { w: 4, d: 3, h: 7 },
+    voxels,
+  };
+}
+
+/**
+ * Fabricator silhouette: 3×3 ziggurat with a side-mounted smokestack
+ * and conveyor extension. For agents with `write_artifact` — they
+ * produce things; the structure has a chimney and a side dock.
+ *
+ *   Top:                         . . S      (smokestack tower offset)
+ *   Mid:        . . .  ║ ║       . . S
+ *   Body:       ▓ ▓ ▓  ║ ║       ▓ ▓ S
+ *   Base:       ▓▓▓▓▓▓▓▓ concrete pad ▓▓▓
+ */
+export function fabricatorAgentShape(bodyColor: string): VoxelShape {
+  const voxels: Voxel[] = [];
+  const accent = lighten(bodyColor, 0.18);
+  const stackColor = darken(bodyColor, 0.3);
+
+  // Base (z=0): 4x3 (extends one cell south for conveyor dock).
+  for (let x = 0; x < 4; x++) {
+    for (let y = 0; y < 3; y++) {
+      voxels.push({ x, y, z: 0, color: BASE_COLOR });
+    }
+  }
+  // Main body (z=1, 2): 3x3 ziggurat at x=0..2.
+  for (let z = 1; z <= 2; z++) {
+    for (let x = 0; x < 3; x++) {
+      for (let y = 0; y < 3; y++) {
+        voxels.push({ x, y, z, color: bodyColor });
+      }
+    }
+  }
+  // Top deck (z=3): 3x3 accent.
+  for (let x = 0; x < 3; x++) {
+    for (let y = 0; y < 3; y++) {
+      if (x === 1 && y === 1) continue;
+      voxels.push({ x, y, z: 3, color: accent });
+    }
+  }
+  // Conveyor dock — single voxel at x=3, y=1, z=1 (extends the base).
+  voxels.push({ x: 3, y: 1, z: 1, color: stackColor });
+  // Smokestack — 4 voxels rising at x=2, y=2, z=3..6 (off-center
+  // chimney, contrasts the central spire).
+  for (let z = 3; z <= 6; z++) {
+    voxels.push({ x: 2, y: 2, z, color: stackColor });
+  }
+  // Stack cap with smoke-glow color.
+  voxels.push({ x: 2, y: 2, z: 7, color: '#fbbf24' });
+  // Central spire (shorter than orchestrator's).
+  voxels.push({ x: 1, y: 1, z: 4, color: SPIRE_DEFAULT });
+
+  return {
+    footprint: { w: 4, d: 3, h: 8 },
+    voxels,
+  };
+}
+
+/**
+ * Pick the right shape for an agent based on its tool set.
+ *  - `spawn_child_task` → orchestrator (twin-tower complex)
+ *  - `write_artifact`   → fabricator (smokestack)
+ *  - otherwise          → default (ziggurat)
+ *
+ * If an agent has BOTH tools, orchestrator wins — the child-spawning
+ * shape is the more visually distinct silhouette.
+ */
+export function agentShapeForRole(
+  bodyColor: string,
+  tools: readonly string[] | undefined,
+): VoxelShape {
+  if (tools !== undefined) {
+    if (tools.includes('spawn_child_task')) return orchestratorAgentShape(bodyColor);
+    if (tools.includes('write_artifact')) return fabricatorAgentShape(bodyColor);
+  }
+  return defaultAgentShape(bodyColor);
 }
 
 /* =====================================================================
