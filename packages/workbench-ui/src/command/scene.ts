@@ -115,6 +115,18 @@ interface SceneInputs {
    * peripheral sense of cluster health updates without reading text.
    */
   readonly mood: number;
+  /**
+   * Saved camera bookmarks (F5–F8). When present, scene renders a
+   * small chip at the world centre that was on-screen when the
+   * bookmark was saved, so operators can SEE where they've pinned.
+   */
+  readonly bookmarks: ReadonlyMap<number, { worldX: number; worldY: number }>;
+  /**
+   * Task filter — `'all'` shows every sprite, `'failed'` hides
+   * everything except Failed sprites + their trails. Used during
+   * incidents so the operator can focus on the burning structures.
+   */
+  readonly taskFilter: 'all' | 'failed';
 }
 
 export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): HitMap {
@@ -130,6 +142,8 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     marquee,
     shake,
     mood,
+    bookmarks,
+    taskFilter,
   } = inputs;
 
   // ── Background fill (screen space) — mood-tinted slate. ──
@@ -174,6 +188,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     const a = snapshot.agents.get(pos.key);
     const inFlight = countInFlightFor(snapshot, pos.key);
     const failed = countFailedRecentFor(snapshot, pos.key, nowMs);
+    const completed = countCompletedRecentFor(snapshot, pos.key, nowMs);
     const progress = buildProgress(firstSeen.get(pos.key), nowMs, BUILD_MS);
     const isSelected = selection.keys.has(pos.key);
     const rect = drawAgentBuilding(
@@ -183,6 +198,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
       a?.model ?? a?.modelClass ?? '—',
       inFlight,
       failed,
+      completed,
       isSelected,
       progress,
       nowMs,
@@ -203,7 +219,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
   );
 
   // Task sprites.
-  const taskSprites = drawTaskUnits(ctx, snapshot, layout, nowMs);
+  const taskSprites = drawTaskUnits(ctx, snapshot, layout, nowMs, taskFilter);
+
+  // Bookmark map-pins — small "F5"-"F8" chips at saved world centres.
+  for (const [slot, pos] of bookmarks) {
+    drawBookmarkPin(ctx, pos.worldX, pos.worldY, `F${String(slot)}`, camera.zoom);
+  }
 
   // Build-queue stacks: floats of ghost diamonds above busy structures.
   for (const pos of layout.agents.values()) {
@@ -449,6 +470,7 @@ function drawAgentBuilding(
   modelLabel: string,
   inFlight: number,
   failed: number,
+  completed: number,
   selected: boolean,
   buildProg: number,
   nowMs: number,
@@ -527,7 +549,109 @@ function drawAgentBuilding(
     ctx.fillText(String(inFlight), cx + 26, above);
   }
 
+  // Veterancy stars — bronze at 5+ recent completions, gold at 15+,
+  // double-gold at 30+. Stars sit just above the HP bar.
+  if (completed >= 5) {
+    drawVeterancyStars(ctx, cx - 26, bounds.y - 14, completed);
+  }
+
   return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
+}
+
+/**
+ * Tiny RTS-style rank chevron. 1 bronze star = 5+, 1 gold = 15+,
+ * 2 gold = 30+. Drawn left of the HP bar so it doesn't collide with
+ * the in-flight count badge on the right.
+ */
+function drawVeterancyStars(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  completed: number,
+): void {
+  const tier = completed >= 30 ? 3 : completed >= 15 ? 2 : 1;
+  const color = tier === 1 ? '#c08a40' : '#fde68a';
+  const count = tier === 3 ? 2 : 1;
+  for (let i = 0; i < count; i++) {
+    drawStar(ctx, x - i * 8, y, 3.4, color);
+  }
+}
+
+function drawStar(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  color: string,
+): void {
+  // 5-point star path.
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 4;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const outerAngle = (i * 2 * Math.PI) / 5 - Math.PI / 2;
+    const innerAngle = outerAngle + Math.PI / 5;
+    const ox = cx + Math.cos(outerAngle) * r;
+    const oy = cy + Math.sin(outerAngle) * r;
+    const ix = cx + Math.cos(innerAngle) * (r * 0.45);
+    const iy = cy + Math.sin(innerAngle) * (r * 0.45);
+    if (i === 0) ctx.moveTo(ox, oy);
+    else ctx.lineTo(ox, oy);
+    ctx.lineTo(ix, iy);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+/**
+ * Render a small dashed-border chip with the bookmark slot label
+ * (e.g. "F5") at a saved world centre. Uses a fixed pixel size in
+ * camera-zoom units so the chip stays legible whether zoomed in or out.
+ */
+function drawBookmarkPin(
+  ctx: CanvasRenderingContext2D,
+  worldX: number,
+  worldY: number,
+  label: string,
+  zoom: number,
+): void {
+  const pad = 4 / zoom;
+  const w = 22 / zoom;
+  const h = 14 / zoom;
+  const x = worldX - w / 2;
+  const y = worldY - h / 2;
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.12)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.7)';
+  ctx.lineWidth = 1 / zoom;
+  ctx.setLineDash([3 / zoom, 2 / zoom]);
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#22d3ee';
+  ctx.font = `700 ${String(9 / zoom)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, worldX, worldY + pad / 4);
+}
+
+/** Count of Completed tasks for an agent within the last 60 minutes. */
+function countCompletedRecentFor(
+  snapshot: CommandSnapshot,
+  agentKey: string,
+  nowMs: number,
+): number {
+  let n = 0;
+  const RECENT_MS = 60 * 60 * 1000;
+  for (const t of snapshot.tasks.values()) {
+    const k = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : '';
+    if (k !== agentKey) continue;
+    if (t.phase !== 'Completed') continue;
+    const c = t.completedAt !== undefined ? Date.parse(t.completedAt) : NaN;
+    if (Number.isNaN(c) || nowMs - c <= RECENT_MS) n++;
+  }
+  return n;
 }
 
 /**
@@ -698,6 +822,7 @@ function drawTaskUnits(
   snapshot: CommandSnapshot,
   layout: LayoutResult,
   nowMs: number,
+  taskFilter: 'all' | 'failed',
 ): Map<string, { x: number; y: number }> {
   const sprites = new Map<string, { x: number; y: number }>();
   // Trail samples: 5 ghost dots backward at 90ms cadence, fading.
@@ -705,6 +830,7 @@ function drawTaskUnits(
   const TRAIL_STEP_MS = 90;
 
   for (const t of snapshot.tasks.values()) {
+    if (taskFilter === 'failed' && t.phase !== 'Failed') continue;
     const agentKey = t.targetAgent ? `${t.namespace}/${t.targetAgent}` : null;
     const pos = agentKey !== null ? layout.agents.get(agentKey) : undefined;
     if (pos === undefined) continue;

@@ -83,6 +83,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const [alertText, setAlertText] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(false);
   const [hintsOpen, setHintsOpen] = useState<boolean>(false);
+  const [audioReady, setAudioReady] = useState<boolean>(false);
+  const [filterFailed, setFilterFailed] = useState<boolean>(false);
   // Wrapper size in CSS px — driven by fitCanvas() inside the RAF loop;
   // updated only on resize so we don't churn React every frame. The
   // Minimap consumes this to draw the camera-viewport rect at correct
@@ -362,6 +364,18 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         inFlightCount / 16 + recentFailCount * 0.18,
       );
 
+      // Derive bookmark-with-world-centre map. Each saved bookmark
+      // recorded the camera transform; reverse-project the viewport
+      // centre at that transform back into world space so the chip
+      // renders where the operator was looking when they pinned.
+      const bookmarksWithPos = new Map<number, { worldX: number; worldY: number }>();
+      for (const [slot, b] of inputRef.current.bookmarks) {
+        bookmarksWithPos.set(slot, {
+          worldX: (w / 2 - b.offsetX) / b.zoom,
+          worldY: (h / 2 - b.offsetY) / b.zoom,
+        });
+      }
+
       hitMapRef.current = drawScene(ctx, {
         snapshot,
         layout,
@@ -374,6 +388,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         marquee,
         shake: { x: shakeX, y: shakeY },
         mood: moodFactor,
+        bookmarks: bookmarksWithPos,
+        taskFilter: filterFailed ? 'failed' : 'all',
       });
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -388,7 +404,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       window.removeEventListener('resize', onResize);
     };
-  }, [agentNodes, snapshot, selection]);
+  }, [agentNodes, snapshot, selection, filterFailed]);
 
   // ───────────────────────── Sound + FX from events ─────────────────────────
   useEffect(() => {
@@ -580,6 +596,9 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
 
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isTextTarget(e.target)) return;
+      // Any keyboard interaction counts as a user gesture — unlock
+      // AudioContext + dismiss the audio-enable hint.
+      if (!audioReady) setAudioReady(true);
       const k = e.key.toLowerCase();
       const keys = inputRef.current.keys;
       if (k === 'w') keys.w = true;
@@ -799,6 +818,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const onCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>): void => {
     if (e.button !== 0) return; // left only
     sound.unlock();
+    if (!audioReady) setAudioReady(true);
     const { sx, sy } = canvasMouse(e);
     inputRef.current.drag = {
       startX: sx,
@@ -1127,6 +1147,17 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         <div className={styles.navLinks}>
           <button
             type="button"
+            className={filterFailed ? styles.filterToggleActive : styles.filterToggle}
+            onClick={() => {
+              setFilterFailed((v) => !v);
+              sound.click();
+            }}
+            title="Hide non-Failed task sprites + log rows."
+          >
+            {filterFailed ? '✕ failed-only' : '✕ filter'}
+          </button>
+          <button
+            type="button"
             className={styles.demoButton}
             onClick={triggerDemoIncident}
             title="Synthesize a 3-failure cluster — exercises every FX path."
@@ -1169,6 +1200,12 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           />
           {agentNodes.length === 0 ? (
             <div className={styles.emptyOverlay}>No agents observed yet.</div>
+          ) : null}
+
+          {!audioReady ? (
+            <div className={styles.audioHint}>
+              🔊 click anywhere or press any key to enable audio
+            </div>
           ) : null}
 
           {alertText !== null ? (
@@ -1244,7 +1281,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
         />
       </div>
 
-      <ActivityLog events={snapshot.events} error={snapshot.error} />
+      <ActivityLog events={snapshot.events} error={snapshot.error} filterFailed={filterFailed} />
     </div>
   );
 }
@@ -1696,19 +1733,27 @@ function TaskPanel({
 function ActivityLog({
   events,
   error,
+  filterFailed,
 }: {
   readonly events: readonly ActivityEvent[];
   readonly error: string | null;
+  readonly filterFailed: boolean;
 }): React.JSX.Element {
+  const visible = filterFailed ? events.filter((e) => e.phase === 'Failed') : events;
   return (
     <div className={styles.log}>
-      <div className={styles.logHeader}>Activity</div>
+      <div className={styles.logHeader}>
+        Activity
+        {filterFailed ? <span className={styles.logFilterTag}> · failed only</span> : null}
+      </div>
       {error !== null ? <div className={styles.logError}>stream error: {error}</div> : null}
       <ul className={styles.logList}>
-        {events.length === 0 ? (
-          <li className={styles.logEmpty}>waiting for events…</li>
+        {visible.length === 0 ? (
+          <li className={styles.logEmpty}>
+            {filterFailed ? 'no failures in window' : 'waiting for events…'}
+          </li>
         ) : (
-          events.slice(0, 12).map((ev) => (
+          visible.slice(0, 12).map((ev) => (
             <li key={ev.id} className={styles.logRow}>
               <span className={styles.logAt}>{formatTime(ev.at)}</span>
               <span className={`${styles.logPhase} ${phaseClass(ev.phase)}`}>

@@ -827,3 +827,65 @@ button.navLink {
 .demoButton:active {
   background: rgba(248, 113, 113, 0.4);
 }
+
+/* ───────────────────── Filter toggle (topbar) ─────────────────────── */
+
+.filterToggle,
+.filterToggleActive {
+  background: transparent;
+  border: 1px solid #1f2a44;
+  color: #94a3b8;
+  border-radius: 4px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.filterToggle:hover {
+  border-color: #475569;
+  color: #cbd5e1;
+}
+
+.filterToggleActive {
+  background: rgba(184, 82, 70, 0.18);
+  border-color: rgba(248, 113, 113, 0.55);
+  color: #fca5a5;
+}
+
+.logFilterTag {
+  font-weight: 400;
+  color: #f87171;
+  letter-spacing: 0.04em;
+}
+
+/* ───────────────────── Audio-enable hint banner ─────────────────────── */
+
+.audioHint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.5rem 1rem;
+  background: rgba(7, 13, 24, 0.92);
+  border: 1px solid rgba(34, 211, 238, 0.6);
+  border-radius: 4px;
+  font-size: 0.78rem;
+  color: #67e8f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  z-index: 12;
+  animation: audioHintPulse 2s ease-in-out infinite;
+}
+
+@keyframes audioHintPulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(34, 211, 238, 0.55);
+  }
+}
