@@ -89,3 +89,13 @@ export {
   PROPOSAL_KINDS,
   parseDispositionConfigMap,
 } from './disposition-parser.js';
+
+// Phase 1 / DISP-03 — DispositionOverlayRow read projection.
+// Single source of truth for the workbench-api → workbench-ui DTO
+// shape; the workbench-api computes it, workbench-ui consumes it.
+export type {
+  DispositionOverBudgetReason,
+  DispositionOverlayRow,
+  DispositionProposalKind,
+} from './disposition.js';
+export { assertIsDispositionOverlayRow } from './disposition.js';
