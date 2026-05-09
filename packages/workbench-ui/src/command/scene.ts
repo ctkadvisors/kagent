@@ -146,12 +146,14 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     taskFilter,
   } = inputs;
 
-  // ── Background fill (screen space) — mood-tinted slate. ──
-  // Lerp between calm slate (0,0,0 mood) and incident crimson (mood=1)
-  // by interpolating r/g/b independently. Each component spends most
-  // of its dynamic range in the upper half of mood so a few quiet
-  // failures don't over-color the world.
+  // ── Clear + background tint (screen space). ──
+  // Canvas is transparent at calm mood so the .sceneWrap RA2-terrain
+  // CSS background shows through. moodBgColor returns rgba with
+  // mood-driven alpha — calm = a=0 (no-op), incident = a≈0.55 crimson
+  // veil. clearRect first so prior-frame voxels don't ghost when the
+  // tint isn't fully opaque.
   ctx.save();
+  ctx.clearRect(0, 0, viewport.w, viewport.h);
   ctx.fillStyle = moodBgColor(mood);
   ctx.fillRect(0, 0, viewport.w, viewport.h);
 
@@ -969,16 +971,16 @@ function easeInOutCubic(t: number): number {
 }
 
 /**
- * Compute the canvas background color from the mood factor. Calm =
- * #070d18 (slate), incident = #1a0a14 (warm crimson). Sub-linear
- * curve on each channel so light loads tint subtly and only severe
- * incidents feel red.
+ * Compute the canvas background tint from the mood factor. Calm =
+ * fully transparent (the wrapper's RA2 terrain texture shows through
+ * untinted); incident = warm crimson with mood-driven alpha. Severe
+ * incidents still feel red, but in calm state the operator sees the
+ * RA2 base map directly instead of a flat slate.
  */
 function moodBgColor(mood: number): string {
   const m = Math.max(0, Math.min(1, mood));
   const k = Math.pow(m, 1.4); // ease-in: subtle until things get bad
-  const r = Math.round(7 + (26 - 7) * k);
-  const g = Math.round(13 + (10 - 13) * k);
-  const b = Math.round(24 + (20 - 24) * k);
-  return `rgb(${String(r)}, ${String(g)}, ${String(b)})`;
+  // Crimson tint at incident; alpha scales 0 → 0.55 with mood.
+  const a = (0.55 * k).toFixed(3);
+  return `rgba(60, 12, 18, ${a})`;
 }

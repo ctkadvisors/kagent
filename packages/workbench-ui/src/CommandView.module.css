@@ -133,7 +133,16 @@
 
 .sceneWrap {
   position: relative;
-  background: #050b18;
+  /* RA2 terrain backdrop — bright cartoony-military base plate the
+   * voxel scene paints over. The canvas itself is now transparent at
+   * calm mood (see scene.ts moodBgColor); only crimson incident-state
+   * tint comes from canvas. Solid #050b18 fallback if the asset 404s
+   * so we never flash white. */
+  background-color: #050b18;
+  background-image: url('/assets/ra2-terrain.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   overflow: hidden;
 }
 
