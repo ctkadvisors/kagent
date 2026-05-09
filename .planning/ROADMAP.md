@@ -46,7 +46,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 
 - [x] 01-01-PLAN.md — Wave 0 setup (audit events, RBAC, PROPOSAL_TOOL_MAP, vitest, fixtures) + DISP-01 ConfigMap overlay carrier + schema-validation Job
-- [ ] 01-02-PLAN.md — DISP-02 capability-JWT scope narrowing in cap-issuer (narrows-never-widens; typed audit on rejection)
+- [x] 01-02-PLAN.md — DISP-02 capability-JWT scope narrowing in cap-issuer (narrows-never-widens; typed audit on rejection)
 - [ ] 01-03-PLAN.md — DISP-03 workbench-api /api/dispositions projection + over-budget exactly-once-per-day audit emission
 - [ ] 01-04-PLAN.md — DISP-04 Command Center DispositionOverlay + CC-01 source-binding (disposition slice) + reload-stability + base-building-only mode
 
