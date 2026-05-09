@@ -48,6 +48,8 @@ import {
   type V1Job,
 } from '@kubernetes/client-node';
 
+import { AuditPublisher } from '@kagent/audit-events';
+
 import { resolveAuthRequired } from './auth.js';
 import { SnapshotCache } from './cache.js';
 import { createGatewayClient, type GatewayClient } from './gateway-client.js';
@@ -156,6 +158,41 @@ async function main(): Promise<void> {
     process.env.WORKBENCH_DEFAULT_NAMESPACE ??
     kubeConfig?.getContextObject(kubeConfig.getCurrentContext())?.namespace;
 
+  // Phase 1 / DISP-03 — AuditPublisher for `disposition.over_budget`
+  // events. Constructed lazily; `connect()` is best-effort so a NATS
+  // outage does NOT block boot or break the read-only API surface
+  // (the dispositions route still computes the projection; events
+  // simply no-op until NATS is reachable). Uses the same env-var
+  // convention as the operator: `KAGENT_AUDIT_NATS_URL` is the audit
+  // stream endpoint shared substrate-wide.
+  const auditNatsUrl = process.env.KAGENT_AUDIT_NATS_URL;
+  let auditPublisher: AuditPublisher | undefined;
+  if (typeof auditNatsUrl === 'string' && auditNatsUrl.length > 0) {
+    auditPublisher = new AuditPublisher({ source: 'kagent.knuteson.io/workbench-api' });
+    void auditPublisher.connect(auditNatsUrl);
+    console.log(
+      `[workbench-api] audit publisher configured → ${auditNatsUrl} (best-effort, non-critical)`,
+    );
+  } else {
+    console.log(
+      '[workbench-api] audit publisher NOT configured (set KAGENT_AUDIT_NATS_URL to enable disposition.over_budget emission)',
+    );
+  }
+
+  // Phase 1 / DISP-03 — disposition projection options. Daily
+  // boundary defaults to UTC (only value supported in v0.2);
+  // watchNamespaces defaults to cluster-wide via
+  // listConfigMapForAllNamespaces.
+  const dailyBoundaryTimezone = process.env.WORKBENCH_DISPOSITION_DAILY_BOUNDARY_TZ ?? 'UTC';
+  const watchNamespacesRaw = process.env.KAGENT_WATCH_NAMESPACES;
+  const watchNamespaces =
+    typeof watchNamespacesRaw === 'string' && watchNamespacesRaw.length > 0
+      ? watchNamespacesRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : undefined;
+
   const app = buildRouter({
     cache,
     broker,
@@ -170,6 +207,11 @@ async function main(): Promise<void> {
     ...(readCustomApi !== undefined && { readCustomApi }),
     ...(readCoreApi !== undefined && { coreApi: readCoreApi }),
     writesEnabled,
+    ...(auditPublisher !== undefined && { auditPublisher }),
+    disposition: {
+      dailyBoundaryTimezone,
+      ...(watchNamespaces !== undefined && { watchNamespaces }),
+    },
   });
   const handle = startServer(app, { port, hostname });
 
@@ -193,6 +235,11 @@ async function main(): Promise<void> {
       await handle.close();
     } catch (err) {
       console.error('[workbench-api] server close failed:', err);
+    }
+    try {
+      if (auditPublisher !== undefined) await auditPublisher.close();
+    } catch (err) {
+      console.error('[workbench-api] audit publisher close failed:', err);
     }
     process.exit(0);
   };

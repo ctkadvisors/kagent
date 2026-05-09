@@ -84,6 +84,19 @@ api:
   # `/healthz` and `/readyz` ALWAYS bypass auth so kubelet probes
   # work regardless of upstream auth-shim health.
   authRequired: 'true'
+  # Phase 1 / DISP-03 — `/api/dispositions` projection options.
+  # The projection computes per-Agent disposition rows from existing
+  # telemetry (gateway token-usage + the operator-written
+  # `kagent.knuteson.io/proposals-today` annotation). NO new
+  # persistence primitive — D2.
+  disposition:
+    # IANA timezone name for the daily counter boundary. Defaults to
+    # 'UTC'. v0.2 only supports 'UTC' in code; non-UTC values log a
+    # warning at workbench-api boot and fall back to UTC. The Helm
+    # value is reserved for forward compatibility once a multi-
+    # timezone deployment justifies the implementation (e.g.
+    # 'America/Chicago').
+    dailyBoundaryTimezone: 'UTC'
   # Per-container resource budget. Conservative MVP defaults — bump
   # when you start watching many AgentTasks (the in-memory cache scales
   # with the count of objects under watch).

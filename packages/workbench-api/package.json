@@ -23,6 +23,7 @@
     "src"
   ],
   "dependencies": {
+    "@kagent/audit-events": "workspace:*",
     "@kagent/dto": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
     "hono": "4.6.14",
