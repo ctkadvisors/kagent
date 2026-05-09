@@ -1911,6 +1911,15 @@ async function main(): Promise<void> {
     emitKeyrotationCapMintedWithTtl?: NonNullable<ReconcileDeps['emitKeyrotationCapMintedWithTtl']>;
   } = {};
 
+  // Phase 1 / DISP-02 — disposition.proposal_rejected publisher
+  // holder. Same mutable-holder pattern as capabilityAuditHolder: the
+  // ReconcileDeps object is constructed BEFORE the audit publisher
+  // init below, so the cap-issuer's narrowing step reads through this
+  // holder. While the publisher is unconfigured the publish closure
+  // is a no-op and narrowing rejections are still recorded on
+  // MintCapForTaskResult.dispositionRejections.
+  const dispositionAuditHolder: { publisher?: AuditPublisher } = {};
+
   // Phase 5 P4 — `parent.children_aggregated` audit hook. Same
   // mutable-holder pattern as `capabilityAuditHolder` /
   // `supervisionAuditHolder`: the deps object is built BEFORE the
@@ -1958,6 +1967,15 @@ async function main(): Promise<void> {
     },
     emitParentChildrenAggregated: async (fields) => {
       await parentChildrenAggregatedAuditHolder.emit?.(fields);
+    },
+    // Phase 1 / DISP-02 — disposition.proposal_rejected publisher.
+    // Reads through dispositionAuditHolder so deps construction can
+    // precede AuditPublisher connect. While the holder is empty, the
+    // publish call is a no-op (best-effort audit contract).
+    dispositionAuditPublisher: {
+      publish: async (event) => {
+        await dispositionAuditHolder.publisher?.publish(event);
+      },
     },
   };
 
@@ -2359,6 +2377,12 @@ async function main(): Promise<void> {
       });
       await publisher.publish(event);
     };
+
+    // Phase 1 / DISP-02 — wire the disposition publisher onto the
+    // shared AuditPublisher. cap-issuer reads through the holder so
+    // disposition.proposal_rejected events flow onto the same audit
+    // stream as capability.minted / task.admitted / etc.
+    dispositionAuditHolder.publisher = publisher;
     capabilityAuditHolder.emitKeyrotationCapMintedWithTtl = async (fields) => {
       const event = makeEvent({
         type: KEYROTATION_CAP_MINTED_WITH_TTL,

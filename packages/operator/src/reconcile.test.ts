@@ -2023,3 +2023,174 @@ describe('reconcileParentFromChildEvent — end-to-end three-child fold (Phase 5
     expect(fields.triggeredBy).toBe('failed-child');
   });
 });
+
+/* =====================================================================
+ * Phase 1 / DISP-02 — production reconcile wiring of AgentDisposition
+ * overlay narrowing. Proves the reconciler:
+ *   - reads the overlay via loadDispositionOverlayForAgent
+ *   - applies narrowing inside mintCapabilityForTask
+ *   - emits disposition.proposal_rejected through the shared publisher
+ *   - PATCHes proposals-today on the disposition ConfigMap when the
+ *     minted JWT carries a surviving proposal-category tool
+ *   - back-compat: with capCa disabled or coreApi unavailable, the
+ *     existing path is unchanged.
+ * ===================================================================== */
+
+describe('reconcileAgentTask — DISP-02 production wiring', () => {
+  const overlayCm = (mayProposeAgainst: readonly string[], rv = 'rv-disp-1') => ({
+    metadata: {
+      name: 'researcher-disposition',
+      namespace: 'default',
+      labels: { 'kagent.knuteson.io/agent-disposition': 'true' },
+      annotations: { 'kagent.knuteson.io/agent-ref': 'default/researcher' },
+      resourceVersion: rv,
+    },
+    data: {
+      'disposition.yaml':
+        'idleBehavior:\n' +
+        '  readChannels: []\n' +
+        '  attentionBudget:\n' +
+        '    tokensPerDay: 50000\n' +
+        '    pollIntervalSeconds: 300\n' +
+        '  proposalScope:\n' +
+        `    mayProposeAgainst: [${mayProposeAgainst.map((k) => `'${k}'`).join(', ')}]\n` +
+        '    maxProposalsPerDay: 3\n',
+    },
+  });
+
+  it('Test 1 — production reconcile wiring: overlay narrows the persisted Secret tools', async () => {
+    const ca = await makeCa();
+    const capAgent: Agent = {
+      ...validAgent,
+      spec: {
+        ...validAgent.spec,
+        capabilityClaims: {
+          tools: ['write_artifact', 'verifier_register', 'http_get'],
+        },
+      },
+    };
+    const cm = overlayCm(['templates']);
+    const coreApiOverrides = {
+      listNamespacedConfigMap: vi.fn().mockResolvedValue({ items: [cm] }),
+      readNamespacedConfigMap: vi.fn().mockResolvedValue(cm),
+      patchNamespacedConfigMap: vi.fn().mockResolvedValue({}),
+    };
+    const localDeps = makeDeps({
+      customApi: { getNamespacedCustomObject: vi.fn().mockResolvedValue(capAgent) },
+      coreApi: coreApiOverrides,
+      capCa: ca,
+      capJwksUrl: 'http://operator-templates.default.svc.cluster.local:8081/.well-known/jwks.json',
+    });
+
+    await reconcileAgentTask(makeTask(), localDeps);
+
+    // The persisted capability Secret carries the JWT; decode it and
+    // assert tools[] is narrowed (verifier_register removed).
+    const secretBody = localDeps.mocks.coreApi?.createNamespacedSecret.mock.calls[0]?.[0]?.body as {
+      stringData?: Record<string, string>;
+    };
+    const jwt = secretBody.stringData?.['cap.jwt'] ?? '';
+    const decoded = decodeCapabilityJwtUnsafe(jwt);
+    expect(decoded?.claims.tools).toEqual(['write_artifact', 'http_get']);
+  });
+
+  it('Test 2 — proposals-counter wiring: proposal-category survival triggers the annotation patch', async () => {
+    const ca = await makeCa();
+    const capAgent: Agent = {
+      ...validAgent,
+      spec: {
+        ...validAgent.spec,
+        capabilityClaims: { tools: ['write_artifact', 'http_get'] },
+      },
+    };
+    const cm = overlayCm(['templates'], 'rv-counter');
+    const coreApiOverrides = {
+      listNamespacedConfigMap: vi.fn().mockResolvedValue({ items: [cm] }),
+      readNamespacedConfigMap: vi.fn().mockResolvedValue(cm),
+      patchNamespacedConfigMap: vi.fn().mockResolvedValue({}),
+    };
+    const localDeps = makeDeps({
+      customApi: { getNamespacedCustomObject: vi.fn().mockResolvedValue(capAgent) },
+      coreApi: coreApiOverrides,
+      capCa: ca,
+    });
+
+    await reconcileAgentTask(makeTask(), localDeps);
+
+    // The proposals-today annotation patch was issued.
+    expect(coreApiOverrides.patchNamespacedConfigMap).toHaveBeenCalledTimes(1);
+    const callArg = coreApiOverrides.patchNamespacedConfigMap.mock.calls[0][0] as {
+      name: string;
+      namespace: string;
+      body: unknown;
+    };
+    expect(callArg.name).toBe('researcher-disposition');
+    expect(callArg.namespace).toBe('default');
+    const ops = callArg.body as Array<{ op: string; path: string; value: unknown }>;
+    expect(ops[1].path).toBe('/metadata/annotations/kagent.knuteson.io~1proposals-today');
+    expect(ops[2].path).toBe('/metadata/annotations/kagent.knuteson.io~1proposals-today-day');
+  });
+
+  it('Test 3 — audit publisher wiring: rejection emits via dispositionAuditPublisher', async () => {
+    const ca = await makeCa();
+    const capAgent: Agent = {
+      ...validAgent,
+      spec: {
+        ...validAgent.spec,
+        capabilityClaims: { tools: ['verifier_register', 'http_get'] },
+      },
+    };
+    const cm = overlayCm(['templates'], 'rv-audit');
+    const coreApiOverrides = {
+      listNamespacedConfigMap: vi.fn().mockResolvedValue({ items: [cm] }),
+      readNamespacedConfigMap: vi.fn().mockResolvedValue(cm),
+      patchNamespacedConfigMap: vi.fn().mockResolvedValue({}),
+    };
+    const dispositionPublish = vi.fn().mockResolvedValue(undefined);
+    const localDeps: ReconcileDeps = {
+      ...makeDeps({
+        customApi: { getNamespacedCustomObject: vi.fn().mockResolvedValue(capAgent) },
+        coreApi: coreApiOverrides,
+        capCa: ca,
+      }),
+      dispositionAuditPublisher: { publish: dispositionPublish },
+    };
+
+    await reconcileAgentTask(makeTask(), localDeps);
+
+    // verifier_register was excluded → exactly one event emitted.
+    expect(dispositionPublish).toHaveBeenCalledTimes(1);
+    const event = dispositionPublish.mock.calls[0][0] as {
+      type: string;
+      data: { excludedTool: string; excludedKind: string };
+    };
+    expect(event.type).toBe('disposition.proposal_rejected');
+    expect(event.data.excludedTool).toBe('verifier_register');
+    expect(event.data.excludedKind).toBe('verifiers');
+  });
+
+  it('Test 4 — back-compat: capCa disabled means no disposition-side activity', async () => {
+    const capAgent: Agent = {
+      ...validAgent,
+      spec: {
+        ...validAgent.spec,
+        capabilityClaims: { tools: ['write_artifact', 'verifier_register'] },
+      },
+    };
+    const coreApiOverrides = {
+      listNamespacedConfigMap: vi.fn().mockResolvedValue({ items: [] }),
+      readNamespacedConfigMap: vi.fn(),
+      patchNamespacedConfigMap: vi.fn(),
+    };
+    const localDeps = makeDeps({
+      customApi: { getNamespacedCustomObject: vi.fn().mockResolvedValue(capAgent) },
+      coreApi: coreApiOverrides,
+      // No capCa wired → mintAndPersistCapabilityIfEnabled returns
+      // { kind: 'disabled' } before any disposition lookup.
+    });
+    const result = await reconcileAgentTask(makeTask(), localDeps);
+    expect(result.action).toBe('dispatched');
+    expect(coreApiOverrides.listNamespacedConfigMap).not.toHaveBeenCalled();
+    expect(coreApiOverrides.patchNamespacedConfigMap).not.toHaveBeenCalled();
+  });
+});

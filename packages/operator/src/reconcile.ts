@@ -56,6 +56,7 @@ import type {
 } from '@kubernetes/client-node';
 import { decodeCapabilityJwtUnsafe, type CapabilityBundle } from '@kagent/capability-types';
 import type { CapTtlPolicy } from '@kagent/keyrotation-controller';
+import type { AuditEvent } from '@kagent/audit-events';
 
 import {
   API_GROUP,
@@ -72,6 +73,7 @@ import type { CapabilityRegistry } from './capability-registry.js';
 import { StubCapabilityRegistry } from './capability-registry.js';
 import type { CapCa } from './cap-ca.js';
 import { CapabilityViolationError, mintCapabilityForTask } from './cap-issuer.js';
+import { loadDispositionOverlayForAgent } from './disposition/overlay-loader.js';
 import type { Dispatcher } from './dispatcher.js';
 import { isDispatchPublished, markJobPublished, readJob, unsuspendJob } from './job-annotator.js';
 import {
@@ -225,6 +227,15 @@ export interface ReconcileDeps {
   readonly emitKeyrotationCapMintedWithTtl?: (
     fields: KeyrotationCapMintedWithTtlAuditFields,
   ) => Promise<void>;
+  /**
+   * Phase 1 / DISP-02 — publisher passed through to cap-issuer for
+   * disposition.proposal_rejected events. main.ts wires this via the
+   * existing mutable audit-holder pattern so deps can be constructed
+   * before AuditPublisher connects. Best-effort: a missing publisher
+   * means narrowing still happens; the rejections are still recorded
+   * on MintCapForTaskResult.dispositionRejections.
+   */
+  readonly dispositionAuditPublisher?: { publish(event: AuditEvent): Promise<void> };
 }
 
 /**
@@ -693,8 +704,13 @@ async function mintAndPersistCapabilityIfEnabled(
     };
   }
 
+  // Capture the narrowed CoreV1Api into a non-undefined local so the
+  // disposition loader closure can reference it without TypeScript
+  // re-narrowing concerns.
+  const coreApi = deps.coreApi;
+
   try {
-    const parentBundle = await loadParentCapabilityBundle(task, deps.coreApi);
+    const parentBundle = await loadParentCapabilityBundle(task, coreApi);
     const tenant = deps.resolveTenantForTask?.(task, agent);
     const minted = await mintCapabilityForTask(deps.capCa, {
       task,
@@ -702,9 +718,23 @@ async function mintAndPersistCapabilityIfEnabled(
       ...(parentBundle !== undefined && { parentBundle }),
       ...(tenant !== undefined && { tenant }),
       ...(deps.capTtlPolicy !== undefined && { ttlPolicy: deps.capTtlPolicy }),
+      // Phase 1 / DISP-02 — production wiring of the AgentDisposition
+      // overlay narrowing path. The loader reads sibling ConfigMaps
+      // labeled `kagent.knuteson.io/agent-disposition=true`. The audit
+      // publisher (best-effort) emits one disposition.proposal_rejected
+      // per excluded tool. The coreApi is the same client; the
+      // proposals-counter helper PATCHes the proposals-today annotation
+      // when the minted JWT carries a surviving proposal-category tool.
+      loadDispositionOverlay: (agentNamespace, agentName) =>
+        loadDispositionOverlayForAgent(coreApi, agentNamespace, agentName),
+      ...(deps.dispositionAuditPublisher !== undefined && {
+        auditPublisher: deps.dispositionAuditPublisher,
+      }),
+      coreApi,
+      ...(deps.now !== undefined && { now: deps.now }),
     });
     const secretName = capabilitySecretNameForTask(task);
-    await createSecretIdempotent(buildCapabilitySecret(task, secretName, minted.jwt), deps.coreApi);
+    await createSecretIdempotent(buildCapabilitySecret(task, secretName, minted.jwt), coreApi);
     await patchCapabilityRef(task, deps.customApi, minted.jti);
     await emitCapabilityMintAudit(task, minted, deps);
     return {
