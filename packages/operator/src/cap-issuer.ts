@@ -43,10 +43,19 @@ import {
   type CapTtlDecision,
   type CapTtlPolicy,
 } from '@kagent/keyrotation-controller';
+import { makeEvent, type AuditEvent } from '@kagent/audit-events';
+import type { CoreV1Api } from '@kubernetes/client-node';
 
 import type { CapCa, MintCapResult } from './cap-ca.js';
 import type { Agent, AgentTask, AgentWorkflow, Tenant } from './crds/index.js';
 import { resolveTenantIssuer } from './crds/index.js';
+import { classifyToolAsProposal } from './disposition/proposal-tool-map.js';
+import {
+  narrowByDispositionOverlay,
+  type ProposalRejection,
+} from './disposition/narrow-by-overlay.js';
+import type { DispositionOverlay } from './disposition/overlay-loader.js';
+import { incrementProposalsToday } from './disposition/proposals-counter.js';
 
 /**
  * Inputs to `mintCapabilityForTask`.
@@ -104,6 +113,47 @@ export interface MintCapForTaskInput {
    * Wave 4 keyrotation on without breaking pre-Wave-4 callsites.
    */
   readonly ttlPolicy?: CapTtlPolicy;
+  /**
+   * Phase 1 / DISP-02 — AgentDisposition overlay loader. Optional.
+   * When provided, the cap-issuer reads the per-Agent overlay
+   * (sibling ConfigMap labeled `kagent.knuteson.io/agent-disposition=true`
+   * with annotation `kagent.knuteson.io/agent-ref=<ns>/<name>`) and
+   * narrows the minted JWT's `tools` claim against
+   * `proposalScope.mayProposeAgainst`. Self-proposal terminology
+   * only: narrows; never widens.
+   *
+   * If undefined, no narrowing applied (back-compat for call sites
+   * predating Phase 1). If the loader throws, narrowing is treated
+   * as "no overlay" (fail-open for availability — malformed overlays
+   * fail closed in the parser/schema path).
+   */
+  readonly loadDispositionOverlay?: (
+    agentNamespace: string,
+    agentName: string,
+  ) => Promise<DispositionOverlay | null>;
+  /**
+   * Phase 1 / DISP-02 — audit-event publisher. Optional. Emits one
+   * `disposition.proposal_rejected` event per excluded proposal-category
+   * tool. If undefined OR the publish call rejects, narrowing still
+   * applies (the rejection is recorded in
+   * `MintCapForTaskResult.dispositionRejections` for caller observability).
+   */
+  readonly auditPublisher?: { publish(event: AuditEvent): Promise<void> };
+  /**
+   * Phase 1 / DISP-02 → DISP-03 bridge — Kubernetes core API client.
+   * Optional. When provided AND an overlay was loaded AND the minted
+   * JWT carries a proposal-category tool, the cap-issuer PATCHes the
+   * disposition ConfigMap's `kagent.knuteson.io/proposals-today`
+   * annotation to increment the daily proposal counter. Read by the
+   * workbench-api dispositions projection (plan 03).
+   */
+  readonly coreApi?: Pick<CoreV1Api, 'patchNamespacedConfigMap' | 'readNamespacedConfigMap'>;
+  /**
+   * Phase 1 / DISP-02 → DISP-03 bridge — clock injection for the
+   * UTC-day boundary computation. Defaults to `() => new Date()`.
+   * Tests inject a deterministic now to verify rollover semantics.
+   */
+  readonly now?: () => Date;
 }
 
 /**
@@ -132,6 +182,12 @@ export interface MintCapForTaskResult {
    * (pre-Wave-4) TTL heuristic was used.
    */
   readonly ttlDecision?: CapTtlDecision;
+  /**
+   * Phase 1 / DISP-02 — proposal-tool rejections produced by the
+   * disposition overlay narrowing step. Empty / undefined when no
+   * overlay was loaded or when no tools were excluded.
+   */
+  readonly dispositionRejections?: readonly ProposalRejection[];
 }
 
 /**
@@ -182,10 +238,78 @@ export async function mintCapabilityForTask(
 ): Promise<MintCapForTaskResult> {
   const agentClaims = resolveAgentClaims(input.agent);
 
+  // Phase 1 / DISP-02 — apply AgentDisposition overlay narrowing
+  // BEFORE parent-narrowing. The overlay narrows the per-Agent base
+  // scope; parent-narrowing then intersects against the parent-bundle.
+  // Order matters: overlay rules are an Agent-author expression of
+  // intent, not a child-of-parent constraint.
+  let overlayClaims: CapabilityClaims = agentClaims;
+  let dispositionRejections: readonly ProposalRejection[] = [];
+  let overlay: DispositionOverlay | null = null;
+  if (input.loadDispositionOverlay !== undefined) {
+    try {
+      overlay = await input.loadDispositionOverlay(
+        input.agent.metadata.namespace ?? '',
+        input.agent.metadata.name ?? '',
+      );
+    } catch (e) {
+      // Fail-open-on-load-error for availability: treat as no overlay.
+      // The schema-validate Job (DISP-01) is the upstream gate; an
+      // unparseable overlay should never reach here in steady state.
+      // Do NOT throw — that would break revocation semantics (delete
+      // the ConfigMap → next mint must succeed). console.warn keeps
+      // the failure observable.
+      const message = e instanceof Error ? e.message : String(e);
+      console.warn(
+        `cap-issuer: loadDispositionOverlay threw, falling back to no overlay: ${message}`,
+      );
+      overlay = null;
+    }
+    if (overlay !== null) {
+      const narrowResult = narrowByDispositionOverlay(agentClaims, overlay);
+      overlayClaims = narrowResult.narrowed;
+      dispositionRejections = narrowResult.rejections;
+
+      // Emit one disposition.proposal_rejected event per rejection.
+      // Publish failures are caught and logged — the JWT mint must not
+      // be blocked by audit-stream issues (audit best-effort contract).
+      if (input.auditPublisher !== undefined && dispositionRejections.length > 0) {
+        const rejectionTaskUid = input.task.metadata.uid ?? '';
+        const publisher = input.auditPublisher;
+        for (const r of dispositionRejections) {
+          try {
+            await publisher.publish(
+              makeEvent({
+                type: 'disposition.proposal_rejected',
+                source: 'kagent.knuteson.io/operator',
+                subject: `Agent/${r.agentNamespace}/${r.agentName}`,
+                data: {
+                  agentRef: r.agentRef,
+                  agentNamespace: r.agentNamespace,
+                  agentName: r.agentName,
+                  dispositionConfigMapName: r.dispositionConfigMapName,
+                  dispositionConfigMapNamespace: r.dispositionConfigMapNamespace,
+                  excludedTool: r.tool,
+                  excludedKind: r.kind,
+                  mayProposeAgainst: r.mayProposeAgainst,
+                  reason: r.reason,
+                  taskUid: rejectionTaskUid,
+                },
+              }),
+            );
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            console.warn(`cap-issuer: disposition.proposal_rejected publish failed: ${message}`);
+          }
+        }
+      }
+    }
+  }
+
   const narrowed =
     input.parentBundle === undefined
-      ? agentClaims
-      : narrowClaimsByParent(agentClaims, input.parentBundle.claims);
+      ? overlayClaims
+      : narrowClaimsByParent(overlayClaims, input.parentBundle.claims);
 
   if (input.parentBundle !== undefined) {
     const violations = claimsSubsetViolations(narrowed, input.parentBundle.claims);
@@ -229,6 +353,38 @@ export async function mintCapabilityForTask(
     ...(tenantIssuer !== undefined && { issuerOverride: tenantIssuer }),
   });
 
+  // Phase 1 / DISP-02 → DISP-03 bridge — when the mint REPRESENTS a
+  // proposal-claim that would have proceeded (i.e., the minted JWT
+  // carries at least one proposal-category tool AFTER overlay
+  // narrowing), increment the disposition ConfigMap's
+  // kagent.knuteson.io/proposals-today annotation. workbench-api's
+  // projection (plan 03) READS this annotation to compute proposalsToday;
+  // the operator is the SOLE writer.
+  //
+  // Increment runs AFTER the mint completes (post-mint) so the JWT is
+  // observable in the substrate even if the patch fails. The helper
+  // itself catches and logs patch errors — mint reliability is more
+  // important than counter exactness.
+  //
+  // Skip when:
+  //   - no overlay was loaded (loadDispositionOverlay undefined OR overlay null)
+  //   - the post-narrowing minted tools has NO proposal-category tool
+  //     (i.e., this mint was not for a proposal — counting it would
+  //     inflate proposalsToday)
+  //   - input.coreApi is undefined (test paths without K8s wiring)
+  if (overlay !== null && input.coreApi !== undefined) {
+    const mintedTools = withTenant.tools ?? [];
+    const hasProposalTool = mintedTools.some((t) => classifyToolAsProposal(t) !== null);
+    if (hasProposalTool) {
+      // Fire-and-await — the helper does not throw out (it catches+logs).
+      await incrementProposalsToday({
+        coreApi: input.coreApi,
+        overlay,
+        now: input.now?.() ?? new Date(),
+      });
+    }
+  }
+
   return {
     jwt: result.jwt,
     jti: result.jti,
@@ -238,6 +394,7 @@ export async function mintCapabilityForTask(
     ...(ttlPolicyDecision.decision !== undefined && {
       ttlDecision: ttlPolicyDecision.decision,
     }),
+    ...(dispositionRejections.length > 0 && { dispositionRejections }),
   };
 }
 
