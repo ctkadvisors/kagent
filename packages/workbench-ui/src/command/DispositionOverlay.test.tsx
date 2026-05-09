@@ -277,7 +277,7 @@ describe('DispositionOverlay (DISP-04)', () => {
     const { container } = render(<DispositionOverlay snapshot={snapshot} />);
     const anchor = container.querySelector(
       'a[data-source-fields="spentTokensToday,idleBehavior"]',
-    ) as HTMLAnchorElement | null;
+    );
     expect(anchor).not.toBeNull();
     expect(anchor?.getAttribute('href')).toBe('/agents/kagent-system/researcher-01');
   });
@@ -298,7 +298,7 @@ describe('DispositionOverlay (DISP-04)', () => {
     // its textContent is the canonical literal we render.
     let block = r.container.querySelector(
       '[data-source-field="overBudgetEventCountToday"]',
-    ) as HTMLElement | null;
+    );
     expect(block).not.toBeNull();
     expect(block?.textContent).toBe('1 event today');
     r.unmount();
@@ -318,7 +318,7 @@ describe('DispositionOverlay (DISP-04)', () => {
     r = render(<DispositionOverlay snapshot={snapshot} />);
     block = r.container.querySelector(
       '[data-source-field="overBudgetEventCountToday"]',
-    ) as HTMLElement | null;
+    );
     expect(block).not.toBeNull();
     expect(block?.textContent).toBe('2 events today');
   });
