@@ -1,5 +1,7 @@
 ## Conflict Detection Report
 
+> **Re-steered 2026-05-09 PM.** This report describes the 2026-05-09 ingest of `NORTH-STAR-SYSTEM-DESIGN.md` + `PROTO-SOCIETY-DESIGN.md`. After the 2026-05-09 PM operator directive, both north stars are treated as **candidate inputs**, not commitments. Authoritative active milestone scope lives in `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`. The 2026-05-09 PM re-steering itself is not a conflict against an ingested ADR/PRD (none were ingested) — it is an operator directive that demoted proto-society primitives to Future Research, reframed AgentDisposition as overlay-first, ingested `docs/COMMAND-CENTER-CONTRACT.md` as a binding contract, and added D6 (self-proposal) + D7 (COMMAND-CENTER-CONTRACT priority).
+
 ### BLOCKERS (0)
 
 (none)

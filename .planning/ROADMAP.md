@@ -1,10 +1,12 @@
-# Roadmap: kagent — v0.2 (proto-society foundations)
+# Roadmap: kagent — v0.2 (workflow-substrate hardening + observation-first experiments)
 
 ## Overview
 
 The v0.1 workflow substrate is shipped: operator + CRDs, NATS A2A bus, agent-pod runtime, capability-JWT, LiteLLM gateway, Langfuse traces, replay/eval/supervision/quotas controllers, workbench API + UI. Historical v0.1 phases are captured in `docs/ROADMAP.md`.
 
-This roadmap is **forward-looking only**: v0.2 lays the smallest substrate primitives required for emergent agent collectives — a _proto-society_ — to form on top of the workflow substrate, in dependency order from `docs/PROTO-SOCIETY-DESIGN.md` "Substrate primitives needed" §1–6, ending with a substrate-level kill-switch (non-negotiable per `D4`) and a small pilot deployment to observe under bounded budget. Every phase must answer the §11 bounds test affirmatively (declared capability + bounded resource drain + observable state transition + auditable output + revocation path) and the §15 one-sentence test (helps the collective generate, refine, and govern its own intent while keeping authority/observation/review/revocation legible to humans).
+**Re-steered 2026-05-09 PM.** This roadmap is forward-looking and **observation-first**: v0.2 hardens what's already real (Workbench, Command Center, review/promotion paths over existing substrate state) and runs minimum-viable observation experiments (idle/attention overlays on existing Agents) before any new CRD or controller is introduced. Proto-society primitives (CRD-shaped Channels, Posts, CoalitionProposals, reputation, society kill-switch) are recorded in REQUIREMENTS.md §4 "Future Research" and intentionally **not** in this roadmap.
+
+Every phase must answer the §11 bounds test affirmatively (declared capability + bounded resource drain + observable state transition + auditable output + revocation path) and the §15 one-sentence test (helps the substrate turn intent into verified reusable capability with clearer authority, resource accounting, observability, review, or revocation). Workbench/Command Center work additionally honors the `docs/COMMAND-CENTER-CONTRACT.md` Prime Directive.
 
 ## Phases
 
@@ -12,154 +14,131 @@ This roadmap is **forward-looking only**: v0.2 lays the smallest substrate primi
 
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+- 999.x: Future-research backlog placeholders (see REQUIREMENTS.md §4)
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: AgentDisposition v0** — CRD + reconciler + capability-JWT scope + workbench projection; the smallest first move
-- [ ] **Phase 2: Discourse primitives** — Channel/Post as artifacts; durable, citable, attention-budgeted; no CRD until usage justifies
-- [ ] **Phase 3: Consolidation controller** — Read-only daemon that proposes hygiene actions to the existing review queue
-- [ ] **Phase 4: MobProposal + coalition action** — CRD + signed quorum + no-self-review + ring-review detection
-- [ ] **Phase 5: Decay / revalidation** — Per-class staleness function + revalidationPolicy; re-review proposals at threshold crossings
-- [ ] **Phase 6: Quarantine semantics** — First-class holding pattern with bounded TTL and explicit exit paths
-- [ ] **Phase 7: Substrate-level revocation kill-switch** — Operator-only, society-independent, auditable; non-negotiable
-- [ ] **Phase 8: Pilot deployment + observation** — Two agents, one channel, small budget, 7+ days; collect evidence and retrospective
+- [ ] **Phase 1: AgentDisposition prototype (overlay-first)** — express idle/attention behavior as overlay on existing `Agent`; surface in workbench-api as a read projection; render in Command Center as overlay; observe before promoting to a CRD
+- [ ] **Phase 2: Command Center contract hardening** — make existing Command Center provably source-bound (Slice A) and add operational read depth on selection panels (Slice B) per `docs/COMMAND-CENTER-CONTRACT.md`
+- [ ] **Phase 3: Resource-flow overlays** — render `C-flow-economy` flows from existing Workbench API DTOs; pressure overlay (Slice E); base-building-only fallback mode
+- [ ] **Phase 4: Review queue projection + promotion path** — strengthen review queue, AgentTemplate promotion, replay/eval signal surfacing using existing v0.1 substrate primitives; no new CRDs
+- [ ] **Phase 5: Workbench usability primitives** — hotkeys, multi-select, replay-from-context; RTS feel as usability, not visual chrome
 
 ## Phase Details
 
-### Phase 1: AgentDisposition v0
+### Phase 1: AgentDisposition prototype (overlay-first, no CRD)
 
-**Goal**: Idle agent behavior becomes cost-visible and capability-scoped — the substrate represents what an agent does between tasks as a first-class object that an operator can inspect, budget, and revoke.
-**Depends on**: Nothing (first v0.2 phase; layers on shipped v0.1 substrate)
+**Goal**: Idle agent behavior becomes representable on the existing substrate **without introducing a new CRD or reconciler**. An overlay (annotation, ConfigMap, or artifact record) on an existing `Agent` declares idle behavior, attention budget, and proposal scope. Workbench-api exposes a read projection. Command Center shows the overlay. Observability uses existing telemetry. The phase deliberately produces evidence to decide whether to promote to a field on `Agent` or to a sibling CRD in a future milestone.
+**Depends on**: Nothing (first v0.2 phase; layers on shipped v0.1 substrate).
 **Requirements**: DISP-01, DISP-02, DISP-03, DISP-04
 **Success Criteria** (what must be TRUE):
 
-1. An operator can `kubectl apply` an `AgentDisposition` referencing an existing `Agent` and observe the disposition's spec/status via `kubectl get agentdisposition` with all `C-agent-disposition` fields populated.
-2. An agent whose disposition declares `proposalScope.mayProposeAgainst: [templates]` cannot issue a tool-change or capability-policy proposal — the substrate rejects with a typed audit event tying the rejection back to the disposition's capability-JWT scope.
-3. An operator can read `AgentDisposition.status.spentTokensToday` and `proposalsToday` and see them increment in step with disposition activity; over-budget conditions emit substrate audit events with structured reasons.
-4. The Workbench Command Center renders a "dispositions" flow alongside the existing economy flows (model power, token, build power, etc.); the flow shows budget remaining and over-budget event count per disposition.
-   **Plans**: TBD
-   **UI hint**: yes
+1. Operator can attach an idle-behavior overlay to an existing `Agent` using ONLY shipped v0.1 primitives (annotation, ConfigMap referenced by `agentRef`, or artifact record). The overlay carries `idleBehavior.readChannels[]`, `idleBehavior.attentionBudget.{tokensPerDay, pollIntervalSeconds}`, `idleBehavior.proposalScope.{mayProposeAgainst[], maxProposalsPerDay}`. A schema-validation Job rejects overlays missing any required field.
+2. The overlay's `proposalScope.mayProposeAgainst` narrows the existing capability-JWT scope **at issuance time** in the existing capability-JWT scope check — it never widens it. A unit test proves an overlay declaring `proposalScope.mayProposeAgainst: [templates]` causes the existing capability-JWT scope check to reject a tool-change or capability-policy proposal with a typed audit event tied back to the overlay (self-proposal, never self-promotion).
+3. Workbench-api exposes `/dispositions` (or equivalent overlay projection endpoint) computed from existing telemetry — gateway DTOs for token usage, audit-event stream for proposal counts. Counters reset at a documented daily boundary. Over-budget conditions emit substrate audit events with structured reasons via the existing audit-event surface. **No new persistence primitive is introduced.**
+4. Command Center renders a "disposition" overlay alongside existing flow-economy flows. Every rendered field has a backing substrate source field (per `COMMAND-CENTER-CONTRACT.md` Prime Directive). Overlay shows budget remaining and over-budget event count per agent. Reload-stable: closing and reopening Command Center reconstructs the overlay from API state.
+
+**Promotion gate (post-phase observation):** within ~7 days of overlay use across ≥2 agents, capture which fields are read often, which are written often, which are silently ignored, and whether overlay collisions occur. If repeated behavior justifies it, file a Future Research → Candidate Requirement promotion for `AgentDisposition` as a CRD field on `Agent` or as a sibling CRD. Until then: overlay-only.
+
+**Plans**: TBD
+**UI hint**: yes (Workbench/Command Center work — `COMMAND-CENTER-CONTRACT.md` is binding)
 
 Plans:
 
 - [ ] 01-01: TBD
 
-### Phase 2: Discourse primitives
+### Phase 2: Command Center contract hardening
 
-**Goal**: Agents can post into named channels with durable, citable records — discourse is representable as substrate state without forcing a CRD before the read-side proves out.
-**Depends on**: Phase 1 (Posts consume `AgentDisposition` attention budget per DISC-03)
-**Requirements**: DISC-01, DISC-02, DISC-03, DISC-04, DISC-05
+**Goal**: Make the existing Command Center provably source-bound. Implements Slice A (contract hardening) and Slice B (operational read depth) from `docs/COMMAND-CENTER-CONTRACT.md` §7. Read-depth precedes write-depth.
+**Depends on**: Phase 1 (the disposition overlay rides on Slice A's source-of-truth assertions).
+**Requirements**: CC-01, CC-02, CC-03, CC-04
 **Success Criteria** (what must be TRUE):
 
-1. An operator can declare a channel (configmap or namespaced object form) carrying name/visibility/participants/retention; a verifier Job rejects channel definitions missing any of the four fields.
-2. An agent can issue a `Post` (artifact-shape) referencing a channel and citing prior posts/artifacts; the post is write-once + append-only and tampering an existing post body fails verification.
-3. A post issued by an over-budget agent is rejected at the substrate boundary — the disposition's attention budget is enforced as a precondition, not a post-hoc audit.
-4. Channel retention runs as a scheduled Job and prunes posts past the channel's TTL; each pruned post emits one audit event; pruned content cannot be restored in-place (signed re-import is the only path back).
-5. The substrate exposes a citation-graph read API: given a post id, the set of posts/artifacts it cites and the set of posts that cite it are returnable without reading the underlying storage layout.
-   **Plans**: TBD
+1. A development-only assertion fires when any rendered Agent node lacks a backing `AgentSummaryRow` from `/api/agents`, or any rendered task sprite lacks a backing `TaskSummary` from `/api/tasks`. Triggers in dev builds, no-ops in prod. Fixture-based test asserts the assertion fires for synthesized orphan nodes.
+2. Reloading `/#/command` reconstructs the same world from API state. Presentation-only state is restricted to camera, selection, hover, audio, bookmarks, and short-lived FX; all other state derives from API responses. Snapshot test seeded with a captured API response asserts rendered DOM tree matches across reloads.
+3. Agent / Task / Gateway selection panels show full operational read depth per `COMMAND-CENTER-CONTRACT.md` §7 Slice B. Direct links exist to existing TaskDetail, GatewayPage, ClusterPage routes.
+4. Pressure overlay renders all nine pressure types from existing DTO fields (context, gateway, policy denial, verifier, artifact, trace, pod, quota, telemetry). Each marker carries source field name + detail link. UI runs in "base-building-only" mode with pressure dramatization disabled while keeping the same data.
 
-Plans:
+**Plans**: TBD
+**UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding)
 
-- [ ] 02-01: TBD
+### Phase 3: Resource-flow overlays
 
-### Phase 3: Consolidation controller
-
-**Goal**: A read-only "sleep" daemon turns recent substrate state into proposals — the substrate becomes one of the signal sources alongside agents and human steering, but signals still propose; governance still disposes.
-**Depends on**: Phase 2 (controller reads citation counts, post engagement); transitively Phase 1 (reads disposition status). Disabled-by-default Helm flag prevents the controller from running in deployments that opt out of the proto-society layer.
-**Requirements**: CONS-01, CONS-02, CONS-03, CONS-04
+**Goal**: Make the eight `C-flow-economy` flows visible in Command Center as overlays sourced from existing Workbench API DTOs. Continues Slice E "Pressure system overlay" from `docs/COMMAND-CENTER-CONTRACT.md` §7.
+**Depends on**: Phase 2 (Command Center read-depth + pressure overlay foundation).
+**Requirements**: FLOW-01, FLOW-02
 **Success Criteria** (what must be TRUE):
 
-1. A consolidation controller process exists, ships disabled-by-default, and when enabled wakes on a configurable schedule (and on task-tree close) to emit proposals into the existing review queue — same pipeline as any other proposal per `C-promotion-loop`.
-2. The controller's capability-JWT carries no write scopes against catalog objects; a unit test asserts the JWT cannot mutate templates, verifiers, tools, or capability policies.
-3. Every proposal carries `proposer: consolidation-controller` plus the inputs that produced it (citation list, failure-rate window, etc.); a reviewer can replay the inputs deterministically or get a substrate-attributed explanation why not.
-4. When the proposal queue grows past a configurable threshold the substrate throttles new proposals and surfaces queue depth as a "trust" pressure flow per `C-flow-economy`; an operator-issued substrate action pauses the controller within one reconcile cycle.
-   **Plans**: TBD
+1. Each of the eight `C-flow-economy` flows (model power, token flow, build power, pod capacity, artifact bandwidth, authority, trust, attention) renders as a Command Center overlay with a documented source field and pressure trigger from existing DTOs. A test fixture asserts each flow has a non-null source field reference; a missing source field fails the test.
+2. A "flow legend" exists in developer docs (NOT in main UI chrome per `COMMAND-CENTER-CONTRACT.md` Slice E acceptance) mapping each flow to its substrate source, pressure trigger, and operator action. Living doc updated as flows evolve.
 
-### Phase 4: MobProposal + coalition action
+**Plans**: TBD
+**UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding)
 
-**Goal**: Coalition action is representable as a substrate object — multiple agents agreeing on a proposal becomes a signed, quorum-checked, no-self-review, ring-review-detectable artifact that the existing review pipeline acts on.
-**Depends on**: Phase 3 (MobProposal flows through the same review pipeline the consolidation controller already uses); transitively Phase 1 (proposer signatures verified against capability-JWT public keys from disposition scope).
-**Requirements**: MOB-01, MOB-02, MOB-03, MOB-04, MOB-05
+### Phase 4: Review queue projection + promotion path
+
+**Goal**: Strengthen review queue ergonomics, AgentTemplate promotion, and replay/eval signal surfacing using existing v0.1 substrate primitives — `AgentTask`, `ArtifactRef`, verifier outputs, audit events. **No `Tool`, `SteeringEvent`, `TaskReview`, `Channel`, or `Post` CRD.**
+**Depends on**: Nothing structurally; benefits from Phase 2's Command Center read depth (review queue is reachable from Command Center).
+**Requirements**: REV-01, REV-02, REV-03
 **Success Criteria** (what must be TRUE):
 
-1. An operator can `kubectl apply` a `MobProposal` whose spec carries `proposers[]` (each with agent + signature), `proposal.{kind,target,reason,citations[]}`, and `status.{reviewState,requiredReviewers,decision}` per `C-mob-proposal`. Single-proposer payloads are rejected with a typed CRD validation error.
-2. Each proposer signature is verified against their agent's capability-JWT public key at admission; an unverifiable or scope-mismatched signature rejects the proposal and emits a typed audit event identifying the offending proposer.
-3. The substrate enforces quorum (≥N proposers, default N≥2; capability-policy proposals require N≥3 multi-human review per `C-governance-tiers`); quorum failure rejects with a typed reason; the test suite covers the boundary cases.
-4. An agent listed in `proposers[]` cannot also appear as a reviewer on the same proposal — the controller rejects such review attempts as self-review.
-5. A periodic Job scans recent proposals + reviews and flags clusters where the same N agents review each other's proposals beyond a configurable rate; flagged clusters surface as quarantine candidates and trigger rate-limiting on those agents' subsequent coalition actions.
-   **Plans**: TBD
+1. Review queue projection in workbench-api lists every terminal `AgentTask` whose result needs review (verifier failed, suspicious detector flagged, or human-review-requested) sorted by staleness. Computed from existing `AgentTask.status` + verifier results + audit events; no new persistence. Reload-stable.
+2. AgentTemplate promotion proposal flow exists end-to-end: a candidate `AgentTemplate` (artifact-shape today) is reviewable in the queue; accept/reject decisions are recorded as audit events tied back to the candidate; an accepted candidate becomes a versioned `AgentTemplate` CR via the existing operator-write path. Single-reviewer covered; multi-reviewer is future research.
+3. Replay / eval signals (existing v0.1 controllers) surface their outputs into the review queue projection — a failed eval or replay divergence becomes a queue row with the same shape as a verifier failure. Reviewer can navigate from queue row to underlying eval/replay artifact.
 
-### Phase 5: Decay / revalidation
+**Plans**: TBD
 
-**Goal**: Catalog objects age honestly — every promotable object class declares a staleness function and a revalidation policy; stale objects remain usable but trigger re-review proposals at decay-threshold crossings.
-**Depends on**: Phase 3 (revalidation proposals flow through the consolidation controller's queue + review pipeline).
-**Requirements**: DECAY-01, DECAY-02
+### Phase 5: Workbench usability primitives
+
+**Goal**: Add usability primitives that make the operator's daily workflow less friction-bound. RTS feel here is **usability** — hotkeys, multi-select, dispatch, replay, audit-trace shortcut, FX — NOT visual chrome (per memory `feedback_workbench_rts_ui_aesthetic.md`).
+**Depends on**: Phase 2 (Command Center read-depth foundation).
+**Requirements**: WB-01, WB-02, WB-03
 **Success Criteria** (what must be TRUE):
 
-1. Every catalog object class (verifier, prompt, AgentTemplate, guard) carries a declared `staleness` function and `revalidationPolicy` as schema metadata; a catalog object missing either field fails admission with a typed reason.
-2. A periodic Job evaluates staleness across the catalog and emits re-review proposals at decay-threshold crossings, flowing through the same review pipeline as any other proposal; stale objects remain usable but their continued use is logged as audit events so reviewers can correlate stale-use with downstream failures.
-   **Plans**: TBD
+1. Hotkey scheme covers the most-used Workbench operations (open task detail, open agent detail, navigate to gateway, open trace, dismiss alert, jump to review queue). Documented in a developer-facing keyboard cheat sheet. Hotkeys map to existing actions; no new substrate state.
+2. Multi-select on Command Center sprites for bulk-inspect actions (open all selected detail views in tabs, copy IDs, scroll to first failure). Bulk-mutate actions remain forbidden until the underlying CRD write path explicitly supports the operation.
+3. Replay-from-context: from any task detail, an operator can re-dispatch the same input under a different model class or a different agent, creating a new `AgentTask` with a recorded `replayOf` annotation pointing to the original. No new CRD; uses existing AgentTask write path.
 
-### Phase 6: Quarantine semantics
+**Plans**: TBD
+**UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding)
 
-**Goal**: The substrate has a gentle response to "something is wrong but we're not sure what" — a holding pattern that pulls the object from new bindings, preserves evidence, bounds the duration, and forces an explicit exit.
-**Depends on**: Phase 4 (ring-review detection from MOB-05 surfaces clusters that need quarantining); Phase 5 (decay events can request quarantine).
-**Requirements**: QUAR-01, QUAR-02
-**Success Criteria** (what must be TRUE):
+## Future Research Backlog (999.x — NOT in v0.2)
 
-1. An operator can transition a catalog object to `quarantine` via a signed substrate action; existing references continue to function but new bindings are denied at the admission webhook; evidence (artifacts, audit events, traces) is preserved unaltered.
-2. Every quarantine carries a bounded TTL; on expiry the substrate forces one of three explicit exit paths — `rehabilitate` (signed unblock), `deprecate` (versioned removal), `delete` (purge with audit). Owner / proposer is notified at quarantine entry and at TTL expiry; notification failures themselves emit audit events.
-   **Plans**: TBD
+Recorded so they don't get re-invented. Promotion to active phase requires empirical signal AND explicit operator acceptance. See REQUIREMENTS.md §4 "Future Research / Speculative Concepts".
 
-### Phase 7: Substrate-level revocation kill-switch
-
-**Goal**: The operator retains a substrate-level revocation that the agent collective cannot route around — non-negotiable per `D4` and `C-failure-modes` row 8 ("society outgrows human relevance"). This is a design requirement, not a configuration option.
-**Depends on**: Phases 1–4 (the kill-switch must disable AgentDisposition idle behavior, Discourse posting, Consolidation controller, and MobProposal admission within one reconcile cycle).
-**Requirements**: REVOKE-01, REVOKE-02
-**Success Criteria** (what must be TRUE):
-
-1. An operator can fire a substrate-level kill-switch via a single signed substrate action; within one reconcile cycle, AgentDisposition idle behavior halts, Discourse posting is denied at the substrate boundary, the Consolidation controller pauses, and MobProposal admission rejects all new proposals. The switch does not require quorum, does not honor MobProposal vetoes, and cannot be revoked by the agent collective.
-2. A failure-injection test proves the switch fires correctly even when the consolidation controller and MobProposal admission are concurrently degraded.
-3. Kill-switch state is persisted (CRD `status` field; recoverable across operator restarts), projected to workbench-ui Command Center as `proto_society_enabled: bool`, and every state transition emits a substrate-attributed audit event.
-   **Plans**: TBD
-   **UI hint**: yes
-
-### Phase 8: Pilot deployment + observation
-
-**Goal**: Run the proto-society layer with the minimum substrate that proves it on a real homelab K3s cluster — two agents, one channel, capped budget, kill-switch wired but disabled by default, observed for at least 7 days, retrospectively documented. Token-throwing is the _scaling_ test; this phase is the _correctness_ test.
-**Depends on**: Phases 1–7 (every primitive must exist; the kill-switch must be wired and provably operable before the pilot starts taking real signal).
-**Requirements**: PILOT-01, PILOT-02, PILOT-03
-**Success Criteria** (what must be TRUE):
-
-1. A Helm values overlay seeds a personal-research deployment with two `Agent` + `AgentDisposition` pairs, one channel, capped daily token budget, and the kill-switch wired-but-disabled; the overlay lives under `packages/operator/charts/values-references/` and is GitOps-deployable to the homelab K3s cluster (no imperative `kubectl apply`).
-2. After ≥7 calendar days of pilot operation the substrate has emitted (a) at least one disposition over-budget event or documented near-miss, (b) at least one consolidation proposal that surfaced to the review queue, and (c) one operator-reviewed `MobProposal` (real or synthetic) end-to-end through admission → quorum check → review → decision; pilot evidence is committed under `evidence/v0.2-pilot/`.
-3. A retrospective document captures which of the eight `C-failure-modes` rows the pilot exercised (even synthetically), which the substrate caught vs missed, and at least one concrete revision proposal filed as a v0.3 candidate (not auto-accepted; honors `D3` "signals propose; governance disposes").
-   **Plans**: TBD
+- [ ] **Phase 999.1** (future research): `AgentDisposition` as a first-class CRD — pending Phase 1 observation evidence
+- [ ] **Phase 999.2** (future research): `Channel` / `Post` as artifacts (then later as CRDs) — defer until read-side proves out
+- [ ] **Phase 999.3** (future research): Consolidation controller — defer until manual review queue ergonomics prove what hygiene means
+- [ ] **Phase 999.4** (future research): `CoalitionProposal` (renamed from "MobProposal") with signed quorum, no-self-review, ring-review detection
+- [ ] **Phase 999.5** (future research): Decay / revalidation policy on catalog object kinds
+- [ ] **Phase 999.6** (future research): Quarantine semantics as first-class state
+- [ ] **Phase 999.7** (future research): Substrate-level proto-society revocation kill-switch — non-negotiable IF the layer ships
+- [ ] **Phase 999.8** (future research): Pilot deployment of proto-society layer (1–2 agents, one channel, small budget, 7+ days observation)
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
-| Phase                                     | Plans Complete | Status      | Completed |
-| ----------------------------------------- | -------------- | ----------- | --------- |
-| 1. AgentDisposition v0                    | 0/TBD          | Not started | -         |
-| 2. Discourse primitives                   | 0/TBD          | Not started | -         |
-| 3. Consolidation controller               | 0/TBD          | Not started | -         |
-| 4. MobProposal + coalition action         | 0/TBD          | Not started | -         |
-| 5. Decay / revalidation                   | 0/TBD          | Not started | -         |
-| 6. Quarantine semantics                   | 0/TBD          | Not started | -         |
-| 7. Substrate-level revocation kill-switch | 0/TBD          | Not started | -         |
-| 8. Pilot deployment + observation         | 0/TBD          | Not started | -         |
+| Phase                                         | Plans Complete | Status      | Completed |
+| --------------------------------------------- | -------------- | ----------- | --------- |
+| 1. AgentDisposition prototype (overlay-first) | 0/TBD          | Not started | -         |
+| 2. Command Center contract hardening          | 0/TBD          | Not started | -         |
+| 3. Resource-flow overlays                     | 0/TBD          | Not started | -         |
+| 4. Review queue projection + promotion path   | 0/TBD          | Not started | -         |
+| 5. Workbench usability primitives             | 0/TBD          | Not started | -         |
+| 999.x Future Research backlog                 | —              | Deferred    | -         |
 
 ## Notes
 
 - **Forward-looking only.** Historical v0.1 phases (Phase 0 scope/docs through Phase 5.x agent self-service) are captured in `docs/ROADMAP.md` and not duplicated here.
-- **Per-phase gates.** Every phase must, at completion, satisfy the §11 bounds test (`C-bounds`) and the §15 one-sentence test (proto-society extension). Verifier Jobs shipping with each phase enforce these at code level.
-- **`HYBRID-AGENT-POLICY.md` not yet ingested.** Both source north stars cross-reference it. If Phase 1's idle-behavior modeling or Phase 4's signature scoping turns out to depend on per-agent reactive+deliberative policy details, run `/gsd-ingest-docs` to pull it in before scoping the affected phase. Flagged here so it doesn't surprise downstream `/gsd-plan-phase`.
-- **D2 CRD policy.** Phase 1 (AgentDisposition) and Phase 4 (MobProposal) are the two places the source spec forces a CRD: dispositions because idle behavior must be governed, mob proposals because coalition action must be representable for review. All other primitives (Channel, Post, SteeringEvent, Tool, etc.) stay as overlays/artifacts until usage justifies promotion. Promoting any to first-class CRD is a v2 candidate.
-- **D4 non-negotiability.** Phase 7 is gated independent of pilot signal — it ships before Phase 8 because the pilot must be revocable from day zero, even synthetically.
+- **Re-steering 2026-05-09 PM.** This roadmap supersedes the earlier proto-society-first roadmap (commit 7308e9d). The earlier phases' goals are preserved in REQUIREMENTS.md §4 "Future Research / Speculative Concepts" and intel/\* files. The earlier source schema sketches (`C-agent-disposition`, `C-discourse-primitives`, `C-mob-proposal`, etc.) remain in `intel/constraints.md` as **future-research target shapes**, not v0.2 commitments.
+- **Per-phase gates.** Every phase must, at completion, satisfy the §11 bounds test (`C-bounds`) and the §15 one-sentence test. Workbench/Command Center work additionally honors `docs/COMMAND-CENTER-CONTRACT.md` Prime Directive. Verifier Jobs shipping with each phase enforce these at code level.
+- **D2 CRD policy.** No new CRDs in v0.2. AgentDisposition stays as overlay; review queue stays as projection; flows stay as overlays. CRD promotion is post-observation, post-acceptance, in a future milestone.
+- **D6 Self-proposal, not self-promotion.** Phase 1's DISP-02 enforces the existing capability-JWT scope check at issuance time — overlays narrow scope; they never widen it. Agents propose; the substrate or human governance promotes.
+- **D7 COMMAND-CENTER-CONTRACT.md priority.** For all UI hint phases (1, 2, 3, 5), the contract takes precedence over north-star design language. Every visible world object/action/animation must map back to a substrate source.
+- **HYBRID-AGENT-POLICY.md not yet ingested.** Both source north stars cross-reference it. If a future-research phase activates and depends on per-agent reactive+deliberative policy details, run `/gsd-ingest-docs` first.
 
 ---
 
-_Roadmap created: 2026-05-09 by `gsd-roadmapper` from `.planning/intel/` (no PRDs ingested; REQ-IDs derived from `PROTO-SOCIETY-DESIGN.md` "Substrate primitives needed")._
+_Roadmap re-steered: 2026-05-09 PM. Original CRD-first proto-society roadmap (Phases 1–8) demoted to Future Research backlog (999.x). Active phases re-derived from REQUIREMENTS.md §1 "Candidate Requirements" — workflow-substrate hardening + observation-first experiments per operator directive._

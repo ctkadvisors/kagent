@@ -1,8 +1,10 @@
 # Requirements
 
+> **Re-steered 2026-05-09 PM.** This file records **requirement candidates** drawn from the two ingested SPEC-tagged design north stars. After the 2026-05-09 PM re-steering, both north stars are treated as **candidate inputs**, not commitments. Authoritative active milestone scope lives in `.planning/REQUIREMENTS.md` §1 "Candidate Requirements"; deferred concepts live in `.planning/REQUIREMENTS.md` §4 "Future Research / Speculative Concepts". Synthesized outputs use **CoalitionProposal** (not "MobProposal") and **self-proposal** (not "self-promotion") — the original source-document terms are preserved here when quoting source material.
+
 No PRDs were ingested. The two ingested documents are SPEC-tagged design north stars. They describe goals, non-goals, and winning conditions in PRD-adjacent language but do not enumerate per-feature acceptance criteria as canonical PRDs would.
 
-The downstream `gsd-roadmapper` should treat the goals/non-goals/winning-conditions sections of the north stars as _requirement candidates_ — useful for shaping `REQUIREMENTS.md` but not yet structured as `REQ-*` IDs with per-criterion acceptance.
+The downstream consumer should treat the goals/non-goals/winning-conditions sections of the north stars as _requirement candidates_ — useful for shaping `REQUIREMENTS.md` but not yet structured as `REQ-*` IDs with per-criterion acceptance.
 
 ## Requirement candidates pulled from goals/winning-conditions (NOT canonical REQ-IDs)
 
@@ -75,7 +77,7 @@ Near-term proof-of-concept:
 Medium-term:
 
 - promote `Channel` and `Post` to first-class CRDs once read-side proves out
-- `MobProposal` for coalition action (signed quorum; self-review prevention; ring-review detection)
+- `CoalitionProposal` (renamed from source-document "MobProposal") for coalition action (signed quorum; self-review prevention; ring-review detection)
 - decay / revalidation as a property on catalog object kinds
 - quarantine semantics with explicit TTL and exit paths
 - ground-truth eval scaffolding external to society signals

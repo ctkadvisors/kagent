@@ -1,5 +1,7 @@
 # Context
 
+> **Re-steered 2026-05-09 PM.** Topics below are design rationale extracted from the two ingested SPEC-tagged design north stars. After the 2026-05-09 PM re-steering, both north stars are treated as **candidate inputs**, not commitments. The proto-society topics (society, governance tension, range of outcomes, etc.) are recorded here for future-research planning context — they do NOT define v0.2 scope. Active v0.2 scope is workflow-substrate hardening + observation-first experiments; see `.planning/REQUIREMENTS.md` §1. Synthesized outputs use **CoalitionProposal** (not "MobProposal") and **self-proposal** (not "self-promotion") — original source-document terms preserved when quoting.
+
 Design rationale, framing, and posture extracted from the two ingested SPEC-tagged design north stars. This file holds the _why_; `constraints.md` holds the _what_.
 
 ---
@@ -76,7 +78,7 @@ Compatibility declaration: "Everything in the workflow north star is foundationa
 
 - source: docs/PROTO-SOCIETY-DESIGN.md ("The honest range of outcomes")
 
-Plausible outcomes when an agent collective with persistent identity, discourse, and self-promotion authority is given infinite tokens and time:
+Plausible outcomes when an agent collective with persistent identity, discourse, and self-proposal authority (NOT self-promotion — promotion is governance-gated per D3 + D6) is given infinite tokens and time:
 
 - Productive collaboration — the operator gets the pal they wanted; agents iterate; catalog grows usefully; human input remains load-bearing.
 - Drift toward irrelevance — society self-organizes around concerns humans don't share; human input becomes ceremonial.

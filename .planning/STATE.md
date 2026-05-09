@@ -2,17 +2,17 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-09)
+See: .planning/PROJECT.md (re-steered 2026-05-09 PM)
 
-**Core value:** The substrate turns intent into verified reusable capability under bounded resources, observable state, and revocable authority. Signals propose; governance disposes.
-**Current focus:** Phase 1 — AgentDisposition v0
+**Core value:** The substrate turns intent into verified reusable capability under bounded resources, observable state, and revocable authority. **Signals propose; governance disposes.** Agents propose; substrate or human governance promotes; no agent self-escalates authority.
+**Current focus:** Phase 1 — AgentDisposition prototype (overlay-first, no CRD)
 
 ## Current Position
 
-Phase: 1 of 8 (AgentDisposition v0)
+Phase: 1 of 5 (AgentDisposition prototype, overlay-first)
 Plan: — of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-05-09 — Intel ingested, roadmap created (forward-looking v0.2 proto-society foundations)
+Status: Ready to plan (CONTEXT.md being generated as part of /gsd-plan-phase 1)
+Last activity: 2026-05-09 PM — Re-steering applied to PROJECT.md / REQUIREMENTS.md / ROADMAP.md / intel/\* (north stars demoted to candidate inputs; proto-society demoted to Future Research; CRD-first phases removed from active scope; AgentDisposition reframed as overlay-first prototype; COMMAND-CENTER-CONTRACT.md ingested as binding contract for Workbench/CC work; "MobProposal" renamed to "CoalitionProposal" in synthesized outputs; "self-promotion" renamed to "self-proposal").
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -41,13 +41,12 @@ _Updated after each plan completion_
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table (D1–D5 are PROPOSED, not locked ADRs; promoting to ADR requires explicit user input).
+Decisions are logged in PROJECT.md "Key Decisions" table. **All D1–D7 are PROPOSED, not locked ADRs.** Promoting any to ADR status requires explicit user input.
 
 Recent decisions affecting current work:
 
-- 2026-05-09 (initial intel + roadmap): adopted the §11 bounds test and §15 one-sentence test (proto-society extension) as per-phase verification gates; roadmap is forward-looking only (historical v0.1 phases live in `docs/ROADMAP.md`).
-- D2 (proposed): defer CRDs until usage justifies. Phase 1 (AgentDisposition) and Phase 4 (MobProposal) are the only v0.2 phases that force a CRD; Channel/Post/SteeringEvent/Tool stay as overlays/artifacts.
-- D4 (proposed, treated as design requirement): substrate-level kill-switch ships in Phase 7 before pilot start (Phase 8); revocability is non-negotiable.
+- **2026-05-09 PM (re-steering):** Re-output the entire planning corpus per operator directive. Treat `docs/NORTH-STAR-SYSTEM-DESIGN.md` and `docs/PROTO-SOCIETY-DESIGN.md` as candidate inputs only. Demote proto-society primitives (CRD-shaped Channels/Posts/CoalitionProposals/reputation/society kill-switch) to Future Research. Reframe AgentDisposition as overlay-first prototype on existing v0.1 substrate. Add D6 (self-proposal, not self-promotion) and D7 (`docs/COMMAND-CENTER-CONTRACT.md` is binding for Workbench/Command Center work). Rename "MobProposal" → "CoalitionProposal" in synthesized outputs. Move original Phases 2–8 (CRD-first proto-society) to Future Research backlog 999.x.
+- **2026-05-09 (initial intel + roadmap):** adopted the §11 bounds test and §15 one-sentence test as per-phase verification gates (still binding). Original roadmap created from intel ingest; superseded by 2026-05-09 PM re-steering above.
 
 ### Pending Todos
 
@@ -55,24 +54,38 @@ None yet. (Capture via `/gsd-add-todo` during execution.)
 
 ### Blockers/Concerns
 
-- **`HYBRID-AGENT-POLICY.md` not yet ingested.** Both north stars cross-reference it; if Phase 1 idle-behavior modeling or Phase 4 signature scoping needs per-agent reactive+deliberative policy details, run `/gsd-ingest-docs` first.
-- **D1–D5 are proposed, not locked.** No ADRs were ingested. Promoting any of D1–D5 to formal ADR status (e.g., the Kata isolation backend, NATS JetStream as the bus) requires explicit user input before phases that depend on those locks.
+- **`HYBRID-AGENT-POLICY.md` not yet ingested.** Both north stars cross-reference it. The current active scope (overlay-first AgentDisposition; Command Center hardening; flow overlays; review-queue projection; usability primitives) does NOT depend on per-agent reactive+deliberative policy details, so this is informational rather than blocking. If a future-research phase activates and needs it, run `/gsd-ingest-docs` first.
+- **D1–D7 are proposed, not locked.** No ADRs were ingested. Promoting any of D1–D7 to formal ADR status requires explicit user input before phases that depend on those locks.
+- **Original CRD-first proto-society roadmap demoted.** The original Phases 1–8 (CRD-first AgentDisposition, Discourse, Consolidation, MobProposal, Decay, Quarantine, Revoke, Pilot) are recorded in `intel/requirements.md` as candidate inputs and in `ROADMAP.md` Future Research backlog (999.x). Do not plan from those.
 
 ## Deferred Items
 
-Items acknowledged and carried forward from v0.1 close (per `docs/ROADMAP.md` and intel):
+### Carried from v0.1 close (per `docs/ROADMAP.md` and intel):
 
-| Category                | Item                                                                                                                                        | Status                                                           | Deferred At   |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------- |
-| Runtime                 | Bun runtime re-evaluation (currently Node 22 + tsx; Bun reverted in v0.1 due to K3s self-signed CA TLS issues in `@kubernetes/client-node`) | Deferred to v0.3+                                                | v0.1          |
-| Isolation               | Whether agent-sandbox replaces Kata Containers as isolation backend                                                                         | Long-term decision per NORTH-STAR §13                            | v0.1          |
-| CRDs                    | Whether `Tool`, `SteeringEvent`, `TaskReview` graduate to first-class CRDs                                                                  | Defer per `D2` until usage justifies                             | v0.1          |
-| Discourse promotion     | Promote `Channel` and `Post` to CRDs                                                                                                        | v2 (after v0.2 pilot signal)                                     | v0.2 planning |
-| Reputation algorithm    | PageRank-like / upvote / citation-weighted / hybrid                                                                                         | v2 (after pilot signal)                                          | v0.2 planning |
-| MobProposal voting rule | Simple quorum / weighted / liquid democracy                                                                                                 | v2 (after pilot signal; v0.2 ships ≥N quorum + capability scope) | v0.2 planning |
+| Category  | Item                                                                       | Status                                | Deferred At |
+| --------- | -------------------------------------------------------------------------- | ------------------------------------- | ----------- |
+| Runtime   | Bun runtime re-evaluation (currently Node 22 + tsx)                        | Deferred to v0.3+                     | v0.1        |
+| Isolation | Whether agent-sandbox replaces Kata Containers as isolation backend        | Long-term decision per NORTH-STAR §13 | v0.1        |
+| CRDs      | Whether `Tool`, `SteeringEvent`, `TaskReview` graduate to first-class CRDs | Defer per `D2` until usage justifies  | v0.1        |
+
+### Carried from 2026-05-09 PM re-steering (proto-society Future Research):
+
+| Category    | Item                                                                                                       | Status                                                                               | Deferred At      |
+| ----------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------- |
+| CRDs        | `AgentDisposition` as a first-class CRD (vs the v0.2 overlay prototype)                                    | Future Research; promote post-Phase 1 if observation justifies                       | v0.2 re-steering |
+| Discourse   | `Channel` / `Post` as artifacts and later CRDs                                                             | Future Research; defer until read-side proves out                                    | v0.2 re-steering |
+| Coalition   | `CoalitionProposal` (renamed from "MobProposal") with signed quorum, no-self-review, ring-review detection | Future Research; defer until coalition action is real                                | v0.2 re-steering |
+| Controllers | Consolidation controller (read-only daemon proposing hygiene actions)                                      | Future Research; defer until manual review-queue ergonomics prove what hygiene means | v0.2 re-steering |
+| NFR         | Decay / revalidation policy on catalog object kinds                                                        | Future Research                                                                      | v0.2 re-steering |
+| NFR         | Quarantine semantics as first-class state                                                                  | Future Research                                                                      | v0.2 re-steering |
+| Governance  | Substrate-level proto-society revocation kill-switch                                                       | Future Research; non-negotiable IF the layer ships                                   | v0.2 re-steering |
+| Pilot       | Pilot deployment of proto-society layer (1–2 agents, observe)                                              | Future Research; only after primitives exist                                         | v0.2 re-steering |
+| Reputation  | Specific reputation algorithm                                                                              | Future Research; pick after pilot signal                                             | v0.2 re-steering |
+| Voting      | Specific voting rule for CoalitionProposal                                                                 | Future Research; pick after coalitions are real                                      | v0.2 re-steering |
 
 ## Session Continuity
 
 Last session: 2026-05-09 12:30
-Stopped at: `gsd-roadmapper` wrote PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md from intel ingest
-Resume file: None (next: `/gsd-plan-phase 1`)
+Stopped at: `gsd-roadmapper` wrote PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md from intel ingest (commit 7308e9d).
+Re-steered: 2026-05-09 PM during /gsd-plan-phase 1 — operator redirected the entire planning corpus.
+Resume file: None (next: continue `/gsd-plan-phase 1` with corrected scope; CONTEXT.md to be generated, then research → plan → verify).

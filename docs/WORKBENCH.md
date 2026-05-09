@@ -245,6 +245,15 @@ and [`GA-EVIDENCE-CHECKLIST.md`](./GA-EVIDENCE-CHECKLIST.md).
 
 ## 6. Deployment
 
+For the RTS-style Command Center specifically, treat
+[`COMMAND-CENTER-CONTRACT.md`](./COMMAND-CENTER-CONTRACT.md) as the
+implementation contract. The short version: the canvas may be playful,
+but every object and action must map back to CRDs, Workbench API DTOs,
+audit events, gateway state, artifacts, traces, or verifier output. It
+is a projection over the engine, not a second source of truth.
+The broader product/system north star lives in
+[`NORTH-STAR-SYSTEM-DESIGN.md`](./NORTH-STAR-SYSTEM-DESIGN.md).
+
 Deploy as a separate app in `new_localai`, not as part of the operator
 binary.
 

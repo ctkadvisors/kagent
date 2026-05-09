@@ -1,5 +1,7 @@
 # Synthesis Summary
 
+> **Re-steered 2026-05-09 PM.** Counts and structure below describe the 2026-05-09 ingest of `NORTH-STAR-SYSTEM-DESIGN.md` + `PROTO-SOCIETY-DESIGN.md`. After the 2026-05-09 PM operator directive, both north stars are treated as **candidate inputs**, not commitments. Authoritative active milestone scope and decisions live in `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`. Synthesized outputs use **CoalitionProposal** (not "MobProposal") and **self-proposal** (not "self-promotion").
+
 Entry point for downstream consumers (e.g., `gsd-roadmapper`).
 
 ## Doc counts by type

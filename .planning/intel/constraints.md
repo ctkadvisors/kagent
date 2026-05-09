@@ -1,5 +1,7 @@
 # Constraints
 
+> **Re-steered 2026-05-09 PM.** Constraints below were extracted from the two SPEC-tagged design north stars during the 2026-05-09 ingest. After the 2026-05-09 PM re-steering, both north stars are treated as **candidate inputs**, not commitments. The proto-society schema sketches (`C-agent-disposition`, `C-discourse-primitives`, `C-mob-proposal`, `C-consolidation`, `C-decay`, `C-quarantine`, `C-governance-tiers`, `C-failure-modes`) are **future-research target shapes**, not v0.2 commitments. Active v0.2 work uses overlay-shaped representations on existing v0.1 substrate; see `.planning/REQUIREMENTS.md` §1. Synthesized outputs use **CoalitionProposal** (not "MobProposal"); the constraint ID `C-mob-proposal` is retained in this file as a source-quote artifact, but the synthesized name is **CoalitionProposal**.
+
 Constraints extracted from the two SPEC-tagged design north stars. Both ingested at SPEC precedence (manifest-honored, non-locked). Schema-shaped substrate primitives are recorded as `protocol`/`schema` constraints; resource and governance bounds as `nfr`; loop and aggregation contracts as `protocol`.
 
 ---
@@ -300,7 +302,9 @@ Implementation posture: start with `Post` records as artifacts; promote to full 
 
 ---
 
-## C-mob-proposal — MobProposal / coalition action primitive (proto-society)
+## C-mob-proposal — CoalitionProposal / coalition action primitive (proto-society) — FUTURE RESEARCH
+
+> **Synthesized name:** `CoalitionProposal`. The source document uses "MobProposal"; the constraint ID `C-mob-proposal` is retained as a source-quote artifact, but downstream synthesized outputs use `CoalitionProposal`. Status after 2026-05-09 PM re-steering: **future research, not v0.2 commitment**.
 
 - source: docs/PROTO-SOCIETY-DESIGN.md (Substrate primitives needed §3)
 - type: schema
