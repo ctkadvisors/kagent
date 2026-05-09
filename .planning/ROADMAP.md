@@ -40,12 +40,15 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Promotion gate (post-phase observation):** within ~7 days of overlay use across ≥2 agents, capture which fields are read often, which are written often, which are silently ignored, and whether overlay collisions occur. If repeated behavior justifies it, file a Future Research → Candidate Requirement promotion for `AgentDisposition` as a CRD field on `Agent` or as a sibling CRD. Until then: overlay-only.
 
-**Plans**: TBD
+**Plans**: 4 plans
 **UI hint**: yes (Workbench/Command Center work — `COMMAND-CENTER-CONTRACT.md` is binding)
 
 Plans:
 
-- [ ] 01-01: TBD
+- [ ] 01-01-PLAN.md — Wave 0 setup (audit events, RBAC, PROPOSAL_TOOL_MAP, vitest, fixtures) + DISP-01 ConfigMap overlay carrier + schema-validation Job
+- [ ] 01-02-PLAN.md — DISP-02 capability-JWT scope narrowing in cap-issuer (narrows-never-widens; typed audit on rejection)
+- [ ] 01-03-PLAN.md — DISP-03 workbench-api /api/dispositions projection + over-budget exactly-once-per-day audit emission
+- [ ] 01-04-PLAN.md — DISP-04 Command Center DispositionOverlay + CC-01 source-binding (disposition slice) + reload-stability + base-building-only mode
 
 ### Phase 2: Command Center contract hardening
 
@@ -122,7 +125,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase                                         | Plans Complete | Status      | Completed |
 | --------------------------------------------- | -------------- | ----------- | --------- |
-| 1. AgentDisposition prototype (overlay-first) | 0/TBD          | Not started | -         |
+| 1. AgentDisposition prototype (overlay-first) | 0/4            | Not started | -         |
 | 2. Command Center contract hardening          | 0/TBD          | Not started | -         |
 | 3. Resource-flow overlays                     | 0/TBD          | Not started | -         |
 | 4. Review queue projection + promotion path   | 0/TBD          | Not started | -         |
