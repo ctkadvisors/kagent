@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v0.2
+milestone_name: milestone
+status: executing
+stopped_at: `gsd-roadmapper` wrote PROJECT.md, REQUIREMENTS.md, ROADMAP.md, STATE.md from intel ingest (commit 7308e9d).
+last_updated: "2026-05-09T18:00:02.963Z"
+last_activity: 2026-05-09 -- Phase 1 planning complete
+progress:
+  total_phases: 5
+  completed_phases: 0
+  total_plans: 4
+  completed_plans: 0
+  percent: 0
+---
+
 # Project State
 
 ## Project Reference
@@ -11,8 +27,8 @@ See: .planning/PROJECT.md (re-steered 2026-05-09 PM)
 
 Phase: 1 of 5 (AgentDisposition prototype, overlay-first)
 Plan: — of TBD in current phase
-Status: Ready to plan (CONTEXT.md being generated as part of /gsd-plan-phase 1)
-Last activity: 2026-05-09 PM — Re-steering applied to PROJECT.md / REQUIREMENTS.md / ROADMAP.md / intel/\* (north stars demoted to candidate inputs; proto-society demoted to Future Research; CRD-first phases removed from active scope; AgentDisposition reframed as overlay-first prototype; COMMAND-CENTER-CONTRACT.md ingested as binding contract for Workbench/CC work; "MobProposal" renamed to "CoalitionProposal" in synthesized outputs; "self-promotion" renamed to "self-proposal").
+Status: Ready to execute
+Last activity: 2026-05-09 -- Phase 1 planning complete
 
 Progress: [░░░░░░░░░░] 0%
 
