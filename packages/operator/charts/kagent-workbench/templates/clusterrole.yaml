@@ -73,4 +73,13 @@ rules:
   - apiGroups: ['events.k8s.io']
     resources: ['events']
     verbs: ['get', 'list', 'watch']
+  # Phase 1 / DISP-03 — AgentDisposition overlay ConfigMaps for the
+  # `/api/dispositions` projection. Read-only: the operator chart's
+  # ClusterRole owns `configmaps:patch` for the proposals-today
+  # annotation; the workbench MUST NOT acquire a write verb here.
+  # (DISP-02's annotation-writer pattern keeps the operator as the
+  # SOLE writer; workbench-api READS the annotation.)
+  - apiGroups: ['']
+    resources: ['configmaps']
+    verbs: ['get', 'list', 'watch']
 {{- end }}

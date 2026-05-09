@@ -119,6 +119,14 @@ spec:
             # packages/workbench-api/src/auth.ts.
             - name: WORKBENCH_AUTH_REQUIRED
               value: {{ .Values.api.authRequired | quote }}
+            # Phase 1 / DISP-03 — `/api/dispositions` daily-counter
+            # boundary timezone. Only 'UTC' is supported in v0.2;
+            # non-UTC values log a warning at workbench-api boot.
+            # Forward-compat hook for IANA names (e.g.
+            # 'America/Chicago') once a multi-timezone deployment
+            # justifies the implementation.
+            - name: WORKBENCH_DISPOSITION_DAILY_BOUNDARY_TZ
+              value: {{ .Values.api.disposition.dailyBoundaryTimezone | default "UTC" | quote }}
             # WS-J write surface gate. The workbench-api default-OFFs the
             # POST /api/tasks handler unless this is the literal string
             # `true`. Tied to `.Values.rbac.actions.create` so the chart

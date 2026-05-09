@@ -20,12 +20,15 @@ import type { CustomObjectsApi } from '@kubernetes/client-node';
 
 import type { CoreV1Api } from '@kubernetes/client-node';
 
+import type { AuditEvent } from '@kagent/audit-events';
+
 import { buildAuthMiddleware } from './auth.js';
 import type { SnapshotCache } from './cache.js';
 import type { GatewayClient } from './gateway-client.js';
 import type { SseBroker } from './sse.js';
 import { agentsRoute } from './routes/agents.js';
 import { clusterRoute } from './routes/cluster.js';
+import { dispositionsRoute } from './routes/dispositions.js';
 import { gatewayRoute } from './routes/gateway.js';
 import { healthzRoute } from './routes/healthz.js';
 import { streamRoute } from './routes/stream.js';
@@ -101,6 +104,34 @@ export interface RouterDeps {
    * mode / KAGENT_NO_INFORMER), `/api/cluster/*` routes 503.
    */
   readonly coreApi?: CoreV1Api;
+  /**
+   * Phase 1 / DISP-03 — audit-event publisher for `disposition.*`
+   * events. When undefined, the dispositions route still computes
+   * the projection but emits no audit events; production wires this
+   * to a connected `AuditPublisher` shared with the rest of the
+   * substrate audit stream.
+   */
+  readonly auditPublisher?: { publish(event: AuditEvent): Promise<void> };
+  /**
+   * Phase 1 / DISP-03 — `/api/dispositions` route options.
+   */
+  readonly disposition?: {
+    /**
+     * IANA timezone for the daily counter boundary. Only `'UTC'` is
+     * supported in v0.2 — non-UTC values fall back to UTC and log a
+     * warning at router-build time. Forward-compat hook for IANA
+     * names (e.g. `'America/Chicago'`) once a multi-timezone
+     * deployment justifies the implementation.
+     */
+    readonly dailyBoundaryTimezone?: string;
+    /**
+     * Namespaces to query for disposition ConfigMaps. When undefined
+     * or empty, the route lists cluster-wide via
+     * `listConfigMapForAllNamespaces`. Production wires this from
+     * `KAGENT_WATCH_NAMESPACES` (comma-separated env var).
+     */
+    readonly watchNamespaces?: readonly string[];
+  };
 }
 
 export function buildRouter(deps: RouterDeps): Hono {
@@ -156,6 +187,37 @@ export function buildRouter(deps: RouterDeps): Hono {
       ...(deps.coreApi !== undefined && { coreApi: deps.coreApi }),
     }),
   );
+
+  // Phase 1 / DISP-03 — `/api/dispositions` projection. Mounted only
+  // when a CoreV1 read client is wired (same posture as
+  // `clusterRoute`); the route handles the missing-customApi case
+  // internally by returning empty `items` rather than rendering
+  // unverified rows.
+  if (deps.coreApi !== undefined) {
+    // Forward-compat sanity: only 'UTC' is supported in v0.2; emit
+    // ONE warning at router build time for non-UTC values so a
+    // misconfigured Helm value is visible in workbench-api logs.
+    const tz = deps.disposition?.dailyBoundaryTimezone;
+    if (typeof tz === 'string' && tz.length > 0 && tz !== 'UTC') {
+      console.warn(
+        `[workbench-api] disposition.dailyBoundaryTimezone: only UTC is supported in v0.2; got "${tz}" — falling back to UTC`,
+      );
+    }
+    const readCustomForOrphan = deps.readCustomApi ?? deps.customApi;
+    app.route(
+      '/api/dispositions',
+      dispositionsRoute({
+        coreApi: deps.coreApi,
+        ...(readCustomForOrphan !== undefined && { readCustomApi: readCustomForOrphan }),
+        ...(deps.gatewayClient !== undefined && { gatewayClient: deps.gatewayClient }),
+        ...(deps.auditPublisher !== undefined && { auditPublisher: deps.auditPublisher }),
+        ...(deps.disposition?.watchNamespaces !== undefined &&
+          deps.disposition.watchNamespaces.length > 0 && {
+            watchNamespaces: deps.disposition.watchNamespaces,
+          }),
+      }),
+    );
+  }
 
   // Reserve the API namespace before the SPA proxy catches unmatched
   // GETs. Without this, `/api/typo` can return the UI's index.html
