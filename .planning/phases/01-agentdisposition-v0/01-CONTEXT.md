@@ -67,13 +67,17 @@
 
 ### Counter projection (no new persistence)
 
-**Decision: Compute `spentTokensToday`, `postsToday`, `proposalsToday` as a workbench-api projection from existing telemetry. NO new database table, no new CRD status field, no new etcd key.**
+**Decision: Compute `spentTokensToday`, `postsToday`, `proposalsToday` as a workbench-api projection from existing telemetry. NO new database table, no new CRD status field, no new etcd key. Annotations on the existing disposition ConfigMap carrier are NOT a new persistence primitive — they are an existing K8s primitive being used.**
 
 - `spentTokensToday`: sum of token usage from gateway DTOs (existing — gateway already emits per-Agent token usage) over the current day boundary.
 - `postsToday`: in v0.2, **this counter remains zero** for any Agent (no Post primitive yet — Posts are Future Research). The field is reserved for forward compatibility; the projection emits 0 with a documented "not-implemented-in-v0.2" comment.
-- `proposalsToday`: count of audit events of `kind: proposal` (or equivalent existing audit-event signature) whose `agent` matches the disposition's `agentRef`, scoped to the current day boundary.
+- `proposalsToday`: **annotation-writer pattern (locked 2026-05-09 PM via plan-checker BLOCKER #2 resolution; supersedes the original audit-event-counting design).**
+  - **Source of truth:** the disposition ConfigMap's annotation `kagent.knuteson.io/proposals-today` (string-encoded integer). A sibling annotation `kagent.knuteson.io/proposals-today-day` records the UTC day window (`YYYY-MM-DD`) the count belongs to.
+  - **Sole writer:** the operator's cap-issuer narrowing step (plan 02). When a successful capability mint includes a proposal-category tool after overlay narrowing, the cap-issuer PATCHes the ConfigMap to increment the annotation by 1 and write the current UTC day. The configmaps:patch RBAC for this is granted in plan 01 (task 3).
+  - **Reader:** workbench-api dispositions projection (plan 03). It reads both annotations on every projection request: if the day annotation matches today's UTC day, it parses the count; otherwise it treats the count as 0 (rollover semantics). Workbench-api NEVER writes the annotation.
+  - **Why not audit-event-counting?** Adding a NATS JetStream consumer to workbench-api would expand the substrate's primitive surface for the projection. The annotation-writer keeps the projection an O(1) read on the same ConfigMap that already carries the spec — cleaner, fewer moving parts, and the rollover semantics are explicit rather than depending on consumer position-tracking.
 
-**Daily boundary:** UTC midnight, configurable per-deployment via Helm values (defaults to UTC). Documented in the projection's API response.
+**Daily boundary:** UTC midnight, configurable per-deployment via Helm values (defaults to UTC). Documented in the projection's API response. The day-mismatch reset is handled READ-SIDE (workbench-api treats a day-annotation mismatch as count=0); the operator's next narrowing-increment then rewrites both annotations to today.
 
 **Over-budget audit event:** when a projection observes `spentTokensToday > attentionBudget.tokensPerDay` OR `proposalsToday > proposalScope.maxProposalsPerDay`, emit a substrate audit event of `kind: disposition_over_budget` with structured `reason` (`tokens_exceeded` | `proposals_exceeded`), `agentRef`, and current+budget values. Emit at most once per (agent, kind) per day to avoid log floods.
 
