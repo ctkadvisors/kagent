@@ -360,6 +360,9 @@ importers:
 
   packages/workbench-ui:
     dependencies:
+      '@kagent/dto':
+        specifier: workspace:*
+        version: link:../dto
       react:
         specifier: 19.0.0
         version: 19.0.0
