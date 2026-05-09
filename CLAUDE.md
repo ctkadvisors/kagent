@@ -43,13 +43,30 @@ A fresh session must read these in order — the *why* and *what* are all here:
 
 ## Phase discipline
 
-This repo uses a **lighter** planning pattern than `agent-runtime` (which used the full GSD `.planning/` system). Here, [`docs/ROADMAP.md`](./docs/ROADMAP.md) is the plan; one phase = one git commit cluster + one tag. Don't invent unscoped work.
+This repo uses **GSD** (the `.planning/` tree) for forward-looking planning. The migration from the prior lighter pattern (flat `docs/ROADMAP.md` checklist) happened on 2026-05-09 alongside the proto-society direction; legacy completed v0.1 phases remain in `docs/ROADMAP.md` as historical reference and are NOT duplicated in `.planning/`.
+
+The current planning artifacts:
+
+- [`.planning/PROJECT.md`](./.planning/PROJECT.md) — project bones, conventions, key decisions (D1–D5 are PROPOSED, not locked)
+- [`.planning/REQUIREMENTS.md`](./.planning/REQUIREMENTS.md) — REQ-IDs with falsifiable acceptance criteria
+- [`.planning/ROADMAP.md`](./.planning/ROADMAP.md) — phases + dependency graph (8 forward-looking v0.2 phases)
+- [`.planning/STATE.md`](./.planning/STATE.md) — current phase pointer + blockers/concerns
+- [`.planning/intel/`](./.planning/intel/) — synthesized planning context from ingested design docs (`NORTH-STAR-SYSTEM-DESIGN.md` + `PROTO-SOCIETY-DESIGN.md`)
+
+Drive phase work with `/gsd-*` slash commands:
+
+- `/gsd-progress` — answer "where am I?"
+- `/gsd-plan-phase N` — produce `PLAN.md` for a phase (after a discuss step)
+- `/gsd-execute-phase N` — execute the plan with atomic commits
+- `/gsd-resume-work` — pick up mid-phase after a context reset
+
+Don't invent unscoped work. Every phase must answer the §11 bounds test (declared capability + bounded resource drain + observable state transition + auditable output + revocation path) and the §15 one-sentence test from `docs/NORTH-STAR-SYSTEM-DESIGN.md`.
 
 When a phase completes:
-1. Commit each task atomically (Conventional Commits: `feat(phase-N-...)`, `fix(phase-N-...)`, etc.)
-2. Update `docs/ROADMAP.md` checkboxes
+1. Each task commit is atomic (Conventional Commits: `feat(phase-N-...)`, `fix(phase-N-...)`, etc.) — `/gsd-execute-phase` enforces this
+2. STATE.md and ROADMAP.md checkbox updates happen as part of phase verification
 3. Tag `vX.Y.Z-phaseN`
-4. Push branch + tag
+4. Push branch + tag (auto-pushed by default per memory)
 
 ## What this repo does NOT do
 
@@ -74,7 +91,7 @@ If a feature would expand the substrate's primitives appropriately (e.g., add `R
 
 - **K3s cluster:** managed by `new_localai/`. ArgoCD is the GitOps engine.
 - **LLM endpoint (default):** Cloudflare AI Gateway (`workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct` and others; provider prefix REQUIRED). Jetson1 Ollama is opt-in only, accessed at bare-metal IP `192.168.68.73:11434`.
-- **Image-gen endpoint (opt-in):** ComfyUI on `Mini-2.local:8188` (`http://192.168.68.60:8188`) — Apple M4 / 16GB / MPS, launchd-managed (`io.knuteson.comfyui`). Native install at `~/comfyui/` on mini-2. Default checkpoints: `sd_xl_turbo_1.0_fp16.safetensors`, `v1-5-pruned-emaonly.safetensors`. Workflow: POST `/prompt`, poll `/history/<id>`, fetch `/view?filename=...`. ComfyUI also installed on jetson1 (`dustynv/comfyui:r36.4.0` Docker, stopped) but Orin Nano 8GB unified RAM hits Tegra NvMap OOM on SD-class diffusion — kept as backup only for FLUX-schnell-GGUF Q4 experimentation. **For asset generation: read [`docs/IMAGE-ASSETS.md`](./docs/IMAGE-ASSETS.md) first** — locked Clash-of-Clans / Warcraft-3 style spec, working code snippet, reference exemplars in [`docs/assets/reference/`](./docs/assets/reference/).
+- **Image-gen endpoint (opt-in):** ComfyUI on `Mini-2.local:8188` (`http://192.168.68.60:8188`) — Apple M4 / 16GB / MPS, launchd-managed (`io.knuteson.comfyui`). Native install at `~/comfyui/` on mini-2. Default checkpoints: `sd_xl_turbo_1.0_fp16.safetensors`, `v1-5-pruned-emaonly.safetensors`. Workflow: POST `/prompt`, poll `/history/<id>`, fetch `/view?filename=...`. ComfyUI also installed on jetson1 (`dustynv/comfyui:r36.4.0` Docker, stopped) but Orin Nano 8GB unified RAM hits Tegra NvMap OOM on SD-class diffusion — kept as backup only for FLUX-schnell-GGUF Q4 experimentation. **For asset generation: read [`docs/IMAGE-ASSETS.md`](./docs/IMAGE-ASSETS.md) first** — there is **no active visual lock** for the workbench (the 2026-05-08 sprite-GUI experiment was abandoned); the pipeline still works for one-off uses (README hero, marketing). Don't skin the workbench in any visual style — game-like character lives in usability primitives, not chrome.
 - **GitOps only on the homelab cluster** — never reach for imperative `kubectl apply/exec/port-forward`. Deploy AND verify via git → Argo. Ship verification as Job manifests.
 - **Don't auto-merge PRs** — `gh pr create` and `gh pr merge` are not a unit; per-PR explicit consent only.
 - **Check existing hostnames** before grabbing a `*.knuteson.io` subdomain — `kubectl get ingress,ingressroute -A` + grep `new_localai/`, BEFORE writing any Ingress.
