@@ -179,9 +179,24 @@ export const VERIFIER_STARTED = 'verifier.started' as const;
 export const VERIFIER_COMPLETED = 'verifier.completed' as const;
 export const VERIFIER_FAILED = 'verifier.failed' as const;
 
+/* Phase 1 — AgentDisposition overlay-first prototype (DISP-02 + DISP-03).
+ * Two events bracket the disposition slice:
+ *   - `disposition.proposal_rejected` — emitted by the operator's
+ *     cap-issuer narrowing step when an Agent's disposition overlay
+ *     (sibling ConfigMap labelled `kagent.knuteson.io/agent-disposition=true`)
+ *     excludes a proposal-category tool that the resolved Agent claims
+ *     would otherwise have permitted. Self-proposal, never self-promotion:
+ *     the overlay narrows; it never widens.
+ *   - `disposition.over_budget` — emitted by the workbench-api dispositions
+ *     projection when an Agent's observed daily counter
+ *     (spentTokensToday OR proposalsToday) exceeds its overlay budget.
+ *     Emitted AT MOST ONCE per (agentRef, reason) per UTC-day-boundary. */
+export const DISPOSITION_PROPOSAL_REJECTED = 'disposition.proposal_rejected' as const;
+export const DISPOSITION_OVER_BUDGET = 'disposition.over_budget' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(47)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(49)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -232,4 +247,6 @@ export const ALL_EVENT_TYPES = Object.freeze([
   VERIFIER_STARTED,
   VERIFIER_COMPLETED,
   VERIFIER_FAILED,
+  DISPOSITION_PROPOSAL_REJECTED,
+  DISPOSITION_OVER_BUDGET,
 ] as const);

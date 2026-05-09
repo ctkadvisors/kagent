@@ -75,3 +75,17 @@ export type {
   ModelEndpointStatus,
 } from './crds.js';
 export { API_GROUP, API_GROUP_VERSION, API_VERSION, isModelEndpoint } from './crds.js';
+
+// Phase 1 / DISP-01 — AgentDisposition overlay parser. Single source
+// of truth for the overlay spec shape; consumed by both
+// @kagent/operator (cap-issuer narrowing + overlay-loader) and
+// @kagent/workbench-api (dispositions projection).
+export type { DispositionOverlay, ParseResult, ProposalKind } from './disposition-parser.js';
+export {
+  DISPOSITION_AGENT_REF_ANNOTATION,
+  DISPOSITION_LABEL,
+  DISPOSITION_PROPOSALS_TODAY_ANNOTATION,
+  DISPOSITION_PROPOSALS_TODAY_DAY_ANNOTATION,
+  PROPOSAL_KINDS,
+  parseDispositionConfigMap,
+} from './disposition-parser.js';

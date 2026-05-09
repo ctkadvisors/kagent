@@ -1,0 +1,249 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Phase 1 / DISP-01 — AgentDisposition overlay schema-validation Job.
+
+When `.Values.dispositionSchemaTest.enabled = true` this template renders:
+  - Two seed ConfigMaps representing a valid + an invalid disposition
+    overlay (the invalid one is missing `attentionBudget.tokensPerDay`)
+  - A ServiceAccount + namespaced Role + RoleBinding granting `configmaps: get`
+  - A one-shot Job whose Pod mounts both ConfigMaps as projected volumes,
+    runs an inline node:22-alpine validator, and exits 0 ONLY when the
+    valid CM passes AND the invalid CM is correctly rejected.
+
+ArgoCD hook annotations ensure the Job re-runs on every sync and the
+prior Pod is reaped before the new one is created.
+
+Per CLAUDE.md operational context: GitOps only on the homelab cluster.
+Verification reads `kubectl get -l phase=01-disposition` — no `kubectl exec`,
+no `kubectl apply` against the cluster.
+
+Codex MEDIUM #7 — accepted-with-pin: the Job runs `npm i js-yaml@4`
+against the public npm registry at sync time. Air-gapped clusters
+without registry egress should set `dispositionSchemaTest.enabled=false`
+and rely on the unit-level parser tests in
+`packages/dto/src/disposition-parser.test.ts` for schema-validation
+coverage. v0.3+ may switch to a prebuilt validator image.
+*/}}
+{{- if .Values.dispositionSchemaTest.enabled -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: disposition-test-valid
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    kagent.knuteson.io/agent-disposition: 'true'
+    phase: '01-disposition'
+    app.kubernetes.io/component: 'schema-validate'
+  annotations:
+    kagent.knuteson.io/agent-ref: '{{ .Release.Namespace }}/test-agent-valid'
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+data:
+  disposition.yaml: |
+    idleBehavior:
+      readChannels: []
+      attentionBudget:
+        tokensPerDay: 50000
+        pollIntervalSeconds: 300
+      proposalScope:
+        mayProposeAgainst:
+          - templates
+          - verifiers
+        maxProposalsPerDay: 3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: disposition-test-invalid
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    kagent.knuteson.io/agent-disposition: 'true'
+    phase: '01-disposition'
+    app.kubernetes.io/component: 'schema-validate'
+  annotations:
+    kagent.knuteson.io/agent-ref: '{{ .Release.Namespace }}/test-agent-invalid'
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+data:
+  # The required attention-budget token-cap field is intentionally
+  # absent below. The schema-validate Job MUST reject this overlay
+  # with a non-zero exit from the validator; the Job's success
+  # criterion is "valid passes AND invalid is rejected".
+  disposition.yaml: |
+    idleBehavior:
+      readChannels: []
+      attentionBudget:
+        pollIntervalSeconds: 300
+      proposalScope:
+        mayProposeAgainst:
+          - templates
+        maxProposalsPerDay: 3
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: disposition-schema-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    phase: '01-disposition'
+    app.kubernetes.io/component: 'schema-validate'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: disposition-schema-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    phase: '01-disposition'
+    app.kubernetes.io/component: 'schema-validate'
+rules:
+  - apiGroups: ['']
+    resources: ['configmaps']
+    verbs: ['get']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: disposition-schema-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    phase: '01-disposition'
+    app.kubernetes.io/component: 'schema-validate'
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: disposition-schema-validate
+subjects:
+  - kind: ServiceAccount
+    name: disposition-schema-validate
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: disposition-schema-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    phase: '01-disposition'
+    app.kubernetes.io/component: 'schema-validate'
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true,Force=true
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-operator.labels" . | nindent 8 }}
+        phase: '01-disposition'
+        app.kubernetes.io/component: 'schema-validate'
+    spec:
+      serviceAccountName: disposition-schema-validate
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: disposition-valid
+          configMap:
+            name: disposition-test-valid
+        - name: disposition-invalid
+          configMap:
+            name: disposition-test-invalid
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: validate
+          image: {{ .Values.dispositionSchemaTest.image | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ['ALL']
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          env:
+            - name: HOME
+              value: /tmp
+            - name: NPM_CONFIG_CACHE
+              value: /tmp/.npm
+          volumeMounts:
+            - name: disposition-valid
+              mountPath: /etc/disposition/valid
+              readOnly: true
+            - name: disposition-invalid
+              mountPath: /etc/disposition/invalid
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              cd /tmp
+              echo "[disposition-schema-validate] installing js-yaml@4 from npm registry…"
+              npm i --omit=dev --no-fund --no-audit --silent js-yaml@4
+              cat <<'JS' > /tmp/validate.js
+              // Embedded validation script — Phase 1 / DISP-01.
+              // Mirrors the field-level rules in
+              // packages/dto/src/disposition-parser.ts so a Job-green
+              // overlay does NOT later fail-closed at operator runtime.
+              const fs = require('fs');
+              const yaml = require('js-yaml');
+              const REQUIRED_KINDS = new Set(['templates', 'verifiers', 'capability-policy']);
+              function validate(text) {
+                const doc = yaml.load(text);
+                if (!doc || typeof doc !== 'object') throw new Error('disposition.yaml is not an object');
+                const ib = doc.idleBehavior;
+                if (!ib || typeof ib !== 'object') throw new Error('missing idleBehavior');
+                if (!Array.isArray(ib.readChannels)) throw new Error('idleBehavior.readChannels must be an array');
+                const ab = ib.attentionBudget;
+                if (!ab || typeof ab !== 'object') throw new Error('missing idleBehavior.attentionBudget');
+                if (typeof ab.tokensPerDay !== 'number' || ab.tokensPerDay <= 0) {
+                  throw new Error('idleBehavior.attentionBudget.tokensPerDay must be a positive number');
+                }
+                if (typeof ab.pollIntervalSeconds !== 'number' || ab.pollIntervalSeconds <= 0) {
+                  throw new Error('idleBehavior.attentionBudget.pollIntervalSeconds must be a positive number');
+                }
+                const ps = ib.proposalScope;
+                if (!ps || typeof ps !== 'object') throw new Error('missing idleBehavior.proposalScope');
+                if (!Array.isArray(ps.mayProposeAgainst)) throw new Error('proposalScope.mayProposeAgainst must be an array');
+                for (const k of ps.mayProposeAgainst) {
+                  if (!REQUIRED_KINDS.has(k)) throw new Error('proposalScope.mayProposeAgainst contains unknown kind: ' + k);
+                }
+                if (typeof ps.maxProposalsPerDay !== 'number' || ps.maxProposalsPerDay < 0) {
+                  throw new Error('proposalScope.maxProposalsPerDay must be a non-negative number');
+                }
+              }
+              const valid = fs.readFileSync('/etc/disposition/valid/disposition.yaml', 'utf8');
+              const invalid = fs.readFileSync('/etc/disposition/invalid/disposition.yaml', 'utf8');
+              try { validate(valid); console.log('valid: OK'); } catch (e) { console.error('valid CM failed validation: ' + e.message); process.exit(2); }
+              try { validate(invalid); console.error('invalid CM should have failed but passed'); process.exit(3); } catch (e) { console.log('invalid: correctly rejected (' + e.message + ')'); }
+              console.log('disposition-schema-validate: OK');
+              JS
+              node /tmp/validate.js
+{{- end }}

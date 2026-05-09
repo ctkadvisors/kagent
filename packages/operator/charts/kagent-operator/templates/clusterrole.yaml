@@ -87,7 +87,11 @@ rules:
   # operator on the next reconcile.
   - apiGroups: ['']
     resources: ['configmaps']
-    verbs: ['get', 'list', 'watch', 'create', 'delete']
+    # 'patch' added 2026-05-09 (Phase 1 / DISP-03) so cap-issuer can
+    # write `kagent.knuteson.io/proposals-today` annotations onto the
+    # AgentDisposition overlay ConfigMap as part of the proposal-count
+    # projection. Existing primitive (annotation), no new persistence.
+    verbs: ['get', 'list', 'watch', 'create', 'delete', 'patch']
   # ---------------------------------------------------------------------
   # Wave 1 — Workspace
   # ---------------------------------------------------------------------

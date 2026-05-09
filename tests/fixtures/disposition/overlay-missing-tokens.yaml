@@ -1,0 +1,24 @@
+# Phase 1 / DISP-01 — invalid overlay used by the schema-validation
+# Job's red-path test. The required attention-budget token cap field
+# is intentionally absent from the data block below; the schema-Job
+# MUST reject this with a non-zero exit code. See README.md for the
+# full fixture inventory.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: researcher-broken-disposition
+  namespace: kagent-system
+  labels:
+    kagent.knuteson.io/agent-disposition: 'true'
+  annotations:
+    kagent.knuteson.io/agent-ref: 'kagent-system/researcher-broken'
+data:
+  disposition.yaml: |
+    idleBehavior:
+      readChannels: []
+      attentionBudget:
+        pollIntervalSeconds: 300
+      proposalScope:
+        mayProposeAgainst:
+          - templates
+        maxProposalsPerDay: 3

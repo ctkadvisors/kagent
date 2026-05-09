@@ -104,7 +104,10 @@ export type AuditEventType =
   /* v0.1.7-rig.2 — substrate verifier reconciler. */
   | 'verifier.started'
   | 'verifier.completed'
-  | 'verifier.failed';
+  | 'verifier.failed'
+  /* Phase 1 — AgentDisposition overlay-first prototype. */
+  | 'disposition.proposal_rejected'
+  | 'disposition.over_budget';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -845,6 +848,56 @@ export interface VerifierFailedData {
 }
 
 /**
+ * `disposition.proposal_rejected` — Phase 1 / DISP-02. Emitted by
+ * the operator's cap-issuer narrowing step when an Agent's
+ * disposition overlay (sibling ConfigMap with label
+ * `kagent.knuteson.io/agent-disposition=true` and annotation
+ * `kagent.knuteson.io/agent-ref`) excludes a proposal-category
+ * tool that the resolved Agent claims would otherwise have
+ * permitted. Self-proposal, never self-promotion: the overlay
+ * narrows; it never widens.
+ */
+export interface DispositionProposalRejectedData {
+  /** "namespace/name" — the Agent the overlay narrows. */
+  readonly agentRef: string;
+  readonly agentNamespace: string;
+  readonly agentName: string;
+  readonly dispositionConfigMapName: string;
+  readonly dispositionConfigMapNamespace: string;
+  /** Tool name removed by the narrowing step (e.g. `write_artifact`). */
+  readonly excludedTool: string;
+  /** ProposalKind the excluded tool maps to — outside `mayProposeAgainst`. */
+  readonly excludedKind: 'templates' | 'verifiers' | 'capability-policy';
+  /** Allow-list from the overlay (intersected against the cap). */
+  readonly mayProposeAgainst: readonly ('templates' | 'verifiers' | 'capability-policy')[];
+  readonly reason: 'not_in_mayProposeAgainst';
+  readonly taskUid: string;
+}
+
+/**
+ * `disposition.over_budget` — Phase 1 / DISP-03. Emitted by
+ * the workbench-api dispositions projection when an Agent's
+ * observed daily counter exceeds its overlay budget. Emitted
+ * AT MOST ONCE per (agentRef, reason) per UTC-day-boundary;
+ * the projection in-memory de-dups within the workbench-api
+ * process, with rollover at the configured daily boundary.
+ */
+export interface DispositionOverBudgetData {
+  /** "namespace/name" — the Agent whose counter is over budget. */
+  readonly agentRef: string;
+  readonly agentNamespace: string;
+  readonly agentName: string;
+  readonly dispositionConfigMapName: string;
+  readonly reason: 'tokens_exceeded' | 'proposals_exceeded';
+  /** Observed counter value at projection time. */
+  readonly observed: number;
+  /** Budget value from the overlay (tokensPerDay or maxProposalsPerDay). */
+  readonly budget: number;
+  /** ISO 8601 timestamp of the day-window start (UTC midnight by default). */
+  readonly dailyBoundaryUtc: string;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -938,7 +991,13 @@ export type AuditEventData =
   /* v0.1.7-rig.2 — substrate verifier reconciler. */
   | { readonly type: 'verifier.started'; readonly data: VerifierStartedData }
   | { readonly type: 'verifier.completed'; readonly data: VerifierCompletedData }
-  | { readonly type: 'verifier.failed'; readonly data: VerifierFailedData };
+  | { readonly type: 'verifier.failed'; readonly data: VerifierFailedData }
+  /* Phase 1 — AgentDisposition overlay-first prototype. */
+  | {
+      readonly type: 'disposition.proposal_rejected';
+      readonly data: DispositionProposalRejectedData;
+    }
+  | { readonly type: 'disposition.over_budget'; readonly data: DispositionOverBudgetData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

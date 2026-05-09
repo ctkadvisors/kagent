@@ -1,0 +1,24 @@
+# Phase 1 / DISP-01 — canonical valid AgentDisposition overlay.
+# Sibling ConfigMap, referenced by `agentRef` annotation.
+# No new CRD; existing v0.1 primitive.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: researcher-01-disposition
+  namespace: kagent-system
+  labels:
+    kagent.knuteson.io/agent-disposition: 'true'
+  annotations:
+    kagent.knuteson.io/agent-ref: 'kagent-system/researcher-01'
+data:
+  disposition.yaml: |
+    idleBehavior:
+      readChannels: []
+      attentionBudget:
+        tokensPerDay: 50000
+        pollIntervalSeconds: 300
+      proposalScope:
+        mayProposeAgainst:
+          - templates
+          - verifiers
+        maxProposalsPerDay: 3

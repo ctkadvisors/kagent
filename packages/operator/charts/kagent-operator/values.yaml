@@ -1474,6 +1474,17 @@ smokeTest:
   # Timeout for the verification Job to wait on AgentTask completion.
   timeoutSeconds: 300
 
+# Phase 1 / DISP-01 — schema-validation Job for AgentDisposition
+# overlay ConfigMaps. ArgoCD-deployable; runs once per sync. Disabled
+# by default; enable in environment values to gate deployments on a
+# green schema check. The Job ships two seed ConfigMaps (one valid,
+# one missing the required tokensPerDay field) and asserts the parser
+# accepts the first AND rejects the second; only when both
+# expectations hold does the Job exit 0.
+dispositionSchemaTest:
+  enabled: false
+  image: 'node:22-alpine'
+
 # Node placement
 nodeSelector: {}
 tolerations: []
