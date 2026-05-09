@@ -1,0 +1,24 @@
+{
+  "source_path": "/Users/chrisknuteson/Projects/ctkadvisors/active/kagent/docs/PROTO-SOCIETY-DESIGN.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": true,
+  "title": "Proto-Society System Design",
+  "summary": "Forward-looking design north star for substrate primitives enabling an emergent, governed agent collective layered atop the kagent workflow substrate.",
+  "scope": [
+    "agent collective / proto-society",
+    "AgentDisposition primitive",
+    "Discussion/Channel/Post discourse layer",
+    "Coalition / MobProposal collective-action primitive",
+    "Consolidation controller (substrate sleep)",
+    "Decay / revalidation policy on catalog objects",
+    "Quarantine semantics",
+    "Governance authority tiers",
+    "Failure-mode taxonomy and substrate responses",
+    "Substrate-level revocation kill switch"
+  ],
+  "cross_refs": ["NORTH-STAR-SYSTEM-DESIGN.md", "HYBRID-AGENT-POLICY.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Manifest declared SPEC and is honored. Document self-identifies as 'companion design north star ... not an implementation spec' (line 4), which is DOC-leaning prose, but it does define concrete schema-shaped substrate primitives (AgentDisposition, Channel, Post, MobProposal) with YAML examples that function as technical contracts — supporting the SPEC tag. Also carries strong PRD-style goals/non-goals and failure-mode framing. Treated as SPEC per manifest with the understanding that downstream synthesis should weight the YAML primitives as constraints and the prose as design rationale."
+}

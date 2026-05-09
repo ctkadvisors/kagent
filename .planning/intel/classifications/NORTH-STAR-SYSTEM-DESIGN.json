@@ -1,0 +1,29 @@
+{
+  "source_path": "/Users/chrisknuteson/Projects/ctkadvisors/active/kagent/docs/NORTH-STAR-SYSTEM-DESIGN.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": true,
+  "title": "North Star System Design",
+  "summary": "Design north star describing kagent as a real-time autonomous work substrate with layered system model, flow economy, parent/child execution, promotion/review loops, and bounds for substrate inclusion.",
+  "scope": [
+    "kagent substrate",
+    "Command Center",
+    "AgentTask",
+    "AgentWorkflow",
+    "AgentTemplate",
+    "SteeringEvent",
+    "TaskReview",
+    "Tool CRD",
+    "ArtifactRef",
+    "verifier contracts",
+    "capability JWTs",
+    "promotion workflow",
+    "review queue",
+    "flow economy / resource accounting",
+    "Tool Foundry"
+  ],
+  "cross_refs": ["./PROTO-SOCIETY-DESIGN.md", "./HYBRID-AGENT-POLICY.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Manifest declared SPEC and was honored. Content self-identifies as 'design north star; not an implementation spec' and reads as a hybrid PRD/DOC: heavy on goals, non-goals, winning conditions, and product scope, with only a sketch SteeringEvent YAML and a north-star objects table — no endpoint tables, schemas, SLOs, or implementation contracts. PRD signals (goals/non-goals, winning conditions, interface model) outweigh SPEC signals. Synthesizer should consider downgrading precedence accordingly."
+}
