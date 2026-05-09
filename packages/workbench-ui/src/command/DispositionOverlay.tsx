@@ -32,7 +32,7 @@
  */
 
 import { type FC } from 'react';
-import type { DispositionOverlayRow } from '@kagent/dto';
+import type { DispositionOverlayRow } from '@kagent/dto/disposition';
 
 import {
   assertSourceField,

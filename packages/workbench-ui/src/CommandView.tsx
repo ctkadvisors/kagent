@@ -49,6 +49,7 @@ import {
   zoomAt,
   type Camera,
 } from './command/camera.js';
+import { DispositionOverlay } from './command/DispositionOverlay.js';
 import { FxLayer } from './command/fx.js';
 import { Minimap } from './command/Minimap.js';
 import { MissionOverlay } from './command/Mission.js';
@@ -70,6 +71,18 @@ import { factionColor } from './command/voxel.js';
 import type { ActivityEvent } from './command/state.js';
 import type { AgentSummaryRow, TaskSummary } from './types.js';
 import styles from './CommandView.module.css';
+
+/**
+ * Phase 1 / DISP-04 — Slice E base-building-only fallback flag. Set
+ * `VITE_PRESSURE_DRAMATIZATION=false` at build/dev time to disable the
+ * dramatic over-budget visual treatment while keeping the same data
+ * legible. Per `docs/COMMAND-CENTER-CONTRACT.md` §6 + §7 Slice E. The
+ * flag is read once at module load — Vite inlines `import.meta.env`
+ * values at build time, so a runtime change requires a fresh build.
+ */
+const pressureDramatization: boolean =
+  (import.meta as unknown as { env?: { VITE_PRESSURE_DRAMATIZATION?: string } }).env
+    ?.VITE_PRESSURE_DRAMATIZATION !== 'false';
 
 interface CommandViewProps {
   readonly onBack: () => void;
@@ -1358,6 +1371,17 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             onComplete={() => {
               /* tour finished — component persists localStorage itself */
             }}
+          />
+
+          {/* Phase 1 / DISP-04 — sibling overlay rendering per-Agent
+              disposition state. Reads from snapshot.dispositions
+              (refetched on mount, on agent SSE events, and on a 30s
+              interval — see useCommandSnapshot). pressureDramatization
+              is plumbed through VITE_PRESSURE_DRAMATIZATION for
+              Slice E base-building-only mode (default: true). */}
+          <DispositionOverlay
+            snapshot={snapshot}
+            pressureDramatization={pressureDramatization}
           />
 
           <div className={styles.hotkeyStrip}>

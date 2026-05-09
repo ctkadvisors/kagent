@@ -28,7 +28,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import type { DispositionOverlayRow } from '@kagent/dto';
+import type { DispositionOverlayRow } from '@kagent/dto/disposition';
 
 import { DispositionOverlay } from './DispositionOverlay.js';
 

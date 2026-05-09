@@ -33,7 +33,7 @@
  *     every input, not just one.
  */
 
-import type { DispositionOverlayRow } from '@kagent/dto';
+import type { DispositionOverlayRow } from '@kagent/dto/disposition';
 
 /**
  * Closed enumeration of DispositionOverlayRow top-level field names.
@@ -65,12 +65,21 @@ type DispositionFieldName =
  *   4. `process.env.NODE_ENV !== 'production'` → dev.
  *   5. Default: dev (so unhandled environments still get the assertion's
  *      value during testing).
+ *
+ * The `process` reference is read through `globalThis` so the workbench-
+ * ui's tsconfig.build.json (vite/client types only, no `node`) doesn't
+ * need to take a `@types/node` dep. At runtime in a Node/vitest context
+ * `process` is present on `globalThis`; in a browser bundle it's
+ * undefined and the falsy guards skip the check.
  */
 function isDevBuild(): boolean {
   // (1) Explicit NODE_ENV=production — the standard prod marker
   // across the Node/test ecosystem. Win first so vitest's
   // `vi.stubEnv` test path is honored.
-  if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') {
+  const proc = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } })
+    .process;
+  const nodeEnv = proc?.env?.NODE_ENV;
+  if (nodeEnv === 'production') {
     return false;
   }
   // (2)/(3) Vite-bundled flags.
@@ -82,8 +91,8 @@ function isDevBuild(): boolean {
     // import.meta not available — fall through.
   }
   // (4) Other NODE_ENV values (development, test, etc).
-  if (typeof process !== 'undefined' && process.env?.NODE_ENV !== undefined) {
-    return process.env.NODE_ENV !== 'production';
+  if (nodeEnv !== undefined) {
+    return nodeEnv !== 'production';
   }
   // (5) Default safe-mode: dev.
   return true;

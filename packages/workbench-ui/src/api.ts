@@ -9,7 +9,7 @@
  * so paths are relative.
  */
 
-import { assertIsDispositionOverlayRow } from '@kagent/dto';
+import { assertIsDispositionOverlayRow } from '@kagent/dto/disposition';
 
 import type {
   AgentSummaryRow,

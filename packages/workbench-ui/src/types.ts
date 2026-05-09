@@ -30,7 +30,7 @@ export type {
   DispositionOverBudgetReason,
   DispositionOverlayRow,
   DispositionProposalKind,
-} from '@kagent/dto';
+} from '@kagent/dto/disposition';
 
 export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 

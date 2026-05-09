@@ -16,7 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DispositionOverlayRow } from '@kagent/dto';
+import type { DispositionOverlayRow } from '@kagent/dto/disposition';
 
 import {
   assertSourceField,
