@@ -1,0 +1,143 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * DispositionOverlay — Phase 1 / DISP-04. Sibling overlay rendering
+ * per-Agent disposition state. Mirrors Mission.module.css's anchored
+ * dark-navy-card aesthetic — NO new color tokens, NO painted/skinned
+ * chrome. RTS feel = USABILITY (clear numeric labels, source-binding
+ * for inspector debugging) per project memory; visual chrome is the
+ * same minimal panel pattern the Mission tour uses.
+ */
+
+/* ───── Disposition card (anchored; visually a sibling of Mission) ───── */
+
+.card {
+  position: absolute;
+  top: 56px; /* clear the top HUD */
+  right: 16px;
+  min-width: 280px;
+  max-width: 360px;
+  background: #0a1628;
+  border: 1px solid #1f2a44;
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(251, 191, 36, 0.06);
+  z-index: 7; /* below alertTicker (10), above hotkey strip (5) */
+  pointer-events: auto;
+}
+
+.header {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #fbbf24;
+  margin-bottom: 0.55rem;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.4rem 0.45rem;
+  background: #0c1a30;
+  border: 1px solid #14213d;
+  border-radius: 4px;
+}
+
+.agent {
+  font-size: 0.82rem;
+  color: #e2e8f0;
+  letter-spacing: 0.02em;
+}
+
+.namespace {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.metric {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+
+.metricLabel {
+  color: #64748b;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.metricValue {
+  color: #cbd5e1;
+}
+
+/* The numeric over-budget event count — separate from pressure markers
+ * so it stays legible even when pressureDramatization is off. */
+.eventCount {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  margin-top: 0.1rem;
+}
+
+/* Pressure dramatization (Slice E). Subtle amber pulse — NOT painted
+ * chrome, NOT a sprite. The data is the same in either mode; only the
+ * class swaps when pressureDramatization=false. */
+.pressureDramatic {
+  color: #fbbf24;
+  font-weight: bold;
+  text-shadow: 0 0 6px rgba(251, 191, 36, 0.4);
+}
+
+.pressureMarker {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.45rem;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 3px;
+  color: #fbbf24;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.pressureMarker:hover {
+  background: rgba(251, 191, 36, 0.15);
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+/* Base-building-only mode: same data, subdued visuals. */
+.pressureMarkerSubdued {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.45rem;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.pressureMarkerSubdued:hover {
+  color: #cbd5e1;
+  border-color: #475569;
+}

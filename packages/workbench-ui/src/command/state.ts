@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import {
   fetchAgents,
+  fetchDispositions,
   fetchGatewayCapacity,
   fetchGatewayUsage,
   fetchTasks,
@@ -28,6 +29,7 @@ import {
 } from '../api.js';
 import type {
   AgentSummaryRow,
+  DispositionOverlayRow,
   GatewayCapacityRow,
   GatewayUsageRow,
   TaskSummary,
@@ -48,6 +50,21 @@ export interface CommandSnapshot {
   readonly tasks: ReadonlyMap<string, TaskSummary>;
   readonly gatewayCapacity: readonly GatewayCapacityRow[];
   readonly gatewayUsage: readonly GatewayUsageRow[];
+  /**
+   * Phase 1 / DISP-04 — per-Agent disposition projection from
+   * `GET /api/dispositions`, keyed by `agentRef` (`namespace/name`).
+   *
+   * State derives entirely from the API: refetched on mount, on every
+   * SSE 'agent' cache event (the disposition row is keyed by agentRef
+   * so any agent-cache change is a reasonable refresh trigger), and on
+   * a small periodic interval (the workbench SSE stream does not emit
+   * ConfigMap changes — polling is the v0.2 bridge for overlay
+   * create/delete/annotation changes). No localStorage / sessionStorage.
+   *
+   * Reload-stable by construction: closing and reopening Command
+   * Center re-runs the mount-effect → fresh fetch → identical Map.
+   */
+  readonly dispositions: ReadonlyMap<string, DispositionOverlayRow>;
   readonly events: readonly ActivityEvent[];
   readonly lastEventAt: number;
   readonly error: string | null;
@@ -55,12 +72,23 @@ export interface CommandSnapshot {
 
 const MAX_EVENTS = 50;
 const GATEWAY_POLL_MS = 5_000;
+/**
+ * Phase 1 / DISP-04 — periodic refetch of `/api/dispositions`. The
+ * workbench SSE stream does not yet emit ConfigMap-change events, so
+ * a 30s poll is the v0.2 bridge for overlay create/delete/annotation
+ * changes (e.g., the operator's `kagent.knuteson.io/proposals-today`
+ * write per plan 02). Cleared on unmount.
+ */
+const DISPOSITION_POLL_MS = 30_000;
 
 export function useCommandSnapshot(): CommandSnapshot {
   const [agents, setAgents] = useState<Map<string, AgentSummaryRow>>(new Map());
   const [tasks, setTasks] = useState<Map<string, TaskSummary>>(new Map());
   const [gatewayCapacity, setGatewayCapacity] = useState<readonly GatewayCapacityRow[]>([]);
   const [gatewayUsage, setGatewayUsage] = useState<readonly GatewayUsageRow[]>([]);
+  const [dispositions, setDispositions] = useState<ReadonlyMap<string, DispositionOverlayRow>>(
+    () => new Map(),
+  );
   const [events, setEvents] = useState<readonly ActivityEvent[]>([]);
   const [lastEventAt, setLastEventAt] = useState<number>(Date.now());
   const [error, setError] = useState<string | null>(null);
@@ -137,16 +165,43 @@ export function useCommandSnapshot(): CommandSnapshot {
       });
   };
 
+  const refetchDispositions = (): void => {
+    fetchDispositions()
+      .then((rows) => {
+        const next = new Map<string, DispositionOverlayRow>();
+        for (const row of rows) next.set(row.agentRef, row);
+        setDispositions(next);
+      })
+      .catch((err: unknown) => {
+        // Best-effort: log so an inspector can see schema-drift
+        // failures, but don't surface to `error` — the rest of the
+        // Command Center should keep rendering even if the disposition
+        // projection misbehaves.
+
+        console.warn(
+          'refetchDispositions failed: ' + (err instanceof Error ? err.message : String(err)),
+        );
+      });
+  };
+
   useEffect(() => {
     refetchAgents();
     refetchTasks();
     refetchGateway();
+    refetchDispositions();
 
     const unsubscribe = subscribeCacheEvents(
       (ev) => {
         setLastEventAt(Date.now());
         if (ev.kind === 'task') refetchTasks();
-        else if (ev.kind === 'agent') refetchAgents();
+        else if (ev.kind === 'agent') {
+          refetchAgents();
+          // Disposition rows are keyed by agentRef — any agent-cache
+          // event is a reasonable refresh trigger. ConfigMap-only
+          // annotation writes (proposals-today) still rely on the
+          // periodic poll below.
+          refetchDispositions();
+        }
       },
       () => {
         setLastEventAt(Date.now());
@@ -154,10 +209,12 @@ export function useCommandSnapshot(): CommandSnapshot {
     );
 
     const gwTick = setInterval(refetchGateway, GATEWAY_POLL_MS);
+    const dispTick = setInterval(refetchDispositions, DISPOSITION_POLL_MS);
 
     return () => {
       unsubscribe();
       clearInterval(gwTick);
+      clearInterval(dispTick);
     };
     // Effect intentionally runs once on mount.
   }, []);
@@ -167,6 +224,7 @@ export function useCommandSnapshot(): CommandSnapshot {
     tasks,
     gatewayCapacity,
     gatewayUsage,
+    dispositions,
     events,
     lastEventAt,
     error,

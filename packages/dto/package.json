@@ -7,7 +7,8 @@
   "author": "Chris Knuteson <chris@ctkadvisors.net>",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./disposition": "./src/disposition.ts"
   },
   "scripts": {
     "typecheck": "tsc -p . --noEmit",

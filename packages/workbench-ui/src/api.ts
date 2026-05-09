@@ -9,6 +9,8 @@
  * so paths are relative.
  */
 
+import { assertIsDispositionOverlayRow } from '@kagent/dto/disposition';
+
 import type {
   AgentSummaryRow,
   CacheChangeEvent,
@@ -16,6 +18,7 @@ import type {
   CreateTaskError,
   CreateTaskRequest,
   CreateTaskResponse,
+  DispositionOverlayRow,
   GatewayCapacityResponse,
   GatewayUsageResponse,
   PatchInFlightRequest,
@@ -95,6 +98,31 @@ export async function fetchAgents(signal?: AbortSignal): Promise<AgentSummaryRow
   if (!res.ok) return [];
   const body = (await res.json()) as { items?: AgentSummaryRow[] };
   return body.items ?? [];
+}
+
+/**
+ * Phase 1 / DISP-04 — fetch the per-Agent disposition projection from
+ * `GET /api/dispositions`. Each row passes `assertIsDispositionOverlayRow`
+ * as a defense against schema drift between the workbench-api and
+ * workbench-ui — if the API's emitted shape ever diverges from the
+ * shared DTO in `@kagent/dto`, the rejected row throws here rather
+ * than corrupting the Command Center overlay state silently.
+ *
+ * Unlike `fetchAgents`, this throws on non-2xx (matching `fetchTasks`)
+ * because the disposition overlay is an explicit Command Center
+ * surface — a 500 must surface to the operator, not be hidden behind
+ * an empty list.
+ */
+export async function fetchDispositions(signal?: AbortSignal): Promise<DispositionOverlayRow[]> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/dispositions', init);
+  if (!res.ok) {
+    throw new Error(`fetchDispositions: ${String(res.status)} ${res.statusText}`);
+  }
+  const body = (await res.json()) as { items?: unknown };
+  const items = Array.isArray(body.items) ? body.items : [];
+  for (const it of items) assertIsDispositionOverlayRow(it);
+  return items as DispositionOverlayRow[];
 }
 
 /**

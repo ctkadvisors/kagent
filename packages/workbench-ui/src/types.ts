@@ -11,9 +11,26 @@
  * (no @kagent imports). The API is the source of truth; if a field
  * shape drifts, surface it here as a UI bug.
  *
+ * Phase 1 / DISP-04 EXCEPTION: `DispositionOverlayRow` is re-exported
+ * from `@kagent/dto` directly because it's the SAME read DTO the
+ * workbench-api emits — a single source of truth across the
+ * substrate-API-UI tier boundary (per plan 03 D-DISP-03-A). Schema
+ * drift between API and UI is caught at runtime by
+ * `assertIsDispositionOverlayRow`.
+ *
  * TODO(post-mvp): generate these from the workbench-api OpenAPI spec
  * when one exists, or move to a shared zero-runtime types package.
  */
+
+// Phase 1 / DISP-04 — shared DTOs for the disposition slice. The
+// workbench-api computes them; the workbench-ui renders them in the
+// Command Center DispositionOverlay. Same type both sides means no
+// duplication and no drift.
+export type {
+  DispositionOverBudgetReason,
+  DispositionOverlayRow,
+  DispositionProposalKind,
+} from '@kagent/dto/disposition';
 
 export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 
