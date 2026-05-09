@@ -414,8 +414,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 47 event-type strings (Wave 0-4 sum + Phase 5 P4 parent.children_aggregated + v0.1.7-rig.2 verifier triplet)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(47);
+  it('exports exactly 49 event-type strings (Wave 0-4 sum + Phase 5 P4 parent.children_aggregated + v0.1.7-rig.2 verifier triplet + Phase 1 disposition pair)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(49);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -479,7 +479,60 @@ describe('event-types catalog', () => {
       'verifier.started',
       'verifier.completed',
       'verifier.failed',
+      // Phase 1 — AgentDisposition overlay-first prototype.
+      'disposition.proposal_rejected',
+      'disposition.over_budget',
     ]);
+  });
+});
+
+describe('disposition audit events (Phase 1 — AgentDisposition overlay-first prototype)', () => {
+  it('builds a disposition.proposal_rejected envelope (overlay narrows; never widens)', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/operator',
+      subject: 'Agent/kagent-system/researcher-01',
+      type: 'disposition.proposal_rejected',
+      data: {
+        agentRef: 'kagent-system/researcher-01',
+        agentNamespace: 'kagent-system',
+        agentName: 'researcher-01',
+        dispositionConfigMapName: 'researcher-01-disposition',
+        dispositionConfigMapNamespace: 'kagent-system',
+        excludedTool: 'write_artifact',
+        excludedKind: 'capability-policy',
+        mayProposeAgainst: ['templates'],
+        reason: 'not_in_mayProposeAgainst',
+        taskUid: 'task-uid-test',
+      },
+    });
+    expect(event.type).toBe('disposition.proposal_rejected');
+    expect(event.data.excludedTool).toBe('write_artifact');
+    expect(event.data.excludedKind).toBe('capability-policy');
+    expect(event.data.reason).toBe('not_in_mayProposeAgainst');
+    expect(event.data.mayProposeAgainst).toEqual(['templates']);
+  });
+
+  it('builds a disposition.over_budget envelope for tokens_exceeded', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'Agent/kagent-system/researcher-01',
+      type: 'disposition.over_budget',
+      data: {
+        agentRef: 'kagent-system/researcher-01',
+        agentNamespace: 'kagent-system',
+        agentName: 'researcher-01',
+        dispositionConfigMapName: 'researcher-01-disposition',
+        reason: 'tokens_exceeded',
+        observed: 55000,
+        budget: 50000,
+        dailyBoundaryUtc: '2026-05-09T00:00:00.000Z',
+      },
+    });
+    expect(event.type).toBe('disposition.over_budget');
+    expect(event.data.reason).toBe('tokens_exceeded');
+    expect(event.data.observed).toBe(55000);
+    expect(event.data.budget).toBe(50000);
+    expect(event.data.dailyBoundaryUtc).toBe('2026-05-09T00:00:00.000Z');
   });
 });
 
