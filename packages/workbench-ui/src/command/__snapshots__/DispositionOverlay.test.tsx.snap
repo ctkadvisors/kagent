@@ -1,0 +1,42 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`DispositionOverlay (DISP-04) > Test 7 — reload stability: re-render with same snapshot produces equal selector tree (no innerHTML; OpenCode LOW #8) 1`] = `
+[
+  {
+    "agentRef": "kagent-system/researcher-01",
+    "sourceFields": [
+      {
+        "multiFields": "spentTokensToday,idleBehavior",
+        "singleField": null,
+        "tag": "div",
+        "text": "Tokens 5,000 remaining",
+      },
+      {
+        "multiFields": "proposalsToday,idleBehavior",
+        "singleField": null,
+        "tag": "div",
+        "text": "Proposals 2 remaining",
+      },
+    ],
+    "text": "researcher-01 (kagent-system)Tokens 5,000 remainingProposals 2 remaining",
+  },
+  {
+    "agentRef": "kagent-system/curator-02",
+    "sourceFields": [
+      {
+        "multiFields": "spentTokensToday,idleBehavior",
+        "singleField": null,
+        "tag": "div",
+        "text": "Tokens 5,000 remaining",
+      },
+      {
+        "multiFields": "proposalsToday,idleBehavior",
+        "singleField": null,
+        "tag": "div",
+        "text": "Proposals 2 remaining",
+      },
+    ],
+    "text": "curator-02 (kagent-system)Tokens 5,000 remainingProposals 2 remaining",
+  },
+]
+`;
