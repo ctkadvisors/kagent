@@ -1,5 +1,5 @@
 ---
-status: in-progress (tasks 1-4 complete; task 5 = checkpoint:human-verify)
+status: complete
 phase: 01-agentdisposition-v0
 plan: 04
 subsystem: workbench-ui
@@ -105,7 +105,7 @@ completed: 2026-05-09
 
 ## Status
 
-Tasks 1-4 complete and committed atomically on the worktree branch. Task 5 is a `checkpoint:human-verify` — the orchestrator owns end-to-end UI verification (vite dev server + browser walkthrough against either the homelab cluster or a local stub) and will resume execution on `approved` or remediate.
+**COMPLETE.** Tasks 1-4 (implementation) committed atomically on the worktree branch and merged to main; Task 5 (checkpoint:human-verify) approved by user via end-to-end homelab cluster verification on 2026-05-09. See "Cluster verification (Task 5)" section below for evidence.
 
 ## Performance
 
@@ -133,8 +133,9 @@ Each task committed atomically on the worktree branch `worktree-agent-a689ec33ee
 2. **Task 2 — CC-01 disposition-slice source-binding helpers:** `2d68301` (feat)
 3. **Task 3 — DispositionOverlay component + reload-stability + base-building-only:** `1127c6b` (feat)
 4. **Task 4 — Mount in CommandView + sub-path export + globalThis cast:** `5cdf22f` (feat)
-
-This SUMMARY commit follows immediately after Task 4 in the same worktree branch.
+5. **Worktree → main merge:** `4aafc74` (merge)
+6. **Post-tag CI fix (eslint no-unnecessary-type-assertion in DispositionOverlay.test.tsx):** `d40d8f6` (fix) — required to pass CI; v0.2.0-disp-rc.1 tag was deleted + re-cut here. (Companion CI fix `cc528a9` covered prettier on `01-RESEARCH.md` + `.gitignore` for `.playwright-mcp/`.)
+7. **SUMMARY closure (this commit):** docs commit on main flipping status → complete and embedding cluster verification evidence.
 
 ## Files Created/Modified
 
@@ -245,6 +246,40 @@ The data binding is invariant: every `data-source-field*` attribute is identical
 
 Phase 2 / 3 generalizes this to other overlays by lifting the env-var read into a `useUiConfig()` hook (or context provider) and threading the flag through every overlay's prop signature. Phase 1 keeps it scoped to the disposition slice — no over-design.
 
+## Cluster verification (Task 5 — end-to-end on homelab K3s)
+
+User-approved end-to-end verification, 2026-05-09. Path A (homelab) ran; Path B (local stub) was not needed.
+
+**Tag cut:** `v0.2.0-disp-rc.1` published to `ghcr.io/ctkadvisors/kagent-*` 2026-05-09T20:49Z. Initial tag cut, deleted, and re-cut at `d40d8f6` after post-tag CI fixes landed.
+
+**Repo SHAs at verification:**
+
+- `kagent` @ tag `v0.2.0-disp-rc.1` → `d40d8f6` (eslint CI fix on DispositionOverlay.test.tsx)
+- `new_localai` @ `c5bb7fd` — image-tag bump in `clusters/k3s-homelab/apps/kagent/overlays/homelab` (operator + workbench-api + workbench-ui all to `v0.2.0-disp-rc.1`)
+- `new_localai` @ `10f592f` — three demo disposition ConfigMap overlays added to GitOps:
+  - `kagent-system/orchestrator-disposition` (broad scope, 500k tokens/day)
+  - `kagent-rc-spectrum/rc-spectrum-fanout-orchestrator-disposition` (templates-only, 100k tokens/day)
+  - `kagent-system/summarizer-rust-disposition` (small budget, 1 proposal/day)
+
+**ArgoCD sync:** `kagent` (operator) and `kagent-workbench` (api + ui) Applications synced cleanly to the new images.
+
+**Pod state at verification:**
+
+```
+NAMESPACE     POD                                    READY   STATUS    IMAGE
+kagent-system kagent-workbench-557c79fddf-72f7z      2/2     Running   ghcr.io/.../v0.2.0-disp-rc.1
+```
+
+**Live API verification (in-pod `node fetch` against `localhost`):** `GET /api/dispositions` returned a `DispositionOverlayRow[]` with all three demo overlays (orchestrator, rc-spectrum-fanout-orchestrator, summarizer-rust), and `dailyBoundaryUtc=2026-05-09T00:00:00Z`. All rows passed `assertIsDispositionOverlayRow` at the projection boundary.
+
+**User visual verification (Chris, on the workbench Command Center):**
+
+> "it looks the same as before with a few more items"
+
+Three new disposition rows render alongside the existing flow-economy widgets (Mission, Replay, Minimap, SelectionPanel, ActivityLog) — DOM source-binding attributes (`data-source-field`, `data-source-fields`) intact and inspector-visible per CC-01 §2 contract. Approved.
+
+This satisfies plan 04 Task 5 (checkpoint:human-verify) and ROADMAP success criterion 4 end-to-end on a real K3s cluster against real operator-written `kagent.knuteson.io/proposals-today` annotations.
+
 ## Deviations from Plan
 
 ### Auto-fixed Issues
@@ -293,12 +328,19 @@ Phase 2 / 3 generalizes this to other overlays by lifting the env-var read into 
 
 **6. [Note] eslint-disable comments stripped by lint-staged.** Two `eslint-disable-next-line` comments I added (one in `api.test.ts` for `@typescript-eslint/unbound-method`, one in `state.ts` for `no-console`) were stripped by the pre-commit lint-staged formatting because the underlying rules didn't actually fire in those positions. No semantic change. Captured here for completeness.
 
-**7. [Note] No homelab cluster verification in this plan.** The orchestrator owns end-to-end Command Center verification (Task 5 checkpoint) — vite dev server + browser walkthrough. The executor's job ended at "tests + typecheck + build green; commits atomic; SUMMARY.md drafted". The Path A homelab walkthrough described in the plan's Task 5 acceptance section requires a real disposition ConfigMap deployed against a real Agent in the cluster, which is GitOps work in `../new_localai/` — explicitly outside the executor's scope.
+**7. [Note — superseded] No homelab cluster verification in this plan.** Originally captured as out-of-scope for the executor; superseded by the cluster verification documented above. The Path A homelab walkthrough did require GitOps work in `../new_localai/` (commits `c5bb7fd` image bump + `10f592f` demo overlays), which has now been done; user visually approved the rendered Command Center on 2026-05-09.
+
+**8. [Note — post-tag CI fixes after worktree merge to main]** After tasks 1-4 merged to main (merge commit `4aafc74`) and the initial `v0.2.0-disp-rc.1` tag was cut, two CI failures surfaced:
+
+- `cc528a9` — prettier formatting on `.planning/phases/01-agentdisposition-v0/01-RESEARCH.md` + `.gitignore` entry for `.playwright-mcp/` artifacts.
+- `d40d8f6` — eslint `@typescript-eslint/no-unnecessary-type-assertion` on a handful of redundant casts in `DispositionOverlay.test.tsx`.
+
+The original tag was deleted and re-cut at `d40d8f6` once both fixes landed on main. No production code path was touched; cluster image content at the re-cut tag is functionally identical to what tasks 1-4 produced. Captured here as a deviation for completeness — these are routine CI hygiene fixes, not Rule 1/2/3 deviations against the plan.
 
 ---
 
-**Total deviations:** 4 auto-fixed issues (2 Rule 3 blocking; 2 Rule 1 minor); 1 plan adaptation note (existing-pattern win); 2 logging notes.
-**Impact on plan:** None of the deviations change DISP-04 surface area. All 12 acceptance criteria items in `<verification>` pass. ROADMAP success criterion 4 (budget remaining + over-budget event count per agent + reload stability + base-building-only fallback + source-binding contract) is satisfied.
+**Total deviations:** 4 auto-fixed issues (2 Rule 3 blocking; 2 Rule 1 minor); 1 plan adaptation note (existing-pattern win); 3 logging / closure notes (1 superseded by cluster verification; 1 post-tag CI hygiene; 1 lint-staged stripping eslint-disables).
+**Impact on plan:** None of the deviations change DISP-04 surface area. All 12 acceptance criteria items in `<verification>` pass. ROADMAP success criterion 4 (budget remaining + over-budget event count per agent + reload stability + base-building-only fallback + source-binding contract) is satisfied end-to-end on the homelab cluster.
 
 ## Issues Encountered
 
@@ -317,14 +359,14 @@ For the orchestrator's Task 5 verification (out of scope for the executor):
 
 ## Next Phase Readiness
 
-Phase 1's four DISP requirements are all complete pending Task 5 human-verify:
+Phase 1's four DISP requirements are all complete and verified end-to-end on the homelab cluster:
 
 - DISP-01 (plan 01): sibling-ConfigMap overlay carrier + schema-validate Job ✓
 - DISP-02 (plan 02): cap-issuer narrowing + proposals-today annotation writer ✓
 - DISP-03 (plan 03): GET /api/dispositions projection + over-budget audit ✓
-- DISP-04 (plan 04): Command Center overlay + source-binding contract + reload stability ✓ (pending checkpoint)
+- DISP-04 (plan 04): Command Center overlay + source-binding contract + reload stability ✓ (Task 5 verified on cluster, user-approved)
 
-When Task 5 returns `approved`, the post-phase ~7-day observation window begins. The promotion gate (file Future Research → Candidate Requirement for AgentDisposition CRD) decides based on observed read/write/ignore patterns — a question Phase 1 was explicitly designed to answer.
+The post-phase ~7-day observation window begins now. The promotion gate (file Future Research → Candidate Requirement for AgentDisposition CRD) decides based on observed read/write/ignore patterns against the three demo overlays deployed via `new_localai` `10f592f` — a question Phase 1 was explicitly designed to answer.
 
 ## Self-Check
 
@@ -361,5 +403,6 @@ Verified the SUMMARY's load-bearing claims:
 
 _Phase: 01-agentdisposition-v0_
 _Plan: 04_
-_Status: tasks 1-4 complete; Task 5 = checkpoint:human-verify (orchestrator owns end-to-end UI verification)_
+_Status: complete (tasks 1-4 implementation + Task 5 cluster verification approved by user 2026-05-09; tag v0.2.0-disp-rc.1 cut at d40d8f6)_
 _Drafted: 2026-05-09_
+_Closed: 2026-05-09_
