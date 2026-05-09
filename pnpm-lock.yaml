@@ -159,6 +159,9 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+      yaml:
+        specifier: 2.8.3
+        version: 2.8.3
 
   packages/egress-controller:
     dependencies:
@@ -251,6 +254,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/dto':
+        specifier: workspace:*
+        version: link:../dto
       '@kagent/egress-controller':
         specifier: workspace:*
         version: link:../egress-controller
