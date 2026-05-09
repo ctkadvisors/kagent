@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { generateKeyPair, exportPKCS8, exportSPKI } from 'jose';
 import { KAGENT_SUBSTRATE_AUDIENCE, type CapabilityBundle } from '@kagent/capability-types';
 
@@ -20,6 +20,8 @@ import {
 } from './cap-issuer.js';
 import { API_GROUP_VERSION } from './crds/index.js';
 import type { Agent, AgentTask, Tenant } from './crds/index.js';
+import type { DispositionOverlay } from './disposition/overlay-loader.js';
+import type { ProposalKind } from './disposition/proposal-tool-map.js';
 
 async function makeCa() {
   const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
@@ -438,5 +440,317 @@ describe('mintCapabilityForTask — TTL policy integration (v0.5.4-keyrotation)'
     const task = makeTask();
     const result = await mintCapabilityForTask(ca, { task, agent });
     expect(result.ttlDecision).toBeUndefined();
+  });
+});
+
+/* =====================================================================
+ * Phase 1 / DISP-02 — AgentDisposition overlay narrowing.
+ * ===================================================================== */
+
+function makeDispositionOverlay(
+  mayProposeAgainst: readonly ProposalKind[],
+  agentName = 'researcher',
+  agentNamespace = 'default',
+): DispositionOverlay {
+  return {
+    agentRef: `${agentNamespace}/${agentName}`,
+    agentNamespace,
+    agentName,
+    configMapName: `${agentName}-disposition`,
+    configMapNamespace: agentNamespace,
+    idleBehavior: {
+      readChannels: [],
+      attentionBudget: { tokensPerDay: 50000, pollIntervalSeconds: 300 },
+      proposalScope: { mayProposeAgainst, maxProposalsPerDay: 3 },
+    },
+  };
+}
+
+function makeCoreApiStub(): {
+  readNamespacedConfigMap: ReturnType<typeof vi.fn>;
+  patchNamespacedConfigMap: ReturnType<typeof vi.fn>;
+} {
+  return {
+    readNamespacedConfigMap: vi.fn(() =>
+      Promise.resolve({
+        metadata: {
+          name: 'researcher-disposition',
+          namespace: 'default',
+          annotations: {},
+          resourceVersion: 'rv-cap-issuer-test',
+        },
+        data: { 'disposition.yaml': '...' },
+      }),
+    ),
+    patchNamespacedConfigMap: vi.fn(() => Promise.resolve({})),
+  };
+}
+
+describe('mintCapabilityForTask: AgentDisposition overlay narrowing (DISP-02)', () => {
+  it('Test 1 — happy path no overlay (revocation/baseline): returns claims with all proposal tools intact', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: {
+        tools: ['write_artifact', 'verifier_register', 'capability_policy_propose', 'http_get'],
+      },
+    });
+    const task = makeTask({ uid: 'no-overlay-1' });
+    // No loadDispositionOverlay injected → narrowing is skipped entirely.
+    const result = await mintCapabilityForTask(ca, { task, agent });
+    expect(result.claims.tools).toEqual([
+      'write_artifact',
+      'verifier_register',
+      'capability_policy_propose',
+      'http_get',
+    ]);
+    expect(result.dispositionRejections).toBeUndefined();
+  });
+
+  it('Test 1b — loader returning null = revocation path: no narrowing applied', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: {
+        tools: ['write_artifact', 'verifier_register', 'capability_policy_propose'],
+      },
+    });
+    const task = makeTask({ uid: 'overlay-deleted' });
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(null));
+    const result = await mintCapabilityForTask(ca, { task, agent, loadDispositionOverlay });
+    expect(result.claims.tools).toEqual([
+      'write_artifact',
+      'verifier_register',
+      'capability_policy_propose',
+    ]);
+    expect(result.dispositionRejections).toBeUndefined();
+  });
+
+  it('Test 2 — overlay narrows: removes proposal tools whose kind is not in mayProposeAgainst, emits one event per excluded tool', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['write_artifact', 'verifier_register', 'http_get'] },
+    });
+    const task = makeTask({ uid: 'narrow-1' });
+    const overlay = makeDispositionOverlay(['templates']);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    const auditPublisher = { publish: vi.fn(() => Promise.resolve()) };
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      auditPublisher,
+    });
+    expect(result.claims.tools).toEqual(['write_artifact', 'http_get']);
+    expect(auditPublisher.publish).toHaveBeenCalledTimes(1);
+    const event = auditPublisher.publish.mock.calls[0]![0] as {
+      type: string;
+      data: {
+        excludedTool: string;
+        excludedKind: string;
+        reason: string;
+        taskUid: string;
+        agentRef: string;
+      };
+    };
+    expect(event.type).toBe('disposition.proposal_rejected');
+    expect(event.data.excludedTool).toBe('verifier_register');
+    expect(event.data.excludedKind).toBe('verifiers');
+    expect(event.data.reason).toBe('not_in_mayProposeAgainst');
+    expect(event.data.taskUid).toBe('narrow-1');
+    expect(event.data.agentRef).toBe('default/researcher');
+    expect(result.dispositionRejections).toHaveLength(1);
+  });
+
+  it('Test 3 — emits one event per excluded proposal tool', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: {
+        tools: ['write_artifact', 'verifier_register', 'capability_policy_propose'],
+      },
+    });
+    const task = makeTask({ uid: 'narrow-3' });
+    const overlay = makeDispositionOverlay([]);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    const auditPublisher = { publish: vi.fn(() => Promise.resolve()) };
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      auditPublisher,
+    });
+    expect(result.claims.tools).toEqual([]);
+    expect(auditPublisher.publish).toHaveBeenCalledTimes(3);
+    expect(result.dispositionRejections).toHaveLength(3);
+    const excludedTools = (result.dispositionRejections ?? []).map((r) => r.tool).sort();
+    expect(excludedTools).toEqual([
+      'capability_policy_propose',
+      'verifier_register',
+      'write_artifact',
+    ]);
+  });
+
+  it('Test 4 — defense-in-depth invariant preserved: parent-narrowing still runs after overlay narrowing without violation', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['write_artifact', 'http_get'] },
+    });
+    const parentBundle: CapabilityBundle = {
+      iss: 'kagent.knuteson.io/operator',
+      sub: 'task-uid:parent',
+      aud: [KAGENT_SUBSTRATE_AUDIENCE],
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      jti: 'cap-parent',
+      claims: { tools: ['write_artifact', 'http_get'] },
+    };
+    const task = makeTask({ uid: 'narrow-4', parentTask: 'parent' });
+    const overlay = makeDispositionOverlay(['templates']);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    // No CapabilityViolationError thrown for valid (subset) inputs.
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      parentBundle,
+    });
+    expect(result.claims.tools).toEqual(['write_artifact', 'http_get']);
+  });
+
+  it('Test 5 — narrowing is monotonic: empty cap stays empty even when overlay allows everything', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({ capabilityClaims: { tools: [] } });
+    const task = makeTask({ uid: 'narrow-5' });
+    const overlay = makeDispositionOverlay(['templates', 'verifiers', 'capability-policy']);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    const auditPublisher = { publish: vi.fn(() => Promise.resolve()) };
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      auditPublisher,
+    });
+    expect(result.claims.tools).toEqual([]);
+    expect(auditPublisher.publish).not.toHaveBeenCalled();
+    expect(result.dispositionRejections).toBeUndefined();
+  });
+
+  it('Test 6 — overlay loader error handling (fail-open for availability): mint proceeds with no narrowing', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['write_artifact', 'verifier_register', 'http_get'] },
+    });
+    const task = makeTask({ uid: 'narrow-6' });
+    const loadDispositionOverlay = vi.fn(() => Promise.reject(new Error('k8s api unreachable')));
+    const auditPublisher = { publish: vi.fn(() => Promise.resolve()) };
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      auditPublisher,
+    });
+    // Narrowing is skipped on loader-throw — minted claims equal base.
+    expect(result.claims.tools).toEqual(['write_artifact', 'verifier_register', 'http_get']);
+    expect(result.dispositionRejections).toBeUndefined();
+    expect(auditPublisher.publish).not.toHaveBeenCalled();
+  });
+
+  it('Test 7 — taskUid populated in audit event from input.task.metadata.uid', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['verifier_register'] },
+    });
+    const task = makeTask({ uid: 'task-uid-xyz' });
+    const overlay = makeDispositionOverlay(['templates']);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    const auditPublisher = { publish: vi.fn(() => Promise.resolve()) };
+    await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      auditPublisher,
+    });
+    const callArg = auditPublisher.publish.mock.calls[0]![0] as {
+      data: { taskUid: string };
+    };
+    expect(callArg.data.taskUid).toBe('task-uid-xyz');
+  });
+
+  it('Test 8 — overlay loader undefined (back-compat): baseline behavior preserved', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['write_artifact', 'verifier_register'] },
+    });
+    const task = makeTask({ uid: 'narrow-8' });
+    // No loadDispositionOverlay AND no auditPublisher → baseline behavior.
+    const result = await mintCapabilityForTask(ca, { task, agent });
+    expect(result.claims.tools).toEqual(['write_artifact', 'verifier_register']);
+    expect(result.dispositionRejections).toBeUndefined();
+  });
+
+  it('Test 9 — proposals-today increment fires when minted JWT carries a proposal-category tool', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['write_artifact', 'http_get'] },
+    });
+    const task = makeTask({ uid: 'mint-with-proposal' });
+    const overlay = makeDispositionOverlay(['templates']);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    const coreApi = makeCoreApiStub();
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      coreApi,
+    });
+    // write_artifact (templates) survives narrowing — proposal-category mint.
+    expect(result.claims.tools).toEqual(['write_artifact', 'http_get']);
+    expect(coreApi.patchNamespacedConfigMap).toHaveBeenCalledTimes(1);
+    const callArg = coreApi.patchNamespacedConfigMap.mock.calls[0]![0] as {
+      name: string;
+      namespace: string;
+      body: unknown;
+    };
+    expect(callArg.name).toBe('researcher-disposition');
+    expect(callArg.namespace).toBe('default');
+    // The patch body is a JSON-Patch array; second/third ops touch the
+    // proposals-today annotations.
+    const ops = callArg.body as Array<{ op: string; path: string; value: unknown }>;
+    expect(ops[1]!.path).toBe('/metadata/annotations/kagent.knuteson.io~1proposals-today');
+    expect(ops[2]!.path).toBe('/metadata/annotations/kagent.knuteson.io~1proposals-today-day');
+  });
+
+  it('Test 10 — proposals-today increment SKIPPED when narrowing removes all proposal tools', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['verifier_register'] },
+    });
+    const task = makeTask({ uid: 'mint-narrowed-empty' });
+    const overlay = makeDispositionOverlay(['templates']);
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(overlay));
+    const coreApi = makeCoreApiStub();
+    const result = await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      coreApi,
+    });
+    // verifier_register removed → no proposal-category tool in mint.
+    expect(result.claims.tools).toEqual([]);
+    expect(coreApi.patchNamespacedConfigMap).not.toHaveBeenCalled();
+  });
+
+  it('Test 11 — proposals-today increment SKIPPED when no overlay loaded', async () => {
+    const ca = await makeCa();
+    const agent = makeAgent({
+      capabilityClaims: { tools: ['write_artifact'] },
+    });
+    const task = makeTask({ uid: 'mint-no-overlay' });
+    const loadDispositionOverlay = vi.fn(() => Promise.resolve(null));
+    const coreApi = makeCoreApiStub();
+    await mintCapabilityForTask(ca, {
+      task,
+      agent,
+      loadDispositionOverlay,
+      coreApi,
+    });
+    expect(coreApi.patchNamespacedConfigMap).not.toHaveBeenCalled();
   });
 });
