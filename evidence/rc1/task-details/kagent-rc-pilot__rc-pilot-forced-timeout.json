@@ -1,0 +1,52 @@
+{
+  "name": "rc-pilot-forced-timeout",
+  "namespace": "kagent-rc-pilot",
+  "uid": "c6cf6fc8-398f-45f4-8d91-7bcb11b5b39a",
+  "phase": "Failed",
+  "targetAgent": "rc-pilot-summarizer",
+  "model": "nemotron-3-nano:4b",
+  "createdAt": "2026-05-05T17:51:47Z",
+  "completedAt": "2026-05-05T17:53:21.350Z",
+  "error": "cancelled: SIGTERM received",
+  "suspicious": [],
+  "originalUserMessage": "Write a 5000-word essay on the history of distributed systems. Take\nyour time and include detailed footnotes; this prompt is intentionally\nexpensive so the wall-clock timeout fires before completion.\n",
+  "payload": {
+    "smokeTest": true
+  },
+  "containerStatuses": [],
+  "eventsSummary": [],
+  "traceLink": {
+    "provider": "langfuse",
+    "runId": "c6cf6fc8-398f-45f4-8d91-7bcb11b5b39a",
+    "url": "http://langfuse-web.langfuse-system.svc.cluster.local:3000/trace/8dd2fe5088b427a570e2b64725b4e6f3"
+  },
+  "pilotEvidence": {
+    "audit": {
+      "labels": {
+        "app.kubernetes.io/created-by": "rc-pilot-runbook",
+        "app.kubernetes.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/role": "rc-pilot",
+        "kagent.knuteson.io/scenario": "forced-timeout",
+        "kagent.knuteson.io/tenant": "enterprise-pilot"
+      },
+      "annotations": {
+        "kagent.knuteson.io/evidence-bundle": "enterprise-pilot-rc1"
+      },
+      "tenant": "enterprise-pilot",
+      "createdBy": "rc-pilot-runbook"
+    },
+    "policy": {
+      "agentResolved": true,
+      "maxConcurrentChildren": 10
+    },
+    "taskGraph": {},
+    "artifacts": {},
+    "structuralVerdict": {
+      "suspicious": []
+    },
+    "capabilityRef": "cap-c6cf6fc8-c4f50c93",
+    "runConfig": {
+      "timeoutSeconds": 1
+    }
+  }
+}

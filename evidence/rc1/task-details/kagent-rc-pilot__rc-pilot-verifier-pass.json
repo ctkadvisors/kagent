@@ -1,0 +1,103 @@
+{
+  "name": "rc-pilot-verifier-pass",
+  "namespace": "kagent-rc-pilot",
+  "uid": "87cb770b-faa2-4b95-b033-053ad57e763c",
+  "phase": "Completed",
+  "targetAgent": "rc-pilot-verifier-gated",
+  "model": "nemotron-3-nano:4b",
+  "createdAt": "2026-05-05T19:45:58Z",
+  "completedAt": "2026-05-05T19:46:46.713Z",
+  "suspicious": [],
+  "originalUserMessage": "Answer in JSON: what does the K in K3s stand for?",
+  "payload": {
+    "expect": "pass",
+    "smokeTest": true
+  },
+  "result": {
+    "content": "{\"answer\":\"K stands for Kubernetes.\"}"
+  },
+  "containerStatuses": [
+    {
+      "name": "agent",
+      "state": {
+        "terminated": {
+          "exitCode": 0,
+          "reason": "Completed",
+          "startedAt": "2026-05-05T19:46:33Z",
+          "finishedAt": "2026-05-05T19:46:46Z",
+          "containerID": "containerd://7f7185c3e08a9f6a6e203fac1ed3c3adf1861371fad173023e288bf1e5f104eb"
+        }
+      },
+      "lastState": {},
+      "ready": false,
+      "restartCount": 0,
+      "image": "ghcr.io/ctkadvisors/kagent-agent-pod:v0.1.7-rig.2",
+      "imageID": "ghcr.io/ctkadvisors/kagent-agent-pod@sha256:e178349321aac11cb67a5053e3a3382f1c02b92ef132d839ab0f9453ff06390b",
+      "containerID": "containerd://7f7185c3e08a9f6a6e203fac1ed3c3adf1861371fad173023e288bf1e5f104eb",
+      "started": false,
+      "volumeMounts": [
+        {
+          "name": "tmp",
+          "mountPath": "/tmp"
+        },
+        {
+          "name": "kagent-config",
+          "mountPath": "/var/kagent/config",
+          "readOnly": true,
+          "recursiveReadOnly": "Disabled"
+        },
+        {
+          "name": "cap-jwt",
+          "mountPath": "/var/kagent/cap",
+          "readOnly": true,
+          "recursiveReadOnly": "Disabled"
+        },
+        {
+          "name": "kube-api-access-s5z8h",
+          "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+          "readOnly": true,
+          "recursiveReadOnly": "Disabled"
+        }
+      ]
+    }
+  ],
+  "eventsSummary": [],
+  "traceLink": {
+    "provider": "langfuse",
+    "runId": "87cb770b-faa2-4b95-b033-053ad57e763c",
+    "url": "http://langfuse-web.langfuse-system.svc.cluster.local:3000/trace/e9c23e2ea297f5efcaac9cc40323df82"
+  },
+  "pilotEvidence": {
+    "audit": {
+      "labels": {
+        "app.kubernetes.io/created-by": "rc-pilot-runbook",
+        "app.kubernetes.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/role": "rc-pilot",
+        "kagent.knuteson.io/scenario": "verifier",
+        "kagent.knuteson.io/tenant": "enterprise-pilot",
+        "kagent.knuteson.io/verifier-case": "pass"
+      },
+      "annotations": {
+        "kagent.knuteson.io/evidence-bundle": "enterprise-pilot-rc1"
+      },
+      "tenant": "enterprise-pilot",
+      "createdBy": "rc-pilot-runbook"
+    },
+    "policy": {
+      "agentResolved": true,
+      "maxConcurrentChildren": 10
+    },
+    "taskGraph": {},
+    "artifacts": {},
+    "structuralVerdict": {
+      "suspicious": []
+    },
+    "verification": {
+      "passed": false,
+      "mode": "llmJudge",
+      "reason": "verdict:fail: The output is not a JSON object with a single key 'answer' containing a single sentence; it is nested under a 'content' field containing a JSON string.",
+      "completedAt": "2026-05-05T19:46:58.199Z"
+    },
+    "capabilityRef": "cap-87cb770b-20ec009a"
+  }
+}

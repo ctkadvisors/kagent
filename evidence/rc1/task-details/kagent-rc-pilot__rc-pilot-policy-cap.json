@@ -1,0 +1,61 @@
+{
+  "name": "rc-pilot-policy-cap",
+  "namespace": "kagent-rc-pilot",
+  "uid": "b62626a6-e091-4777-9287-19d5fc1f3950",
+  "phase": "Completed",
+  "targetAgent": "rc-pilot-policy-capped",
+  "model": "nemotron-3-nano:4b",
+  "createdAt": "2026-05-05T17:51:47Z",
+  "completedAt": "2026-05-05T17:53:16.372Z",
+  "suspicious": [],
+  "originalUserMessage": "In one sentence, why are concurrency caps important on shared LLM endpoints?",
+  "payload": {
+    "smokeTest": true
+  },
+  "result": {
+    "content": "Concurrency caps are important on shared LLM endpoints because they limit simultaneous requests to prevent overload, ensure fair resource allocation, and protect system stability and compliance with enterprise policy."
+  },
+  "containerStatuses": [],
+  "eventsSummary": [],
+  "traceLink": {
+    "provider": "langfuse",
+    "runId": "b62626a6-e091-4777-9287-19d5fc1f3950",
+    "url": "http://langfuse-web.langfuse-system.svc.cluster.local:3000/trace/cfc9030b4794e7f4185e7f69d20c7859"
+  },
+  "pilotEvidence": {
+    "audit": {
+      "labels": {
+        "app.kubernetes.io/created-by": "rc-pilot-runbook",
+        "app.kubernetes.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/role": "rc-pilot",
+        "kagent.knuteson.io/scenario": "policy-cap",
+        "kagent.knuteson.io/tenant": "enterprise-pilot"
+      },
+      "annotations": {
+        "kagent.knuteson.io/evidence-bundle": "enterprise-pilot-rc1"
+      },
+      "tenant": "enterprise-pilot",
+      "createdBy": "rc-pilot-runbook"
+    },
+    "policy": {
+      "agentResolved": true,
+      "tools": [
+        "spawn_child_task"
+      ],
+      "allowedChildAgents": [
+        "rc-pilot-summarizer"
+      ],
+      "allowedChildTemplates": [
+        "rc-pilot-research-template"
+      ],
+      "maxConcurrentChildren": 2,
+      "maxInFlightTasks": 4
+    },
+    "taskGraph": {},
+    "artifacts": {},
+    "structuralVerdict": {
+      "suspicious": []
+    },
+    "capabilityRef": "cap-b62626a6-585c2d27"
+  }
+}

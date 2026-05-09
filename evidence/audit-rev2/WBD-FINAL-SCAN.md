@@ -13,12 +13,12 @@
 
 **Verdict: WBD-CLEAN at HEAD.**
 
-| Class                                          | NEW (introduced W0–W5) | SURVIVING from rev2 | RESOLVED in W0–W5 | Remaining at HEAD |
-| ---------------------------------------------- | ---------------------- | ------------------- | ----------------- | ----------------- |
-| **WBD** (wired-but-dead-code, paradigm proper) | 0                      | 0                   | 2 (NB1, WBD-OP-1) | **0**             |
-| **MCALL** (missing call on required dep)       | 0                      | 0                   | 1 (H18)           | **0**             |
-| **DEADBRANCH** (dep wired, branch unrealized)  | 0                      | 0                   | 1 (WBD-OP-2 / M2) | **0**             |
-| **CSPREAD** (legitimate feature flag)          | ~389 (inventory only)  | n/a                 | n/a               | ~389              |
+| Class | NEW (introduced W0–W5) | SURVIVING from rev2 | RESOLVED in W0–W5 | Remaining at HEAD |
+|---|---|---|---|---|
+| **WBD** (wired-but-dead-code, paradigm proper) | 0 | 0 | 2 (NB1, WBD-OP-1) | **0** |
+| **MCALL** (missing call on required dep) | 0 | 0 | 1 (H18) | **0** |
+| **DEADBRANCH** (dep wired, branch unrealized) | 0 | 0 | 1 (WBD-OP-2 / M2) | **0** |
+| **CSPREAD** (legitimate feature flag) | ~389 (inventory only) | n/a | n/a | ~389 |
 
 The substrate is at **net-zero WBD** as of `2c94bf2`. The four originally-flagged
 sites (NB1 `tokenUtilizationSnapshot`, WBD-OP-1 `auditEmit`, WBD-OP-2 / M2
@@ -43,42 +43,42 @@ view across teams.
 Counts derived from canonical scan: `grep -rnE 'deps\.\w+\?\.\(' src` and
 the broader `X.Y?.()` / `?.() ?? {/[` predicates.
 
-| Package                         | `?.()` sites | WBD   | MCALL | CSPREAD/handler/test-seam | Notes                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------- | ------------ | ----- | ----- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent-loop`                    | 0            | 0     | 0     | 0                         | No optional-call sites in production code paths.                                                                                                                                                                                                                                                                                        |
-| `agent-loop-vercel-ai` (NEW W4) | 0            | 0     | 0     | 0                         | All optional-shaped deps use CSPREAD spread at the wireup (`runner.ts:125-152`). The capability wrapper has a fail-CLOSED default (`requireBundle ?? true`). The trace bridge always populates the in-memory `traces` array (no silent drop).                                                                                           |
-| `agent-pod`                     | 6            | 0     | 0     | 6                         | 5 × `remainingBudgetSeconds`, 1 × `getTraceparent` — all CSPREAD (W3-Pod / W5-Pod confirmed). The 6th hit (`builtin-tools.ts:1153 tokenUtilizationSnapshot`) was the original NB1 site; production wireup now threads it through `buildTokenUtilizationBridge → RunDeps → resolveToolProviders → defineGetMyContext`. CSPREAD post-fix. |
-| `agent-workflow-runtime`        | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `audit-events`                  | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `blackboard`                    | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `cache-controller`              | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `capability-types`              | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `cli`                           | 1            | 0     | 0     | 1                         | `commands/submit.ts:149 opts.onPhaseChange?.()` — UI progress callback; absence is correct in non-interactive mode. CSPREAD.                                                                                                                                                                                                            |
-| `dto`                           | 0            | 0     | 0     | 0                         | Pure type definitions.                                                                                                                                                                                                                                                                                                                  |
-| `egress-controller`             | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `events`                        | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `http-tool-provider`            | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `in-process-tool-provider`      | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `keyrotation-controller`        | 2            | 0     | 0     | 2                         | `gateway-rotation.ts:221,228 timer.unref?.()` — Node.js timer optional API (older runtimes). Not the WBD shape.                                                                                                                                                                                                                         |
-| `llm-gateway`                   | 0            | 0     | 0     | 0                         | H18 (MCALL) closed at `392b5bd`. No remaining optional-call sites.                                                                                                                                                                                                                                                                      |
-| `locality-controller`           | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `mcp-tool-provider`             | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `openai-compat`                 | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `operator`                      | 38           | 0     | 0     | 38                        | See breakdown below.                                                                                                                                                                                                                                                                                                                    |
-| `quota-controller`              | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `supervision`                   | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `trace-sinks`                   | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `triggers`                      | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `versioning-controller`         | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `workbench-api`                 | 0            | 0     | 0     | 0                         | —                                                                                                                                                                                                                                                                                                                                       |
-| `workbench-ui`                  | 0            | 0     | 0     | 0                         | Out of scope (presentational); also no optional-call sites.                                                                                                                                                                                                                                                                             |
-| **Total**                       | **47**       | **0** | **0** | **47**                    |                                                                                                                                                                                                                                                                                                                                         |
+| Package | `?.()` sites | WBD | MCALL | CSPREAD/handler/test-seam | Notes |
+|---|---|---|---|---|---|
+| `agent-loop` | 0 | 0 | 0 | 0 | No optional-call sites in production code paths. |
+| `agent-loop-vercel-ai` (NEW W4) | 0 | 0 | 0 | 0 | All optional-shaped deps use CSPREAD spread at the wireup (`runner.ts:125-152`). The capability wrapper has a fail-CLOSED default (`requireBundle ?? true`). The trace bridge always populates the in-memory `traces` array (no silent drop). |
+| `agent-pod` | 6 | 0 | 0 | 6 | 5 × `remainingBudgetSeconds`, 1 × `getTraceparent` — all CSPREAD (W3-Pod / W5-Pod confirmed). The 6th hit (`builtin-tools.ts:1153 tokenUtilizationSnapshot`) was the original NB1 site; production wireup now threads it through `buildTokenUtilizationBridge → RunDeps → resolveToolProviders → defineGetMyContext`. CSPREAD post-fix. |
+| `agent-workflow-runtime` | 0 | 0 | 0 | 0 | — |
+| `audit-events` | 0 | 0 | 0 | 0 | — |
+| `blackboard` | 0 | 0 | 0 | 0 | — |
+| `cache-controller` | 0 | 0 | 0 | 0 | — |
+| `capability-types` | 0 | 0 | 0 | 0 | — |
+| `cli` | 1 | 0 | 0 | 1 | `commands/submit.ts:149 opts.onPhaseChange?.()` — UI progress callback; absence is correct in non-interactive mode. CSPREAD. |
+| `dto` | 0 | 0 | 0 | 0 | Pure type definitions. |
+| `egress-controller` | 0 | 0 | 0 | 0 | — |
+| `events` | 0 | 0 | 0 | 0 | — |
+| `http-tool-provider` | 0 | 0 | 0 | 0 | — |
+| `in-process-tool-provider` | 0 | 0 | 0 | 0 | — |
+| `keyrotation-controller` | 2 | 0 | 0 | 2 | `gateway-rotation.ts:221,228 timer.unref?.()` — Node.js timer optional API (older runtimes). Not the WBD shape. |
+| `llm-gateway` | 0 | 0 | 0 | 0 | H18 (MCALL) closed at `392b5bd`. No remaining optional-call sites. |
+| `locality-controller` | 0 | 0 | 0 | 0 | — |
+| `mcp-tool-provider` | 0 | 0 | 0 | 0 | — |
+| `openai-compat` | 0 | 0 | 0 | 0 | — |
+| `operator` | 38 | 0 | 0 | 38 | See breakdown below. |
+| `quota-controller` | 0 | 0 | 0 | 0 | — |
+| `supervision` | 0 | 0 | 0 | 0 | — |
+| `trace-sinks` | 0 | 0 | 0 | 0 | — |
+| `triggers` | 0 | 0 | 0 | 0 | — |
+| `versioning-controller` | 0 | 0 | 0 | 0 | — |
+| `workbench-api` | 0 | 0 | 0 | 0 | — |
+| `workbench-ui` | 0 | 0 | 0 | 0 | Out of scope (presentational); also no optional-call sites. |
+| **Total** | **47** | **0** | **0** | **47** | |
 
 ### Operator scope — 38 hits broken out
 
 - **Watch / job-watch error handlers** (15 sites): `watch.ts:112-164` and
   `job-watch.ts:133-200` — `handler.onError?.(err)` and `handler.onJob /
-onPod` follow-up. Handler-shape (caller may opt out of error notification);
+  onPod` follow-up. Handler-shape (caller may opt out of error notification);
   not the WBD shape. Production wireup at `main.ts` always passes
   `onError`. CSPREAD-equivalent (handler-injection seam).
 - **Workspace controller cache injection** (4 sites): `workspace-controller.ts:460,465,481,491`
@@ -111,7 +111,7 @@ onPod` follow-up. Handler-shape (caller may opt out of error notification);
   Test-seam clock injection; the production fallback `Date.now()` is the
   desired behavior. CSPREAD/clock-injection (W5-Operator confirmed).
 - **Node.js timer `.unref()` API** (3 sites): `main.ts:3081,3403,3926
-X.unref?.()`. Not the WBD shape — guarding against pre-Node-22 runtimes.
+  X.unref?.()`. Not the WBD shape — guarding against pre-Node-22 runtimes.
 - **Comment block (false positive)** (2 lines): `main.ts:2425,2426` —
   text inside a comment, not a callsite.
 
@@ -149,28 +149,28 @@ asserts both the positive path (touched on success) and the negative path
 Conditional-spread feature-flag sites (NOT bugs — production answer to
 "feature is enabled" vs "feature is off"):
 
-| Package                    | CSPREAD count |
-| -------------------------- | ------------- |
-| `operator`                 | 139           |
-| `agent-pod`                | 75            |
-| `workbench-api`            | 66            |
-| `dto`                      | 26            |
-| `cli`                      | 16            |
-| `agent-loop-vercel-ai`     | 16            |
-| `agent-loop`               | 15            |
-| `llm-gateway`              | 12            |
-| `egress-controller`        | 7             |
-| `keyrotation-controller`   | 4             |
-| `capability-types`         | 3             |
-| `mcp-tool-provider`        | 2             |
-| `triggers`                 | 2             |
-| `events`                   | 1             |
-| `http-tool-provider`       | 1             |
-| `in-process-tool-provider` | 1             |
-| `locality-controller`      | 1             |
-| `quota-controller`         | 1             |
-| `versioning-controller`    | 1             |
-| **Total**                  | **389**       |
+| Package | CSPREAD count |
+|---|---|
+| `operator` | 139 |
+| `agent-pod` | 75 |
+| `workbench-api` | 66 |
+| `dto` | 26 |
+| `cli` | 16 |
+| `agent-loop-vercel-ai` | 16 |
+| `agent-loop` | 15 |
+| `llm-gateway` | 12 |
+| `egress-controller` | 7 |
+| `keyrotation-controller` | 4 |
+| `capability-types` | 3 |
+| `mcp-tool-provider` | 2 |
+| `triggers` | 2 |
+| `events` | 1 |
+| `http-tool-provider` | 1 |
+| `in-process-tool-provider` | 1 |
+| `locality-controller` | 1 |
+| `quota-controller` | 1 |
+| `versioning-controller` | 1 |
+| **Total** | **389** |
 
 (Counted via `grep -rnE '\.\.\.\([^)]+\s+&&\s+\{' src --include='*.ts' --exclude='*.test.ts'`.)
 
@@ -312,10 +312,10 @@ the dual-constructor pattern:
 
 ```ts
 // unit-level (tests)
-function defineFoo(deps: { snapshot?: () => Snapshot });
+function defineFoo(deps: { snapshot?: () => Snapshot })
 
 // boot-level (production)
-function buildFooForProduction(deps: { snapshot: () => Snapshot }): Foo;
+function buildFooForProduction(deps: { snapshot: () => Snapshot }): Foo
 ```
 
 The type system catches the omission at the boot site. The substrate

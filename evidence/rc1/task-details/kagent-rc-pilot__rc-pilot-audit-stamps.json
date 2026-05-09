@@ -1,0 +1,55 @@
+{
+  "name": "rc-pilot-audit-stamps",
+  "namespace": "kagent-rc-pilot",
+  "uid": "e74cbc3e-4e1c-4842-8650-49d0fa254f7e",
+  "phase": "Completed",
+  "targetAgent": "rc-pilot-summarizer",
+  "model": "nemotron-3-nano:4b",
+  "createdAt": "2026-05-05T17:51:47Z",
+  "completedAt": "2026-05-05T17:52:35.190Z",
+  "suspicious": [],
+  "originalUserMessage": "In one sentence, what is the value of audit metadata?",
+  "payload": {
+    "smokeTest": true
+  },
+  "result": {
+    "content": "Audit metadata is the set of contextual information—such as timestamps, user identifiers, and system details—that accompanies an audit event to enable verification, compliance, and post‑event analysis."
+  },
+  "containerStatuses": [],
+  "eventsSummary": [],
+  "traceLink": {
+    "provider": "langfuse",
+    "runId": "e74cbc3e-4e1c-4842-8650-49d0fa254f7e",
+    "url": "http://langfuse-web.langfuse-system.svc.cluster.local:3000/trace/f6f42a4624e2f24ed9b73d96ae895ccb"
+  },
+  "pilotEvidence": {
+    "audit": {
+      "labels": {
+        "app.kubernetes.io/created-by": "rc-pilot-runbook",
+        "app.kubernetes.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/role": "rc-pilot",
+        "kagent.knuteson.io/scenario": "audit-stamps",
+        "kagent.knuteson.io/tenant": "enterprise-pilot"
+      },
+      "annotations": {
+        "kagent.knuteson.io/evidence-bundle": "enterprise-pilot-rc1",
+        "kagent.knuteson.io/evidence-id": "rc1-audit-stamps",
+        "kagent.knuteson.io/notes": "Audit-stamps probe row. Reviewer should confirm pilotEvidence.audit\nmirrors every kagent.knuteson.io/* and app.kubernetes.io/created-by\nkey set on this CR, plus `tenant`, `createdBy`, `managedBy`.\n"
+      },
+      "tenant": "enterprise-pilot",
+      "createdBy": "rc-pilot-runbook",
+      "managedBy": "kagent-rc-pilot"
+    },
+    "policy": {
+      "agentResolved": true,
+      "maxConcurrentChildren": 10
+    },
+    "taskGraph": {},
+    "artifacts": {},
+    "structuralVerdict": {
+      "suspicious": []
+    },
+    "capabilityRef": "cap-e74cbc3e-c7888044"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "rc-pilot-image-pull-fail",
+  "namespace": "kagent-rc-pilot",
+  "uid": "9fdbb767-b3ed-40f8-905c-6e2f0d4a77b3",
+  "phase": "Failed",
+  "targetAgent": "rc-pilot-bad-image",
+  "model": "nemotron-3-nano:4b",
+  "createdAt": "2026-05-05T17:51:47Z",
+  "completedAt": "2026-05-05T17:52:39.554Z",
+  "error": "runner threw: unknown built-in tool \"nonexistent_tool_for_testing\" (known built-ins: ensure_agent_from_template, extract_text, get_my_context, http_get, rss_fetch, spawn_child_task, wait_for_child_task, wait_for_children_all, write_artifact). Edit Agent.spec.tools to drop the name, or extend packages/agent-pod/src/builtin-tools.ts to add it.",
+  "suspicious": [],
+  "originalUserMessage": "This task should never reach the agent loop.",
+  "payload": {
+    "smokeTest": true
+  },
+  "containerStatuses": [],
+  "eventsSummary": [],
+  "traceLink": {
+    "provider": "langfuse",
+    "runId": "9fdbb767-b3ed-40f8-905c-6e2f0d4a77b3",
+    "url": "http://langfuse-web.langfuse-system.svc.cluster.local:3000/trace/31c6461fb0e95b816646b26de9c53b50"
+  },
+  "pilotEvidence": {
+    "audit": {
+      "labels": {
+        "app.kubernetes.io/created-by": "rc-pilot-runbook",
+        "app.kubernetes.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/role": "rc-pilot",
+        "kagent.knuteson.io/scenario": "image-pull-fail",
+        "kagent.knuteson.io/tenant": "enterprise-pilot"
+      },
+      "annotations": {
+        "kagent.knuteson.io/evidence-bundle": "enterprise-pilot-rc1"
+      },
+      "tenant": "enterprise-pilot",
+      "createdBy": "rc-pilot-runbook"
+    },
+    "policy": {
+      "agentResolved": true,
+      "tools": [
+        "nonexistent_tool_for_testing"
+      ],
+      "maxConcurrentChildren": 10
+    },
+    "taskGraph": {},
+    "artifacts": {},
+    "structuralVerdict": {
+      "suspicious": []
+    },
+    "capabilityRef": "cap-9fdbb767-88cbeb22"
+  }
+}

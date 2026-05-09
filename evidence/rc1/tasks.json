@@ -1,0 +1,105 @@
+{
+  "items": [
+    {
+      "name": "rc-pilot-verifier-fail",
+      "namespace": "kagent-rc-pilot",
+      "uid": "76e2b9e4-78d7-4c94-bccc-60b01cdf235a",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-verifier-gated",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T19:45:58Z",
+      "completedAt": "2026-05-05T19:46:29.592Z",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-verifier-pass",
+      "namespace": "kagent-rc-pilot",
+      "uid": "87cb770b-faa2-4b95-b033-053ad57e763c",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-verifier-gated",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T19:45:58Z",
+      "completedAt": "2026-05-05T19:46:46.713Z",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-artifact-producer",
+      "namespace": "kagent-rc-pilot",
+      "uid": "b4cd24dd-bfcf-45bd-a5be-cb774bdc7867",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-artifact-writer",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:52:25.884Z",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-audit-stamps",
+      "namespace": "kagent-rc-pilot",
+      "uid": "e74cbc3e-4e1c-4842-8650-49d0fa254f7e",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-summarizer",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:52:35.190Z",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-image-pull-fail",
+      "namespace": "kagent-rc-pilot",
+      "uid": "9fdbb767-b3ed-40f8-905c-6e2f0d4a77b3",
+      "phase": "Failed",
+      "targetAgent": "rc-pilot-bad-image",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:52:39.554Z",
+      "error": "runner threw: unknown built-in tool \"nonexistent_tool_for_testing\" (known built-ins: ensure_agent_from_template, extract_text, get_my_context, http_get, rss_fetch, spawn_child_task, wait_for_child_task, wait_for_children_all, write_artifact). Edit Agent.spec.tools to drop the name, or extend packages/agent-pod/src/builtin-tools.ts to add it.",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-delegation",
+      "namespace": "kagent-rc-pilot",
+      "uid": "7eea25a2-27ce-44d9-86e1-0e806285d374",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-orchestrator",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:53:06.809Z",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-happy-path",
+      "namespace": "kagent-rc-pilot",
+      "uid": "9ab60801-1bb0-47dc-8011-0fc109e16032",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-summarizer",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:52:47.173Z",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-forced-timeout",
+      "namespace": "kagent-rc-pilot",
+      "uid": "c6cf6fc8-398f-45f4-8d91-7bcb11b5b39a",
+      "phase": "Failed",
+      "targetAgent": "rc-pilot-summarizer",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:53:21.350Z",
+      "error": "cancelled: SIGTERM received",
+      "suspicious": []
+    },
+    {
+      "name": "rc-pilot-policy-cap",
+      "namespace": "kagent-rc-pilot",
+      "uid": "b62626a6-e091-4777-9287-19d5fc1f3950",
+      "phase": "Completed",
+      "targetAgent": "rc-pilot-policy-capped",
+      "model": "nemotron-3-nano:4b",
+      "createdAt": "2026-05-05T17:51:47Z",
+      "completedAt": "2026-05-05T17:53:16.372Z",
+      "suspicious": []
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "generatedAt": "2026-05-05T19:48:30.167Z",
+  "baseUrl": "http://kagent-workbench.kagent-system.svc.cluster.local:80",
+  "namespace": "kagent-rc-pilot",
+  "taskSelectors": [
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-verifier-fail"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-verifier-pass"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-artifact-producer"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-audit-stamps"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-image-pull-fail"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-delegation"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-happy-path"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-forced-timeout"
+    },
+    {
+      "namespace": "kagent-rc-pilot",
+      "name": "rc-pilot-policy-cap"
+    }
+  ],
+  "taskCount": 9,
+  "detailCount": 9,
+  "files": {
+    "healthz": "healthz.json",
+    "readyz": "readyz.json",
+    "tasks": "tasks.json",
+    "summary": "summary.md",
+    "taskDetails": [
+      "task-details/kagent-rc-pilot__rc-pilot-verifier-fail.json",
+      "task-details/kagent-rc-pilot__rc-pilot-verifier-pass.json",
+      "task-details/kagent-rc-pilot__rc-pilot-artifact-producer.json",
+      "task-details/kagent-rc-pilot__rc-pilot-audit-stamps.json",
+      "task-details/kagent-rc-pilot__rc-pilot-image-pull-fail.json",
+      "task-details/kagent-rc-pilot__rc-pilot-delegation.json",
+      "task-details/kagent-rc-pilot__rc-pilot-happy-path.json",
+      "task-details/kagent-rc-pilot__rc-pilot-forced-timeout.json",
+      "task-details/kagent-rc-pilot__rc-pilot-policy-cap.json"
+    ]
+  }
+}

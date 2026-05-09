@@ -1,0 +1,51 @@
+{
+  "name": "rc-pilot-happy-path",
+  "namespace": "kagent-rc-pilot",
+  "uid": "9ab60801-1bb0-47dc-8011-0fc109e16032",
+  "phase": "Completed",
+  "targetAgent": "rc-pilot-summarizer",
+  "model": "nemotron-3-nano:4b",
+  "createdAt": "2026-05-05T17:51:47Z",
+  "completedAt": "2026-05-05T17:52:47.173Z",
+  "suspicious": [],
+  "originalUserMessage": "In one sentence, what is K3s?",
+  "payload": {
+    "smokeTest": true
+  },
+  "result": {
+    "content": "K3s is a lightweight Kubernetes distribution that runs entirely on a single machine."
+  },
+  "containerStatuses": [],
+  "eventsSummary": [],
+  "traceLink": {
+    "provider": "langfuse",
+    "runId": "9ab60801-1bb0-47dc-8011-0fc109e16032",
+    "url": "http://langfuse-web.langfuse-system.svc.cluster.local:3000/trace/c4ac3388776956b7d9d9f82eabe276a5"
+  },
+  "pilotEvidence": {
+    "audit": {
+      "labels": {
+        "app.kubernetes.io/created-by": "rc-pilot-runbook",
+        "app.kubernetes.io/managed-by": "kagent-rc-pilot",
+        "kagent.knuteson.io/role": "rc-pilot",
+        "kagent.knuteson.io/scenario": "happy-path",
+        "kagent.knuteson.io/tenant": "enterprise-pilot"
+      },
+      "annotations": {
+        "kagent.knuteson.io/evidence-bundle": "enterprise-pilot-rc1"
+      },
+      "tenant": "enterprise-pilot",
+      "createdBy": "rc-pilot-runbook"
+    },
+    "policy": {
+      "agentResolved": true,
+      "maxConcurrentChildren": 10
+    },
+    "taskGraph": {},
+    "artifacts": {},
+    "structuralVerdict": {
+      "suspicious": []
+    },
+    "capabilityRef": "cap-9ab60801-a60b5870"
+  }
+}
