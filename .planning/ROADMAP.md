@@ -69,7 +69,7 @@ Plans:
 
 - [x] 02-01-PLAN.md — Wave 0 scaffolding: extend source-binding.ts with 4 new closed-enum types + generic helpers; create pressure.ts/pressure.test.ts/PressureOverlay.tsx/.test.tsx/.module.css skeletons; create cc-orphan.test.ts + cc-reload.test.tsx skeletons; create **fixtures**/cc-snapshot.json with all 9 pressure-trigger scenarios
 - [x] 02-02-PLAN.md — Wave 1: CC-01 canvas-side orphan assertion (assertCanvasOrphan in source-binding.ts; insertion in CommandView.tsx agentNodes useMemo); CC-04 PRESSURE_TYPES populated with 9 entries + 18 vitest tests
-- [ ] 02-03-PLAN.md — Wave 2: CC-04 PressureOverlay full JSX + module CSS + 4 real tests + mount alongside DispositionOverlay; CC-03 inline-expand AgentPanel/TaskPanel/GatewayPanel with data-source-field(s) on every new KV row + bottom deep links
+- [x] 02-03-PLAN.md — Wave 2: CC-04 PressureOverlay full JSX + module CSS + 4 real tests + mount alongside DispositionOverlay; CC-03 inline-expand AgentPanel/TaskPanel/GatewayPanel with data-source-field(s) on every new KV row + bottom deep links
 - [ ] 02-04-PLAN.md — Wave 3: CC-02 reload-stability test (mount → unmount → fresh-remount; DOM + scene-graph snapshots deep-equal; vi.useFakeTimers for deterministic Date.now; vitest snapshot file committed to git)
 
 ### Phase 3: Resource-flow overlays
