@@ -95,10 +95,6 @@ exports[`cc-reload (CC-02 — reload-stable rendering) > mount → unmount → f
       "href": "#/tasks",
       "text": "trust events 2 events",
     },
-    {
-      "href": "#/tasks",
-      "text": "awaiting review queue projection — Phase 4 3 items",
-    },
   ],
   "sourceBound": [
     {
@@ -246,10 +242,10 @@ exports[`cc-reload (CC-02 — reload-stable rendering) > mount → unmount → f
       "text": "trust events 2 events",
     },
     {
-      "multiFields": "phase,suspicious",
+      "multiFields": "reviewQueueRowCount",
       "singleField": null,
-      "tag": "a",
-      "text": "awaiting review queue projection — Phase 4 3 items",
+      "tag": "div",
+      "text": "— no attention source data",
     },
   ],
 }

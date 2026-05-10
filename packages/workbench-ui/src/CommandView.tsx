@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { createTask, CreateTaskApiError } from './api.js';
+import { createTask, CreateTaskApiError, useReviewQueue } from './api.js';
 import { computeLayout } from './command/layout.js';
 import type { AgentNode, LayoutResult } from './command/layout.js';
 import {
@@ -109,7 +109,17 @@ interface DispatchPopover {
 }
 
 export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
-  const snapshot = useCommandSnapshot();
+  const baseSnapshot = useCommandSnapshot();
+  // Phase 4 / REV-01 — wire review-queue row count into the snapshot so the
+  // `attention` flow gauge in FlowOverlay reads the real projection count.
+  // useReviewQueue polls at 5s (CONTEXT.md D-01-A); useMemo limits re-renders
+  // of unrelated subtrees to count changes only (T-04-W4-02 accepted).
+  const { rows: reviewRows } = useReviewQueue();
+  const snapshot = useMemo(
+    () => ({ ...baseSnapshot, reviewQueueRowCount: reviewRows.length }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [baseSnapshot, reviewRows.length],
+  );
   const [selection, setSelection] = useState<SelectionState>({
     keys: new Set<string>(),
     focus: { kind: null, key: null },

@@ -284,6 +284,66 @@ Backbone: NATS JetStream `audit` stream. Consumers: log warehouse (Loki, Splunk,
 
 Lands in `v0.1.15-audit-stream` (foundation, before Capabilities depend on it).
 
+#### Audit-event catalog (53 total as of Phase 4)
+
+The canonical event-type literals live in `packages/audit-events/src/event-types.ts`. Below is the full catalog in delivery order. Each event carries a CloudEvents envelope (`source`, `subject`, `type`, `data`) — see `packages/audit-events/src/types.ts` for the discriminated-union data shapes.
+
+| Event type | Description |
+|---|---|
+| `task.admitted` | Operator admission webhook accepted the AgentTask; prerequisites validated. |
+| `task.spawned` | Operator reconciler spawned a pod for the AgentTask. |
+| `task.completed` | AgentTask reached terminal `Completed` status. |
+| `task.failed` | AgentTask reached terminal `Failed` status. |
+| `child.spawned` | Parent AgentTask spawned a child AgentTask (tree edge created). |
+| `capability.minted` | Operator minted a new Capability JWT for an AgentTask. |
+| `capability.used` | Agent pod consumed a Capability claim at a substrate-mediated gate. |
+| `secret.accessed` | Agent pod read a secret from the substrate's secret-injection path. |
+| `quota.breached` | A quota threshold (compute / gateway / storage) was exceeded. |
+| `contract.violated` | AgentTask's `verifyContract` verdict: failed at the substrate-mediated gate. |
+| `supervision.applied` | Supervision strategy triggered (restart, escalate, isolate) for a task. |
+| `supervision.restart_limit_exceeded` | Restart cap hit; task permanently failed under supervision. |
+| `infra.fault.observed` | Infrastructure fault (node eviction, OOM kill) observed by the controller. |
+| `workflow.started` | AgentWorkflow controller began processing a new workflow run. |
+| `workflow.step.completed` | One `ctx.spawnAgentTask` await resolved in a workflow run. |
+| `workflow.completed` | AgentWorkflow reached terminal `Completed` status. |
+| `workflow.failed` | AgentWorkflow reached terminal `Failed` status. |
+| `workflow.event_subscription_pending` | Event-trigger subscription persisted but not yet dispatched. |
+| `cache.hit` | Agent-pod cache lookup found a matching slot (cache-effectiveness telemetry). |
+| `cache.miss` | Agent-pod cache lookup found no matching slot. |
+| `identity.svid_issued` | Agent pod received a fresh SPIFFE SVID from the SPIRE Workload API. |
+| `identity.rotation` | SPIRE-helper observed a certificate rotation event. |
+| `locality.speculative_spawned` | Locality engine spawned a speculative duplicate for a slow primary. |
+| `locality.speculative_superseded` | Speculative loser was marked superseded after the primary completed. |
+| `admission.pod_pressure_deferred` | Admission deferred a task because pending pod count crossed the pressure threshold. |
+| `tenant.created` | Tenant CR created (tenant lifecycle). |
+| `tenant.updated` | Tenant CR updated (tenant lifecycle). |
+| `tenant.deleted` | Tenant CR deleted (tenant lifecycle). |
+| `tenant.admission_violation` | AgentTask creation hit `policy_denied:tenant_namespace_mismatch`. |
+| `tenant.migration` | CLI migrate-tenants rewrote Agent + AgentTask tenant labels. |
+| `egress.policy_applied` | NetworkPolicy / CiliumNetworkPolicy materialized for an Agent. |
+| `egress.policy_violation` | Egress traffic violated the declared `Agent.spec.egress` policy. |
+| `quota.gateway_inflight_exceeded` | Per-tenant gateway in-flight cap crossed. |
+| `quota.storage_exceeded` | Per-tenant storage quota exceeded. |
+| `quota.compute_warning` | Per-tenant compute usage crossed the warning threshold (not yet hard-cap). |
+| `quota.resource_quota_applied` | Kubernetes ResourceQuota was applied / updated for a tenant namespace. |
+| `agent.published` | AgentTemplate or Agent was published (immutable post-publish). |
+| `agent.mutation_refused` | Attempted mutation of a published Agent was refused. |
+| `agent.deprecated_used` | A task targeted a deprecated Agent version. |
+| `keyrotation.svid_rotated` | Substrate-policy-driven SVID rotation completed (distinct from `identity.rotation`). |
+| `keyrotation.cap_minted_with_ttl` | Capability minted with a non-default TTL per the rotation policy tier. |
+| `keyrotation.gateway_rotated` | Gateway key-rotation endpoint responded successfully. |
+| `keyrotation.gateway_unsupported` | Gateway returned 404 for the key-rotation endpoint (graceful degradation). |
+| `parent.children_aggregated` | Operator patched a parent AgentTask's `status.children` / aggregate-phase projection. |
+| `verifier.started` | Operator verifier reconciler dispatched a verifier (script or LLM judge) for a Completed task. |
+| `verifier.completed` | Verifier returned a `passed=true` verdict. |
+| `verifier.failed` | Verifier returned a `passed=false` verdict; `reason` carries the structured failure tag. |
+| `disposition.proposal_rejected` | Cap-issuer narrowing step excluded a proposal-category tool per the agent's disposition overlay. |
+| `disposition.over_budget` | Agent's observed daily counter (tokens or proposals) exceeded its overlay budget. |
+| `review.requested` | Phase 4 / REV-02 — emitted when an operator POSTs `/api/review-queue/:ns/:name/request` to flag a Completed-clean task for review. |
+| `review.accepted` | Phase 4 / REV-02 — emitted on accept (always). For `candidate-template` accepts, additionally fires `template.candidate.promoted`. |
+| `review.rejected` | Phase 4 / REV-02 — emitted on reject; no AgentTemplate CR creation under any reason. |
+| `template.candidate.promoted` | Phase 4 / REV-02 — emitted when accept-on-candidate-template creates an AgentTemplate CR via the existing operator-write path. Distinct from `review.accepted` so consumers can split promotion events from review-decision events. |
+
 ---
 
 ## 5. Composition rules

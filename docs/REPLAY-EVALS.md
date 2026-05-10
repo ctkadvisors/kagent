@@ -213,3 +213,13 @@ How `docs/V0.1-COMPARISON.md` (the deliverable promised in `ROADMAP.md` Phase 5)
 - **ReplaySet matrix granularity.** v0.1 ships `{models, seeds}`. v0.2 candidates: `{systemPromptOverlays, toolListOverlays, sandboxProfiles}`. Don't pre-build them; let demand drive.
 - **A2A multi-pod runs.** A delegation chain (researcher → summarizer) is multiple AgentTaskRuns linked via `parentTask`. "Whole-chain completion rate" is a derived metric the reducer computes — it does not leak into CRD shape.
 - **Artifacts workstream coupling.** This design assumes `ArtifactRef` exists. If that workstream slips, v0.1 of the harness writes tape paths as plain strings and gets `ArtifactRef` retrofitted in v0.2. Don't block on it.
+
+---
+
+## REV-03 stub — Phase 4 placement
+
+Phase 4 reserves two slots in the `ReviewReason` closed-enum (`@kagent/dto/review-queue.ts`): `replay-divergence` and `eval-failed`. v0.2 producers: zero. The Phase 4 review-queue route (`packages/workbench-api/src/routes/review-queue.ts`) carries an inline comment block at the top of the module documenting the slot and the promotion path.
+
+When the Phase 5 design ships (`AgentTaskRun` CRD + `@kagent/eval` package + `ReplaySet` controller), the eval reducer should emit `replay-divergence` audit events the projection picks up. Concretely, the projection classifier (`classifyTask`) gains a step 2.5: "if any `AgentTaskRun` for this task has `terminalStatus='replayed-divergence'`, emit reason `replay-divergence` with `replayDivergence` populated." The `ReviewQueueRow` shape is unchanged; the projection module's `compute()` body grows ~15 lines.
+
+Until then, `verifier-failed` and `suspicious-detector` cover what `.planning/REQUIREMENTS.md` REV-03 calls "replay/eval signals" today.
