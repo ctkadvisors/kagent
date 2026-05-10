@@ -1,2 +1,87 @@
-/* Phase 2 / CC-04 — PressureOverlay styles. Wave 0 scaffold; styles
-   land in 02-03-PLAN.md when the component renders real markers. */
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * Phase 2 / CC-04 — PressureOverlay styles. Mirrors
+ * DispositionOverlay.module.css class vocabulary so the dramatic /
+ * subdued treatment toggle behaves identically. Positioned on the
+ * LEFT side of the canvas so it does NOT overlap DispositionOverlay
+ * (which sits top: 56px; right: 16px).
+ */
+
+/* ───── Pressure card (anchored; visually a sibling of DispositionOverlay) ───── */
+
+.card {
+  position: absolute;
+  top: 56px; /* clear the top HUD, same vertical band as DispositionOverlay */
+  left: 16px;
+  min-width: 280px;
+  max-width: 360px;
+  background: #0a1628;
+  border: 1px solid #1f2a44;
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(248, 113, 113, 0.06);
+  z-index: 7; /* matches DispositionOverlay; below alertTicker (10) */
+  pointer-events: auto;
+}
+
+.header {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #f87171;
+  margin-bottom: 0.55rem;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.row {
+  display: block;
+}
+
+/* Dramatic pressure marker — subtle red glow, NOT painted chrome. */
+.pressureMarker {
+  display: block;
+  padding: 0.3rem 0.5rem;
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 3px;
+  color: #fca5a5;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.pressureMarker:hover {
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+/* Base-building-only mode: same data, subdued visuals. */
+.pressureMarkerSubdued {
+  display: block;
+  padding: 0.3rem 0.5rem;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  color: #94a3b8;
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.pressureMarkerSubdued:hover {
+  color: #cbd5e1;
+  border-color: #475569;
+}

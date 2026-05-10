@@ -50,6 +50,7 @@ import {
   type Camera,
 } from './command/camera.js';
 import { DispositionOverlay } from './command/DispositionOverlay.js';
+import { PressureOverlay } from './command/PressureOverlay.js';
 import { FxLayer } from './command/fx.js';
 import { Minimap } from './command/Minimap.js';
 import { MissionOverlay } from './command/Mission.js';
@@ -1386,6 +1387,17 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
               is plumbed through VITE_PRESSURE_DRAMATIZATION for
               Slice E base-building-only mode (default: true). */}
           <DispositionOverlay
+            snapshot={snapshot}
+            pressureDramatization={pressureDramatization}
+          />
+
+          {/* Phase 2 / CC-04 — nine-type pressure overlay. Derives all
+              markers from existing CommandSnapshot fields via pressure.ts
+              classify functions; no new endpoint, no new substrate state.
+              Same pressureDramatization flag as DispositionOverlay (Slice E
+              base-building-only mode covers all 9 types via single global
+              flag — VITE_PRESSURE_DRAMATIZATION). */}
+          <PressureOverlay
             snapshot={snapshot}
             pressureDramatization={pressureDramatization}
           />

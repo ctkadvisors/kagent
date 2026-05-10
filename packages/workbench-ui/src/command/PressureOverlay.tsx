@@ -11,9 +11,14 @@
  * marker carrying data-source-field(s) attributes per
  * COMMAND-CENTER-CONTRACT.md §2 Prime Directive (D7).
  *
- * Wave 0 scaffold: returns null until PRESSURE_TYPES is populated
- * in Wave 1 (02-02-PLAN.md) and full JSX lands in Wave 2
- * (02-03-PLAN.md).
+ * Reload-stable by construction: state is computed from the snapshot
+ * prop via useMemo; no internal state, no fetches, no localStorage.
+ *
+ * D7 / Prime Directive: every rendered marker carries a substrate
+ * source field name. The classify functions in pressure.ts are the
+ * source-binding contract; this component just renders what they
+ * produce. The conditional spread on data-source-field/data-source-fields
+ * preserves strict-typed JSX (no attribute set to undefined).
  */
 
 import { type FC, useMemo } from 'react';
@@ -21,11 +26,7 @@ import { type FC, useMemo } from 'react';
 import { PRESSURE_TYPES } from './pressure.js';
 import type { PressureMarker } from './pressure.js';
 import type { CommandSnapshot } from './state.js';
-// Module CSS imported so Wave 2 can drop in styles without an additional
-// file change. The `_styles` underscore-prefix mirrors eslint.config.js's
-// `varsIgnorePattern: '^_'` so the unused-binding warning is silenced
-// until Wave 2 references it.
-import _styles from './PressureOverlay.module.css';
+import styles from './PressureOverlay.module.css';
 
 export interface PressureOverlayProps {
   readonly snapshot: CommandSnapshot;
@@ -39,18 +40,38 @@ export interface PressureOverlayProps {
 
 export const PressureOverlay: FC<PressureOverlayProps> = ({
   snapshot,
-  pressureDramatization: _pressureDramatization = true,
+  pressureDramatization = true,
 }) => {
-  // Wave 1 (02-02-PLAN.md) populates PRESSURE_TYPES with 9 entries;
-  // until then this returns [] and the component renders null.
   const markers = useMemo<readonly PressureMarker[]>(
     () => PRESSURE_TYPES.flatMap((pt) => pt.classify(snapshot)),
     [snapshot],
   );
   if (markers.length === 0) return null;
 
-  // Wave 2 (02-03-PLAN.md) replaces this with the full <aside>+<ul>
-  // JSX (mirrors DispositionOverlay.tsx lines 71-189). Until then
-  // the component cannot reach this branch (PRESSURE_TYPES is empty).
-  return null;
+  return (
+    <aside className={styles.card} aria-label="Pressure markers">
+      <header className={styles.header}>Pressure</header>
+      <ul className={styles.list}>
+        {markers.map((marker, i) => {
+          const stableKey = `${marker.kind}-${marker.affectedKey ?? `idx-${String(i)}`}`;
+          const sf = marker.sourceField;
+          const sfs = marker.sourceFields;
+          return (
+            <li key={stableKey} className={styles.row}>
+              <a
+                className={
+                  pressureDramatization ? styles.pressureMarker : styles.pressureMarkerSubdued
+                }
+                href={marker.detailLink}
+                {...(sf !== undefined ? { 'data-source-field': sf } : {})}
+                {...(sfs !== undefined ? { 'data-source-fields': sfs.join(',') } : {})}
+              >
+                {marker.label} →
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
+  );
 };

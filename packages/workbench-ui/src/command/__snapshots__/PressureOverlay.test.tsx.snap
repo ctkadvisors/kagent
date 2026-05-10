@@ -1,0 +1,27 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PressureOverlay (CC-04) > Test 2 — reload stability: re-render with same snapshot produces equal selector tree 1`] = `
+[
+  {
+    "href": "#/gateway",
+    "multiFields": "inFlight,currentCap",
+    "singleField": null,
+    "tag": "a",
+    "text": "m — 8/10 in flight (≥80%) →",
+  },
+  {
+    "href": "#/tasks/kagent-system/t1",
+    "multiFields": "artifactCount,phase",
+    "singleField": null,
+    "tag": "a",
+    "text": "t1 — completed without artifacts →",
+  },
+  {
+    "href": "#/tasks/kagent-system/t1",
+    "multiFields": null,
+    "singleField": "phase",
+    "tag": "a",
+    "text": "t1 — trace link unknown — open task detail →",
+  },
+]
+`;
