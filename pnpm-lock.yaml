@@ -122,6 +122,10 @@ importers:
       nats:
         specifier: 2.29.3
         version: 2.29.3
+    devDependencies:
+      '@kagent/dto':
+        specifier: workspace:*
+        version: link:../dto
 
   packages/blackboard:
     dependencies:
