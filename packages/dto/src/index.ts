@@ -99,3 +99,22 @@ export type {
   DispositionProposalKind,
 } from './disposition.js';
 export { assertIsDispositionOverlayRow } from './disposition.js';
+
+// Phase 4 / REV-01 — ReviewQueueRow read projection.
+// Single source of truth for the workbench-api → workbench-ui DTO
+// shape; the workbench-api computes it, workbench-ui consumes it.
+// Mirrors the DispositionOverlayRow pattern (DISP-03 / Phase 1).
+export type { ArtifactRefSummary, ReviewQueueRow, ReviewReason } from './review-queue.js';
+export { assertIsReviewQueueRow } from './review-queue.js';
+
+// Phase 4 / REV-02 — AgentTemplateSpec YAML parser.
+// Used by the accept handler in workbench-api to validate candidate
+// template YAML before creating an AgentTemplate CR.
+export type {
+  AgentTemplateBudget,
+  AgentTemplateParameter,
+  AgentTemplateParameterType,
+  AgentTemplateSpec,
+  ParseAgentTemplateSpecResult,
+} from './template-candidate.js';
+export { parseAgentTemplateSpec } from './template-candidate.js';
