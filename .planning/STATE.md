@@ -4,8 +4,8 @@ milestone: v0.2
 milestone_name: milestone
 status: executing
 stopped_at: Phase 3 context gathered
-last_updated: '2026-05-10T03:52:11.784Z'
-last_activity: 2026-05-10 -- Phase 03 planning complete
+last_updated: '2026-05-10T06:05:06.661Z'
+last_activity: 2026-05-10 -- Phase 03 execution started
 progress:
   total_phases: 5
   completed_phases: 2
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (re-steered 2026-05-09 PM)
 
 **Core value:** The substrate turns intent into verified reusable capability under bounded resources, observable state, and revocable authority. **Signals propose; governance disposes.** Agents propose; substrate or human governance promotes; no agent self-escalates authority.
-**Current focus:** Phase 02 — command-center-contract-hardening
+**Current focus:** Phase 03 — resource-flow-overlays
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-10 -- Phase 03 planning complete
+Phase: 03 (resource-flow-overlays) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 03
+Last activity: 2026-05-10 -- Phase 03 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
