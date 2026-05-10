@@ -1,0 +1,157 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * Phase 3 / FLOW-01 — FlowOverlay styles. Mirrors
+ * PressureOverlay.module.css class vocabulary so the dramatic /
+ * subdued treatment toggle behaves identically. Positioned at the
+ * BOTTOM-LEFT of the canvas so it does NOT overlap PressureOverlay
+ * (top: 56px; left: 16px) or DispositionOverlay (top: 56px; right: 16px).
+ *
+ * Position: bottom: 16px; left: 16px per RESEARCH.md Open Question 2
+ * (Claude's Discretion pick). max-height: 60vh; overflow-y: auto
+ * because 8 sections × 1–5 gauges may exceed visible area in homelab.
+ */
+
+/* ───── Flow card (anchored; visually a sibling of PressureOverlay) ───── */
+
+.card {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  min-width: 280px;
+  max-width: 380px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: #0a1628;
+  border: 1px solid #1f2a44;
+  border-radius: 6px;
+  padding: 0.75rem 0.9rem;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(59, 130, 246, 0.06);
+  z-index: 7; /* matches PressureOverlay; below alertTicker (10) */
+  pointer-events: auto;
+}
+
+.header {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #60a5fa;
+  margin-bottom: 0.55rem;
+}
+
+/* ───── Per-flow sections ───── */
+
+.section {
+  margin-bottom: 0.6rem;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.sectionHeader {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #475569;
+  margin: 0 0 0.25rem 0;
+  font-weight: 600;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.row {
+  display: block;
+}
+
+/* Empty-state placeholder row — subdued by default: silence is data,
+   but not alarming data. Carries data-source-field(s) for orphan assertion. */
+.emptyRow {
+  padding: 0.2rem 0.4rem;
+  color: #334155;
+  font-size: 0.7rem;
+  letter-spacing: 0.01em;
+  font-style: italic;
+}
+
+/* ───── Gauge bar (shown when capacity is defined) ───── */
+
+.bar {
+  position: relative;
+  width: 100%;
+  height: 1.4rem;
+  background: rgba(30, 41, 59, 0.6);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.barFill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(96, 165, 250, 0.35);
+  border-radius: 2px;
+  transition: width 200ms ease;
+}
+
+.readout {
+  position: relative;
+  z-index: 1;
+  display: block;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2rem;
+}
+
+/* Dramatic flow gauge — blue tint for resource-economy context.
+   NOT painted chrome; NOT a game sprite. */
+.flowGauge {
+  display: block;
+  padding: 0.25rem 0.4rem;
+  background: rgba(59, 130, 246, 0.07);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 3px;
+  color: #93c5fd;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.flowGauge:hover {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+/* Base-building-only mode: same data, subdued visuals. */
+.flowGaugeSubdued {
+  display: block;
+  padding: 0.25rem 0.4rem;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.flowGaugeSubdued:hover {
+  color: #cbd5e1;
+  border-color: #475569;
+}

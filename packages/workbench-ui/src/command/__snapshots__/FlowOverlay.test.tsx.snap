@@ -1,0 +1,13 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`FlowOverlay (FLOW-01) > Test 3 — reload stability: re-render with same snapshot produces equal selector tree 1`] = `
+[
+  {
+    "href": "#/gateway",
+    "multiFields": "inFlight,currentCap",
+    "singleField": null,
+    "tag": "a",
+    "text": "llama-4 3/10 in flight",
+  },
+]
+`;
