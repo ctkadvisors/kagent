@@ -63,6 +63,42 @@ exports[`cc-reload (CC-02 — reload-stable rendering) > mount → unmount → f
       "href": "#/tasks/kagent-system/research-004",
       "text": "research-004 — policy denial →",
     },
+    {
+      "href": "#/gateway",
+      "text": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct 8/10 in flight",
+    },
+    {
+      "href": "#/gateway",
+      "text": "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast 1/8 in flight",
+    },
+    {
+      "href": "#/gateway",
+      "text": "tasks dispatched per model: workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast 1 tasks",
+    },
+    {
+      "href": "#/tasks?agent=executor-03",
+      "text": "executor-03 — 1 in flight 1 in flight",
+    },
+    {
+      "href": "#/cluster",
+      "text": "active pods 1 pods",
+    },
+    {
+      "href": "#/cluster",
+      "text": "completed-task artifacts 2 artifacts",
+    },
+    {
+      "href": "#/tasks",
+      "text": "policy denials 1 denials",
+    },
+    {
+      "href": "#/tasks",
+      "text": "trust events 2 events",
+    },
+    {
+      "href": "#/tasks",
+      "text": "awaiting review queue projection — Phase 4 3 items",
+    },
   ],
   "sourceBound": [
     {
@@ -160,6 +196,60 @@ exports[`cc-reload (CC-02 — reload-stable rendering) > mount → unmount → f
       "singleField": null,
       "tag": "a",
       "text": "research-004 — policy denial →",
+    },
+    {
+      "multiFields": "inFlight,currentCap",
+      "singleField": null,
+      "tag": "a",
+      "text": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct 8/10 in flight",
+    },
+    {
+      "multiFields": "inFlight,currentCap",
+      "singleField": null,
+      "tag": "a",
+      "text": "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast 1/8 in flight",
+    },
+    {
+      "multiFields": "model,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "tasks dispatched per model: workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast 1 tasks",
+    },
+    {
+      "multiFields": "targetAgent,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "executor-03 — 1 in flight 1 in flight",
+    },
+    {
+      "multiFields": "podName,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "active pods 1 pods",
+    },
+    {
+      "multiFields": "artifactCount,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "completed-task artifacts 2 artifacts",
+    },
+    {
+      "multiFields": "error,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "policy denials 1 denials",
+    },
+    {
+      "multiFields": "suspicious,error,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "trust events 2 events",
+    },
+    {
+      "multiFields": "phase,suspicious",
+      "singleField": null,
+      "tag": "a",
+      "text": "awaiting review queue projection — Phase 4 3 items",
     },
   ],
 }
