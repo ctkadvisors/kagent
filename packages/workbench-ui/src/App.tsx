@@ -18,6 +18,7 @@
  *   - `#/gateway`                     → GatewayPage (substrate visibility)
  *   - `#/cluster`                     → ClusterPage
  *   - `#/command`                     → CommandView (RTS command center)
+ *   - `#/review`                      → ReviewPage (Phase 4 / REV-02 reviewer entry point)
  */
 
 import { useEffect, useState } from 'react';
@@ -25,6 +26,7 @@ import { useEffect, useState } from 'react';
 import { ClusterPage } from './ClusterPage.js';
 import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
+import { ReviewPage } from './ReviewPage.js';
 import { TaskDetail } from './TaskDetail.js';
 import { TaskList } from './TaskList.js';
 
@@ -50,7 +52,11 @@ interface CommandRoute {
   readonly kind: 'command';
 }
 
-type Route = DetailRoute | ListRoute | GatewayRoute | ClusterRoute | CommandRoute;
+interface ReviewRoute {
+  readonly kind: 'review';
+}
+
+type Route = DetailRoute | ListRoute | GatewayRoute | ClusterRoute | CommandRoute | ReviewRoute;
 
 function parseHash(hash: string): Route {
   // Strip leading `#` and any leading `/`. Tolerate trailing slashes.
@@ -59,6 +65,7 @@ function parseHash(hash: string): Route {
   if (clean === 'gateway') return { kind: 'gateway' };
   if (clean === 'cluster') return { kind: 'cluster' };
   if (clean === 'command') return { kind: 'command' };
+  if (clean === 'review') return { kind: 'review' };
   const parts = clean.split('/');
   if (parts.length === 3 && parts[0] === 'tasks') {
     const ns = parts[1];
@@ -124,6 +131,15 @@ export function App(): React.JSX.Element {
   if (route.kind === 'command') {
     return (
       <CommandView
+        onBack={() => {
+          window.location.hash = '#/';
+        }}
+      />
+    );
+  }
+  if (route.kind === 'review') {
+    return (
+      <ReviewPage
         onBack={() => {
           window.location.hash = '#/';
         }}

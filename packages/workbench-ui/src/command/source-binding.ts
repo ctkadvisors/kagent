@@ -104,6 +104,28 @@ export type GatewayCapacityFieldName =
   | 'crNamespace';
 
 /**
+ * Closed enumeration of ReviewQueueRow top-level field names.
+ * Phase 4 / REV-02 / D-03-A — ReviewPage + ReviewActions source-binding.
+ * Every rendered cell in ReviewPage.tsx and ReviewActions.tsx MUST
+ * derive from one of these 14 keys (COMMAND-CENTER-CONTRACT.md §2).
+ */
+export type ReviewQueueFieldName =
+  | 'taskRef'
+  | 'reason'
+  | 'reasonDetail'
+  | 'enqueuedAt'
+  | 'stalenessSeconds'
+  | 'phase'
+  | 'targetAgent'
+  | 'model'
+  | 'suspicious'
+  | 'verifierError'
+  | 'traceLink'
+  | 'artifactCount'
+  | 'candidateTemplate'
+  | 'replayDivergence';
+
+/**
  * Re-exported from pressure.ts so PRESSURE_TYPES stays the single
  * source of truth for the pressure kind union (per CONTEXT.md
  * D-CC-04-A). Wave 1 populates PRESSURE_TYPES with all 9 entries; the

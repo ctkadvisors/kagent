@@ -9,7 +9,10 @@
  * so paths are relative.
  */
 
+import { useEffect, useRef, useState } from 'react';
+
 import { assertIsDispositionOverlayRow } from '@kagent/dto/disposition';
+import { assertIsReviewQueueRow } from '@kagent/dto/review-queue';
 
 import type {
   AgentSummaryRow,
@@ -22,6 +25,7 @@ import type {
   GatewayCapacityResponse,
   GatewayUsageResponse,
   PatchInFlightRequest,
+  ReviewQueueRow,
   TaskDetail,
   TaskSummary,
 } from './types.js';
@@ -265,4 +269,247 @@ export async function fetchClusterSnapshot(signal?: AbortSignal): Promise<Cluste
     );
   }
   return (await res.json()) as ClusterSnapshot;
+}
+
+/* =====================================================================
+ * Review queue surface — Phase 4 / REV-01 / REV-02.
+ *
+ * GET  /api/review-queue             → fetchReviewQueue
+ * POST /api/review-queue/:ns/:name/accept  → acceptReviewQueueRow
+ * POST /api/review-queue/:ns/:name/reject  → rejectReviewQueueRow
+ * POST /api/review-queue/:ns/:name/request → requestReview
+ *
+ * All POST helpers throw `ReviewActionApiError` (status: number) on
+ * non-2xx responses. `fetchReviewQueue` throws a plain Error on non-2xx
+ * (mirrors `fetchDispositions` / `fetchTasks` pattern).
+ *
+ * URL-injection defense: `encodeURIComponent` on namespace + name per
+ * the createTask / patchModelEndpointInFlight pattern.
+ *
+ * Schema drift defense: `assertIsReviewQueueRow` from @kagent/dto runs
+ * on every item in `fetchReviewQueue` — mirrors `assertIsDispositionOverlayRow`.
+ *
+ * §11 bounds-test slice: polling at 5s; AbortController per refresh;
+ * cleanup on unmount; no new substrate state.
+ * ===================================================================== */
+
+/** Body sent to the accept endpoint. */
+export interface AcceptReviewBody {
+  readonly reviewerId?: string;
+  readonly reasonText?: string;
+}
+
+/** Body sent to the reject endpoint. */
+export interface RejectReviewBody {
+  readonly reviewerId?: string;
+  readonly reasonText?: string;
+}
+
+/** Body sent to the request-review endpoint. */
+export interface RequestReviewBody {
+  readonly requestedBy?: string;
+  readonly note?: string;
+}
+
+/** Response from the accept endpoint. */
+export interface AcceptReviewResponse {
+  readonly taskRef: { readonly namespace: string; readonly name: string; readonly uid: string };
+  readonly decision: 'accepted';
+  readonly auditedAt: string;
+  readonly agentTemplateRef?: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+}
+
+/** Response from the reject endpoint. */
+export interface RejectReviewResponse {
+  readonly taskRef: { readonly namespace: string; readonly name: string; readonly uid: string };
+  readonly decision: 'rejected';
+  readonly auditedAt: string;
+}
+
+/** Response from the request-review endpoint. */
+export interface RequestReviewResponse {
+  readonly taskRef: { readonly namespace: string; readonly name: string; readonly uid: string };
+  readonly requested: boolean;
+  readonly requestedAt: string;
+}
+
+/**
+ * Error subclass thrown by the review-queue POST helpers on non-2xx
+ * responses. Carries `status: number` for typed 4xx/5xx handling at
+ * the call site (mirror of CreateTaskApiError).
+ */
+export class ReviewActionApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ReviewActionApiError';
+    this.status = status;
+  }
+}
+
+/**
+ * GET /api/review-queue — fetch the current review queue projection.
+ * Each row passes `assertIsReviewQueueRow` as drift defense.
+ * Throws on non-2xx (surfaces to the operator; mirrors fetchDispositions).
+ */
+export async function fetchReviewQueue(signal?: AbortSignal): Promise<ReviewQueueRow[]> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/review-queue', init);
+  if (!res.ok) {
+    throw new Error(`fetchReviewQueue: ${String(res.status)} ${res.statusText}`);
+  }
+  const body = (await res.json()) as { items?: unknown };
+  const items = Array.isArray(body.items) ? body.items : [];
+  for (const it of items) assertIsReviewQueueRow(it);
+  return items as ReviewQueueRow[];
+}
+
+/**
+ * POST /api/review-queue/:namespace/:name/accept
+ * Throws `ReviewActionApiError` on non-200 (including 422 validation
+ * failures and 503 write-surface-disabled errors).
+ */
+export async function acceptReviewQueueRow(
+  namespace: string,
+  name: string,
+  body: AcceptReviewBody,
+): Promise<AcceptReviewResponse> {
+  const url = `/api/review-queue/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/accept`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status !== 200) {
+    let errBody: { error?: string } = {};
+    try {
+      errBody = (await res.json()) as typeof errBody;
+    } catch {
+      /* non-JSON error — fall through */
+    }
+    throw new ReviewActionApiError(
+      res.status,
+      errBody.error ?? `accept failed: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as AcceptReviewResponse;
+}
+
+/**
+ * POST /api/review-queue/:namespace/:name/reject
+ * Throws `ReviewActionApiError` on non-200.
+ */
+export async function rejectReviewQueueRow(
+  namespace: string,
+  name: string,
+  body: RejectReviewBody,
+): Promise<RejectReviewResponse> {
+  const url = `/api/review-queue/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/reject`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status !== 200) {
+    let errBody: { error?: string } = {};
+    try {
+      errBody = (await res.json()) as typeof errBody;
+    } catch {
+      /* non-JSON error — fall through */
+    }
+    throw new ReviewActionApiError(
+      res.status,
+      errBody.error ?? `reject failed: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as RejectReviewResponse;
+}
+
+/**
+ * POST /api/review-queue/:namespace/:name/request
+ * Throws `ReviewActionApiError` on non-200.
+ */
+export async function requestReview(
+  namespace: string,
+  name: string,
+  body: RequestReviewBody,
+): Promise<RequestReviewResponse> {
+  const url = `/api/review-queue/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/request`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status !== 200) {
+    let errBody: { error?: string } = {};
+    try {
+      errBody = (await res.json()) as typeof errBody;
+    } catch {
+      /* non-JSON error — fall through */
+    }
+    throw new ReviewActionApiError(
+      res.status,
+      errBody.error ?? `request failed: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as RequestReviewResponse;
+}
+
+/**
+ * Hook: polls GET /api/review-queue every 5s (CONTEXT.md D-01-A default).
+ * AbortController per refresh for cancelation on unmount.
+ * Returns `{ rows, loading, error, refresh }`.
+ *
+ * Phase 4 / REV-01. Polling cadence: 5 000 ms per CONTEXT.md
+ * "Claude's Discretion" note. SSE-driven invalidation deferred (v0.2).
+ */
+export function useReviewQueue(): {
+  readonly rows: readonly ReviewQueueRow[];
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+} {
+  const [rows, setRows] = useState<readonly ReviewQueueRow[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const refresh = (): void => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    fetchReviewQueue(ctrl.signal)
+      .then((items) => {
+        setRows(items);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(() => {
+      refresh();
+    }, 5_000);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+    };
+    // refresh is captured by ref-based identity inside the closure;
+    // adding it to deps would restart the interval on every call.
+    // Empty dep array is intentional: run once on mount, clean up on unmount.
+  }, []);
+
+  return { rows, loading, error, refresh };
 }

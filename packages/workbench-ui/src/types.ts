@@ -32,6 +32,13 @@ export type {
   DispositionProposalKind,
 } from '@kagent/dto/disposition';
 
+// Phase 4 / REV-01 — ReviewQueueRow read projection.
+// Same source-of-truth pattern as DispositionOverlayRow above: the
+// workbench-api computes these rows, workbench-ui renders them in the
+// #/review page and inline ReviewActions component. Runtime drift
+// defense: assertIsReviewQueueRow in api.ts fetchReviewQueue.
+export type { ArtifactRefSummary, ReviewQueueRow, ReviewReason } from '@kagent/dto/review-queue';
+
 export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 
 /**
