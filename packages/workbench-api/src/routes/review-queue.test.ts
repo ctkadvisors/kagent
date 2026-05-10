@@ -4,9 +4,9 @@
  */
 
 /**
- * Phase 4 / REV-01 — /api/review-queue route tests (Wave 1, Plan 04-02).
+ * Phase 4 / REV-01 + REV-02 — /api/review-queue route tests.
  *
- * Covers:
+ * Wave 1 (Plan 04-02) covers:
  *   - GET / returns 200 with { items: ReviewQueueRow[] }; every row passes assertIsReviewQueueRow
  *   - verifier-failed fires with correct fields
  *   - suspicious-detector fires with correct fields
@@ -19,13 +19,35 @@
  *   - replay-divergence and eval-failed are zero-producer in v0.2 (D-04)
  *   - reload-stability: two consecutive GETs return identical row content
  *     modulo stalenessSeconds (which is zero with a fixed clock)
+ *
+ * Wave 2 (Plan 04-03) covers POST handlers (accept / reject / request):
+ *   - accept verifier-failed happy path → 200 + review.accepted audit event
+ *   - accept candidate-template happy path → CR created BEFORE patch, both events
+ *   - accept fails-closed when customApi undefined → 503 (verbatim message)
+ *   - accept on missing task → 404
+ *   - accept on already-decided → 409
+ *   - accept on candidate-template with malformed YAML → 422
+ *   - accept on candidate-template with K8s 409 collision → 422, no annotation patch
+ *   - reject happy path → 200 + review.rejected, never creates CR
+ *   - reject on already-decided → 409
+ *   - request happy path → 200 + review.requested annotation + event
+ *   - auth fallback to "unknown" when X-Forwarded-User absent
  */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { assertIsReviewQueueRow, type ReviewQueueRow } from '@kagent/dto';
 import type { AgentTask } from '@kagent/dto';
+
+// Load the candidate-template YAML fixture at module scope (W0 fixture).
+const _dirname = dirname(fileURLToPath(import.meta.url));
+const candidateYamlPath = resolve(_dirname, '../__fixtures__/candidate-template.yaml');
+const candidateYaml = readFileSync(candidateYamlPath, 'utf8');
 
 import reviewQueueFixture from '../__fixtures__/review-queue-snapshot.json' with { type: 'json' };
 
@@ -397,5 +419,684 @@ describe('GET /api/review-queue', () => {
     const body = (await (await fetch()).json()) as { items: ReviewQueueRow[] };
     // Wrong mediaType → no matching artifact → OMIT
     expect(body.items).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2 POST handler tests (Plan 04-03 — REV-02 accept / reject / request)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a mock customApi with fresh vi.fn() stubs for the two methods
+ * used by the POST handlers. Both resolve successfully by default.
+ */
+function makeMockCustomApi(overrides?: {
+  createResolvesWith?: unknown;
+  createRejectsWith?: unknown;
+  patchResolvesWith?: unknown;
+  patchRejectsWith?: unknown;
+}): {
+  createNamespacedCustomObject: ReturnType<typeof vi.fn>;
+  patchNamespacedCustomObject: ReturnType<typeof vi.fn>;
+} {
+  const createFn = vi.fn();
+  const patchFn = vi.fn();
+
+  if (overrides?.createRejectsWith !== undefined) {
+    createFn.mockRejectedValueOnce(overrides.createRejectsWith);
+  } else {
+    createFn.mockResolvedValue({
+      metadata: {
+        name: 'researcher-v2-template',
+        namespace: 'kagent-system',
+        uid: 'uid-created-template',
+        creationTimestamp: '2026-05-10T13:00:00.000Z',
+      },
+    });
+  }
+
+  if (overrides?.patchRejectsWith !== undefined) {
+    patchFn.mockRejectedValueOnce(overrides.patchRejectsWith);
+  } else {
+    patchFn.mockResolvedValue({});
+  }
+
+  return {
+    createNamespacedCustomObject: createFn,
+    patchNamespacedCustomObject: patchFn,
+  };
+}
+
+/** Build a mock auditPublisher that records calls. */
+function makeMockAuditPublisher(): { publish: ReturnType<typeof vi.fn> } {
+  return { publish: vi.fn().mockResolvedValue(undefined) };
+}
+
+/**
+ * The verifier-fail-1 task from the fixture: has verification.passed=false,
+ * no review-decision annotation set, and no template-candidate annotation.
+ * Suitable for testing the accept verifier-failed happy path.
+ */
+const verifierFailTask: AgentTask = {
+  apiVersion: 'kagent.knuteson.io/v1alpha1',
+  kind: 'AgentTask',
+  metadata: {
+    name: 'verifier-fail-1',
+    namespace: 'kagent-system',
+    uid: 'uid-verifier-fail-1',
+    creationTimestamp: '2026-05-10T06:00:00.000Z',
+    annotations: {},
+  },
+  spec: { targetAgent: 'researcher', payload: {} },
+  status: {
+    phase: 'Failed',
+    completedAt: '2026-05-10T08:00:00.000Z',
+    verification: {
+      passed: false,
+      reason: 'verifier_returned_non_json',
+      mode: 'script',
+      completedAt: '2026-05-10T08:05:00.000Z',
+    },
+    structuralVerdict: { suspicious: [] },
+  },
+};
+
+/**
+ * The already-decided task: has review-decision=accepted annotation set.
+ * Used for 409 tests.
+ */
+const alreadyDecidedTask: AgentTask = {
+  apiVersion: 'kagent.knuteson.io/v1alpha1',
+  kind: 'AgentTask',
+  metadata: {
+    name: 'already-decided-1',
+    namespace: 'kagent-system',
+    uid: 'uid-already-decided-1',
+    creationTimestamp: '2026-05-09T14:00:00.000Z',
+    annotations: {
+      'kagent.knuteson.io/review-decision': 'accepted',
+      'kagent.knuteson.io/review-decided-by': 'operator@kagent',
+      'kagent.knuteson.io/review-decided-at': '2026-05-09T15:00:00.000Z',
+    },
+  },
+  spec: { targetAgent: 'researcher', payload: {} },
+  status: {
+    phase: 'Failed',
+    completedAt: '2026-05-09T14:30:00.000Z',
+    verification: {
+      passed: false,
+      reason: 'verdict:fail',
+      mode: 'llmJudge',
+      completedAt: '2026-05-09T14:35:00.000Z',
+    },
+    structuralVerdict: { suspicious: [] },
+  },
+};
+
+/**
+ * The candidate-template task: has template-candidate=true annotation and
+ * a matching artifact with the correct media type. The readArtifact dep
+ * is injected in tests to return candidateYaml.
+ */
+const candidateTemplateTask: AgentTask = {
+  apiVersion: 'kagent.knuteson.io/v1alpha1',
+  kind: 'AgentTask',
+  metadata: {
+    name: 'candidate-template-1',
+    namespace: 'kagent-system',
+    uid: 'uid-candidate-template-1',
+    creationTimestamp: '2026-05-10T03:00:00.000Z',
+    annotations: {
+      'kagent.knuteson.io/template-candidate': 'true',
+      'kagent.knuteson.io/proposed-template-name': 'researcher-v2',
+    },
+  },
+  spec: { targetAgent: 'researcher', payload: {} },
+  status: {
+    phase: 'Completed',
+    completedAt: '2026-05-10T03:45:00.000Z',
+    structuralVerdict: { suspicious: [] },
+    artifacts: [
+      {
+        uri: 'pvc://kagent-cas/sha256:abc123def456',
+        mediaType: 'application/x-kagent-template-candidate+yaml',
+        name: 'researcher-v2-template.yaml',
+        sizeBytes: 1024,
+        producedAt: '2026-05-10T03:44:00.000Z',
+      },
+    ],
+  },
+};
+
+/**
+ * A completed-clean task (no signals → goes in queue only via review-requested,
+ * or can be used for request-handler tests).
+ */
+const cleanCompletedTask: AgentTask = {
+  apiVersion: 'kagent.knuteson.io/v1alpha1',
+  kind: 'AgentTask',
+  metadata: {
+    name: 'clean-completed-1',
+    namespace: 'kagent-system',
+    uid: 'uid-clean-completed-1',
+    creationTimestamp: '2026-05-10T09:00:00.000Z',
+    annotations: {},
+  },
+  spec: { targetAgent: 'researcher', payload: {} },
+  status: {
+    phase: 'Completed',
+    completedAt: '2026-05-10T09:30:00.000Z',
+    structuralVerdict: { suspicious: [] },
+  },
+};
+
+describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)', () => {
+  // Fixed clock so timestamps are predictable in assertions
+  const fixedPostNow = new Date('2026-05-10T14:00:00.000Z');
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(fixedPostNow);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 1 — POST accept (verifier-failed) — happy path
+  // ------------------------------------------------------------------
+
+  it('W2-Test 1 — POST accept (verifier-failed) happy path → 200, patch called, no CR, one audit event', async () => {
+    const customApi = makeMockCustomApi();
+    const auditPublisher = makeMockAuditPublisher();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([verifierFailTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher,
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/verifier-fail-1/accept', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-User': 'operator@kagent',
+      },
+      body: JSON.stringify({ reasonText: 'verifier output looks correct after manual review' }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['decision']).toBe('accepted');
+    expect(body['taskRef']).toMatchObject({ namespace: 'kagent-system', name: 'verifier-fail-1' });
+    expect(body['agentTemplateRef']).toBeUndefined();
+
+    // patchNamespacedCustomObject called with correct annotations
+    expect(customApi.patchNamespacedCustomObject).toHaveBeenCalledOnce();
+    const patchArgs = customApi.patchNamespacedCustomObject.mock.calls[0] as unknown[];
+    const patchBody = patchArgs[0] as Record<string, unknown>;
+    expect((patchBody['body'] as Record<string, unknown>)?.['metadata']).toMatchObject({
+      annotations: {
+        'kagent.knuteson.io/review-decision': 'accepted',
+        'kagent.knuteson.io/review-decided-by': 'operator@kagent',
+      },
+    });
+
+    // createNamespacedCustomObject NOT called (not a candidate-template)
+    expect(customApi.createNamespacedCustomObject).not.toHaveBeenCalled();
+
+    // Exactly ONE audit event: review.accepted
+    expect(auditPublisher.publish).toHaveBeenCalledOnce();
+    const event = auditPublisher.publish.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event['type']).toBe('review.accepted');
+    expect((event['data'] as Record<string, unknown>)?.['reason']).toBe('verifier-failed');
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 2 — POST accept (candidate-template) — CR created BEFORE patch, both events
+  // ------------------------------------------------------------------
+
+  it('W2-Test 2 — POST accept (candidate-template) creates CR BEFORE patch, emits both events', async () => {
+    const customApi = makeMockCustomApi();
+    const auditPublisher = makeMockAuditPublisher();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([candidateTemplateTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher,
+        now: () => fixedPostNow,
+        readArtifact: () => Promise.resolve(candidateYaml),
+      }),
+    );
+
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-User': 'reviewer@kagent',
+      },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['decision']).toBe('accepted');
+    expect(body['agentTemplateRef']).toMatchObject({
+      name: 'researcher-v2-template',
+      namespace: 'kagent-system',
+      uid: 'uid-created-template',
+    });
+
+    // CR creation called BEFORE annotation patch — call-order assertion
+    expect(customApi.createNamespacedCustomObject).toHaveBeenCalledOnce();
+    expect(customApi.patchNamespacedCustomObject).toHaveBeenCalledOnce();
+    const createOrder = customApi.createNamespacedCustomObject.mock.invocationCallOrder[0]!;
+    const patchOrder = customApi.patchNamespacedCustomObject.mock.invocationCallOrder[0]!;
+    expect(createOrder).toBeLessThan(patchOrder);
+
+    // Verify create call body
+    const createArgs = customApi.createNamespacedCustomObject.mock.calls[0] as unknown[];
+    const createBody = (createArgs[0] as Record<string, unknown>)?.['body'] as Record<
+      string,
+      unknown
+    >;
+    expect(createBody?.['kind']).toBe('AgentTemplate');
+    expect((createBody?.['metadata'] as Record<string, unknown>)?.['name']).toBe('researcher-v2');
+    expect(
+      (
+        (createBody?.['metadata'] as Record<string, unknown>)?.['annotations'] as Record<
+          string,
+          unknown
+        >
+      )?.['kagent.knuteson.io/promoted-from-task'],
+    ).toBe('kagent-system/candidate-template-1');
+
+    // Two audit events: review.accepted + template.candidate.promoted
+    expect(auditPublisher.publish).toHaveBeenCalledTimes(2);
+    const events = auditPublisher.publish.mock.calls.map(
+      (call) => (call[0] as Record<string, unknown>)['type'],
+    );
+    expect(events).toContain('review.accepted');
+    expect(events).toContain('template.candidate.promoted');
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 3 — POST accept fails-closed when customApi undefined → 503
+  // ------------------------------------------------------------------
+
+  it('W2-Test 3 — POST accept returns 503 with verbatim message when customApi undefined', async () => {
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([verifierFailTask]),
+        // no customApi
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/verifier-fail-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBe(
+      'write surface disabled (no CustomObjects client configured); set actions.create=true on the chart',
+    );
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 4 — POST accept on missing task → 404
+  // ------------------------------------------------------------------
+
+  it('W2-Test 4 — POST accept on missing task → 404', async () => {
+    const customApi = makeMockCustomApi();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([]), // empty cache
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/nonexistent/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(typeof body['error']).toBe('string');
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 5 — POST accept on already-decided → 409
+  // ------------------------------------------------------------------
+
+  it('W2-Test 5 — POST accept on already-decided task → 409', async () => {
+    const customApi = makeMockCustomApi();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([alreadyDecidedTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/already-decided-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(typeof body['error']).toBe('string');
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 6 — POST accept on candidate-template with malformed YAML → 422
+  // ------------------------------------------------------------------
+
+  it('W2-Test 6 — POST accept on candidate-template with malformed YAML → 422', async () => {
+    const customApi = makeMockCustomApi();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([candidateTemplateTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        now: () => fixedPostNow,
+        readArtifact: () => Promise.resolve('not-a-spec: : : completely-broken'),
+      }),
+    );
+
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(typeof body['error']).toBe('string');
+    // The error should mention candidate-template parse failure
+    expect((body['error'] as string).toLowerCase()).toMatch(/candidate.template|parse/);
+
+    // CR was NOT created; annotation PATCH was NOT called
+    expect(customApi.createNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 7 — POST accept on candidate-template with K8s 409 collision → 422, no patch
+  // ------------------------------------------------------------------
+
+  it('W2-Test 7 — POST accept on candidate-template with K8s 409 collision → 422, annotation patch NOT called', async () => {
+    const k8sConflictError = { code: 409, body: { message: 'already exists' } };
+    const customApi = makeMockCustomApi({ createRejectsWith: k8sConflictError });
+    const auditPublisher = makeMockAuditPublisher();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([candidateTemplateTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher,
+        now: () => fixedPostNow,
+        readArtifact: () => Promise.resolve(candidateYaml),
+      }),
+    );
+
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(typeof body['error']).toBe('string');
+
+    // Annotation PATCH was NOT called (early return after CR creation failure)
+    expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
+    // No audit events emitted (early return)
+    expect(auditPublisher.publish).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 8 — POST reject happy path — never creates CR, emits review.rejected
+  // ------------------------------------------------------------------
+
+  it('W2-Test 8 — POST reject happy path → 200, no CR, one audit event review.rejected', async () => {
+    const customApi = makeMockCustomApi();
+    const auditPublisher = makeMockAuditPublisher();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([verifierFailTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher,
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/verifier-fail-1/reject', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-User': 'operator@kagent',
+      },
+      body: JSON.stringify({ reasonText: 'verifier output is still incorrect' }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['decision']).toBe('rejected');
+    expect(body['taskRef']).toMatchObject({ namespace: 'kagent-system', name: 'verifier-fail-1' });
+
+    // Annotation PATCH called with 'rejected'
+    expect(customApi.patchNamespacedCustomObject).toHaveBeenCalledOnce();
+    const patchArgs = customApi.patchNamespacedCustomObject.mock.calls[0] as unknown[];
+    const patchBody = (patchArgs[0] as Record<string, unknown>)?.['body'] as Record<
+      string,
+      unknown
+    >;
+    expect((patchBody?.['metadata'] as Record<string, unknown>)?.['annotations']).toMatchObject({
+      'kagent.knuteson.io/review-decision': 'rejected',
+    });
+
+    // CR NOT created
+    expect(customApi.createNamespacedCustomObject).not.toHaveBeenCalled();
+
+    // Exactly ONE audit event: review.rejected
+    expect(auditPublisher.publish).toHaveBeenCalledOnce();
+    const event = auditPublisher.publish.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event['type']).toBe('review.rejected');
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 9 — POST reject on already-decided → 409
+  // ------------------------------------------------------------------
+
+  it('W2-Test 9 — POST reject on already-decided task → 409', async () => {
+    const customApi = makeMockCustomApi();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([alreadyDecidedTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/already-decided-1/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(409);
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 10 — POST request happy path → 200 + review-requested annotation + event
+  // ------------------------------------------------------------------
+
+  it('W2-Test 10 — POST request happy path → 200, patches review-requested, emits review.requested', async () => {
+    const customApi = makeMockCustomApi();
+    const auditPublisher = makeMockAuditPublisher();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([cleanCompletedTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher,
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/clean-completed-1/request', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-User': 'operator@kagent',
+      },
+      body: JSON.stringify({ reasonText: 'spot audit' }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['requested']).toBe(true);
+    expect(typeof body['requestedAt']).toBe('string');
+
+    // PATCH called with review-requested: true annotation
+    expect(customApi.patchNamespacedCustomObject).toHaveBeenCalledOnce();
+    const patchArgs = customApi.patchNamespacedCustomObject.mock.calls[0] as unknown[];
+    const patchBody = (patchArgs[0] as Record<string, unknown>)?.['body'] as Record<
+      string,
+      unknown
+    >;
+    expect((patchBody?.['metadata'] as Record<string, unknown>)?.['annotations']).toMatchObject({
+      'kagent.knuteson.io/review-requested': 'true',
+      'kagent.knuteson.io/review-requested-by': 'operator@kagent',
+    });
+
+    // ONE audit event: review.requested
+    expect(auditPublisher.publish).toHaveBeenCalledOnce();
+    const event = auditPublisher.publish.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(event['type']).toBe('review.requested');
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 11 — X-Forwarded-User absent → annotation falls back to "unknown"
+  // ------------------------------------------------------------------
+
+  it('W2-Test 11 — X-Forwarded-User absent → review-decided-by annotation falls back to "unknown"', async () => {
+    const customApi = makeMockCustomApi();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([verifierFailTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        now: () => fixedPostNow,
+      }),
+    );
+
+    // No X-Forwarded-User header, no body reviewerId
+    const res = await app.request('/kagent-system/verifier-fail-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    // Should still succeed
+    expect(res.status).toBe(200);
+
+    // Annotation should fall back to 'unknown'
+    const patchArgs = customApi.patchNamespacedCustomObject.mock.calls[0] as unknown[];
+    const patchBody = (patchArgs[0] as Record<string, unknown>)?.['body'] as Record<
+      string,
+      unknown
+    >;
+    expect((patchBody?.['metadata'] as Record<string, unknown>)?.['annotations']).toMatchObject({
+      'kagent.knuteson.io/review-decided-by': 'unknown',
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 12 — POST reject fails-closed (503) when customApi undefined
+  // ------------------------------------------------------------------
+
+  it('W2-Test 12 — POST reject returns 503 with verbatim message when customApi undefined', async () => {
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([verifierFailTask]),
+        // no customApi
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/verifier-fail-1/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBe(
+      'write surface disabled (no CustomObjects client configured); set actions.create=true on the chart',
+    );
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test 13 — POST request fails-closed (503) when customApi undefined
+  // ------------------------------------------------------------------
+
+  it('W2-Test 13 — POST request returns 503 with verbatim message when customApi undefined', async () => {
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([cleanCompletedTask]),
+        // no customApi
+        now: () => fixedPostNow,
+      }),
+    );
+
+    const res = await app.request('/kagent-system/clean-completed-1/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBe(
+      'write surface disabled (no CustomObjects client configured); set actions.create=true on the chart',
+    );
   });
 });
