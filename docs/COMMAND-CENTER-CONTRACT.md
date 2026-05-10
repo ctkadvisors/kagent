@@ -289,3 +289,7 @@ Start with Slice A and Slice B. Do not add new CRDs for the RTS layer.
 Do not add enemies first. Make the current world truthful, inspectable,
 and reload-stable. Once the read model is contractual, the fun parts can
 carry their weight.
+
+## See also
+
+See also: `docs/FLOW-LEGEND.md` for the eight `C-flow-economy` flow definitions surfaced via Command Center's `<FlowOverlay />` (Phase 3 / FLOW-01).
