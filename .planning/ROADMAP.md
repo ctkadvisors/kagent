@@ -62,8 +62,15 @@ Plans:
 3. Agent / Task / Gateway selection panels show full operational read depth per `COMMAND-CENTER-CONTRACT.md` §7 Slice B. Direct links exist to existing TaskDetail, GatewayPage, ClusterPage routes.
 4. Pressure overlay renders all nine pressure types from existing DTO fields (context, gateway, policy denial, verifier, artifact, trace, pod, quota, telemetry). Each marker carries source field name + detail link. UI runs in "base-building-only" mode with pressure dramatization disabled while keeping the same data.
 
-**Plans**: TBD
+**Plans**: 4 plans
 **UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding)
+
+Plans:
+
+- [ ] 02-01-PLAN.md — Wave 0 scaffolding: extend source-binding.ts with 4 new closed-enum types + generic helpers; create pressure.ts/pressure.test.ts/PressureOverlay.tsx/.test.tsx/.module.css skeletons; create cc-orphan.test.ts + cc-reload.test.tsx skeletons; create **fixtures**/cc-snapshot.json with all 9 pressure-trigger scenarios
+- [ ] 02-02-PLAN.md — Wave 1: CC-01 canvas-side orphan assertion (assertCanvasOrphan in source-binding.ts; insertion in CommandView.tsx agentNodes useMemo); CC-04 PRESSURE_TYPES populated with 9 entries + 18 vitest tests
+- [ ] 02-03-PLAN.md — Wave 2: CC-04 PressureOverlay full JSX + module CSS + 4 real tests + mount alongside DispositionOverlay; CC-03 inline-expand AgentPanel/TaskPanel/GatewayPanel with data-source-field(s) on every new KV row + bottom deep links
+- [ ] 02-04-PLAN.md — Wave 3: CC-02 reload-stability test (mount → unmount → fresh-remount; DOM + scene-graph snapshots deep-equal; vi.useFakeTimers for deterministic Date.now; vitest snapshot file committed to git)
 
 ### Phase 3: Resource-flow overlays
 
@@ -126,7 +133,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase                                         | Plans Complete | Status      | Completed |
 | --------------------------------------------- | -------------- | ----------- | --------- |
 | 1. AgentDisposition prototype (overlay-first) | 0/4            | Not started | -         |
-| 2. Command Center contract hardening          | 0/TBD          | Not started | -         |
+| 2. Command Center contract hardening          | 0/4            | Planned     | -         |
 | 3. Resource-flow overlays                     | 0/TBD          | Not started | -         |
 | 4. Review queue projection + promotion path   | 0/TBD          | Not started | -         |
 | 5. Workbench usability primitives             | 0/TBD          | Not started | -         |
