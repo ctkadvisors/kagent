@@ -25,6 +25,7 @@ import { fetchTaskDetail, subscribeCacheEvents } from './api.js';
 import type { ContainerStatusSummary, TaskDetail } from './types.js';
 import styles from './TaskList.module.css';
 import detailStyles from './TaskDetail.module.css';
+import { ReviewActions } from './command/ReviewActions.js';
 
 export interface TaskDetailProps {
   readonly namespace: string;
@@ -98,7 +99,13 @@ export function TaskDetail(props: TaskDetailProps): React.JSX.Element {
       {detail === null && error === null ? (
         <div className={styles.empty}>Loading…</div>
       ) : detail !== null ? (
-        <DetailBody detail={detail} />
+        <>
+          {/* Phase 4 / REV-02 / D-03-A: inline review entry point (above DetailBody).
+              ReviewActions returns null when the task does not meet any of the 4 trigger
+              conditions (phase===Failed | suspicious.length>0 | review-requested | template-candidate). */}
+          <ReviewActions task={detail} onDecision={refetch} />
+          <DetailBody detail={detail} />
+        </>
       ) : null}
     </div>
   );
