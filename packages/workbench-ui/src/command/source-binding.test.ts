@@ -439,6 +439,58 @@ describe('source-binding (CC-01 generalization to AgentSummaryRow / TaskSummary 
 });
 
 // ────────────────────────────────────────────────────────────────────
+// Phase 4 / REV-02 — ReviewQueueFieldName closed-enum narrowing tests.
+// Proves ReviewQueueFieldName is exported from source-binding.ts and
+// that the generic helpers accept it (K extends string). Mirrors the
+// FlowFieldName pattern added in Phase 3.
+// ────────────────────────────────────────────────────────────────────
+
+describe('source-binding (Phase 4 — ReviewQueueFieldName narrowing)', () => {
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'development');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('Test M — useSourceField narrows correctly for each of the 14 ReviewQueueFieldName literals', () => {
+    const literals: ReadonlyArray<import('./source-binding.js').ReviewQueueFieldName> = [
+      'taskRef',
+      'reason',
+      'reasonDetail',
+      'enqueuedAt',
+      'stalenessSeconds',
+      'phase',
+      'targetAgent',
+      'model',
+      'suspicious',
+      'verifierError',
+      'traceLink',
+      'artifactCount',
+      'candidateTemplate',
+      'replayDivergence',
+    ];
+    for (const v of literals) {
+      expect(useSourceField<import('./source-binding.js').ReviewQueueFieldName>(v)).toBe(v);
+    }
+  });
+
+  it('Test N — useSourceFields returns comma-joined string for ReviewQueueFieldName array', () => {
+    const v2 = useSourceFields<import('./source-binding.js').ReviewQueueFieldName>([
+      'reason',
+      'reasonDetail',
+    ]);
+    expect(v2).toBe('reason,reasonDetail');
+    const v3 = useSourceFields<import('./source-binding.js').ReviewQueueFieldName>([
+      'taskRef',
+      'stalenessSeconds',
+      'phase',
+    ]);
+    expect(v3).toBe('taskRef,stalenessSeconds,phase');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
 // Phase 3 / FLOW-01 — FlowFieldName closed-enum narrowing tests.
 // Proves FlowFieldName is exported from source-binding.ts and that
 // the generic helpers accept it without modification (K extends string).
