@@ -307,8 +307,8 @@ export interface RejectReviewBody {
 
 /** Body sent to the request-review endpoint. */
 export interface RequestReviewBody {
-  readonly requestedBy?: string;
-  readonly note?: string;
+  readonly reviewerId?: string;
+  readonly reasonText?: string;
 }
 
 /** Response from the accept endpoint. */

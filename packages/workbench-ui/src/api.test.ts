@@ -331,4 +331,23 @@ describe('requestReview (REV-01)', () => {
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/review-queue/kagent-system/researcher-ok-01/request');
   });
+
+  it('Test REQ-2 — POSTs body with reviewerId + reasonText (WR-06 server-contract alignment)', async () => {
+    mockFetchWithStatus(200, {
+      taskRef: { namespace: 'kagent-system', name: 'researcher-ok-01', uid: 'u' },
+      requested: true,
+      requestedAt: '2026-05-10T15:00:00.000Z',
+    });
+    await requestReview('kagent-system', 'researcher-ok-01', {
+      reviewerId: 'operator@kagent',
+      reasonText: 'spot audit',
+    });
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).toEqual({ reviewerId: 'operator@kagent', reasonText: 'spot audit' });
+    expect(body['requestedBy']).toBeUndefined();
+    expect(body['note']).toBeUndefined();
+  });
 });
