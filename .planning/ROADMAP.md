@@ -82,8 +82,14 @@ Plans:
 1. Each of the eight `C-flow-economy` flows (model power, token flow, build power, pod capacity, artifact bandwidth, authority, trust, attention) renders as a Command Center overlay with a documented source field and pressure trigger from existing DTOs. A test fixture asserts each flow has a non-null source field reference; a missing source field fails the test.
 2. A "flow legend" exists in developer docs (NOT in main UI chrome per `COMMAND-CENTER-CONTRACT.md` Slice E acceptance) mapping each flow to its substrate source, pressure trigger, and operator action. Living doc updated as flows evolve.
 
-**Plans**: TBD
+**Plans**: 3 plans
 **UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding)
+
+Plans:
+
+- [ ] 03-01-PLAN.md — Wave 1 foundation: flows.ts (8 FLOW_TYPES + closed-enum) + flows.test.ts (16 fire/absent + 1 fixture-assert) + source-binding.ts/test.ts FlowFieldName re-export + cc-snapshot.json additive (model + podName on fanout-005)
+- [ ] 03-02-PLAN.md — Wave 2 presentation + integration: FlowOverlay.tsx + FlowOverlay.module.css + FlowOverlay.test.tsx (4 tests + empty-state) + CommandView.tsx mount + cc-reload.test.tsx.snap regen (3 atomic commits — mount commit intentionally fails snapshot, regen commit lands ONLY the snapshot diff per RESEARCH.md Pitfall 1)
+- [ ] 03-03-PLAN.md — Wave 3 docs: docs/FLOW-LEGEND.md (FLOW-02 — at-a-glance table + 8 per-flow sections) + optional docs/COMMAND-CENTER-CONTRACT.md footer link (single-line discoverability — NOT a contract revision)
 
 ### Phase 4: Review queue projection + promotion path
 
@@ -134,7 +140,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | --------------------------------------------- | -------------- | ----------- | --------- |
 | 1. AgentDisposition prototype (overlay-first) | 0/4            | Not started | -         |
 | 2. Command Center contract hardening          | 0/4            | Planned     | -         |
-| 3. Resource-flow overlays                     | 0/TBD          | Not started | -         |
+| 3. Resource-flow overlays                     | 0/3            | Planned     | -         |
 | 4. Review queue projection + promotion path   | 0/TBD          | Not started | -         |
 | 5. Workbench usability primitives             | 0/TBD          | Not started | -         |
 | 999.x Future Research backlog                 | —              | Deferred    | -         |
