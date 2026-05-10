@@ -282,35 +282,29 @@ export const FLOW_TYPES: readonly FlowType[] = [
   },
 
   // ─────────────────────────── attention ───────────────────────────
-  // Phase 4 owns the real review queue projection (REV-01 in REQUIREMENTS.md).
-  // v0.2 stub uses TaskSummary.phase=Failed + .suspicious as a proxy.
-  // Stub flips to the real projection in Phase 4 with no shape change to
-  // flows.ts (FlowGauge stays the same; only the compute() body changes).
-  // data-source-fields: 'phase,suspicious'.
+  // Phase 4 — source flipped to /api/review-queue rows count.
+  // REV-03: replay-divergence and eval-failed reasons are reserved for
+  // AgentTaskRun + @kagent/eval (docs/REPLAY-EVALS.md, Phase 5 design,
+  // pre-implementation as of 2026-05-10). v0.2 producers: zero.
   {
     kind: 'attention',
     granularity: 'substrateWide',
-    sourceFields: ['phase', 'suspicious'],
+    sourceFields: ['reviewQueueRowCount'],
     compute: (s): readonly FlowGauge[] => {
-      let count = 0;
-      for (const t of s.tasks.values()) {
-        if (t.phase === 'Failed' || (t.suspicious?.length ?? 0) > 0) {
-          count++;
-        }
-      }
+      const count = s.reviewQueueRowCount ?? 0;
       if (count === 0) return [];
       return [
         {
           kind: 'attention',
-          sourceFields: ['phase', 'suspicious'],
-          detailLink: '#/tasks',
-          label: 'awaiting review queue projection — Phase 4',
+          sourceFields: ['reviewQueueRowCount'],
+          detailLink: '#/review',
+          label: 'review queue',
           value: count,
           unit: 'items',
         },
       ];
     },
-    detailLink: (): string => '#/tasks',
+    detailLink: (): string => '#/review',
   },
 ];
 

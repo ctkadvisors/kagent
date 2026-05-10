@@ -272,24 +272,30 @@ describe('flows (FLOW-01 — computation)', () => {
 
   // ───────────────────────────── attention ─────────────────────────────
 
-  it('attention — fires when there are Failed or suspicious tasks (Phase 4 stub)', () => {
-    const t = makeTask({ name: 'tf', namespace: 'ns', phase: 'Failed' });
-    const snap = makeSnapshot({
-      tasks: new Map<string, TaskSummary>([[`${t.namespace}/${t.name}`, t]]),
-    });
+  it('attention — fires when reviewQueueRowCount >= 1', () => {
+    const snap = makeSnapshot({ reviewQueueRowCount: 3 });
     const gauges = computeAll(snap).filter((g) => g.kind === 'attention');
-    expect(gauges.length).toBeGreaterThanOrEqual(1);
-    expect(gauges[0]?.value).toBeGreaterThanOrEqual(1);
-    expect(gauges[0]?.capacity).toBeUndefined();
+    expect(gauges.length).toBe(1);
+    expect(gauges[0]?.kind).toBe('attention');
+    expect(gauges[0]?.value).toBe(3);
     expect(gauges[0]?.unit).toBe('items');
-    expect(gauges[0]?.label).toContain('awaiting review queue projection — Phase 4');
-    expect(gauges[0]?.detailLink).toBe('#/tasks');
-    expect(gauges[0]?.sourceFields).toEqual(['phase', 'suspicious']);
+    expect(gauges[0]?.label).toBe('review queue');
+    expect(gauges[0]?.detailLink).toBe('#/review');
+    expect(gauges[0]?.sourceFields).toEqual(['reviewQueueRowCount']);
+    expect(gauges[0]?.capacity).toBeUndefined();
   });
 
-  it('attention — returns empty array when no failed or suspicious tasks', () => {
-    const snap = makeSnapshot({ tasks: new Map<string, TaskSummary>() });
-    const gauges = computeAll(snap).filter((g) => g.kind === 'attention');
-    expect(gauges.length).toBe(0);
+  it('attention — returns empty array when reviewQueueRowCount is 0 or undefined', () => {
+    const snap0 = makeSnapshot({ reviewQueueRowCount: 0 });
+    expect(computeAll(snap0).filter((g) => g.kind === 'attention').length).toBe(0);
+
+    const snapUndef = makeSnapshot({});
+    expect(computeAll(snapUndef).filter((g) => g.kind === 'attention').length).toBe(0);
+  });
+
+  it('attention — sourceFields shape is ["reviewQueueRowCount"] (single source, post-Phase-4 flip)', () => {
+    const attentionEntry = FLOW_TYPES.find((ft) => ft.kind === 'attention');
+    expect(attentionEntry).toBeDefined();
+    expect(attentionEntry?.sourceFields).toEqual(['reviewQueueRowCount']);
   });
 });
