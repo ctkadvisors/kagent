@@ -1,0 +1,204 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`cc-reload (CC-02 — reload-stable rendering) > mount → unmount → fresh-remount with the same fixture: DOM and scene-graph snapshots are deep-equal > dom 1`] = `
+{
+  "links": [
+    {
+      "href": "#/gateway",
+      "text": "Gateway →",
+    },
+    {
+      "href": "#/cluster",
+      "text": "Cluster →",
+    },
+    {
+      "href": "/agents/kagent-system/researcher-01",
+      "text": "Tokens over budget — open agent detail →",
+    },
+    {
+      "href": "#/gateway",
+      "text": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct — 8/10 in flight (≥80%) →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-002",
+      "text": "research-002 — completed without artifacts →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-003",
+      "text": "research-003 — pod research-003-pod failed →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-004",
+      "text": "research-004 — pod research-004-pod failed →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-006",
+      "text": "researcher-01 — over budget (tokens_exceeded) →",
+    },
+    {
+      "href": "#/tasks/kagent-system/fanout-005",
+      "text": "fanout-005 — high fanout (3 children, dispatched) →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-003",
+      "text": "research-003 — verifier failed →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-001",
+      "text": "research-001 — trace link unknown — open task detail →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-002",
+      "text": "research-002 — trace link unknown — open task detail →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-003",
+      "text": "research-003 — trace link unknown — open task detail →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-004",
+      "text": "research-004 — trace link unknown — open task detail →",
+    },
+    {
+      "href": "#/tasks/kagent-system/research-004",
+      "text": "research-004 — policy denial →",
+    },
+  ],
+  "sourceBound": [
+    {
+      "multiFields": "spentTokensToday,idleBehavior",
+      "singleField": null,
+      "tag": "div",
+      "text": "Tokens +5,000 over budget",
+    },
+    {
+      "multiFields": "proposalsToday,idleBehavior",
+      "singleField": null,
+      "tag": "div",
+      "text": "Proposals 2 remaining",
+    },
+    {
+      "multiFields": null,
+      "singleField": "overBudgetEventCountToday",
+      "tag": "div",
+      "text": "2 events today",
+    },
+    {
+      "multiFields": "spentTokensToday,idleBehavior",
+      "singleField": null,
+      "tag": "a",
+      "text": "Tokens over budget — open agent detail →",
+    },
+    {
+      "multiFields": "inFlight,currentCap",
+      "singleField": null,
+      "tag": "a",
+      "text": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct — 8/10 in flight (≥80%) →",
+    },
+    {
+      "multiFields": "artifactCount,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "research-002 — completed without artifacts →",
+    },
+    {
+      "multiFields": "phase,podName",
+      "singleField": null,
+      "tag": "a",
+      "text": "research-003 — pod research-003-pod failed →",
+    },
+    {
+      "multiFields": "phase,podName",
+      "singleField": null,
+      "tag": "a",
+      "text": "research-004 — pod research-004-pod failed →",
+    },
+    {
+      "multiFields": null,
+      "singleField": "overBudget",
+      "tag": "a",
+      "text": "researcher-01 — over budget (tokens_exceeded) →",
+    },
+    {
+      "multiFields": "childCount,phase",
+      "singleField": null,
+      "tag": "a",
+      "text": "fanout-005 — high fanout (3 children, dispatched) →",
+    },
+    {
+      "multiFields": "phase,error",
+      "singleField": null,
+      "tag": "a",
+      "text": "research-003 — verifier failed →",
+    },
+    {
+      "multiFields": null,
+      "singleField": "phase",
+      "tag": "a",
+      "text": "research-001 — trace link unknown — open task detail →",
+    },
+    {
+      "multiFields": null,
+      "singleField": "phase",
+      "tag": "a",
+      "text": "research-002 — trace link unknown — open task detail →",
+    },
+    {
+      "multiFields": null,
+      "singleField": "phase",
+      "tag": "a",
+      "text": "research-003 — trace link unknown — open task detail →",
+    },
+    {
+      "multiFields": null,
+      "singleField": "phase",
+      "tag": "a",
+      "text": "research-004 — trace link unknown — open task detail →",
+    },
+    {
+      "multiFields": "phase,error",
+      "singleField": null,
+      "tag": "a",
+      "text": "research-004 — policy denial →",
+    },
+  ],
+}
+`;
+
+exports[`cc-reload (CC-02 — reload-stable rendering) > mount → unmount → fresh-remount with the same fixture: DOM and scene-graph snapshots are deep-equal > layout 1`] = `
+{
+  "agents": {
+    "kagent-system/curator-02": {
+      "faction": "kagent-system",
+      "key": "kagent-system/curator-02",
+      "radius": 290,
+      "x": 880,
+      "y": 560,
+    },
+    "kagent-system/executor-03": {
+      "faction": "kagent-system",
+      "key": "kagent-system/executor-03",
+      "radius": 290,
+      "x": 360,
+      "y": 340,
+    },
+    "kagent-system/researcher-01": {
+      "faction": "kagent-system",
+      "key": "kagent-system/researcher-01",
+      "radius": 290,
+      "x": 920,
+      "y": 360,
+    },
+  },
+  "factions": {
+    "kagent-system": {
+      "angle": -2.9054345136610626,
+      "count": 3,
+    },
+  },
+  "gateway": {
+    "x": 640,
+    "y": 400,
+  },
+}
+`;
