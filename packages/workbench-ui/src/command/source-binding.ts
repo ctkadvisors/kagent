@@ -6,21 +6,26 @@
 /**
  * source-binding — Phase 1 / DISP-04 implementation of the
  * COMMAND-CENTER-CONTRACT.md §2 Prime Directive scoped to the
- * disposition slice. Every rendered field MUST derive from a
- * substrate source. The TypeScript type system is the primary
- * defense (`DispositionOverlayRow` is a closed shape from
- * `@kagent/dto`); this module adds a development-only runtime guard
- * that throws when a rendered field name is NOT present on the DTO
- * instance — useful during synthesized-fixture test runs and as a
- * debugging aid in dev builds.
+ * disposition slice, generalized in Phase 2 / CC-01 to all of the
+ * Command Center. Every rendered field MUST derive from a substrate
+ * source. The TypeScript type system is the primary defense (the four
+ * DTOs `DispositionOverlayRow`, `AgentSummaryRow`, `TaskSummary`,
+ * `GatewayCapacityRow` are closed shapes); this module adds a
+ * development-only runtime guard that throws when a rendered field
+ * name is NOT present on the DTO instance — useful during
+ * synthesized-fixture test runs and as a debugging aid in dev builds.
  *
  * In production builds (import.meta.env.PROD === true OR
  * process.env.NODE_ENV === 'production'), the assertions are no-ops
  * for performance.
  *
- * CC-01 (Phase 2 scope) generalizes this pattern to all of Command
- * Center; Phase 1 implements the disposition-specific slice. See
- * docs/COMMAND-CENTER-CONTRACT.md for the binding contract.
+ * Phase 2 / CC-01 generalization (RESEARCH.md Finding 14, Option A):
+ *   - The runtime helpers are generic over the DTO type; narrowing is
+ *     enforced at the call site by the closed-enum K (one of
+ *     DispositionFieldName, AgentSummaryFieldName, TaskSummaryFieldName,
+ *     GatewayCapacityFieldName, PressureFieldName).
+ *   - A new top-level field on any DTO requires extending the matching
+ *     closed-enum union — that's the design.
  *
  * Single vs multi-field variant (Codex HIGH #5 mitigation):
  *   - `assertSourceField` / `useSourceField` — a single DTO field
@@ -33,15 +38,16 @@
  *     every input, not just one.
  */
 
-import type { DispositionOverlayRow } from '@kagent/dto/disposition';
-
 /**
  * Closed enumeration of DispositionOverlayRow top-level field names.
  * The TypeScript type system narrows callers to one of these at the
  * source-bind call site. Adding a new top-level field requires
  * updating this list — that's the design.
+ *
+ * Exported in Phase 2 so cc-orphan.test.ts (CC-01) can import it
+ * alongside the four new closed-enum types.
  */
-type DispositionFieldName =
+export type DispositionFieldName =
   | 'agentRef'
   | 'namespace'
   | 'agentName'
@@ -54,6 +60,56 @@ type DispositionFieldName =
   | 'overBudgetReason'
   | 'overBudgetEventCountToday'
   | 'dailyBoundaryUtc';
+
+/** Closed enumeration of AgentSummaryRow top-level field names. */
+export type AgentSummaryFieldName =
+  | 'name'
+  | 'namespace'
+  | 'model'
+  | 'modelClass'
+  | 'tools'
+  | 'capabilities';
+
+/** Closed enumeration of TaskSummary top-level field names. */
+export type TaskSummaryFieldName =
+  | 'name'
+  | 'namespace'
+  | 'uid'
+  | 'phase'
+  | 'targetAgent'
+  | 'targetCapability'
+  | 'model'
+  | 'createdAt'
+  | 'startedAt'
+  | 'completedAt'
+  | 'podName'
+  | 'error'
+  | 'suspicious'
+  | 'artifactCount'
+  | 'childCount'
+  | 'aggregatePhase';
+
+/** Closed enumeration of GatewayCapacityRow top-level field names. */
+export type GatewayCapacityFieldName =
+  | 'model'
+  | 'endpoint'
+  | 'backendKind'
+  | 'inFlight'
+  | 'currentCap'
+  | 'seed'
+  | 'max'
+  | 'minSafe'
+  | 'recentP50Ms'
+  | 'crName'
+  | 'crNamespace';
+
+/**
+ * Re-exported from pressure.ts so PRESSURE_TYPES stays the single
+ * source of truth for the pressure kind union (per CONTEXT.md
+ * D-CC-04-A). Wave 1 populates PRESSURE_TYPES with all 9 entries; the
+ * union resolves automatically.
+ */
+export type { PressureFieldName } from './pressure.js';
 
 /**
  * Detect dev-build context. Priority order:
@@ -99,8 +155,13 @@ function isDevBuild(): boolean {
 }
 
 /**
- * Throws in dev builds if `field` is not a present key on the
- * `DispositionOverlayRow` instance. No-op in prod.
+ * Throws in dev builds if `field` is not a present key on the DTO
+ * instance. No-op in prod.
+ *
+ * Phase 2 / CC-01: generic over the DTO type T. K is a closed-enum
+ * field-name union (DispositionFieldName / AgentSummaryFieldName /
+ * TaskSummaryFieldName / GatewayCapacityFieldName / PressureFieldName)
+ * — TypeScript narrows callers at the source-bind call site.
  *
  * Usage:
  *   assertSourceField(row, 'overBudget');
@@ -109,12 +170,14 @@ function isDevBuild(): boolean {
  * COMMAND-CENTER-CONTRACT.md §2 Prime Directive: every visible field
  * MUST derive from a substrate source.
  */
-export function assertSourceField(row: DispositionOverlayRow, field: DispositionFieldName): void {
+export function assertSourceField<T extends object, K extends string>(row: T, field: K): void {
   if (!isDevBuild()) return;
   if (!(field in row)) {
+    const ref = (row as { agentRef?: string }).agentRef;
     throw new Error(
-      `disposition source-binding violation: rendered field '${String(field)}' has no backing source on DispositionOverlayRow ` +
-        `(agentRef=${row.agentRef ?? '?'}). See COMMAND-CENTER-CONTRACT.md §2 Prime Directive.`,
+      `source-binding violation: rendered field '${String(field)}' has no backing source` +
+        (ref !== undefined ? ` (agentRef=${ref})` : '') +
+        `. See COMMAND-CENTER-CONTRACT.md §2 Prime Directive.`,
     );
   }
 }
@@ -123,13 +186,13 @@ export function assertSourceField(row: DispositionOverlayRow, field: Disposition
  * Returns the field name string. Use as
  * `data-source-field={useSourceField('spentTokensToday')}` so the
  * source binding is visible in the DOM (debugging + future CC-01
- * generalization can scrape these attributes).
+ * scrapers can read these attributes).
  *
  * This is a passthrough — no runtime check. The check is the
  * companion `assertSourceField` call which the component should
  * invoke once per row before rendering.
  */
-export function useSourceField(field: DispositionFieldName): DispositionFieldName {
+export function useSourceField<K extends string>(field: K): K {
   return field;
 }
 
@@ -141,6 +204,10 @@ export function useSourceField(field: DispositionFieldName): DispositionFieldNam
  * visible value. Throws in dev builds when ANY of the listed sourceFields
  * is not present on the DTO instance; no-op in prod.
  *
+ * Phase 2 / CC-01: generic over the DTO type T. K is a closed-enum
+ * field-name union; the body remains identical to Phase 1's so
+ * existing assertion semantics are preserved.
+ *
  * Usage:
  *   assertSourceFields(row, ['spentTokensToday', 'idleBehavior']);
  *   <div data-source-fields={useSourceFields(['spentTokensToday', 'idleBehavior'])}>
@@ -150,16 +217,18 @@ export function useSourceField(field: DispositionFieldName): DispositionFieldNam
  * Single-source fields (e.g., `overBudget`) MAY keep the singular
  * `assertSourceField` helper.
  */
-export function assertSourceFields(
-  row: DispositionOverlayRow,
-  fields: readonly DispositionFieldName[],
+export function assertSourceFields<T extends object, K extends string>(
+  row: T,
+  fields: readonly K[],
 ): void {
   if (!isDevBuild()) return;
   for (const field of fields) {
     if (!(field in row)) {
+      const ref = (row as { agentRef?: string }).agentRef;
       throw new Error(
-        `disposition source-binding violation: rendered field '${String(field)}' has no backing source on DispositionOverlayRow ` +
-          `(agentRef=${row.agentRef ?? '?'}) [computed value listed sourceFields=${fields.join(',')}]. ` +
+        `source-binding violation: rendered field '${String(field)}' has no backing source` +
+          (ref !== undefined ? ` (agentRef=${ref})` : '') +
+          ` [computed value listed sourceFields=${fields.join(',')}]. ` +
           `See COMMAND-CENTER-CONTRACT.md §2 Prime Directive.`,
       );
     }
@@ -172,6 +241,6 @@ export function assertSourceFields(
  * `data-source-fields={useSourceFields(['spentTokensToday', 'idleBehavior'])}`.
  * The comma-separated form is what future CC-01 scrapers parse.
  */
-export function useSourceFields(fields: readonly DispositionFieldName[]): string {
+export function useSourceFields<K extends string>(fields: readonly K[]): string {
   return fields.join(',');
 }

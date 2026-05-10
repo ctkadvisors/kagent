@@ -188,3 +188,252 @@ describe('source-binding (DISP-04 / CC-01 disposition slice)', () => {
     expect(useSourceFields(['overBudget'])).toBe('overBudget');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// Phase 2 / CC-01 — generalization to AgentSummaryRow / TaskSummary /
+// GatewayCapacityRow. Generic helpers; closed-enum K narrows callers.
+// Mirrors the Phase-1 disposition test pattern (vi.stubEnv 'NODE_ENV',
+// `as unknown as <DTO>` casting for synthesized orphans).
+// ────────────────────────────────────────────────────────────────────
+
+describe('source-binding (CC-01 generalization to AgentSummaryRow / TaskSummary / GatewayCapacityRow)', () => {
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'development');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function makeAgent(
+    overrides: Partial<import('../types.js').AgentSummaryRow> = {},
+  ): import('../types.js').AgentSummaryRow {
+    return {
+      name: 'researcher-01',
+      namespace: 'kagent-system',
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      modelClass: 'tool-caller-default',
+      tools: ['http', 'mcp'],
+      capabilities: ['research', 'summarize'],
+      ...overrides,
+    };
+  }
+
+  function makeTask(
+    overrides: Partial<import('../types.js').TaskSummary> = {},
+  ): import('../types.js').TaskSummary {
+    return {
+      name: 'research-001',
+      namespace: 'kagent-system',
+      uid: 'u-001',
+      phase: 'Dispatched',
+      targetAgent: 'researcher-01',
+      targetCapability: 'research',
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      createdAt: '2026-05-10T10:00:00Z',
+      startedAt: '2026-05-10T10:00:30Z',
+      completedAt: '2026-05-10T10:01:30Z',
+      podName: 'research-001-pod',
+      suspicious: [],
+      artifactCount: 1,
+      childCount: 0,
+      aggregatePhase: 'Dispatched',
+      ...overrides,
+    };
+  }
+
+  function makeGateway(
+    overrides: Partial<import('../types.js').GatewayCapacityRow> = {},
+  ): import('../types.js').GatewayCapacityRow {
+    return {
+      model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+      endpoint: 'https://gateway.ai.cloudflare.com/v1/.../workers-ai',
+      backendKind: 'cloudflare-workers-ai',
+      inFlight: 1,
+      currentCap: 8,
+      seed: 4,
+      max: 12,
+      minSafe: 2,
+      recentP50Ms: 42,
+      crName: 'cf-llama-4-scout',
+      crNamespace: 'kagent-system',
+      ...overrides,
+    };
+  }
+
+  it('Test A — assertSourceField passes silently for AgentSummaryRow.capabilities', () => {
+    const row = makeAgent();
+    expect(() => {
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'capabilities',
+      );
+    }).not.toThrow();
+  });
+
+  it('Test B — assertSourceField THROWS in dev for AgentSummaryRow missing capabilities', () => {
+    const orphan = {
+      name: 'researcher-01',
+      namespace: 'kagent-system',
+      // capabilities intentionally missing
+    } as unknown as import('../types.js').AgentSummaryRow;
+
+    expect(() => {
+      assertSourceField<typeof orphan, import('./source-binding.js').AgentSummaryFieldName>(
+        orphan,
+        'capabilities',
+      );
+    }).toThrow(/source-binding violation: rendered field 'capabilities' has no backing source/);
+  });
+
+  it('Test C — assertSourceField is a no-op in production for the same orphan AgentSummaryRow', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const orphan = {
+      name: 'x',
+      namespace: 'y',
+    } as unknown as import('../types.js').AgentSummaryRow;
+    expect(() => {
+      assertSourceField<typeof orphan, import('./source-binding.js').AgentSummaryFieldName>(
+        orphan,
+        'capabilities',
+      );
+    }).not.toThrow();
+  });
+
+  it('Test D — useSourceField returns the literal field name for AgentSummaryFieldName', () => {
+    const v = useSourceField<import('./source-binding.js').AgentSummaryFieldName>('capabilities');
+    expect(v).toBe('capabilities');
+  });
+
+  it('Test E — assertSourceFields THROWS in dev for synthesized TaskSummary missing phase', () => {
+    const orphan = {
+      name: 'orphan',
+      namespace: 'kagent-system',
+      uid: 'u-orphan',
+      // phase intentionally missing — multi-field check should catch it.
+      targetAgent: 'researcher-01',
+    } as unknown as import('../types.js').TaskSummary;
+
+    let caught: Error | null = null;
+    try {
+      assertSourceFields<typeof orphan, import('./source-binding.js').TaskSummaryFieldName>(
+        orphan,
+        ['phase', 'targetAgent'],
+      );
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught?.message).toMatch(/sourceFields=phase,targetAgent/);
+    expect(caught?.message).toMatch(/computed value/);
+  });
+
+  it('Test F — useSourceFields returns the comma-joined string for TaskSummaryFieldName', () => {
+    const v = useSourceFields<import('./source-binding.js').TaskSummaryFieldName>([
+      'phase',
+      'targetAgent',
+    ]);
+    expect(v).toBe('phase,targetAgent');
+  });
+
+  it('Test G — assertSourceField passes for every member of AgentSummaryFieldName on a fully-populated AgentSummaryRow', () => {
+    const row = makeAgent();
+    expect(() => {
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'name',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'namespace',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'model',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'modelClass',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'tools',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').AgentSummaryFieldName>(
+        row,
+        'capabilities',
+      );
+    }).not.toThrow();
+  });
+
+  it('Test H — assertSourceField passes for every member of GatewayCapacityFieldName on a fully-populated GatewayCapacityRow', () => {
+    const row = makeGateway();
+    expect(() => {
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'model',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'endpoint',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'backendKind',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'inFlight',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'currentCap',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'seed',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'max',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'minSafe',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'recentP50Ms',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'crName',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').GatewayCapacityFieldName>(
+        row,
+        'crNamespace',
+      );
+    }).not.toThrow();
+  });
+
+  it('Test I — TaskSummary fully-populated: assertSourceField passes for every TaskSummaryFieldName', () => {
+    const row = makeTask();
+    expect(() => {
+      assertSourceField<typeof row, import('./source-binding.js').TaskSummaryFieldName>(
+        row,
+        'phase',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').TaskSummaryFieldName>(
+        row,
+        'targetAgent',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').TaskSummaryFieldName>(
+        row,
+        'artifactCount',
+      );
+      assertSourceField<typeof row, import('./source-binding.js').TaskSummaryFieldName>(
+        row,
+        'childCount',
+      );
+    }).not.toThrow();
+  });
+});
