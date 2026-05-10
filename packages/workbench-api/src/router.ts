@@ -31,6 +31,7 @@ import { clusterRoute } from './routes/cluster.js';
 import { dispositionsRoute } from './routes/dispositions.js';
 import { gatewayRoute } from './routes/gateway.js';
 import { healthzRoute } from './routes/healthz.js';
+import { reviewQueueRoute } from './routes/review-queue.js';
 import { streamRoute } from './routes/stream.js';
 import { tasksRoute } from './routes/tasks.js';
 import { uiProxyRoute } from './routes/ui-proxy.js';
@@ -218,6 +219,22 @@ export function buildRouter(deps: RouterDeps): Hono {
       }),
     );
   }
+
+  // Phase 4 / REV-01 — `/api/review-queue` projection. Pure-read GET
+  // handler; POST stubs registered in the factory (Plan 04-03 W2
+  // implements them). No new RouterDeps fields — review-queue consumes
+  // cache, customApi, auditPublisher, defaultNamespace, langfuseBaseUrl
+  // which are already threaded through existing routes.
+  app.route(
+    '/api/review-queue',
+    reviewQueueRoute({
+      cache: deps.cache,
+      ...(deps.customApi !== undefined && { customApi: deps.customApi }),
+      ...(deps.auditPublisher !== undefined && { auditPublisher: deps.auditPublisher }),
+      ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
+      ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
+    }),
+  );
 
   // Reserve the API namespace before the SPA proxy catches unmatched
   // GETs. Without this, `/api/typo` can return the UI's index.html
