@@ -234,6 +234,11 @@ describe('GET /api/review-queue', () => {
     expect(body.items[0]?.candidateTemplate?.proposedTemplateName.length).toBeGreaterThan(0);
     expect(body.items[0]?.candidateTemplate?.proposedNamespace).toBe('kagent-system');
     expect(body.items[0]?.taskRef.uid).toBe('uid-template-candidate-01');
+    // CR-02 (Plan 04-06): reasonDetail must match DTO JSDoc spec format exactly
+    // (`${proposedTemplateName} (candidate)`).
+    expect(body.items[0]?.reasonDetail).toBe(
+      `${body.items[0]?.candidateTemplate?.proposedTemplateName ?? ''} (candidate)`,
+    );
   });
 
   // ------------------------------------------------------------------
@@ -719,13 +724,91 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
       )?.['kagent.knuteson.io/promoted-from-task'],
     ).toBe('kagent-system/candidate-template-1');
 
-    // Two audit events: review.accepted + template.candidate.promoted
+    // After CR-01 fix (Plan 04-06): template.candidate.promoted fires BEFORE
+    // the annotation patch (not after, as the original implementation did).
+    // The first publish call is template.candidate.promoted; the second is
+    // review.accepted (which fires in the post-patch audit block).
     expect(auditPublisher.publish).toHaveBeenCalledTimes(2);
+    const firstPublishOrder = auditPublisher.publish.mock.invocationCallOrder[0]!;
+    expect(firstPublishOrder).toBeLessThan(patchOrder);
+    const firstPublishType = (
+      auditPublisher.publish.mock.calls[0]?.[0] as Record<string, unknown>
+    )?.['type'];
+    expect(firstPublishType).toBe('template.candidate.promoted');
+
     const events = auditPublisher.publish.mock.calls.map(
       (call) => (call[0] as Record<string, unknown>)['type'],
     );
-    expect(events).toContain('review.accepted');
-    expect(events).toContain('template.candidate.promoted');
+    expect(events).toEqual(['template.candidate.promoted', 'review.accepted']);
+  });
+
+  // ------------------------------------------------------------------
+  // W2-Test CR-01 — POST accept (candidate-template) — CR-create success
+  //                  + patch failure: template.candidate.promoted IS
+  //                  emitted BEFORE the 500 response; review.accepted
+  //                  is NOT emitted (the decision did not land).
+  // Regression test for the Plan 04-06 CR-01 fix.
+  // ------------------------------------------------------------------
+
+  it('W2-Test CR-01 — candidate-template accept with patch failure emits template.candidate.promoted (not review.accepted) before 500', async () => {
+    const customApi = makeMockCustomApi({
+      patchRejectsWith: new Error('apiserver 500: simulated patch failure'),
+    });
+    const auditPublisher = makeMockAuditPublisher();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([candidateTemplateTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher,
+        now: () => fixedPostNow,
+        readArtifact: () => Promise.resolve(candidateYaml),
+      }),
+    );
+
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-User': 'reviewer@kagent',
+      },
+      body: JSON.stringify({}),
+    });
+
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBe('patch annotation failed');
+    expect(body['detail']).toBe('see workbench-api logs');
+
+    // The AgentTemplate CR creation DID succeed:
+    expect(customApi.createNamespacedCustomObject).toHaveBeenCalledOnce();
+    expect(customApi.patchNamespacedCustomObject).toHaveBeenCalledOnce();
+
+    // The audit log records the AgentTemplate's existence — exactly one
+    // publish, and it is template.candidate.promoted.
+    expect(auditPublisher.publish).toHaveBeenCalledOnce();
+    const publishedEvent = auditPublisher.publish.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(publishedEvent['type']).toBe('template.candidate.promoted');
+    expect((publishedEvent['data'] as Record<string, unknown>)?.['agentTemplateRef']).toMatchObject(
+      {
+        namespace: 'kagent-system',
+        name: 'researcher-v2-template',
+        uid: 'uid-created-template',
+      },
+    );
+
+    // review.accepted is NOT in the publish history — the decision did not
+    // land in the substrate.
+    const publishedTypes = auditPublisher.publish.mock.calls.map(
+      (call) => (call[0] as Record<string, unknown>)['type'],
+    );
+    expect(publishedTypes).not.toContain('review.accepted');
+
+    // Order: the promoted publish was invoked BEFORE the patch call.
+    const publishOrder = auditPublisher.publish.mock.invocationCallOrder[0]!;
+    const patchCallOrder = customApi.patchNamespacedCustomObject.mock.invocationCallOrder[0]!;
+    expect(publishOrder).toBeLessThan(patchCallOrder);
   });
 
   // ------------------------------------------------------------------
