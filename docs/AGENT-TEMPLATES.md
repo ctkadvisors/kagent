@@ -226,3 +226,15 @@ spec:
 ---
 
 **Bottom line:** `AgentTemplate` is the smallest substrate primitive that makes constrained dynamic specialist creation safe. It introduces one new CRD, one operator endpoint, and one in-pod tool — and structurally forecloses the prompt-injection blast radius by making "what can vary" a human-author-time decision in git, not a runtime decision the LLM can drift.
+
+---
+
+## Promotion via review queue (Phase 4)
+
+Candidate AgentTemplates produced by agents (DISP-02 `proposalScope.mayProposeAgainst: ['templates']` allowed) are carried as `ArtifactRef`-shaped blobs at rest. The producing AgentTask carries the annotation `kagent.knuteson.io/template-candidate: "true"`; the artifact's media type is `application/x-kagent-template-candidate+yaml`.
+
+The candidate surfaces as a row in the workbench-api review-queue projection (`GET /api/review-queue`, `reason: "candidate-template"`). An operator-reviewer's `POST /api/review-queue/:namespace/:name/accept` parses the artifact YAML against `AgentTemplateSpec` and creates the new `AgentTemplate` CR via the existing operator-write path. The promoted CR carries `metadata.ownerReferences` to the producing AgentTask and `metadata.annotations["kagent.knuteson.io/promoted-from-task"] = "<ns>/<name>"`. The audit-event log records `review.accepted` + `template.candidate.promoted` (Phase 4 / REV-02).
+
+Single-reviewer scope per Phase 4. Multi-reviewer flows (signed quorum, no-self-review, ring-review detection) are future research per `.planning/REQUIREMENTS.md` §4 (`CoalitionProposal`).
+
+See `.planning/phases/04-review-queue-projection-promotion-path/04-CONTEXT.md` for the full decision corpus (D-01..D-04).
