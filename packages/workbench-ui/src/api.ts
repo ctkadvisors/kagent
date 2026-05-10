@@ -479,6 +479,26 @@ export async function requestReview(
  *
  * Phase 4 / REV-01. Polling cadence: 5 000 ms per CONTEXT.md
  * "Claude's Discretion" note. SSE-driven invalidation deferred (v0.2).
+ *
+ * WR-08 (Plan 04-06): NO exponential backoff on error. Rationale:
+ * `/api/review-queue` is a GET projection over `SnapshotCache.listTasks()`
+ * served by the same workbench-api process that serves
+ * `/api/dispositions` and `/api/tasks`. It is pure-read; it is NOT
+ * gated by the `actions.create=true` Helm flag that fails-closed the
+ * POST endpoints with 503. A 503 from this GET endpoint is
+ * structurally impossible in the current substrate — the same
+ * process serving `useReviewQueue` would have already failed to
+ * serve the surrounding TaskList/CommandView reads and the
+ * operator dashboard would be globally degraded. The 5-Hz hammer
+ * pattern WR-08 describes is therefore a theoretical concern
+ * rather than a realized failure mode in v0.2.
+ *
+ * TODO (Phase 5+): when a fleet of operator dashboards becomes a
+ * real concern, lift the polling logic into a shared helper
+ * (`createPollingHook(url, intervalMs, options)`) with optional
+ * exponential backoff on persistent error. Mirror the existing
+ * `fetchDispositions` 30 s polling pattern (state.ts
+ * DISPOSITION_POLL_MS) and the SSE invalidation seam.
  */
 export function useReviewQueue(): {
   readonly rows: readonly ReviewQueueRow[];
