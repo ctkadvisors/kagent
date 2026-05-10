@@ -346,6 +346,43 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
       }
     }
 
+    // CR-01 fix (Plan 04-06): emit template.candidate.promoted IMMEDIATELY
+    // after CR-create success, BEFORE the annotation patch. This preserves
+    // the audit record of the AgentTemplate's existence even when the
+    // subsequent patch step fails (audit consumers can later join to
+    // review.accepted once it fires on the patch-success path).
+    if (
+      row.reason === 'candidate-template' &&
+      agentTemplateRef !== undefined &&
+      deps.auditPublisher !== undefined
+    ) {
+      const promotedRef = {
+        namespace: agentTemplateRef.namespace ?? '',
+        name: agentTemplateRef.name ?? '',
+        uid: agentTemplateRef.uid,
+      };
+      try {
+        await deps.auditPublisher.publish(
+          makeEvent({
+            type: TEMPLATE_CANDIDATE_PROMOTED,
+            source: 'kagent.knuteson.io/workbench-api',
+            subject: `AgentTask/${namespace}/${name}`,
+            data: {
+              taskRef,
+              agentTemplateRef: promotedRef,
+              reviewerId,
+            },
+          }),
+        );
+      } catch (auditErr) {
+        logWarn(
+          `review-queue: template.candidate.promoted publish failed: ${
+            auditErr instanceof Error ? auditErr.message : String(auditErr)
+          }`,
+        );
+      }
+    }
+
     // Step 7 — PATCH AgentTask annotations (SECOND — after CR creation per D-03 atomicity)
     try {
       await deps.customApi.patchNamespacedCustomObject(
@@ -397,36 +434,6 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
             auditErr instanceof Error ? auditErr.message : String(auditErr)
           }`,
         );
-      }
-
-      if (agentTemplateRef !== undefined) {
-        // Build agentTemplateRef with required string fields for TemplateCandidatePromotedData
-        const promotedRef = {
-          namespace: agentTemplateRef.namespace ?? '',
-          name: agentTemplateRef.name ?? '',
-          uid: agentTemplateRef.uid,
-        };
-        try {
-          await deps.auditPublisher.publish(
-            makeEvent({
-              type: TEMPLATE_CANDIDATE_PROMOTED,
-              source: 'kagent.knuteson.io/workbench-api',
-              subject: `AgentTask/${namespace}/${name}`,
-              data: {
-                taskRef,
-                agentTemplateRef: promotedRef,
-                // TemplateCandidatePromotedData requires reviewerId as `string | undefined`
-                reviewerId,
-              },
-            }),
-          );
-        } catch (auditErr2) {
-          logWarn(
-            `review-queue: template.candidate.promoted publish failed: ${
-              auditErr2 instanceof Error ? auditErr2.message : String(auditErr2)
-            }`,
-          );
-        }
       }
     }
 
