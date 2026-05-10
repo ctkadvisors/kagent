@@ -80,6 +80,18 @@
   text-decoration: underline;
 }
 
+/* SC3 (Plan 04-06): direct trace anchor adjacent to the Task cell. */
+.traceLink {
+  margin-left: 0.5rem;
+  font-size: 0.85em;
+  text-decoration: underline;
+  color: #2563eb;
+}
+
+.traceLink:hover {
+  text-decoration: none;
+}
+
 /* ─── Reason pills ───────────────────────────────────────────────── */
 
 .reasonPill {

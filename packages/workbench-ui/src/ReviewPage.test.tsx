@@ -110,6 +110,37 @@ describe('ReviewPage (REV-02)', () => {
     expect(detailLink.getAttribute('href')).toBe('#/tasks/kagent-system/researcher-fail-01');
   });
 
+  it('Test SC3 — row with traceLink renders a direct anchor; row without traceLink renders none', () => {
+    const mockedRows: ReviewQueueRow[] = [
+      makeRow({
+        taskRef: { namespace: 'kagent-system', name: 'with-trace', uid: 'uid-w-trace' },
+        traceLink: 'https://example.com/trace/abc',
+      }),
+      makeRow({
+        taskRef: { namespace: 'kagent-system', name: 'without-trace', uid: 'uid-wo-trace' },
+        // traceLink intentionally omitted
+      }),
+    ];
+    mockUseReviewQueue.mockReturnValue({
+      rows: mockedRows,
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    const { container } = render(<ReviewPage onBack={vi.fn()} />);
+    const anchors = container.querySelectorAll('a[href="https://example.com/trace/abc"]');
+    expect(anchors).toHaveLength(1);
+    const anchor = anchors[0]!;
+    expect(anchor.getAttribute('target')).toBe('_blank');
+    expect(anchor.getAttribute('rel')).toBe('noreferrer');
+
+    // The row WITH traceLink renders the trace anchor at row index 0.
+    // The row WITHOUT traceLink renders no trace anchor at row index 1.
+    expect(container.querySelectorAll('a[data-testid="trace-link-row-0"]')).toHaveLength(1);
+    expect(container.querySelectorAll('a[data-testid="trace-link-row-1"]')).toHaveLength(0);
+  });
+
   it('Test 2 — empty state message when no rows', () => {
     mockUseReviewQueue.mockReturnValue({
       rows: [],

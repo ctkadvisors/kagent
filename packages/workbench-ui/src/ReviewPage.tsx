@@ -203,6 +203,20 @@ export function ReviewPage({ onBack }: ReviewPageProps): React.JSX.Element {
                     <a href={encodedHref} className={styles.linkCell}>
                       {namespace}/{name}
                     </a>
+                    {/* SC3 (Plan 04-06): direct row-to-artifact trace anchor.
+                        Renders only when row.traceLink is a non-empty string. */}
+                    {typeof row.traceLink === 'string' && row.traceLink.length > 0 ? (
+                      <a
+                        href={row.traceLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={styles.traceLink}
+                        data-testid={`trace-link-row-${idx.toString()}`}
+                        data-source-field={useSourceField('traceLink')}
+                      >
+                        trace
+                      </a>
+                    ) : null}
                   </td>
                   <td data-source-field={useSourceField('targetAgent')}>
                     {row.targetAgent ?? '—'}
