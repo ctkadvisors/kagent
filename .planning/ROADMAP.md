@@ -87,7 +87,7 @@ Plans:
 
 Plans:
 
-- [ ] 03-01-PLAN.md — Wave 1 foundation: flows.ts (8 FLOW_TYPES + closed-enum) + flows.test.ts (16 fire/absent + 1 fixture-assert) + source-binding.ts/test.ts FlowFieldName re-export + cc-snapshot.json additive (model + podName on fanout-005)
+- [x] 03-01-PLAN.md — Wave 1 foundation: flows.ts (8 FLOW_TYPES + closed-enum) + flows.test.ts (16 fire/absent + 1 fixture-assert) + source-binding.ts/test.ts FlowFieldName re-export + cc-snapshot.json additive (model + podName on fanout-005)
 - [ ] 03-02-PLAN.md — Wave 2 presentation + integration: FlowOverlay.tsx + FlowOverlay.module.css + FlowOverlay.test.tsx (4 tests + empty-state) + CommandView.tsx mount + cc-reload.test.tsx.snap regen (3 atomic commits — mount commit intentionally fails snapshot, regen commit lands ONLY the snapshot diff per RESEARCH.md Pitfall 1)
 - [ ] 03-03-PLAN.md — Wave 3 docs: docs/FLOW-LEGEND.md (FLOW-02 — at-a-glance table + 8 per-flow sections) + optional docs/COMMAND-CENTER-CONTRACT.md footer link (single-line discoverability — NOT a contract revision)
 
