@@ -102,7 +102,7 @@ Plans:
 2. AgentTemplate promotion proposal flow exists end-to-end: a candidate `AgentTemplate` (artifact-shape today) is reviewable in the queue; accept/reject decisions are recorded as audit events tied back to the candidate; an accepted candidate becomes a versioned `AgentTemplate` CR via the existing operator-write path. Single-reviewer covered; multi-reviewer is future research.
 3. Replay / eval signals (existing v0.1 controllers) surface their outputs into the review queue projection — a failed eval or replay divergence becomes a queue row with the same shape as a verifier failure. Reviewer can navigate from queue row to underlying eval/replay artifact.
 
-**Plans**: 5 plans
+**Plans**: 6 plans
 **UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding for the Phase 3 attention-flow flip and the deep-link surfaces; main `#/review` page + inline `ReviewActions` component are bound by D7)
 
 Plans:
@@ -112,6 +112,7 @@ Plans:
 - [x] 04-03-PLAN.md — Wave 2 POST handlers: accept (5-step path with AgentTemplate CR creation BEFORE annotation patch on candidate-template; 503/404/409/422/500 ladder; audit-event emission) + reject (annotation-only, never creates CR) + request (D-02 operator-only flag) + 4 new audit-event emit sites; export `extractK8sStatus` + `readCreatedMeta` from `tasks.ts` (LM-3 helper lifting)
 - [x] 04-04-PLAN.md — Wave 3 UI surface: `types.ts` re-exports + `api.ts` (`fetchReviewQueue`, accept/reject/request POST helpers, `useReviewQueue` 5s polling hook, `ReviewActionApiError`) + `App.tsx` `#/review` route + `ReviewPage.tsx` (table-shaped, mirrors TaskList) + inline `ReviewActions.tsx` in TaskDetail (4 trigger conditions) + `source-binding.ts` `ReviewQueueFieldName` 14-member closed enum (D7 / CC-01)
 - [x] 04-05-PLAN.md — Wave 4 Phase 3 attention-flow flip + docs: `state.ts` `CommandSnapshot.reviewQueueRowCount?: number` (additive) + `flows.ts` `attention.compute()` flips from `phase=Failed + suspicious` proxy to `s.reviewQueueRowCount` (`detailLink: '#/review'`, `label: 'review queue'`) + `CommandView.tsx` wires `useReviewQueue()` + `cc-reload.test.tsx.snap` regen (single dedicated commit per LM-8) + `docs/AGENT-TEMPLATES.md` footer (media type + promotion path) + `docs/REPLAY-EVALS.md` footer (REV-03 stub) + `docs/SUBSTRATE-V1.md` §4.3 (4 new audit-event rows; total 49 -> 53)
+- [ ] 04-06-PLAN.md — Wave 5 gap closure: close CR-01 BLOCKER (move template.candidate.promoted audit emit to fire after CR creation, before annotation patch) + SC3 traceLink direct hyperlink in ReviewPage table + CR-02 classifier reasonDetail alignment to DTO JSDoc spec ${proposedTemplateName} (candidate) + CR-03 type-only cross-check pinning ReviewAcceptedData.reason to @kagent/dto ReviewReason (LM-10 preserved) + WR-02 ReviewActionApiError.detail surfacing + WR-06 RequestReviewBody reviewerId/reasonText rename + WR-08 useReviewQueue no-backoff polling doc
 
 ### Phase 5: Workbench usability primitives
 
