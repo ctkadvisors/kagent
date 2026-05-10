@@ -904,7 +904,7 @@ export function classifyTask(
     const proposedTemplateName =
       annotations[ANNOTATION_PROPOSED_TEMPLATE_NAME] ?? `${name}-template`;
     const proposedNamespace = namespace ?? defaultNamespace ?? 'default';
-    const reasonDetail = `candidate AgentTemplate from ${proposedNamespace}/${name}`;
+    const reasonDetail = `${proposedTemplateName} (candidate)`;
     const stalenessSeconds = computeStaleness(nowMs, enqueuedAt);
 
     const row: ReviewQueueRow = {
