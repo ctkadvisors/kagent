@@ -1,0 +1,150 @@
+{
+  "agents": [
+    {
+      "name": "researcher-01",
+      "namespace": "kagent-system",
+      "model": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct",
+      "modelClass": "tool-caller-default",
+      "tools": ["http", "mcp"],
+      "capabilities": ["research", "summarize"]
+    },
+    {
+      "name": "curator-02",
+      "namespace": "kagent-system",
+      "model": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct",
+      "tools": ["http"],
+      "capabilities": ["curate"]
+    },
+    {
+      "name": "executor-03",
+      "namespace": "kagent-system",
+      "modelClass": "tool-caller-fast",
+      "capabilities": ["execute"]
+    }
+  ],
+  "tasks": [
+    {
+      "name": "research-001",
+      "namespace": "kagent-system",
+      "uid": "u-001",
+      "phase": "Completed",
+      "targetAgent": "researcher-01",
+      "model": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct",
+      "createdAt": "2026-05-10T10:00:00Z",
+      "startedAt": "2026-05-10T10:00:30Z",
+      "completedAt": "2026-05-10T10:01:30Z",
+      "podName": "research-001-pod",
+      "artifactCount": 2,
+      "childCount": 0
+    },
+    {
+      "name": "research-002",
+      "namespace": "kagent-system",
+      "uid": "u-002",
+      "phase": "Completed",
+      "targetAgent": "curator-02",
+      "createdAt": "2026-05-10T10:02:00Z",
+      "completedAt": "2026-05-10T10:02:45Z",
+      "artifactCount": 0,
+      "childCount": 0
+    },
+    {
+      "name": "research-003",
+      "namespace": "kagent-system",
+      "uid": "u-003",
+      "phase": "Failed",
+      "targetAgent": "researcher-01",
+      "podName": "research-003-pod",
+      "error": "verifier check failed: structural mismatch in artifact 0",
+      "createdAt": "2026-05-10T10:03:00Z",
+      "startedAt": "2026-05-10T10:03:15Z",
+      "completedAt": "2026-05-10T10:03:50Z",
+      "artifactCount": 1,
+      "childCount": 0
+    },
+    {
+      "name": "research-004",
+      "namespace": "kagent-system",
+      "uid": "u-004",
+      "phase": "Failed",
+      "targetAgent": "curator-02",
+      "podName": "research-004-pod",
+      "error": "policy denial: capability 'execute' not in scope for templates",
+      "createdAt": "2026-05-10T10:04:00Z",
+      "startedAt": "2026-05-10T10:04:05Z",
+      "completedAt": "2026-05-10T10:04:10Z",
+      "artifactCount": 0,
+      "childCount": 0
+    },
+    {
+      "name": "fanout-005",
+      "namespace": "kagent-system",
+      "uid": "u-005",
+      "phase": "Dispatched",
+      "targetAgent": "executor-03",
+      "createdAt": "2026-05-10T10:05:00Z",
+      "startedAt": "2026-05-10T10:05:02Z",
+      "childCount": 3,
+      "artifactCount": 0,
+      "suspicious": ["high-fanout"]
+    },
+    {
+      "name": "research-006",
+      "namespace": "kagent-system",
+      "uid": "u-006",
+      "phase": "Pending",
+      "targetAgent": "researcher-01",
+      "createdAt": "2026-05-10T10:06:00Z",
+      "artifactCount": 0,
+      "childCount": 0
+    }
+  ],
+  "gatewayCapacity": [
+    {
+      "model": "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct",
+      "endpoint": "https://gateway.ai.cloudflare.com/v1/.../workers-ai",
+      "backendKind": "cloudflare-workers-ai",
+      "inFlight": 8,
+      "currentCap": 10,
+      "seed": 8,
+      "max": 16,
+      "minSafe": 4,
+      "recentP50Ms": 420,
+      "crName": "cf-llama-4-scout",
+      "crNamespace": "kagent-system"
+    },
+    {
+      "model": "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "endpoint": "https://gateway.ai.cloudflare.com/v1/.../workers-ai-fp8",
+      "backendKind": "cloudflare-workers-ai",
+      "inFlight": 1,
+      "currentCap": 8,
+      "seed": 4,
+      "max": 12,
+      "minSafe": 2,
+      "recentP50Ms": null,
+      "crName": "cf-llama-3-3-70b",
+      "crNamespace": "kagent-system"
+    }
+  ],
+  "dispositions": [
+    {
+      "agentRef": "kagent-system/researcher-01",
+      "namespace": "kagent-system",
+      "agentName": "researcher-01",
+      "configMapName": "researcher-01-disposition",
+      "idleBehavior": {
+        "readChannels": ["kagent-system/research-channel"],
+        "attentionBudget": { "tokensPerDay": 50000, "pollIntervalSeconds": 300 },
+        "proposalScope": { "mayProposeAgainst": ["templates"], "maxProposalsPerDay": 3 }
+      },
+      "spentTokensToday": 55000,
+      "postsToday": 0,
+      "proposalsToday": 1,
+      "overBudget": true,
+      "overBudgetReason": "tokens_exceeded",
+      "overBudgetEventCountToday": 2,
+      "dailyBoundaryUtc": "2026-05-10T00:00:00.000Z"
+    }
+  ]
+}
