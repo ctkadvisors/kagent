@@ -66,6 +66,7 @@ import { sound } from './command/sound.js';
 import { TaskActionMenu } from './command/TaskActionMenu.js';
 import { DRAG_ACTIVATE_PX, makeInputState } from './command/input.js';
 import type { InputState } from './command/input.js';
+import { assertCanvasOrphan } from './command/source-binding.js';
 import { useCommandSnapshot } from './command/state.js';
 import { factionColor } from './command/voxel.js';
 import type { ActivityEvent } from './command/state.js';
@@ -188,6 +189,11 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     for (const t of snapshot.tasks.values()) {
       if (t.targetAgent === undefined) continue;
       const key = `${t.namespace}/${t.targetAgent}`;
+      // CC-01: dev-only orphan trap. Throws when a task references
+      // an agent key not in snapshot.agents. No-op in prod — the
+      // synthetic AgentNode fallback below continues unchanged so
+      // homelab SSE-reconnect windows degrade gracefully.
+      assertCanvasOrphan(snapshot, t.namespace, t.name, key);
       if (!map.has(key)) {
         map.set(key, {
           key,

@@ -244,3 +244,36 @@ export function assertSourceFields<T extends object, K extends string>(
 export function useSourceFields<K extends string>(fields: readonly K[]): string {
   return fields.join(',');
 }
+
+/**
+ * CC-01 (Phase 2) — canvas-side orphan assertion.
+ *
+ * The CommandView.tsx agentNodes useMemo iterates `snapshot.tasks`
+ * and may build a synthetic AgentNode from a task's `targetAgent`
+ * when no matching `snapshot.agents` row exists. In dev that's a
+ * source-binding violation (per COMMAND-CENTER-CONTRACT.md §2 Prime
+ * Directive — every world object must derive from a substrate
+ * source). This helper throws to surface the violation. In prod
+ * (NODE_ENV=production) it is a no-op so the caller's existing
+ * fallback continues to render gracefully during transient SSE
+ * reconnect windows (per RESEARCH.md Pitfall 1).
+ *
+ * Usage at the call site in agentNodes useMemo (CommandView.tsx):
+ *   assertCanvasOrphan(snapshot, t.namespace, t.name, key);
+ *   if (!map.has(key)) { ... synthetic fallback ... }
+ */
+export function assertCanvasOrphan(
+  snapshot: { readonly agents: ReadonlyMap<string, unknown> },
+  taskNamespace: string,
+  taskName: string,
+  agentKey: string,
+): void {
+  if (!isDevBuild()) return;
+  if (snapshot.agents.has(agentKey)) return;
+  throw new Error(
+    `CC-01 source-binding violation: task '${taskNamespace}/${taskName}' references ` +
+      `agent key '${agentKey}' not in snapshot.agents. ` +
+      `See COMMAND-CENTER-CONTRACT.md §2 Prime Directive. ` +
+      `(If this fires during SSE reconnect, check stream connectivity.)`,
+  );
+}
