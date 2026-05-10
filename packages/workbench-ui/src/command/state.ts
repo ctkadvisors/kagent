@@ -65,6 +65,13 @@ export interface CommandSnapshot {
    * Center re-runs the mount-effect → fresh fetch → identical Map.
    */
   readonly dispositions: ReadonlyMap<string, DispositionOverlayRow>;
+  /**
+   * Phase 4 / REV-01 — count of rows in /api/review-queue. Optional so
+   * the snapshot stays back-compat for tests that do not poll the route.
+   * Wired in CommandView via useReviewQueue().rows.length OR a count-only
+   * fetch (CONTEXT.md D-01-A "lifecycle coupling" note — planner picks).
+   */
+  readonly reviewQueueRowCount?: number;
   readonly events: readonly ActivityEvent[];
   readonly lastEventAt: number;
   readonly error: string | null;
