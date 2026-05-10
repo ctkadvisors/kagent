@@ -38,6 +38,11 @@ rules:
       # the right CR. Read-only here; mutation lives in the actions
       # ClusterRole (split by design — read works without writes).
       - modelendpoints
+      # Phase 4 (REV-01 / REV-02): agenttemplates read verbs added so
+      # the review-queue projection can list promoted AgentTemplate CRs
+      # and verify candidate template name availability before creation.
+      # Write verbs (create) live in clusterrole-actions.yaml per H17.
+      - agenttemplates
     verbs: ['get', 'list', 'watch']
   # Status subresources (operator updates these; UI shows them)
   - apiGroups: ['kagent.knuteson.io']
@@ -45,6 +50,9 @@ rules:
       - agents/status
       - agenttasks/status
       - agentcapabilities/status
+      # Phase 4 (REV-02): agenttemplates/status read — lets the workbench
+      # surface the liveInstanceCount + lastInstantiatedAt for promoted CRs.
+      - agenttemplates/status
     verbs: ['get']
   # Operator-managed Jobs/Pods. Cluster-wide read; the workbench
   # filters by `kagent.knuteson.io/managed-by=kagent-operator` label

@@ -24,13 +24,16 @@ no `create`/`update`/`delete` verbs anywhere; the write Role does not
 exist when actions are disabled. Drop-in: bind/unbind by toggling
 `.Values.rbac.actions.create`.
 
-Today this grants `agenttasks: [create]` + `modelendpoints:
-[patch, update]` only — the smallest verb set that satisfies POST
-/api/tasks and PATCH /api/modelendpoints, scoped to the release
-namespace. WS-K (spawn_child_task) does NOT use this role; it ships
-its own RBAC on the agent-pod's namespace-scoped Role. WS-M
-(AgentTemplate) will extend this Role with
-`agenttemplates: [get,list,watch]` when it lands.
+Phase 4 (REV-01 / REV-02) extended this Role with:
+  - `agenttasks: [patch]` — for annotation writes on accept/reject/request
+    (review-decision, review-decided-by, review-decided-at, review-requested, etc.)
+  - `agenttemplates: [create]` — for AgentTemplate CR creation on accept
+    of a candidate-template row (promotion path).
+
+The READ-SIDE verbs for agenttemplates ([get,list,watch]) live in
+clusterrole.yaml — same split-by-function convention as existing
+resources. An install with `actions.create=false` is provably
+review-write-proof: neither the patch verb nor the create verb exists.
 
 `/cancel` and `/retry` (WORKBENCH.md §5) are not implemented in v0.1;
 when they land they extend this Role with `agenttasks: [delete]` plus
@@ -48,6 +51,15 @@ metadata:
 rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks']
+    # Phase 4 (REV-01 / REV-02): `patch` added for annotation writes
+    # (review-decision, review-requested, review-decided-by/at companions).
+    # `create` pre-dates Phase 4 — serves POST /api/tasks.
+    verbs: ['create', 'patch']
+  # Phase 4 (REV-02): agenttemplates [create] — candidate-template accept
+  # path promotes a reviewed artifact into an AgentTemplate CR.
+  # Read-side [get,list,watch] lives in clusterrole.yaml (split-by-function).
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttemplates']
     verbs: ['create']
   # ModelEndpoint mutation — drives the Gateway page's
   # "save bounds" button. Patches `spec.inFlight.{seed,max,minSafe}`
