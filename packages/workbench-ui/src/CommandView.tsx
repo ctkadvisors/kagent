@@ -67,7 +67,17 @@ import { sound } from './command/sound.js';
 import { TaskActionMenu } from './command/TaskActionMenu.js';
 import { DRAG_ACTIVATE_PX, makeInputState } from './command/input.js';
 import type { InputState } from './command/input.js';
-import { assertCanvasOrphan } from './command/source-binding.js';
+import {
+  assertCanvasOrphan,
+  assertSourceField,
+  useSourceField,
+  useSourceFields,
+} from './command/source-binding.js';
+import type {
+  AgentSummaryFieldName,
+  GatewayCapacityFieldName,
+  TaskSummaryFieldName,
+} from './command/source-binding.js';
 import { useCommandSnapshot } from './command/state.js';
 import { factionColor } from './command/voxel.js';
 import type { ActivityEvent } from './command/state.js';
@@ -1723,9 +1733,26 @@ function SelectionPanel({
             return (
               <li key={row.endpoint} className={styles.panelRow}>
                 <div className={styles.panelRowLabel}>{row.model}</div>
-                <div className={styles.panelRowMeta}>
+                <div
+                  className={styles.panelRowMeta}
+                  data-source-fields={useSourceFields(
+                    ['inFlight', 'currentCap'] satisfies GatewayCapacityFieldName[],
+                  )}
+                >
                   {row.inFlight} / {row.currentCap} in flight
                 </div>
+                {/* CC-03 — recentP50Ms is `number | null` (not undefined); double-equals
+                    guard catches both per RESEARCH.md Pitfall 3. */}
+                {row.recentP50Ms != null ? (
+                  <div
+                    className={styles.panelRowMeta}
+                    data-source-field={useSourceField(
+                      'recentP50Ms' satisfies GatewayCapacityFieldName,
+                    )}
+                  >
+                    P50 {row.recentP50Ms}ms
+                  </div>
+                ) : null}
                 <div className={styles.gauge}>
                   <div
                     className={styles.gaugeFill}
@@ -1738,6 +1765,10 @@ function SelectionPanel({
             );
           })}
         </ul>
+        {/* CC-03 — bottom deep link to existing #/gateway route. */}
+        <a className={styles.taskLinkBtn} href="#/gateway">
+          Open in GatewayPage →
+        </a>
       </aside>
     );
   }
@@ -1952,6 +1983,31 @@ function AgentPanel({
     });
   };
 
+  // CC-03 dev-time source-binding assertion. Only assert on `a` when
+  // it's defined; an undefined `a` shows the agentKey-only fallback panel.
+  // Optional fields (capabilities, tools, modelClass, model) are checked
+  // by the call sites that render them.
+  if (a !== undefined) {
+    assertSourceField(a, 'name' satisfies AgentSummaryFieldName);
+    assertSourceField(a, 'namespace' satisfies AgentSummaryFieldName);
+  }
+
+  // CC-03 — recent-failure window cutoffs. Computed once per render so
+  // the same Date.now() snapshot is used for both 1m and 1h windows.
+  const nowMs = Date.now();
+  const failed1m = recent.filter(
+    (t) =>
+      t.phase === 'Failed' &&
+      t.completedAt !== undefined &&
+      nowMs - Date.parse(t.completedAt) <= 60_000,
+  ).length;
+  const failed1h = recent.filter(
+    (t) =>
+      t.phase === 'Failed' &&
+      t.completedAt !== undefined &&
+      nowMs - Date.parse(t.completedAt) <= 3_600_000,
+  ).length;
+
   return (
     <aside className={styles.panel}>
       <div className={styles.panelTitleRow}>
@@ -1967,16 +2023,83 @@ function AgentPanel({
         />
       </div>
       <div className={styles.panelSub}>{a?.namespace ?? agentKey.split('/')[0]}</div>
-      <div className={styles.panelKv}>
+      {/* CC-03 — namespace KV row (panelSub above is the visual subtitle;
+          this row carries the source-binding attribute for scrapers / tests). */}
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('namespace' satisfies AgentSummaryFieldName)}
+      >
+        <span>Namespace</span>
+        <span>{a?.namespace ?? agentKey.split('/')[0] ?? '—'}</span>
+      </div>
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('model' satisfies AgentSummaryFieldName)}
+      >
         <span>Model</span>
         <span>{a?.model ?? a?.modelClass ?? '—'}</span>
       </div>
+      {/* CC-03 — modelClass label when both model and modelClass are set
+          AND they differ. Per CONTEXT.md D-CC-03-A. */}
+      {a?.modelClass !== undefined && a.modelClass !== a?.model ? (
+        <div
+          className={styles.panelKv}
+          data-source-field={useSourceField('modelClass' satisfies AgentSummaryFieldName)}
+        >
+          <span>Model class</span>
+          <span>{a.modelClass}</span>
+        </div>
+      ) : null}
       {a?.tools && a.tools.length > 0 ? (
-        <div className={styles.panelKv}>
+        <div
+          className={styles.panelKv}
+          data-source-field={useSourceField('tools' satisfies AgentSummaryFieldName)}
+        >
           <span>Tools</span>
           <span>{a.tools.join(', ')}</span>
         </div>
       ) : null}
+      {/* CC-03 — capabilities KV row. Renders even when undefined/empty
+          (operator-facing "what is this agent for?" answer). */}
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('capabilities' satisfies AgentSummaryFieldName)}
+      >
+        <span>Capabilities</span>
+        <span>{a?.capabilities?.join(', ') ?? '—'}</span>
+      </div>
+      {/* CC-03 — counters: in-flight (computed from snapshot.tasks
+          filtered by phase + targetAgent → multi-field bind per
+          RESEARCH.md Pitfall 6). */}
+      <div
+        className={styles.panelKv}
+        data-source-fields={useSourceFields(
+          ['phase', 'targetAgent'] satisfies TaskSummaryFieldName[],
+        )}
+      >
+        <span>In flight</span>
+        <span>{inFlight.length}</span>
+      </div>
+      {/* CC-03 — recent failures (1m). Multi-field: phase + completedAt. */}
+      <div
+        className={styles.panelKv}
+        data-source-fields={useSourceFields(
+          ['phase', 'completedAt'] satisfies TaskSummaryFieldName[],
+        )}
+      >
+        <span>Failed (1m)</span>
+        <span>{failed1m}</span>
+      </div>
+      {/* CC-03 — recent failures (1h). */}
+      <div
+        className={styles.panelKv}
+        data-source-fields={useSourceFields(
+          ['phase', 'completedAt'] satisfies TaskSummaryFieldName[],
+        )}
+      >
+        <span>Failed (1h)</span>
+        <span>{failed1h}</span>
+      </div>
       <h3 className={styles.panelHeading}>In flight ({inFlight.length})</h3>
       {inFlight.length === 0 ? (
         <div className={styles.panelEmpty2}>idle</div>
@@ -2011,6 +2134,12 @@ function AgentPanel({
           </li>
         ))}
       </ul>
+      {/* CC-03 — bottom deep link. Agents don't have a dedicated detail
+          page in v0.2 (see CONTEXT.md D-CC-03-A); /#/cluster is the
+          closest agent-context view. */}
+      <a className={styles.taskLinkBtn} href="#/cluster">
+        Open agent in cluster view →
+      </a>
     </aside>
   );
 }
@@ -2030,24 +2159,111 @@ function TaskPanel({
       </aside>
     );
   }
+  // CC-03 dev-time source-binding assertions for fields rendered below.
+  assertSourceField(t, 'phase' satisfies TaskSummaryFieldName);
+  assertSourceField(t, 'targetAgent' satisfies TaskSummaryFieldName);
   return (
     <aside className={styles.panel}>
       <h2 className={styles.panelTitle}>{t.name}</h2>
       <div className={styles.panelSub}>{t.namespace}</div>
-      <div className={styles.panelKv}>
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('phase' satisfies TaskSummaryFieldName)}
+      >
         <span>Phase</span>
         <span className={phaseClass(t.phase)}>{t.phase ?? '?'}</span>
       </div>
-      <div className={styles.panelKv}>
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('targetAgent' satisfies TaskSummaryFieldName)}
+      >
         <span>Agent</span>
         <span>{t.targetAgent ?? '—'}</span>
       </div>
-      <div className={styles.panelKv}>
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('model' satisfies TaskSummaryFieldName)}
+      >
         <span>Model</span>
         <span>{t.model ?? '—'}</span>
       </div>
+      {/* CC-03 — timestamps; only render fields that are defined. */}
+      {t.createdAt !== undefined ? (
+        <div
+          className={styles.panelKv}
+          data-source-field={useSourceField('createdAt' satisfies TaskSummaryFieldName)}
+        >
+          <span>Created</span>
+          <span>{new Date(t.createdAt).toLocaleString()}</span>
+        </div>
+      ) : null}
+      {t.startedAt !== undefined ? (
+        <div
+          className={styles.panelKv}
+          data-source-field={useSourceField('startedAt' satisfies TaskSummaryFieldName)}
+        >
+          <span>Started</span>
+          <span>{new Date(t.startedAt).toLocaleString()}</span>
+        </div>
+      ) : null}
+      {t.completedAt !== undefined ? (
+        <div
+          className={styles.panelKv}
+          data-source-field={useSourceField('completedAt' satisfies TaskSummaryFieldName)}
+        >
+          <span>Completed</span>
+          <span>{new Date(t.completedAt).toLocaleString()}</span>
+        </div>
+      ) : null}
+      {/* CC-03 — suspicious-tag chips (rendered only when present). */}
+      {t.suspicious !== undefined && t.suspicious.length > 0 ? (
+        <div
+          className={styles.panelKv}
+          data-source-field={useSourceField('suspicious' satisfies TaskSummaryFieldName)}
+        >
+          <span>Suspicious</span>
+          <span>{t.suspicious.join(', ')}</span>
+        </div>
+      ) : null}
+      {/* CC-03 — artifact-count. Defaults to 0 when undefined per CONTEXT.md D-CC-03-A. */}
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('artifactCount' satisfies TaskSummaryFieldName)}
+      >
+        <span>Artifacts</span>
+        <span>{t.artifactCount ?? 0}</span>
+      </div>
+      {/* CC-03 — child-count. */}
+      <div
+        className={styles.panelKv}
+        data-source-field={useSourceField('childCount' satisfies TaskSummaryFieldName)}
+      >
+        <span>Children</span>
+        <span>{t.childCount ?? 0}</span>
+      </div>
+      {/* CC-03 — verifier verdict gap. TaskSummary doesn't carry
+          pilotEvidence; only TaskDetail does. Documented per
+          CONTEXT.md D-CC-03-A — render '—' here, the existing Open-detail
+          link below lands the operator on the page that has the real
+          verdict. */}
+      <div className={styles.panelKv}>
+        <span>Verifier</span>
+        <span>—</span>
+      </div>
+      {/* CC-03 — trace-link gap (similar — traceLink is on TaskDetail,
+          not TaskSummary). Render a placeholder; existing Open-detail
+          link is the resolution per CONTEXT.md Deferred Ideas. */}
+      <div className={styles.panelKv}>
+        <span>Trace</span>
+        <span>open task detail →</span>
+      </div>
       {t.error !== undefined ? (
-        <div className={styles.panelError}>error: {t.error}</div>
+        <div
+          className={styles.panelError}
+          data-source-field={useSourceField('error' satisfies TaskSummaryFieldName)}
+        >
+          error: {t.error}
+        </div>
       ) : null}
       <a
         className={styles.taskLinkBtn}
