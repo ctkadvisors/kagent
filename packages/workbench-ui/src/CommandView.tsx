@@ -50,6 +50,7 @@ import {
   type Camera,
 } from './command/camera.js';
 import { DispositionOverlay } from './command/DispositionOverlay.js';
+import { FlowOverlay } from './command/FlowOverlay.js';
 import { PressureOverlay } from './command/PressureOverlay.js';
 import { FxLayer } from './command/fx.js';
 import { Minimap } from './command/Minimap.js';
@@ -1408,6 +1409,18 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
               base-building-only mode covers all 9 types via single global
               flag — VITE_PRESSURE_DRAMATIZATION). */}
           <PressureOverlay
+            snapshot={snapshot}
+            pressureDramatization={pressureDramatization}
+          />
+
+          {/* Phase 3 / FLOW-01 — eight C-flow-economy flow gauges.
+              Sibling to PressureOverlay; same single global
+              VITE_PRESSURE_DRAMATIZATION flag covers both per
+              CONTEXT.md D-04-A. Every gauge carries data-source-field(s)
+              per Prime Directive (D7). Always-visible: all 8 sections
+              render even when a flow has no active gauges (silence is
+              data per CONTEXT.md D-05-A + RESEARCH.md Pitfall 7). */}
+          <FlowOverlay
             snapshot={snapshot}
             pressureDramatization={pressureDramatization}
           />
