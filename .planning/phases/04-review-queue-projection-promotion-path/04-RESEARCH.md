@@ -1835,32 +1835,17 @@ Verified patterns referenced (file:line citations only — actual code lives in 
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should the read-side ClusterRole add `agenttemplates` resources right now, or defer to a future phase?**
-   - What we know: today the role does NOT include them; the workbench-api can list/watch them only after the change.
-   - What's unclear: does the post-promotion `AgentTemplate` CR need to surface in the workbench-api's read-side cache for any v0.2 UX, or is it sufficient to reach K8s directly when needed?
-   - Recommendation: ADD the read-side verbs in Phase 4 (additive change; future-proof; aligns with the existing AgentTemplate informer patterns in `template-instantiator.ts`). The cost is one additive commit; the benefit is no future-cycle RBAC churn.
+1. **RESOLVED — Should the read-side ClusterRole add `agenttemplates` resources now, or defer?** → Add in Phase 4 (Plan 04-01: `clusterrole.yaml` extended with `agenttemplates: [get,list,watch]`). Additive, future-proofs the read-side cache, aligns with existing informer patterns in `template-instantiator.ts`. Cost: one additive commit; benefit: no future-cycle RBAC churn.
 
-2. **Should `parseAgentTemplateSpec` live in `@kagent/dto/template-candidate.ts` (parses parsed-objects) or in `packages/workbench-api/src/yaml.ts` (parses YAML strings)?**
-   - What we know: `@kagent/dto/disposition-parser.ts` parses YAML inside the dto package (assumed; verify in Wave 0).
-   - What's unclear: which placement maintains "leaf-deps-only" cleanly.
-   - Recommendation: split. YAML→object happens in `packages/workbench-api`. Object→AgentTemplateSpec validation happens in `@kagent/dto/template-candidate.ts`. The DTO package validates shapes; the route package owns wire format.
+2. **RESOLVED — Should `parseAgentTemplateSpec` live in `@kagent/dto` or in `workbench-api`?** → Split (Plan 04-01 + 04-03): YAML→object parsing in `packages/workbench-api/src/yaml.ts`; object→`AgentTemplateSpec` shape validation in `packages/dto/src/template-candidate.ts`. DTO validates shapes; route package owns wire format.
 
-3. **Should the `attention` flow gauge's `data-source-fields` be `'review-queue.rows.length'` (the proposed string) or `'reviewQueueRowCount'` (the new state.ts field name)?**
-   - What we know: the source-field is a string identifier; the existing convention is field names from DTO interfaces (`'phase'`, `'suspicious'`).
-   - What's unclear: whether a "computed" string like `'review-queue.rows.length'` follows the convention or breaks it.
-   - Recommendation: use `'reviewQueueRowCount'` (the actual state.ts field name). Consistent with `'inFlight'` / `'currentCap'` etc.
+3. **RESOLVED — `attention` flow gauge `data-source-fields` string?** → `'reviewQueueRowCount'` (Plan 04-05 Task 2). Matches the new `state.ts:CommandSnapshot` field name and the existing convention (`'inFlight'`, `'currentCap'`). Avoids the computed-string `'review-queue.rows.length'` form which breaks the field-name convention.
 
-4. **Does the v0.2 acceptance for REV-02 require an end-to-end manual UAT against a live cluster, or is the vitest-fixture happy-path sufficient?**
-   - What we know: CONTEXT.md states "A vitest fixture-based test demonstrates end-to-end (synthetic candidate artifact → queue row → POST accept → AgentTemplate CR created in fake K8s client) — that is the v0.2 acceptance."
-   - What's unclear: whether `/gsd-verify-work` requires a homelab smoke test on top.
-   - Recommendation: the vitest fixture is acceptance per CONTEXT.md; the homelab UAT is post-deploy operator verification, not a phase-gate test.
+4. **RESOLVED — Does REV-02 acceptance require end-to-end manual UAT?** → No. The vitest fixture-based test is the v0.2 acceptance per CONTEXT.md (Plan 04-03 Task 2 — synthetic candidate artifact → queue row → POST accept → AgentTemplate CR in fake `customApi`). Homelab UAT is post-deploy operator verification, not a phase-gate test (recorded in `04-VALIDATION.md` Manual-Only Verifications).
 
-5. **Should the `request` POST endpoint exist as a sibling at `/api/review-queue/:ns/:name/request`, or as a separate top-level `POST /api/tasks/:ns/:name/request-review`?**
-   - What we know: CONTEXT.md D-02 explicitly nominates the sibling form: `POST /api/review-queue/:namespace/:name/request`.
-   - What's unclear: whether the endpoint naming feels right since "request" is a verb-as-noun.
-   - Recommendation: stay with CONTEXT.md's choice. The sub-path is clear; renaming requires re-discussion.
+5. **RESOLVED — `request` POST endpoint placement?** → Sibling form `POST /api/review-queue/:ns/:name/request` per CONTEXT.md D-02 (Plan 04-03). The verb-as-noun reads cleanly in route position; renaming would require re-discussion.
 
 ---
 

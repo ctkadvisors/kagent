@@ -102,7 +102,16 @@ Plans:
 2. AgentTemplate promotion proposal flow exists end-to-end: a candidate `AgentTemplate` (artifact-shape today) is reviewable in the queue; accept/reject decisions are recorded as audit events tied back to the candidate; an accepted candidate becomes a versioned `AgentTemplate` CR via the existing operator-write path. Single-reviewer covered; multi-reviewer is future research.
 3. Replay / eval signals (existing v0.1 controllers) surface their outputs into the review queue projection — a failed eval or replay divergence becomes a queue row with the same shape as a verifier failure. Reviewer can navigate from queue row to underlying eval/replay artifact.
 
-**Plans**: TBD
+**Plans**: 5 plans
+**UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding for the Phase 3 attention-flow flip and the deep-link surfaces; main `#/review` page + inline `ReviewActions` component are bound by D7)
+
+Plans:
+
+- [ ] 04-01-PLAN.md — Wave 0 scaffolding: `@kagent/dto/review-queue.ts` (`ReviewQueueRow`, `ReviewReason` 6-member enum + D-04 inline stub, `assertIsReviewQueueRow` runtime guard) + `@kagent/dto/template-candidate.ts` (`parseAgentTemplateSpec`) + 4 new `@kagent/audit-events` types (`review.requested` / `review.accepted` / `review.rejected` / `template.candidate.promoted`) + `__fixtures__/review-queue-snapshot.json` + `__fixtures__/candidate-template.yaml` + RBAC manifest extensions (`agenttasks: [patch]` + `agenttemplates: [create]` write side; `agenttemplates: [get,list,watch]` read side)
+- [ ] 04-02-PLAN.md — Wave 1 GET projection: `routes/review-queue.ts` factory + classifier (priority-ordered: verifier-failed > suspicious-detector > human-review-requested > candidate-template; tasks with `review-decision` annotation are skipped) + `routes/review-queue.test.ts` reload-stability tests + register at `/api/review-queue` in `router.ts` (POST handler stubs return 501; Plan 03 implements them)
+- [ ] 04-03-PLAN.md — Wave 2 POST handlers: accept (5-step path with AgentTemplate CR creation BEFORE annotation patch on candidate-template; 503/404/409/422/500 ladder; audit-event emission) + reject (annotation-only, never creates CR) + request (D-02 operator-only flag) + 4 new audit-event emit sites; export `extractK8sStatus` + `readCreatedMeta` from `tasks.ts` (LM-3 helper lifting)
+- [ ] 04-04-PLAN.md — Wave 3 UI surface: `types.ts` re-exports + `api.ts` (`fetchReviewQueue`, accept/reject/request POST helpers, `useReviewQueue` 5s polling hook, `ReviewActionApiError`) + `App.tsx` `#/review` route + `ReviewPage.tsx` (table-shaped, mirrors TaskList) + inline `ReviewActions.tsx` in TaskDetail (4 trigger conditions) + `source-binding.ts` `ReviewQueueFieldName` 14-member closed enum (D7 / CC-01)
+- [ ] 04-05-PLAN.md — Wave 4 Phase 3 attention-flow flip + docs: `state.ts` `CommandSnapshot.reviewQueueRowCount?: number` (additive) + `flows.ts` `attention.compute()` flips from `phase=Failed + suspicious` proxy to `s.reviewQueueRowCount` (`detailLink: '#/review'`, `label: 'review queue'`) + `CommandView.tsx` wires `useReviewQueue()` + `cc-reload.test.tsx.snap` regen (single dedicated commit per LM-8) + `docs/AGENT-TEMPLATES.md` footer (media type + promotion path) + `docs/REPLAY-EVALS.md` footer (REV-03 stub) + `docs/SUBSTRATE-V1.md` §4.3 (4 new audit-event rows; total 49 -> 53)
 
 ### Phase 5: Workbench usability primitives
 
@@ -141,7 +150,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. AgentDisposition prototype (overlay-first) | 0/4            | Not started | -         |
 | 2. Command Center contract hardening          | 0/4            | Planned     | -         |
 | 3. Resource-flow overlays                     | 0/3            | Planned     | -         |
-| 4. Review queue projection + promotion path   | 0/TBD          | Not started | -         |
+| 4. Review queue projection + promotion path   | 0/5            | Planned     | -         |
 | 5. Workbench usability primitives             | 0/TBD          | Not started | -         |
 | 999.x Future Research backlog                 | —              | Deferred    | -         |
 
