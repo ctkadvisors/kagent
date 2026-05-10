@@ -1,0 +1,173 @@
+[
+  {
+    "apiVersion": "kagent.knuteson.io/v1alpha1",
+    "kind": "AgentTask",
+    "metadata": {
+      "name": "researcher-verifier-fail-01",
+      "namespace": "kagent-system",
+      "uid": "uid-verifier-fail-01",
+      "creationTimestamp": "2026-05-10T06:00:00.000Z",
+      "annotations": {
+        "kagent.knuteson.io/evidence-id": "ev-001"
+      }
+    },
+    "spec": {
+      "targetAgent": "researcher",
+      "payload": { "topic": "AI safety" }
+    },
+    "status": {
+      "phase": "Failed",
+      "completedAt": "2026-05-10T08:00:00.000Z",
+      "verification": {
+        "passed": false,
+        "reason": "verifier_returned_non_json",
+        "mode": "script",
+        "completedAt": "2026-05-10T08:05:00.000Z"
+      },
+      "structuralVerdict": {
+        "suspicious": []
+      }
+    }
+  },
+  {
+    "apiVersion": "kagent.knuteson.io/v1alpha1",
+    "kind": "AgentTask",
+    "metadata": {
+      "name": "researcher-suspicious-01",
+      "namespace": "kagent-system",
+      "uid": "uid-suspicious-01",
+      "creationTimestamp": "2026-05-10T07:00:00.000Z",
+      "annotations": {}
+    },
+    "spec": {
+      "targetAgent": "researcher",
+      "payload": { "topic": "security audit" }
+    },
+    "status": {
+      "phase": "Completed",
+      "completedAt": "2026-05-10T09:00:00.000Z",
+      "structuralVerdict": {
+        "suspicious": ["hallucination-pattern", "unexpected-tool-use"]
+      }
+    }
+  },
+  {
+    "apiVersion": "kagent.knuteson.io/v1alpha1",
+    "kind": "AgentTask",
+    "metadata": {
+      "name": "researcher-review-requested-01",
+      "namespace": "kagent-system",
+      "uid": "uid-review-requested-01",
+      "creationTimestamp": "2026-05-10T04:00:00.000Z",
+      "annotations": {
+        "kagent.knuteson.io/review-requested": "true",
+        "kagent.knuteson.io/review-requested-by": "operator@kagent",
+        "kagent.knuteson.io/review-requested-at": "2026-05-10T05:00:00.000Z"
+      }
+    },
+    "spec": {
+      "targetAgent": "researcher",
+      "payload": { "topic": "compliance spot-check" }
+    },
+    "status": {
+      "phase": "Completed",
+      "completedAt": "2026-05-10T05:30:00.000Z",
+      "structuralVerdict": {
+        "suspicious": []
+      }
+    }
+  },
+  {
+    "apiVersion": "kagent.knuteson.io/v1alpha1",
+    "kind": "AgentTask",
+    "metadata": {
+      "name": "researcher-template-candidate-01",
+      "namespace": "kagent-system",
+      "uid": "uid-template-candidate-01",
+      "creationTimestamp": "2026-05-10T03:00:00.000Z",
+      "annotations": {
+        "kagent.knuteson.io/template-candidate": "true"
+      }
+    },
+    "spec": {
+      "targetAgent": "researcher",
+      "payload": { "action": "propose-template", "templateName": "researcher-v2" }
+    },
+    "status": {
+      "phase": "Completed",
+      "completedAt": "2026-05-10T03:45:00.000Z",
+      "structuralVerdict": {
+        "suspicious": []
+      },
+      "artifacts": [
+        {
+          "uri": "pvc://kagent-cas/sha256:abc123def456",
+          "mediaType": "application/x-kagent-template-candidate+yaml",
+          "name": "researcher-v2-template.yaml",
+          "sizeBytes": 1024,
+          "producedAt": "2026-05-10T03:44:00.000Z"
+        }
+      ]
+    }
+  },
+  {
+    "apiVersion": "kagent.knuteson.io/v1alpha1",
+    "kind": "AgentTask",
+    "metadata": {
+      "name": "researcher-already-decided-01",
+      "namespace": "kagent-system",
+      "uid": "uid-already-decided-01",
+      "creationTimestamp": "2026-05-09T14:00:00.000Z",
+      "annotations": {
+        "kagent.knuteson.io/review-decision": "accepted",
+        "kagent.knuteson.io/review-decided-by": "operator@kagent",
+        "kagent.knuteson.io/review-decided-at": "2026-05-09T15:00:00.000Z"
+      }
+    },
+    "spec": {
+      "targetAgent": "researcher",
+      "payload": { "topic": "already reviewed" }
+    },
+    "status": {
+      "phase": "Failed",
+      "completedAt": "2026-05-09T14:30:00.000Z",
+      "verification": {
+        "passed": false,
+        "reason": "verdict:fail",
+        "mode": "llmJudge",
+        "completedAt": "2026-05-09T14:35:00.000Z"
+      },
+      "structuralVerdict": {
+        "suspicious": []
+      }
+    }
+  },
+  {
+    "apiVersion": "kagent.knuteson.io/v1alpha1",
+    "kind": "AgentTask",
+    "metadata": {
+      "name": "researcher-priority-conflict-01",
+      "namespace": "kagent-system",
+      "uid": "uid-priority-conflict-01",
+      "creationTimestamp": "2026-05-10T02:00:00.000Z",
+      "annotations": {}
+    },
+    "spec": {
+      "targetAgent": "researcher",
+      "payload": { "topic": "priority conflict test" }
+    },
+    "status": {
+      "phase": "Failed",
+      "completedAt": "2026-05-10T02:30:00.000Z",
+      "verification": {
+        "passed": false,
+        "reason": "verifier_timeout",
+        "mode": "script",
+        "completedAt": "2026-05-10T02:35:00.000Z"
+      },
+      "structuralVerdict": {
+        "suspicious": ["unexpected-tool-use"]
+      }
+    }
+  }
+]

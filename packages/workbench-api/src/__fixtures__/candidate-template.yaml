@@ -1,0 +1,35 @@
+# Valid AgentTemplateSpec YAML fixture for the W2 accept-handler happy path.
+# Media type: application/x-kagent-template-candidate+yaml
+# Conforms to packages/operator/src/crds/types.ts:1103-1117 AgentTemplateSpec shape.
+#
+# Minimum fields per PLAN.md W0.9 requirements:
+#   - agentSpec: object (required)
+#   - templateVersion: number
+#   - parameters: at least 1 entry
+#   - budget.maxIterations: number
+#   - toolAllowlist: at least one tool
+agentSpec:
+  model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct'
+  systemPrompt: >-
+    You are a research specialist focused on ${param.topic}.
+    Produce structured summaries with citations.
+  tools:
+    - http
+  llmParams:
+    temperature: 0.2
+    maxTokens: 4096
+templateVersion: 1
+revisionHistoryLimit: 3
+parameters:
+  - name: topic
+    type: string
+    required: true
+  - name: maxSources
+    type: integer
+    default: '5'
+budget:
+  maxIterations: 10
+  maxCostUsdPerRun: 0.05
+  maxParallelInstances: 3
+toolAllowlist:
+  - http
