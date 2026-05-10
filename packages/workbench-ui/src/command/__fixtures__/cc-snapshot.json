@@ -84,6 +84,8 @@
       "targetAgent": "executor-03",
       "createdAt": "2026-05-10T10:05:00Z",
       "startedAt": "2026-05-10T10:05:02Z",
+      "model": "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "podName": "fanout-005-pod",
       "childCount": 3,
       "artifactCount": 0,
       "suspicious": ["high-fanout"]
