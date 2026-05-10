@@ -342,8 +342,11 @@ function hasNamespaceLoadedAgents(
  * number) when the API server returned a structured Status. Older
  * thrown shapes used `statusCode`. Try both; return undefined when
  * neither is present so the caller falls back to 500.
+ *
+ * Exported so `routes/review-queue.ts` can re-use without duplication
+ * (LM-3 helper lifting — PATTERNS.md W2.1 / Phase 4 Plan 03).
  */
-function extractK8sStatus(err: unknown): number | undefined {
+export function extractK8sStatus(err: unknown): number | undefined {
   if (err === null || typeof err !== 'object') return undefined;
   const e = err as Record<string, unknown>;
   if (typeof e.code === 'number') return e.code;
@@ -367,8 +370,11 @@ interface CreatedMeta {
  * untyped `unknown` return without dragging unsafe-`any` chains through
  * the response builder. Returns an empty `{}` if the object is malformed —
  * the caller substitutes the request-supplied values as a fallback.
+ *
+ * Exported so `routes/review-queue.ts` can re-use without duplication
+ * (LM-3 helper lifting — PATTERNS.md W2.1 / Phase 4 Plan 03).
  */
-function readCreatedMeta(obj: unknown): CreatedMeta {
+export function readCreatedMeta(obj: unknown): CreatedMeta {
   if (obj === null || typeof obj !== 'object') return {};
   const candidate = (obj as Record<string, unknown>).metadata;
   if (candidate === null || typeof candidate !== 'object') return {};
