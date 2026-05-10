@@ -344,10 +344,20 @@ export interface RequestReviewResponse {
  */
 export class ReviewActionApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /**
+   * WR-02 (Plan 04-06): structured detail surfaced from the server's
+   * 422 response body (e.g., the `parseAgentTemplateSpec` parser error
+   * tag). Undefined when the server response carried no `detail`
+   * field or the body was not JSON.
+   */
+  readonly detail?: string;
+  constructor(status: number, message: string, detail?: string) {
     super(message);
     this.name = 'ReviewActionApiError';
     this.status = status;
+    if (detail !== undefined) {
+      this.detail = detail;
+    }
   }
 }
 
@@ -385,7 +395,7 @@ export async function acceptReviewQueueRow(
     body: JSON.stringify(body),
   });
   if (res.status !== 200) {
-    let errBody: { error?: string } = {};
+    let errBody: { error?: string; detail?: string } = {};
     try {
       errBody = (await res.json()) as typeof errBody;
     } catch {
@@ -394,6 +404,7 @@ export async function acceptReviewQueueRow(
     throw new ReviewActionApiError(
       res.status,
       errBody.error ?? `accept failed: ${String(res.status)} ${res.statusText}`,
+      errBody.detail,
     );
   }
   return (await res.json()) as AcceptReviewResponse;
@@ -415,7 +426,7 @@ export async function rejectReviewQueueRow(
     body: JSON.stringify(body),
   });
   if (res.status !== 200) {
-    let errBody: { error?: string } = {};
+    let errBody: { error?: string; detail?: string } = {};
     try {
       errBody = (await res.json()) as typeof errBody;
     } catch {
@@ -424,6 +435,7 @@ export async function rejectReviewQueueRow(
     throw new ReviewActionApiError(
       res.status,
       errBody.error ?? `reject failed: ${String(res.status)} ${res.statusText}`,
+      errBody.detail,
     );
   }
   return (await res.json()) as RejectReviewResponse;
@@ -445,7 +457,7 @@ export async function requestReview(
     body: JSON.stringify(body),
   });
   if (res.status !== 200) {
-    let errBody: { error?: string } = {};
+    let errBody: { error?: string; detail?: string } = {};
     try {
       errBody = (await res.json()) as typeof errBody;
     } catch {
@@ -454,6 +466,7 @@ export async function requestReview(
     throw new ReviewActionApiError(
       res.status,
       errBody.error ?? `request failed: ${String(res.status)} ${res.statusText}`,
+      errBody.detail,
     );
   }
   return (await res.json()) as RequestReviewResponse;

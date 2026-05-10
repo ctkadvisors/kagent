@@ -251,8 +251,11 @@ describe('acceptReviewQueueRow (REV-01)', () => {
     expect(init.method).toBe('POST');
   });
 
-  it('Test ACC-2 — 422 throws ReviewActionApiError with status 422 and error message', async () => {
-    mockFetchWithStatus(422, { error: 'candidate parse failed' });
+  it('Test ACC-2 — 422 throws ReviewActionApiError with status 422, error message, and detail', async () => {
+    mockFetchWithStatus(422, {
+      error: 'candidate parse failed',
+      detail: 'missing agentSpec.targetAgent',
+    });
 
     await expect(acceptReviewQueueRow('kagent-system', 'researcher-fail-01', {})).rejects.toThrow(
       ReviewActionApiError,
@@ -267,6 +270,20 @@ describe('acceptReviewQueueRow (REV-01)', () => {
     expect(caught).toBeInstanceOf(ReviewActionApiError);
     expect(caught?.status).toBe(422);
     expect(caught?.message).toContain('candidate parse failed');
+    // WR-02 (Plan 04-06): detail is surfaced from the server's 422 body.
+    expect(caught?.detail).toBe('missing agentSpec.targetAgent');
+  });
+
+  it('Test ACC-2b — 422 without detail field: ReviewActionApiError.detail is undefined', async () => {
+    mockFetchWithStatus(422, { error: 'some other failure' });
+    let caught: ReviewActionApiError | null = null;
+    try {
+      await acceptReviewQueueRow('kagent-system', 'researcher-fail-01', {});
+    } catch (e) {
+      caught = e as ReviewActionApiError;
+    }
+    expect(caught).toBeInstanceOf(ReviewActionApiError);
+    expect(caught?.detail).toBeUndefined();
   });
 
   it('Test ACC-3 — 503 throws ReviewActionApiError with status 503', async () => {

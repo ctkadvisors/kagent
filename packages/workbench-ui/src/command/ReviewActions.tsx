@@ -124,7 +124,11 @@ function ReviewActionsPanel({
       onDecision();
     } catch (err: unknown) {
       if (err instanceof ReviewActionApiError) {
-        setDialogError(`Error ${err.status.toString()}: ${err.message}`);
+        // WR-02 (Plan 04-06): surface server-supplied `detail` (e.g.,
+        // parseAgentTemplateSpec parser error tag) below the top-level
+        // error message so reviewers see the actionable parse error.
+        const base = `Error ${err.status.toString()}: ${err.message}`;
+        setDialogError(err.detail !== undefined ? `${base} — ${err.detail}` : base);
       } else {
         setDialogError(err instanceof Error ? err.message : String(err));
       }
