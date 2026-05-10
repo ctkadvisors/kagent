@@ -41,6 +41,7 @@ Per the 2026-05-09 PM re-steering, all synthesized outputs in this planning corp
 - ✓ Replay / evals / supervision / quotas / egress / locality / cache / keyrotation / versioning controllers — v0.1
 - ✓ HTTP, MCP, in-process tool providers — v0.1
 - ✓ Audit events + trace sinks across operator, gateway, pod paths — v0.1
+- ✓ AgentDisposition prototype (overlay-first, no CRD) — v0.2 Phase 1 (DISP-01..04). Sibling-ConfigMap overlay with `idleBehavior.{readChannels, attentionBudget, proposalScope}`; cluster-rendered schema-validate Job; capability-JWT scope narrowing at issuance with `disposition.proposal_rejected` audit; `/api/dispositions` projection over gateway-usage DTOs + ConfigMap annotations with exactly-once-per-day `disposition.over_budget` audit; Command Center overlay with `data-source-field(s)` source-binding contract. Image tag `v0.2.0-disp-rc.1`. ~7-day observation window opens 2026-05-09 before promotion-to-CRD decision.
 
 ### Active (Candidate Requirements — v0.2 scope)
 
@@ -51,7 +52,7 @@ See `.planning/REQUIREMENTS.md` for full v0.2 candidate requirement list.
 
 Summary of active scope:
 
-- [ ] **AgentDisposition prototype (overlay-first, no CRD)** — represent idle/attention behavior as annotation on existing `Agent` (or as configmap / artifact record); surface in workbench-api as a read projection; render in Command Center as an overlay over existing economy flows. Promote to field or CRD only after observed repeated behavior justifies.
+- [x] **AgentDisposition prototype (overlay-first, no CRD)** — ✓ shipped 2026-05-09 at `v0.2.0-disp-rc.1` (Phase 1). Observation window opens; promote to field or CRD only after observed repeated behavior justifies.
 - [ ] **Command Center contract hardening** — implement Slice A (source-bound assertions, snapshot mapper tests, fixture-based reload stability) and Slice B (operational read depth on Agent/Task/Gateway selection panels) from `docs/COMMAND-CENTER-CONTRACT.md`.
 - [ ] **Resource-flow overlays** — make `C-flow-economy` flows (model power, token, build power, pod, artifact bandwidth, authority, trust, attention) visible as Command Center overlays sourced from existing Workbench API DTOs. No new CRDs.
 - [ ] **Review / consolidation / promotion over existing state** — strengthen review queue ergonomics, AgentTemplate promotion path, and replay/eval signal surfacing using existing `AgentTask`/`ArtifactRef`/verifier outputs. No `Tool`, `SteeringEvent`, `TaskReview`, `Channel`, or `Post` CRD.
