@@ -72,6 +72,11 @@ export type {
   WorkflowFailedData,
   WorkflowStartedData,
   WorkflowStepCompletedData,
+  /* Phase 4 — Review queue projection + promotion path (REV-01 / REV-02). */
+  ReviewRequestedData,
+  ReviewAcceptedData,
+  ReviewRejectedData,
+  TemplateCandidatePromotedData,
 } from './types.js';
 
 export {
@@ -123,6 +128,11 @@ export {
   WORKFLOW_FAILED,
   WORKFLOW_STARTED,
   WORKFLOW_STEP_COMPLETED,
+  /* Phase 4 — Review queue projection + promotion path (REV-01 / REV-02). */
+  REVIEW_REQUESTED,
+  REVIEW_ACCEPTED,
+  REVIEW_REJECTED,
+  TEMPLATE_CANDIDATE_PROMOTED,
 } from './event-types.js';
 
 export { makeEvent } from './make-event.js';

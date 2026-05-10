@@ -22,10 +22,14 @@ import {
   CHILD_SPAWNED,
   CONTRACT_VIOLATED,
   QUOTA_BREACHED,
+  REVIEW_ACCEPTED,
+  REVIEW_REJECTED,
+  REVIEW_REQUESTED,
   SECRET_ACCESSED,
   TASK_ADMITTED,
   TASK_COMPLETED,
   TASK_FAILED,
+  TEMPLATE_CANDIDATE_PROMOTED,
 } from './event-types.js';
 import { makeEvent } from './make-event.js';
 
@@ -414,8 +418,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 49 event-type strings (Wave 0-4 sum + Phase 5 P4 parent.children_aggregated + v0.1.7-rig.2 verifier triplet + Phase 1 disposition pair)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(49);
+  it('exports exactly 53 event-type strings (49 prior + 4 Phase 4 review-queue events)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(53);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -482,6 +486,11 @@ describe('event-types catalog', () => {
       // Phase 1 — AgentDisposition overlay-first prototype.
       'disposition.proposal_rejected',
       'disposition.over_budget',
+      // Phase 4 — Review queue projection + promotion path.
+      'review.requested',
+      'review.accepted',
+      'review.rejected',
+      'template.candidate.promoted',
     ]);
   });
 });
@@ -823,5 +832,152 @@ describe('quota audit events (v0.5.2-quotas)', () => {
     expect(event.type).toBe('quota.resource_quota_applied');
     expect(event.data.action).toBe('created');
     expect(event.data.hard['requests.cpu']).toBe('10');
+  });
+});
+
+describe('review-queue audit events (Phase 4 — REV-01 / REV-02)', () => {
+  it('builds a review.requested envelope (operator explicit annotation path)', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/kagent-system/researcher-task-01',
+      type: REVIEW_REQUESTED,
+      data: {
+        taskRef: {
+          namespace: 'kagent-system',
+          name: 'researcher-task-01',
+          uid: 'uid-task-01',
+        },
+        reviewerId: 'operator@kagent',
+        reasonText: 'Spot audit for compliance review',
+      },
+    });
+    expect(event.type).toBe('review.requested');
+    expect(event.data.taskRef.namespace).toBe('kagent-system');
+    expect(event.data.reviewerId).toBe('operator@kagent');
+    expect(event.data.reasonText).toBe('Spot audit for compliance review');
+  });
+
+  it('builds a review.requested envelope with undefined optional fields', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/default/task-x',
+      type: REVIEW_REQUESTED,
+      data: {
+        taskRef: { namespace: 'default', name: 'task-x', uid: 'uid-x' },
+        reviewerId: undefined,
+        reasonText: undefined,
+      },
+    });
+    expect(event.type).toBe('review.requested');
+    expect(event.data.reviewerId).toBeUndefined();
+    expect(event.data.reasonText).toBeUndefined();
+  });
+
+  it('builds a review.accepted envelope for a verifier-failed task', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/kagent-system/researcher-task-01',
+      type: REVIEW_ACCEPTED,
+      data: {
+        taskRef: {
+          namespace: 'kagent-system',
+          name: 'researcher-task-01',
+          uid: 'uid-task-01',
+        },
+        reason: 'verifier-failed',
+        reviewerId: 'operator@kagent',
+        reasonText: 'Verified manually — output is correct despite verifier failure',
+      },
+    });
+    expect(event.type).toBe('review.accepted');
+    expect(event.data.reason).toBe('verifier-failed');
+    expect(event.data.reviewerId).toBe('operator@kagent');
+  });
+
+  it('builds a review.accepted envelope for a candidate-template task', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/kagent-system/template-proposal-01',
+      type: REVIEW_ACCEPTED,
+      data: {
+        taskRef: {
+          namespace: 'kagent-system',
+          name: 'template-proposal-01',
+          uid: 'uid-proposal-01',
+        },
+        reason: 'candidate-template',
+        reviewerId: undefined,
+        reasonText: undefined,
+      },
+    });
+    expect(event.type).toBe('review.accepted');
+    expect(event.data.reason).toBe('candidate-template');
+  });
+
+  it('builds a review.rejected envelope for a suspicious-detector task', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/kagent-system/researcher-task-02',
+      type: REVIEW_REJECTED,
+      data: {
+        taskRef: {
+          namespace: 'kagent-system',
+          name: 'researcher-task-02',
+          uid: 'uid-task-02',
+        },
+        reason: 'suspicious-detector',
+        reviewerId: 'operator@kagent',
+        reasonText: 'Confirmed: hallucination-pattern triggered legitimately',
+      },
+    });
+    expect(event.type).toBe('review.rejected');
+    expect(event.data.reason).toBe('suspicious-detector');
+    expect(event.data.reviewerId).toBe('operator@kagent');
+  });
+
+  it('builds a template.candidate.promoted envelope after AgentTemplate CR creation', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/kagent-system/template-proposal-01',
+      type: TEMPLATE_CANDIDATE_PROMOTED,
+      data: {
+        taskRef: {
+          namespace: 'kagent-system',
+          name: 'template-proposal-01',
+          uid: 'uid-proposal-01',
+        },
+        agentTemplateRef: {
+          namespace: 'kagent-system',
+          name: 'researcher-v2',
+          uid: 'uid-template-researcher-v2',
+        },
+        reviewerId: 'operator@kagent',
+      },
+    });
+    expect(event.type).toBe('template.candidate.promoted');
+    expect(event.data.agentTemplateRef.name).toBe('researcher-v2');
+    expect(event.data.agentTemplateRef.namespace).toBe('kagent-system');
+    expect(event.data.agentTemplateRef.uid).toBe('uid-template-researcher-v2');
+    expect(event.data.reviewerId).toBe('operator@kagent');
+  });
+
+  it('builds a template.candidate.promoted envelope with undefined uid (CR uid not yet known)', () => {
+    const event = makeEvent({
+      source: 'kagent.knuteson.io/workbench-api',
+      subject: 'AgentTask/kagent-system/template-proposal-02',
+      type: TEMPLATE_CANDIDATE_PROMOTED,
+      data: {
+        taskRef: { namespace: 'kagent-system', name: 'template-proposal-02', uid: 'uid-p02' },
+        agentTemplateRef: {
+          namespace: 'kagent-system',
+          name: 'researcher-v3',
+          uid: undefined,
+        },
+        reviewerId: undefined,
+      },
+    });
+    expect(event.type).toBe('template.candidate.promoted');
+    expect(event.data.agentTemplateRef.uid).toBeUndefined();
+    expect(event.data.reviewerId).toBeUndefined();
   });
 });

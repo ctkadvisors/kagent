@@ -194,9 +194,26 @@ export const VERIFIER_FAILED = 'verifier.failed' as const;
 export const DISPOSITION_PROPOSAL_REJECTED = 'disposition.proposal_rejected' as const;
 export const DISPOSITION_OVER_BUDGET = 'disposition.over_budget' as const;
 
+/* Phase 4 — Review queue projection + promotion path (REV-01 / REV-02).
+ * Four events cover the review lifecycle:
+ *   - `review.requested` — emitted when an operator POST /api/review-queue/:ns/:name/request
+ *     writes the `kagent.knuteson.io/review-requested: "true"` annotation.
+ *   - `review.accepted` — emitted on POST /api/review-queue/:ns/:name/accept regardless
+ *     of the task reason. `template.candidate.promoted` fires additionally when
+ *     reason='candidate-template'.
+ *   - `review.rejected` — emitted on POST /api/review-queue/:ns/:name/reject.
+ *   - `template.candidate.promoted` — emitted AFTER a successful AgentTemplate CR
+ *     creation via the accept path (reason='candidate-template'). Carries the new
+ *     CR's namespace/name/uid so audit consumers can join the promotion event to the
+ *     created AgentTemplate without a separate K8s API call. */
+export const REVIEW_REQUESTED = 'review.requested' as const;
+export const REVIEW_ACCEPTED = 'review.accepted' as const;
+export const REVIEW_REJECTED = 'review.rejected' as const;
+export const TEMPLATE_CANDIDATE_PROMOTED = 'template.candidate.promoted' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(49)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(53)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -249,4 +266,9 @@ export const ALL_EVENT_TYPES = Object.freeze([
   VERIFIER_FAILED,
   DISPOSITION_PROPOSAL_REJECTED,
   DISPOSITION_OVER_BUDGET,
+  /* Phase 4 — Review queue projection + promotion path. */
+  REVIEW_REQUESTED,
+  REVIEW_ACCEPTED,
+  REVIEW_REJECTED,
+  TEMPLATE_CANDIDATE_PROMOTED,
 ] as const);

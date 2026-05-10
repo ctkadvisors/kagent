@@ -44,6 +44,8 @@
  * Kept as a discriminated-union string literal so a switch() over
  * `event.type` is exhaustive. Adding a member here is the only
  * sanctioned way to add a new event class to the audit stream.
+ *
+ * Count: 53 (49 existing + 4 Phase 4 review-queue events).
  */
 export type AuditEventType =
   | 'task.admitted'
@@ -107,7 +109,12 @@ export type AuditEventType =
   | 'verifier.failed'
   /* Phase 1 — AgentDisposition overlay-first prototype. */
   | 'disposition.proposal_rejected'
-  | 'disposition.over_budget';
+  | 'disposition.over_budget'
+  /* Phase 4 — Review queue projection + promotion path (REV-01 / REV-02). */
+  | 'review.requested'
+  | 'review.accepted'
+  | 'review.rejected'
+  | 'template.candidate.promoted';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -898,6 +905,111 @@ export interface DispositionOverBudgetData {
 }
 
 /**
+ * Phase 4 — `review.requested`. Emitted when an operator POSTs
+ * `/api/review-queue/:namespace/:name/request` to explicitly flag an
+ * AgentTask for review. The `kagent.knuteson.io/review-requested: "true"`
+ * annotation is the authoritative substrate state; this event is the
+ * audit record of who flagged it and when.
+ *
+ * Note: implicit review signals (verifier-failed, suspicious-detector,
+ * candidate-template) do NOT emit this event — they produce queue rows
+ * automatically without an explicit operator action.
+ */
+export interface ReviewRequestedData {
+  readonly taskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+  /** Operator identity from `X-Forwarded-User` header (spoofable per H17, v0.2 posture). */
+  readonly reviewerId: string | undefined;
+  /** Optional human-readable context from the request body. */
+  readonly reasonText: string | undefined;
+}
+
+/**
+ * Phase 4 — `review.accepted`. Emitted on every successful POST
+ * `/api/review-queue/:namespace/:name/accept`, regardless of the task's
+ * `ReviewReason`. When `reason === 'candidate-template'`, the
+ * `template.candidate.promoted` event fires ADDITIONALLY.
+ *
+ * The `reason` field uses an inline 6-member string literal union (not
+ * imported from `@kagent/dto`) to keep `@kagent/audit-events` a leaf
+ * package dep (LM-10). Emit sites narrow at call time.
+ */
+export interface ReviewAcceptedData {
+  readonly taskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+  /**
+   * Classifier reason at the time of acceptance. Inline union matching
+   * `ReviewReason` in `@kagent/dto/review-queue.ts` — kept in sync
+   * manually to avoid a new dep edge (LM-10).
+   */
+  readonly reason:
+    | 'verifier-failed'
+    | 'suspicious-detector'
+    | 'human-review-requested'
+    | 'candidate-template'
+    | 'replay-divergence'
+    | 'eval-failed';
+  readonly reviewerId: string | undefined;
+  readonly reasonText: string | undefined;
+}
+
+/**
+ * Phase 4 — `review.rejected`. Emitted on every successful POST
+ * `/api/review-queue/:namespace/:name/reject`.
+ */
+export interface ReviewRejectedData {
+  readonly taskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+  /** Same inline union as ReviewAcceptedData.reason (LM-10). */
+  readonly reason:
+    | 'verifier-failed'
+    | 'suspicious-detector'
+    | 'human-review-requested'
+    | 'candidate-template'
+    | 'replay-divergence'
+    | 'eval-failed';
+  readonly reviewerId: string | undefined;
+  readonly reasonText: string | undefined;
+}
+
+/**
+ * Phase 4 — `template.candidate.promoted`. Emitted AFTER a successful
+ * AgentTemplate CR creation via the accept path when `reason === 'candidate-template'`.
+ * Carries the new CR's identity (namespace/name/uid) so audit consumers can
+ * join the promotion event to the created AgentTemplate without a separate
+ * K8s API call.
+ *
+ * Fires in addition to `review.accepted` — both events land in the same handler
+ * invocation so the audit log carries both the acceptance record and the promotion
+ * record as separate events with sequential IDs.
+ */
+export interface TemplateCandidatePromotedData {
+  /** The producing AgentTask that carried the candidate artifact. */
+  readonly taskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+  /** The newly created AgentTemplate CR. */
+  readonly agentTemplateRef: {
+    readonly namespace: string;
+    readonly name: string;
+    /** CR UID assigned by Kubernetes; present when creation succeeded. */
+    readonly uid: string | undefined;
+  };
+  readonly reviewerId: string | undefined;
+}
+
+/**
  * Discriminated union of the per-type data shapes. The CloudEvents
  * envelope's `data` field is typed by the corresponding member so a
  * `switch (event.type)` narrows `event.data` without a cast.
@@ -997,7 +1109,15 @@ export type AuditEventData =
       readonly type: 'disposition.proposal_rejected';
       readonly data: DispositionProposalRejectedData;
     }
-  | { readonly type: 'disposition.over_budget'; readonly data: DispositionOverBudgetData };
+  | { readonly type: 'disposition.over_budget'; readonly data: DispositionOverBudgetData }
+  /* Phase 4 — Review queue projection + promotion path (REV-01 / REV-02). */
+  | { readonly type: 'review.requested'; readonly data: ReviewRequestedData }
+  | { readonly type: 'review.accepted'; readonly data: ReviewAcceptedData }
+  | { readonly type: 'review.rejected'; readonly data: ReviewRejectedData }
+  | {
+      readonly type: 'template.candidate.promoted';
+      readonly data: TemplateCandidatePromotedData;
+    };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and
