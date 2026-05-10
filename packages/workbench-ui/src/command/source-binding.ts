@@ -112,6 +112,14 @@ export type GatewayCapacityFieldName =
 export type { PressureFieldName } from './pressure.js';
 
 /**
+ * Re-exported from flows.ts so FLOW_TYPES stays the single source of
+ * truth for the flow kind union (per CONTEXT.md D-01-A). Wave 1
+ * populates FLOW_TYPES with all 8 entries; the union resolves
+ * automatically.
+ */
+export type { FlowFieldName } from './flows.js';
+
+/**
  * Detect dev-build context. Priority order:
  *   1. `process.env.NODE_ENV === 'production'` → prod (no-op assertions).
  *      This is the SDK / vitest / jest standard and is the explicit

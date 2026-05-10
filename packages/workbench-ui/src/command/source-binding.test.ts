@@ -437,3 +437,48 @@ describe('source-binding (CC-01 generalization to AgentSummaryRow / TaskSummary 
     }).not.toThrow();
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// Phase 3 / FLOW-01 — FlowFieldName closed-enum narrowing tests.
+// Proves FlowFieldName is exported from source-binding.ts and that
+// the generic helpers accept it without modification (K extends string).
+// ────────────────────────────────────────────────────────────────────
+
+describe('source-binding (Phase 3 — FlowFieldName narrowing)', () => {
+  beforeEach(() => {
+    vi.stubEnv('NODE_ENV', 'development');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('Test K — useSourceField narrows correctly for each of the 8 FlowFieldName literals', () => {
+    const literals: ReadonlyArray<import('./source-binding.js').FlowFieldName> = [
+      'modelPower',
+      'tokenFlow',
+      'buildPower',
+      'podCapacity',
+      'artifactBandwidth',
+      'authority',
+      'trust',
+      'attention',
+    ];
+    for (const v of literals) {
+      expect(useSourceField<import('./source-binding.js').FlowFieldName>(v)).toBe(v);
+    }
+  });
+
+  it('Test L — useSourceFields returns comma-joined string for FlowFieldName array', () => {
+    const v2 = useSourceFields<import('./source-binding.js').FlowFieldName>([
+      'modelPower',
+      'tokenFlow',
+    ]);
+    expect(v2).toBe('modelPower,tokenFlow');
+    const v3 = useSourceFields<import('./source-binding.js').FlowFieldName>([
+      'modelPower',
+      'tokenFlow',
+      'buildPower',
+    ]);
+    expect(v3).toBe('modelPower,tokenFlow,buildPower');
+  });
+});
