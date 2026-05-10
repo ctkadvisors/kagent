@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 1: AgentDisposition prototype (overlay-first)** — express idle/attention behavior as overlay on existing `Agent`; surface in workbench-api as a read projection; render in Command Center as overlay; observe before promoting to a CRD
 - [ ] **Phase 2: Command Center contract hardening** — make existing Command Center provably source-bound (Slice A) and add operational read depth on selection panels (Slice B) per `docs/COMMAND-CENTER-CONTRACT.md`
 - [ ] **Phase 3: Resource-flow overlays** — render `C-flow-economy` flows from existing Workbench API DTOs; pressure overlay (Slice E); base-building-only fallback mode
-- [ ] **Phase 4: Review queue projection + promotion path** — strengthen review queue, AgentTemplate promotion, replay/eval signal surfacing using existing v0.1 substrate primitives; no new CRDs
+- [x] **Phase 4: Review queue projection + promotion path** — strengthen review queue, AgentTemplate promotion, replay/eval signal surfacing using existing v0.1 substrate primitives; no new CRDs
 - [ ] **Phase 5: Workbench usability primitives** — hotkeys, multi-select, replay-from-context; RTS feel as usability, not visual chrome
 
 ## Phase Details
@@ -112,7 +112,7 @@ Plans:
 - [x] 04-03-PLAN.md — Wave 2 POST handlers: accept (5-step path with AgentTemplate CR creation BEFORE annotation patch on candidate-template; 503/404/409/422/500 ladder; audit-event emission) + reject (annotation-only, never creates CR) + request (D-02 operator-only flag) + 4 new audit-event emit sites; export `extractK8sStatus` + `readCreatedMeta` from `tasks.ts` (LM-3 helper lifting)
 - [x] 04-04-PLAN.md — Wave 3 UI surface: `types.ts` re-exports + `api.ts` (`fetchReviewQueue`, accept/reject/request POST helpers, `useReviewQueue` 5s polling hook, `ReviewActionApiError`) + `App.tsx` `#/review` route + `ReviewPage.tsx` (table-shaped, mirrors TaskList) + inline `ReviewActions.tsx` in TaskDetail (4 trigger conditions) + `source-binding.ts` `ReviewQueueFieldName` 14-member closed enum (D7 / CC-01)
 - [x] 04-05-PLAN.md — Wave 4 Phase 3 attention-flow flip + docs: `state.ts` `CommandSnapshot.reviewQueueRowCount?: number` (additive) + `flows.ts` `attention.compute()` flips from `phase=Failed + suspicious` proxy to `s.reviewQueueRowCount` (`detailLink: '#/review'`, `label: 'review queue'`) + `CommandView.tsx` wires `useReviewQueue()` + `cc-reload.test.tsx.snap` regen (single dedicated commit per LM-8) + `docs/AGENT-TEMPLATES.md` footer (media type + promotion path) + `docs/REPLAY-EVALS.md` footer (REV-03 stub) + `docs/SUBSTRATE-V1.md` §4.3 (4 new audit-event rows; total 49 -> 53)
-- [ ] 04-06-PLAN.md — Wave 5 gap closure: close CR-01 BLOCKER (move template.candidate.promoted audit emit to fire after CR creation, before annotation patch) + SC3 traceLink direct hyperlink in ReviewPage table + CR-02 classifier reasonDetail alignment to DTO JSDoc spec ${proposedTemplateName} (candidate) + CR-03 type-only cross-check pinning ReviewAcceptedData.reason to @kagent/dto ReviewReason (LM-10 preserved) + WR-02 ReviewActionApiError.detail surfacing + WR-06 RequestReviewBody reviewerId/reasonText rename + WR-08 useReviewQueue no-backoff polling doc
+- [x] 04-06-PLAN.md — Wave 5 gap closure: close CR-01 BLOCKER (move template.candidate.promoted audit emit to fire after CR creation, before annotation patch) + SC3 traceLink direct hyperlink in ReviewPage table + CR-02 classifier reasonDetail alignment to DTO JSDoc spec ${proposedTemplateName} (candidate) + CR-03 type-only cross-check pinning ReviewAcceptedData.reason to @kagent/dto ReviewReason (LM-10 preserved) + WR-02 ReviewActionApiError.detail surfacing + WR-06 RequestReviewBody reviewerId/reasonText rename + WR-08 useReviewQueue no-backoff polling doc
 
 ### Phase 5: Workbench usability primitives
 
@@ -146,14 +146,14 @@ Recorded so they don't get re-invented. Promotion to active phase requires empir
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
-| Phase                                         | Plans Complete | Status      | Completed |
-| --------------------------------------------- | -------------- | ----------- | --------- |
-| 1. AgentDisposition prototype (overlay-first) | 0/4            | Not started | -         |
-| 2. Command Center contract hardening          | 0/4            | Planned     | -         |
-| 3. Resource-flow overlays                     | 0/3            | Planned     | -         |
-| 4. Review queue projection + promotion path   | 0/5            | Planned     | -         |
-| 5. Workbench usability primitives             | 0/TBD          | Not started | -         |
-| 999.x Future Research backlog                 | —              | Deferred    | -         |
+| Phase                                         | Plans Complete | Status      | Completed  |
+| --------------------------------------------- | -------------- | ----------- | ---------- |
+| 1. AgentDisposition prototype (overlay-first) | 4/4            | Complete    | -          |
+| 2. Command Center contract hardening          | 4/4            | Complete    | -          |
+| 3. Resource-flow overlays                     | 3/3            | Complete    | -          |
+| 4. Review queue projection + promotion path   | 6/6            | Complete    | 2026-05-10 |
+| 5. Workbench usability primitives             | 0/TBD          | Not started | -          |
+| 999.x Future Research backlog                 | —              | Deferred    | -          |
 
 ## Notes
 
