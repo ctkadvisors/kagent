@@ -45,7 +45,7 @@
  * `event.type` is exhaustive. Adding a member here is the only
  * sanctioned way to add a new event class to the audit stream.
  *
- * Count: 53 (49 existing + 4 Phase 4 review-queue events).
+ * Count: 54 (49 existing + 4 Phase 4 review-queue events + 1 Phase 5 replay event).
  */
 export type AuditEventType =
   | 'task.admitted'
@@ -114,7 +114,9 @@ export type AuditEventType =
   | 'review.requested'
   | 'review.accepted'
   | 'review.rejected'
-  | 'template.candidate.promoted';
+  | 'template.candidate.promoted'
+  /* Phase 5 — Workbench usability primitives (WB-03). */
+  | 'task.replay.created';
 
 /**
  * `task.admitted` — operator's admission reconciler accepted an
@@ -982,6 +984,34 @@ export interface ReviewRejectedData {
 }
 
 /**
+ * Phase 5 / WB-03 — `task.replay.created`. Emitted by the workbench-api
+ * POST /api/tasks handler when the request body includes a `replayOf` field.
+ * Records both the new task reference and the original task reference so audit
+ * consumers can reconstruct the full replay chain without a separate K8s API call.
+ *
+ * `decidedBy` carries the operator identity from `X-Forwarded-User` (spoofable
+ * per H17, v0.2 posture — same caveat as `review.requested`).
+ */
+export interface TaskReplayCreatedData {
+  /** The newly created AgentTask. */
+  readonly newTaskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+  /** The original AgentTask being replayed. */
+  readonly originalTaskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid: string;
+  };
+  /** Operator identity from `X-Forwarded-User` header (spoofable per H17). */
+  readonly decidedBy?: string;
+  /** Optional operator-provided reason for the replay (max 256 bytes, no newlines). */
+  readonly reason?: string;
+}
+
+/**
  * Phase 4 — `template.candidate.promoted`. Emitted AFTER a successful
  * AgentTemplate CR creation via the accept path when `reason === 'candidate-template'`.
  * Carries the new CR's identity (namespace/name/uid) so audit consumers can
@@ -1117,7 +1147,9 @@ export type AuditEventData =
   | {
       readonly type: 'template.candidate.promoted';
       readonly data: TemplateCandidatePromotedData;
-    };
+    }
+  /* Phase 5 — Workbench usability primitives (WB-03). */
+  | { readonly type: 'task.replay.created'; readonly data: TaskReplayCreatedData };
 
 /**
  * CloudEvents v1.0 envelope, locked at `specversion: "1.0"` and

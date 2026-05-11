@@ -211,9 +211,18 @@ export const REVIEW_ACCEPTED = 'review.accepted' as const;
 export const REVIEW_REJECTED = 'review.rejected' as const;
 export const TEMPLATE_CANDIDATE_PROMOTED = 'template.candidate.promoted' as const;
 
+/* Phase 5 — Workbench usability primitives (WB-03). Task replay support:
+ *   - `task.replay.created` — emitted by the workbench-api POST /api/tasks
+ *     5-step replay handler (Plan 02) when it creates a new AgentTask as a
+ *     replay of an existing one. The `decidedBy` field carries the
+ *     X-Forwarded-User identity; `reason` carries the optional operator note.
+ *     The `originalTaskRef` identifies the task being replayed; `newTaskRef`
+ *     is the freshly created AgentTask. See CONTEXT.md D-03. */
+export const TASK_REPLAY_CREATED = 'task.replay.created' as const;
+
 /**
  * Frozen array of every event type. Useful for sanity tests
- * (`expect(ALL_EVENT_TYPES.length).toBe(53)`) and for downstream tools
+ * (`expect(ALL_EVENT_TYPES.length).toBe(54)`) and for downstream tools
  * that want to enumerate the event schema (e.g. an OpenAPI generator).
  */
 export const ALL_EVENT_TYPES = Object.freeze([
@@ -271,4 +280,6 @@ export const ALL_EVENT_TYPES = Object.freeze([
   REVIEW_ACCEPTED,
   REVIEW_REJECTED,
   TEMPLATE_CANDIDATE_PROMOTED,
+  /* Phase 5 — Workbench usability primitives (WB-03). */
+  TASK_REPLAY_CREATED,
 ] as const);

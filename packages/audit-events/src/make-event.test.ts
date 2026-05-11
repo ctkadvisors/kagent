@@ -418,8 +418,8 @@ describe('makeEvent — discriminated-union per-type', () => {
 });
 
 describe('event-types catalog', () => {
-  it('exports exactly 53 event-type strings (49 prior + 4 Phase 4 review-queue events)', () => {
-    expect(ALL_EVENT_TYPES.length).toBe(53);
+  it('exports exactly 54 event-type strings (49 prior + 4 Phase 4 review-queue events + 1 Phase 5 replay event)', () => {
+    expect(ALL_EVENT_TYPES.length).toBe(54);
   });
 
   it('matches the spec catalog exactly', () => {
@@ -491,6 +491,8 @@ describe('event-types catalog', () => {
       'review.accepted',
       'review.rejected',
       'template.candidate.promoted',
+      // Phase 5 — Workbench usability primitives (WB-03).
+      'task.replay.created',
     ]);
   });
 });

@@ -12,6 +12,31 @@
  * needs the type.
  */
 
+/**
+ * Phase 5 / WB-03 — Optional replay-of reference.
+ *
+ * Shape is intentionally duplicated from workbench-ui's types.ts to
+ * keep both packages leaf-dep-only (no shared @kagent/dto edge for
+ * the write contract). The workbench-api is the wire authority; the
+ * workbench-ui has its own copy. See CONTEXT.md D-03.
+ */
+export interface ReplayOfReference {
+  /** Reference to the original task being replayed. */
+  readonly taskRef: {
+    /** K8s namespace of the original task. RFC1123 label shape. */
+    readonly namespace: string;
+    /** K8s name of the original task. RFC1123 label shape. */
+    readonly name: string;
+    /** Optional UID of the original task (for idempotency / cross-check). */
+    readonly uid?: string;
+  };
+  /**
+   * Optional operator-provided reason for the replay.
+   * Max 256 bytes UTF-8; no newlines.
+   */
+  readonly reason?: string;
+}
+
 export interface CreateTaskRequest {
   /** Target Agent CR name. Required. K8s RFC1123 label shape. */
   readonly targetAgent: string;
@@ -33,6 +58,13 @@ export interface CreateTaskRequest {
   readonly labels?: Readonly<Record<string, string>>;
   /** Opaque structured payload — forwarded verbatim to AgentTask.spec.payload. */
   readonly payload?: unknown;
+  /**
+   * Phase 5 / WB-03 — Optional replay-of reference. When present, the
+   * POST /api/tasks 5-step handler (Plan 02) resolves the original task
+   * from SnapshotCache and materializes 5 kagent.knuteson.io/replay-*
+   * annotations on the new AgentTask. See CONTEXT.md D-03.
+   */
+  readonly replayOf?: ReplayOfReference;
 }
 
 export interface CreateTaskResponse {

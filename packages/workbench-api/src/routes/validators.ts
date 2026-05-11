@@ -15,7 +15,7 @@
  * (e.g. POST /api/agents in WS-M's wake), revisit and consolidate.
  */
 
-import type { CreateTaskRequest } from '../types-write.js';
+import type { CreateTaskRequest, ReplayOfReference } from '../types-write.js';
 
 export type ValidationError =
   | { readonly code: 'missing'; readonly field: string }
@@ -63,6 +63,12 @@ const K8S_NAME_RE = /^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$/;
 
 /** K8s namespace regex (same shape as label, max 63 chars). */
 const K8S_NAMESPACE_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+
+/** UUID v4 regex (lowercase hex; case-insensitive match). Phase 5 / WB-03. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Max UTF-8 byte length for a replay reason string. Phase 5 / WB-03. */
+const MAX_REPLAY_REASON_BYTES = 256;
 
 /**
  * Validate a `POST /api/tasks` request body. Returns `valid: true` with
@@ -253,5 +259,105 @@ export function validateCreateTaskBody(raw: unknown): ValidationResult {
       ...(labels !== undefined && { labels }),
       ...(payload !== undefined && { payload }),
     },
+  };
+}
+
+/**
+ * Phase 5 / WB-03 — Validate the optional `replayOf` field of a
+ * `POST /api/tasks` request body.
+ *
+ * This is a sub-helper alongside `validateCreateTaskBody`. It is NOT
+ * called from `validateCreateTaskBody` in Plan 01 — Plan 02 adds that
+ * call site when it wires the 5-step replay handler in `routes/tasks.ts`.
+ *
+ * The helper pushes per-field `ValidationError`s into the supplied
+ * `errors` accumulator and returns a typed `ReplayOfReference` on
+ * success, or `undefined` if any error was pushed.
+ *
+ * Validation rules:
+ *   - Non-object root → wrong-type
+ *   - Non-object `taskRef` → wrong-type
+ *   - Missing/empty `taskRef.namespace` → missing or invalid-name (RFC1123)
+ *   - Missing/empty `taskRef.name` → missing or invalid-name (RFC1123)
+ *   - `taskRef.uid` present and non-UUID → invalid-name
+ *   - `reason` present: non-string → wrong-type; >256 bytes UTF-8 → too-long;
+ *     contains CR or LF → invalid-name
+ *
+ * See RESEARCH §12.2 for the reference implementation sketch.
+ */
+export function validateReplayOf(
+  raw: unknown,
+  errors: ValidationError[],
+): ReplayOfReference | undefined {
+  const startLen = errors.length;
+
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push({ code: 'wrong-type', field: 'replayOf', expected: 'object' });
+    return undefined;
+  }
+
+  const body = raw as Record<string, unknown>;
+
+  // taskRef — required object
+  const rawTaskRef = body.taskRef;
+  if (rawTaskRef === null || typeof rawTaskRef !== 'object' || Array.isArray(rawTaskRef)) {
+    errors.push({ code: 'wrong-type', field: 'replayOf.taskRef', expected: 'object' });
+    return undefined;
+  }
+
+  const taskRef = rawTaskRef as Record<string, unknown>;
+
+  // taskRef.namespace — required RFC1123 label
+  const rawNamespace = taskRef.namespace;
+  if (rawNamespace === undefined || rawNamespace === null) {
+    errors.push({ code: 'missing', field: 'replayOf.taskRef.namespace' });
+  } else if (typeof rawNamespace !== 'string' || rawNamespace.length === 0) {
+    errors.push({ code: 'invalid-name', field: 'replayOf.taskRef.namespace' });
+  } else if (!K8S_NAMESPACE_RE.test(rawNamespace)) {
+    errors.push({ code: 'invalid-name', field: 'replayOf.taskRef.namespace' });
+  }
+
+  // taskRef.name — required RFC1123 label
+  const rawName = taskRef.name;
+  if (rawName === undefined || rawName === null) {
+    errors.push({ code: 'missing', field: 'replayOf.taskRef.name' });
+  } else if (typeof rawName !== 'string' || rawName.length === 0) {
+    errors.push({ code: 'invalid-name', field: 'replayOf.taskRef.name' });
+  } else if (!K8S_NAME_RE.test(rawName)) {
+    errors.push({ code: 'invalid-name', field: 'replayOf.taskRef.name' });
+  }
+
+  // taskRef.uid — optional; when present must be UUID-shaped
+  const rawUid = taskRef.uid;
+  if (rawUid !== undefined && rawUid !== null) {
+    if (typeof rawUid !== 'string' || !UUID_RE.test(rawUid)) {
+      errors.push({ code: 'invalid-name', field: 'replayOf.taskRef.uid' });
+    }
+  }
+
+  // reason — optional; when present: string, ≤256 bytes, no newlines
+  const rawReason = body.reason;
+  if (rawReason !== undefined && rawReason !== null) {
+    if (typeof rawReason !== 'string') {
+      errors.push({ code: 'wrong-type', field: 'replayOf.reason', expected: 'string' });
+    } else if (Buffer.byteLength(rawReason, 'utf8') > MAX_REPLAY_REASON_BYTES) {
+      errors.push({ code: 'too-long', field: 'replayOf.reason', max: MAX_REPLAY_REASON_BYTES });
+    } else if (/[\r\n]/.test(rawReason)) {
+      errors.push({ code: 'invalid-name', field: 'replayOf.reason' });
+    }
+  }
+
+  // Return undefined if any error was pushed during this call.
+  if (errors.length > startLen) return undefined;
+
+  return {
+    taskRef: {
+      namespace: rawNamespace as string,
+      name: rawName as string,
+      ...(rawUid !== undefined && rawUid !== null && { uid: rawUid as string }),
+    },
+    ...(rawReason !== undefined &&
+      rawReason !== null &&
+      typeof rawReason === 'string' && { reason: rawReason }),
   };
 }
