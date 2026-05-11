@@ -63,30 +63,30 @@ Tighten the existing review queue, AgentTemplate promotion path, and replay/eval
 
 Carry forward `feedback_workbench_rts_ui_aesthetic.md`: RTS feel = USABILITY, not visual chrome. Every WB candidate is a usability primitive (hotkey, multi-select, dispatch, replay, audit-trace shortcut, FX), not a reskin.
 
-- [ ] **WB-01** _(candidate)_: Hotkey scheme for the most-used Workbench operations (open task detail, open agent detail, navigate to gateway, open trace, dismiss alert, jump to review queue). Documented in a developer-facing keyboard cheat sheet. Hotkeys map to existing actions; no new substrate state.
-- [ ] **WB-02** _(candidate)_: Multi-select on Command Center sprites (Agents, tasks, gateways) for bulk-inspect actions (open all selected detail views in tabs, copy IDs, scroll to first failure). Bulk-mutate actions remain forbidden until the underlying CRD write path explicitly supports the operation.
-- [ ] **WB-03** _(candidate)_: Replay-from-context surface: from any task detail, an operator can re-dispatch the same input under a different model class or a different agent, creating a new `AgentTask` with a recorded `replayOf` annotation pointing to the original. No new CRD; uses existing AgentTask write path.
+- [x] **WB-01** _(candidate)_: Hotkey scheme for the most-used Workbench operations (open task detail, open agent detail, navigate to gateway, open trace, dismiss alert, jump to review queue). Documented in a developer-facing keyboard cheat sheet. Hotkeys map to existing actions; no new substrate state.
+- [x] **WB-02** _(candidate)_: Multi-select on Command Center sprites (Agents, tasks, gateways) for bulk-inspect actions (open all selected detail views in tabs, copy IDs, scroll to first failure). Bulk-mutate actions remain forbidden until the underlying CRD write path explicitly supports the operation.
+- [x] **WB-03** _(candidate)_: Replay-from-context surface: from any task detail, an operator can re-dispatch the same input under a different model class or a different agent, creating a new `AgentTask` with a recorded `replayOf` annotation pointing to the original. No new CRD; uses existing AgentTask write path.
 
 ### Coverage
 
-| Candidate | Phase   | Status  |
-| --------- | ------- | ------- |
-| DISP-01   | Phase 1 | Pending |
-| DISP-02   | Phase 1 | Pending |
-| DISP-03   | Phase 1 | Pending |
-| DISP-04   | Phase 1 | Pending |
-| CC-01     | Phase 2 | Pending |
-| CC-02     | Phase 2 | Pending |
-| CC-03     | Phase 2 | Pending |
-| CC-04     | Phase 2 | Pending |
-| FLOW-01   | Phase 3 | Pending |
-| FLOW-02   | Phase 3 | Pending |
-| REV-01    | Phase 4 | Pending |
-| REV-02    | Phase 4 | Pending |
-| REV-03    | Phase 4 | Pending |
-| WB-01     | Phase 5 | Pending |
-| WB-02     | Phase 5 | Pending |
-| WB-03     | Phase 5 | Pending |
+| Candidate | Phase   | Status   |
+| --------- | ------- | -------- |
+| DISP-01   | Phase 1 | Pending  |
+| DISP-02   | Phase 1 | Pending  |
+| DISP-03   | Phase 1 | Pending  |
+| DISP-04   | Phase 1 | Pending  |
+| CC-01     | Phase 2 | Pending  |
+| CC-02     | Phase 2 | Pending  |
+| CC-03     | Phase 2 | Pending  |
+| CC-04     | Phase 2 | Pending  |
+| FLOW-01   | Phase 3 | Pending  |
+| FLOW-02   | Phase 3 | Pending  |
+| REV-01    | Phase 4 | Pending  |
+| REV-02    | Phase 4 | Pending  |
+| REV-03    | Phase 4 | Pending  |
+| WB-01     | Phase 5 | Complete |
+| WB-02     | Phase 5 | Complete |
+| WB-03     | Phase 5 | Complete |
 
 **Coverage:**
 

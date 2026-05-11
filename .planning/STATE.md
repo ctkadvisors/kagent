@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.2
 milestone_name: milestone
-status: executing
+status: verifying
 stopped_at: Phase 05 context gathered
-last_updated: '2026-05-11T02:26:34.972Z'
-last_activity: 2026-05-11 -- Phase 05 planning complete
+last_updated: '2026-05-11T03:56:12.439Z'
+last_activity: 2026-05-11
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 20
-  completed_plans: 17
-  percent: 85
+  completed_plans: 18
+  percent: 90
 ---
 
 # Project State
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (re-steered 2026-05-09 PM)
 
 Phase: 04 (review-queue-projection-promotion-path) — COMPLETE & VERIFIED (3/3 must-haves, 0 gaps)
 Plan: 6 of 6 complete (04-06 wave-5 gap closure shipped 2026-05-10)
-Status: Ready to execute
-Last activity: 2026-05-11 -- Phase 05 planning complete
+Status: Phase complete — ready for verification
+Last activity: 2026-05-11
 
-Progress: [████████░░] 80% (4 of 5 phases)
+Progress: [█████████░] 90%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [████████░░] 80% (4 of 5 phases)
 - Trend: —
 
 _Updated after each plan completion_
+| Phase 05-workbench-usability-primitives P01 | 45 | 3 tasks | 21 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,7 @@ Decisions are logged in PROJECT.md "Key Decisions" table. **All D1–D7 are PROP
 
 Recent decisions affecting current work:
 
+- **2026-05-10 (Phase 05 Plan 01):** useAlert implemented as shared util — single hook for all callers per RESEARCH §3.3; validateReplayOf is standalone sub-helper in Plan 01, wired into validateCreateTaskBody in Plan 02; audit-events ALL_EVENT_TYPES grows 53→54 with task.replay.created constant (LM-10 leaf-dep pattern maintained).
 - **2026-05-09 PM (re-steering):** Re-output the entire planning corpus per operator directive. Treat `docs/NORTH-STAR-SYSTEM-DESIGN.md` and `docs/PROTO-SOCIETY-DESIGN.md` as candidate inputs only. Demote proto-society primitives (CRD-shaped Channels/Posts/CoalitionProposals/reputation/society kill-switch) to Future Research. Reframe AgentDisposition as overlay-first prototype on existing v0.1 substrate. Add D6 (self-proposal, not self-promotion) and D7 (`docs/COMMAND-CENTER-CONTRACT.md` is binding for Workbench/Command Center work). Rename "MobProposal" → "CoalitionProposal" in synthesized outputs. Move original Phases 2–8 (CRD-first proto-society) to Future Research backlog 999.x.
 - **2026-05-09 (initial intel + roadmap):** adopted the §11 bounds test and §15 one-sentence test as per-phase verification gates (still binding). Original roadmap created from intel ingest; superseded by 2026-05-09 PM re-steering above.
 
@@ -105,8 +107,8 @@ None yet. (Capture via `/gsd-add-todo` during execution.)
 
 ## Session Continuity
 
-Last session: 2026-05-11T01:15:19.142Z
-Stopped at: Phase 05 context gathered
+Last session: 2026-05-10T23:54:00Z
+Stopped at: Completed 05-01-PLAN.md — Wave 1 scaffolding for workbench usability primitives
 Re-steered: 2026-05-09 PM during /gsd-plan-phase 1 — operator redirected the entire planning corpus.
-Resume file: .planning/phases/05-workbench-usability-primitives/05-CONTEXT.md
-Next action: `/gsd-plan-phase 05` (workbench-usability-primitives — WB-01/02/03)
+Resume file: None
+Next action: Execute 05-02-PLAN.md (behavior wiring — hotkey mount, ReplayModal wire-up, SelectionActions mount, validateReplayOf integration)

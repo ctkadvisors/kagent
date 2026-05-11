@@ -130,7 +130,7 @@ Plans:
 
 Plans:
 
-- [ ] 05-01-PLAN.md — Wave-1 scaffolding: hotkeys.ts + HotkeyCheatSheet + useAlert + ReplayModal + SelectionActions + types extensions + audit-event extension + validateReplayOf (additive; no mounts)
+- [x] 05-01-PLAN.md — Wave-1 scaffolding: hotkeys.ts + HotkeyCheatSheet + useAlert + ReplayModal + SelectionActions + types extensions + audit-event extension + validateReplayOf (additive; no mounts)
 - [ ] 05-02-PLAN.md — Wave-2 wire-up: App.tsx + CommandView.tsx + TaskDetail.tsx + ReviewPage.tsx + TaskList.tsx wiring; 5-step server-side replay branch + 5 replay tests; cc-reload snapshot regen
 - [ ] 05-03-PLAN.md — Wave-3 docs + final audit: docs/HOTKEYS.md + COMMAND-CENTER-CONTRACT.md footer + SUBSTRATE-V1.md §4.3 row; §11/§15 gate statements; final audit greps
 
@@ -158,7 +158,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. Command Center contract hardening          | 4/4            | Complete    | -          |
 | 3. Resource-flow overlays                     | 3/3            | Complete    | -          |
 | 4. Review queue projection + promotion path   | 6/6            | Complete    | 2026-05-10 |
-| 5. Workbench usability primitives             | 0/TBD          | Not started | -          |
+| 5. Workbench usability primitives             | 1/3            | In Progress |            |
 | 999.x Future Research backlog                 | —              | Deferred    | -          |
 
 ## Notes
