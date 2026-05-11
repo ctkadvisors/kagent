@@ -1,0 +1,45 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * SelectionActions — Phase 5 (WB-02). Absolute-positioned action panel
+ * anchored to bottom-right of the Command Center canvas. Clones
+ * DispositionOverlay.module.css button styling for consistency.
+ */
+
+/* Outer container: absolute bottom-right anchor above the footer HUD */
+.selectionActions {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 5; /* below alertTicker (10), above canvas (0) */
+  pointer-events: auto;
+}
+
+/* Action buttons: clone DispositionOverlay's dark-navy aesthetic */
+.button {
+  background: #0a1628;
+  border: 1px solid #1f2a44;
+  border-radius: 4px;
+  color: #cbd5e1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+  text-align: left;
+  letter-spacing: 0.02em;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.button:hover {
+  background: #0c1a30;
+  border-color: rgba(251, 191, 36, 0.3);
+  color: #e2e8f0;
+}
+
+.button:active {
+  background: #0f1f36;
+}

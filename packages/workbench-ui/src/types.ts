@@ -210,6 +210,24 @@ export interface AgentSummaryRow {
   readonly capabilities?: readonly string[];
 }
 
+/**
+ * Phase 5 (WB-03) — Optional replay-of reference. When present, the
+ * server-side handler resolves the original task from SnapshotCache and
+ * materializes 5 replay-* annotations on the new AgentTask.
+ * See .planning/phases/05-workbench-usability-primitives/05-CONTEXT.md D-03.
+ *
+ * Shape is intentionally duplicated from workbench-api's types-write.ts to
+ * keep the UI a leaf in the dep graph (no @kagent imports). API is authority.
+ */
+export interface ReplayOfReference {
+  readonly taskRef: {
+    readonly namespace: string;
+    readonly name: string;
+    readonly uid?: string;
+  };
+  readonly reason?: string;
+}
+
 export interface CreateTaskRequest {
   readonly targetAgent: string;
   readonly originalUserMessage: string;
@@ -221,6 +239,13 @@ export interface CreateTaskRequest {
   };
   readonly labels?: Readonly<Record<string, string>>;
   readonly payload?: unknown;
+  /**
+   * Phase 5 / WB-03 — Optional replay-of reference. When present, the
+   * POST /api/tasks 5-step handler (Plan 02) resolves the original task
+   * from SnapshotCache and materializes 5 kagent.knuteson.io/replay-*
+   * annotations on the new AgentTask.
+   */
+  readonly replayOf?: ReplayOfReference;
 }
 
 export interface CreateTaskResponse {
