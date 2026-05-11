@@ -1231,38 +1231,38 @@ export interface TaskReplayCreatedData {
 
 ---
 
-## 15. Open Questions for Planner
+## 15. Open Questions for Planner (RESOLVED)
 
 Resolved at planning time. Cross-referenced to §3.3 and §14 above.
 
-1. **Auth strictness** — Reject with 401 when `X-Forwarded-User` is absent on replay POST? (A1 / §6 R-recommendation). **Recommendation:** YES.
+1. **Auth strictness** — Reject with 401 when `X-Forwarded-User` is absent on replay POST? (A1 / §6 R-recommendation). **RESOLVED:** YES.
 
-2. **`useAlert` shared util** — Lift to `packages/workbench-ui/src/useAlert.ts`? (A2 / §3.3 #1). **Recommendation:** YES, ≥5 callers identified.
+2. **`useAlert` shared util** — Lift to `packages/workbench-ui/src/useAlert.ts`? (A2 / §3.3 #1). **RESOLVED:** YES, ≥5 callers identified.
 
-3. **`defaultGenerateName(prefix)` vs sibling helper** — (A3 / §3.3 #2). **Recommendation:** parameterize the existing helper.
+3. **`defaultGenerateName(prefix)` vs sibling helper** — (A3 / §3.3 #2). **RESOLVED:** parameterize the existing helper.
 
-4. **`?targetAgent=<name>` filter on TaskList — ship in Phase 5?** (A4 / §3.3 #4). **Recommendation:** YES, ~10 LOC, unlocks Agent-case bulk-inspect.
+4. **`?targetAgent=<name>` filter on TaskList — ship in Phase 5?** (A4 / §3.3 #4). **RESOLVED:** YES, ~10 LOC, unlocks Agent-case bulk-inspect.
 
-5. **`<SelectionActions>` always-mounted vs conditional** — (A5 / §3.3 #6). **Recommendation:** always-mounted.
+5. **`<SelectionActions>` always-mounted vs conditional** — (A5 / §3.3 #6). **RESOLVED:** always-mounted.
 
-6. **`cc-reload.test.tsx` snapshot regen** — single dedicated commit? (A6 / §3.3 #6). **Recommendation:** YES per Phase 3/4 LM-8.
+6. **`cc-reload.test.tsx` snapshot regen** — single dedicated commit? (A6 / §3.3 #6). **RESOLVED:** YES per Phase 3/4 LM-8.
 
-7. **ReplayModal success delight** — trigger `useReplay.start()`? (A7 / §3.3 #8). **Recommendation:** defer.
+7. **ReplayModal success delight** — trigger `useReplay.start()`? (A7 / §3.3 #8). **RESOLVED:** defer.
 
-8. **Open `?` cancels in-flight chord** — (A8 / §3.3 #9). **Recommendation:** YES, ~3 LOC.
+8. **Open `?` cancels in-flight chord** — (A8 / §3.3 #9). **RESOLVED:** YES, ~3 LOC.
 
-9. **ReplayModal "Advanced" section** — (A9 / CONTEXT.md `<discretion>`). **Recommendation:** defer.
+9. **ReplayModal "Advanced" section** — (A9 / CONTEXT.md `<discretion>`). **RESOLVED:** defer.
 
-10. **HotkeyCheatSheet layout** — match NewTaskModal vs 2-column? (CONTEXT.md `<discretion>`). **Recommendation:** match NewTaskModal.
+10. **HotkeyCheatSheet layout** — match NewTaskModal vs 2-column? (CONTEXT.md `<discretion>`). **RESOLVED:** match NewTaskModal.
 
-11. **TaskDetail "Replayed-by" badge (inverse chain)** — (CONTEXT.md `<discretion>`). **Recommendation:** defer unless cheap. Implementation requires scanning `/api/tasks` for any task whose `metadata.annotations['kagent.knuteson.io/replay-of']` matches the current task's `ns/name` — server-side projection or client-side scan, both non-trivial. Defer.
+11. **TaskDetail "Replayed-by" badge (inverse chain)** — (CONTEXT.md `<discretion>`). **RESOLVED:** defer unless cheap. Implementation requires scanning `/api/tasks` for any task whose `metadata.annotations['kagent.knuteson.io/replay-of']` matches the current task's `ns/name` — server-side projection or client-side scan, both non-trivial. Defer.
 
-12. **Wave count** — Phase 4 was 6 plans (5 work + 1 gap closure). Phase 5 is smaller. **Recommendation:** 3 plans + optional 4th gap-closure if code review surfaces issues.
+12. **Wave count** — Phase 4 was 6 plans (5 work + 1 gap closure). Phase 5 is smaller. **RESOLVED:** 3 plans + optional 4th gap-closure if code review surfaces issues.
     - **Wave 0 / Plan 01:** Scaffolding — `hotkeys.ts`/.test.ts, `HotkeyCheatSheet.tsx`/.test.tsx, `useAlert.ts`/.test.ts (if adopted), `ReplayModal.tsx`/.test.tsx, `SelectionActions.tsx`/.test.tsx, `docs/HOTKEYS.md` skeleton, audit-events extension + tests, `types-write.ts` `ReplayOfReference`, `validators.ts` `validateReplayOf` + tests. NO mounts yet; pure additions. Vitest CI green on every commit.
     - **Wave 1 / Plan 02:** Wire-up — App.tsx mount HotkeyCheatSheet + useGlobalHotkeys; TaskDetail mount Replay button + `t` handler; ReviewPage `j/k/a/r/Esc`; CommandView mount SelectionActions + `o` handler; TaskList `?targetAgent` filter; api.ts `createTask` extension; routes/tasks.ts 5-step replay branch + tests. Snapshot regen commit if `cc-reload.test.tsx` shifts.
     - **Wave 2 / Plan 03:** Docs + audit — `docs/HOTKEYS.md` filled in with every shipped hotkey; `docs/COMMAND-CENTER-CONTRACT.md` footer link; `docs/SUBSTRATE-V1.md` §4.3 catalog row; verify §11 bounds-test answer + §15 one-sentence in PLAN.md.
 
-13. **Per-task `replayOf` chain inverse-link in TaskDetail** — see #11 above. **Recommendation:** defer.
+13. **Per-task `replayOf` chain inverse-link in TaskDetail** — see #11 above. **RESOLVED:** defer.
 
 ---
 
