@@ -125,8 +125,14 @@ Plans:
 2. Multi-select on Command Center sprites for bulk-inspect actions (open all selected detail views in tabs, copy IDs, scroll to first failure). Bulk-mutate actions remain forbidden until the underlying CRD write path explicitly supports the operation.
 3. Replay-from-context: from any task detail, an operator can re-dispatch the same input under a different model class or a different agent, creating a new `AgentTask` with a recorded `replayOf` annotation pointing to the original. No new CRD; uses existing AgentTask write path.
 
-**Plans**: TBD
+**Plans**: 3 plans
 **UI hint**: yes (`COMMAND-CENTER-CONTRACT.md` is binding)
+
+Plans:
+
+- [ ] 05-01-PLAN.md — Wave-1 scaffolding: hotkeys.ts + HotkeyCheatSheet + useAlert + ReplayModal + SelectionActions + types extensions + audit-event extension + validateReplayOf (additive; no mounts)
+- [ ] 05-02-PLAN.md — Wave-2 wire-up: App.tsx + CommandView.tsx + TaskDetail.tsx + ReviewPage.tsx + TaskList.tsx wiring; 5-step server-side replay branch + 5 replay tests; cc-reload snapshot regen
+- [ ] 05-03-PLAN.md — Wave-3 docs + final audit: docs/HOTKEYS.md + COMMAND-CENTER-CONTRACT.md footer + SUBSTRATE-V1.md §4.3 row; §11/§15 gate statements; final audit greps
 
 ## Future Research Backlog (999.x — NOT in v0.2)
 
