@@ -42,7 +42,9 @@ describe('POST /api/architect/draft', () => {
 
   it('strips code fences the model may wrap around the YAML', async () => {
     const fenced = '```yaml\n' + VALID + '```';
-    const app = architectRoute(deps({ architect: { complete: vi.fn(() => Promise.resolve(fenced)) } }));
+    const app = architectRoute(
+      deps({ architect: { complete: vi.fn(() => Promise.resolve(fenced)) } }),
+    );
     const res = await app.request('/draft', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

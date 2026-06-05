@@ -51,6 +51,8 @@ describe('ArchitectClient.complete', () => {
       { baseUrl: 'http://gw:4000/v1', token: 'sk-x', model: 'm1' },
       fetchMock,
     );
-    await expect(client.complete([{ role: 'user', content: 'hi' }])).rejects.toThrow(/no message content/i);
+    await expect(client.complete([{ role: 'user', content: 'hi' }])).rejects.toThrow(
+      /no message content/i,
+    );
   });
 });

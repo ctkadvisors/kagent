@@ -747,20 +747,16 @@ function makeStubCustomApi(): CustomObjectsApi & {
   readonly createNamespacedCustomObject: ReturnType<typeof vi.fn>;
 } {
   return {
-    patchNamespacedCustomObject: vi
-      .fn()
-      .mockResolvedValue({
-        apiVersion: 'kagent.knuteson.io/v1alpha1',
-        kind: 'AgentTask',
-        metadata: {},
-      }),
-    createNamespacedCustomObject: vi
-      .fn()
-      .mockResolvedValue({
-        apiVersion: 'kagent.knuteson.io/v1alpha1',
-        kind: 'AgentTemplate',
-        metadata: { uid: 'tpl-1' },
-      }),
+    patchNamespacedCustomObject: vi.fn().mockResolvedValue({
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTask',
+      metadata: {},
+    }),
+    createNamespacedCustomObject: vi.fn().mockResolvedValue({
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'AgentTemplate',
+      metadata: { uid: 'tpl-1' },
+    }),
   } as unknown as CustomObjectsApi & {
     /* ... */
   };

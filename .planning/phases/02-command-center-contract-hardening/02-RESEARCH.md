@@ -2,6 +2,7 @@
   SPDX-License-Identifier: MIT
   Copyright (c) 2026 Chris Knuteson
 -->
+
 # Phase 2: Command Center Contract Hardening — Research
 
 **Researched:** 2026-05-10
@@ -11,6 +12,7 @@
 ---
 
 <user_constraints>
+
 ## User Constraints (from CONTEXT.md)
 
 ### Locked Decisions
@@ -48,14 +50,15 @@
 </user_constraints>
 
 <phase_requirements>
+
 ## Phase Requirements
 
-| ID | Description | Research Support |
-|----|-------------|------------------|
-| CC-01 | Dev-only assertion fires when any rendered Agent node lacks a backing `AgentSummaryRow`, or any rendered task sprite lacks a backing `TaskSummary`. Fixture-based test asserts assertion fires for orphan nodes and is no-op in prod. | Layout mapper insertion point identified (agentNodes useMemo in CommandView.tsx lines 175-201; assertion fires before computeLayout at line 274); isDevBuild() function body verified; source-binding.ts extension points confirmed. |
-| CC-02 | Reloading `/#/command` reconstructs same world from API state. Vitest snapshot test (DOM + scene-graph JSON) seeded with captured API fixture asserts rendered DOM tree matches across reloads. | Fixture capture curl pipeline documented; snapshot test pattern confirmed from DispositionOverlay.test.tsx; `__fixtures__/` dir does not yet exist (Wave 0 gap); `__snapshots__/` dir exists with DispositionOverlay snapshot. |
-| CC-03 | Selection panels show operational read depth per Slice B. All panels gain "Open in detail page" link. | Exact panel start lines confirmed (AgentPanel=1898, TaskPanel=2000, GatewayPanel=1697); TaskSummary vs TaskDetail field split documented precisely; hash-route deep-link pattern (`#/tasks/<ns>/<name>`) confirmed from existing code. |
-| CC-04 | Pressure overlay (9 types) from existing DTO fields. Each marker carries source-field name + detail link. Base-building-only mode with `pressureDramatization=false`. | `pilotEvidence` field paths verified on `TaskDetail` (TaskSummary-only fallbacks documented for each type); `lastEventAt` already exists in CommandSnapshot (stale-telemetry pressure can use it directly); `pressureDramatization` flag mechanics confirmed. |
+| ID    | Description                                                                                                                                                                                                                           | Research Support                                                                                                                                                                                                                                              |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CC-01 | Dev-only assertion fires when any rendered Agent node lacks a backing `AgentSummaryRow`, or any rendered task sprite lacks a backing `TaskSummary`. Fixture-based test asserts assertion fires for orphan nodes and is no-op in prod. | Layout mapper insertion point identified (agentNodes useMemo in CommandView.tsx lines 175-201; assertion fires before computeLayout at line 274); isDevBuild() function body verified; source-binding.ts extension points confirmed.                          |
+| CC-02 | Reloading `/#/command` reconstructs same world from API state. Vitest snapshot test (DOM + scene-graph JSON) seeded with captured API fixture asserts rendered DOM tree matches across reloads.                                       | Fixture capture curl pipeline documented; snapshot test pattern confirmed from DispositionOverlay.test.tsx; `__fixtures__/` dir does not yet exist (Wave 0 gap); `__snapshots__/` dir exists with DispositionOverlay snapshot.                                |
+| CC-03 | Selection panels show operational read depth per Slice B. All panels gain "Open in detail page" link.                                                                                                                                 | Exact panel start lines confirmed (AgentPanel=1898, TaskPanel=2000, GatewayPanel=1697); TaskSummary vs TaskDetail field split documented precisely; hash-route deep-link pattern (`#/tasks/<ns>/<name>`) confirmed from existing code.                        |
+| CC-04 | Pressure overlay (9 types) from existing DTO fields. Each marker carries source-field name + detail link. Base-building-only mode with `pressureDramatization=false`.                                                                 | `pilotEvidence` field paths verified on `TaskDetail` (TaskSummary-only fallbacks documented for each type); `lastEventAt` already exists in CommandSnapshot (stale-telemetry pressure can use it directly); `pressureDramatization` flag mechanics confirmed. |
 
 </phase_requirements>
 
@@ -75,16 +78,16 @@ Three critical decisions from CONTEXT.md "Claude's Discretion" are now resolved 
 
 ## Architectural Responsibility Map
 
-| Capability | Primary Tier | Secondary Tier | Rationale |
-|------------|-------------|----------------|-----------|
-| CC-01 source-binding assertion (React panels) | Frontend client (workbench-ui) | — | Dev-only runtime guard; emits `data-source-field` DOM attrs for debuggability; no server involvement |
-| CC-01 canvas-side orphan assertion | Frontend client (workbench-ui) | — | Lives at `agentNodes useMemo`→`computeLayout` call site in CommandView.tsx; pure snapshot→layout pipeline check |
-| CC-02 fixture capture | Manual (dev machine) | API (workbench-api) | `curl/jq` against running `workbench-api` dev server; committed once to git |
-| CC-02 reload-stability test | Frontend client (workbench-ui) | — | Vitest jsdom, `@testing-library/react`, no browser |
-| CC-03 panel read depth (AgentPanel/TaskPanel/GatewayPanel) | Frontend client (workbench-ui) | — | Inline HTML KV rows reading from existing `snapshot.*` Maps; no API changes |
-| CC-04 pressure classification logic | Frontend client (workbench-ui) | — | `pressure.ts` derives all 9 types from existing `CommandSnapshot` fields; no new DTO, no new endpoint |
-| CC-04 pressure overlay rendering | Frontend client (workbench-ui) | — | HTML-over-canvas markers (same position strategy as `DispositionOverlay`); extends `pressureDramatization` |
-| `pilotEvidence` field access (context/verifier/trace/pod) | Frontend client (workbench-ui) | API (TaskDetail fetch) | Only available on `TaskDetail`, not `TaskSummary`; Task-Summary-only fallbacks documented per pressure type |
+| Capability                                                 | Primary Tier                   | Secondary Tier         | Rationale                                                                                                       |
+| ---------------------------------------------------------- | ------------------------------ | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| CC-01 source-binding assertion (React panels)              | Frontend client (workbench-ui) | —                      | Dev-only runtime guard; emits `data-source-field` DOM attrs for debuggability; no server involvement            |
+| CC-01 canvas-side orphan assertion                         | Frontend client (workbench-ui) | —                      | Lives at `agentNodes useMemo`→`computeLayout` call site in CommandView.tsx; pure snapshot→layout pipeline check |
+| CC-02 fixture capture                                      | Manual (dev machine)           | API (workbench-api)    | `curl/jq` against running `workbench-api` dev server; committed once to git                                     |
+| CC-02 reload-stability test                                | Frontend client (workbench-ui) | —                      | Vitest jsdom, `@testing-library/react`, no browser                                                              |
+| CC-03 panel read depth (AgentPanel/TaskPanel/GatewayPanel) | Frontend client (workbench-ui) | —                      | Inline HTML KV rows reading from existing `snapshot.*` Maps; no API changes                                     |
+| CC-04 pressure classification logic                        | Frontend client (workbench-ui) | —                      | `pressure.ts` derives all 9 types from existing `CommandSnapshot` fields; no new DTO, no new endpoint           |
+| CC-04 pressure overlay rendering                           | Frontend client (workbench-ui) | —                      | HTML-over-canvas markers (same position strategy as `DispositionOverlay`); extends `pressureDramatization`      |
+| `pilotEvidence` field access (context/verifier/trace/pod)  | Frontend client (workbench-ui) | API (TaskDetail fetch) | Only available on `TaskDetail`, not `TaskSummary`; Task-Summary-only fallbacks documented per pressure type     |
 
 ---
 
@@ -92,14 +95,14 @@ Three critical decisions from CONTEXT.md "Claude's Discretion" are now resolved 
 
 ### Core (in-use, verified)
 
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| react | 18.x | Component rendering | Project dependency [VERIFIED: codebase] |
-| @testing-library/react | 16.3.0 | Component test rendering | Already installed [VERIFIED: package.json] |
-| @testing-library/dom | 10.4.1 | DOM assertions | Already installed [VERIFIED: package.json] |
-| @testing-library/jest-dom | 6.9.1 | Extended matchers | Already installed [VERIFIED: package.json] |
-| vitest | 4.1.4 | Test runner | Project standard [VERIFIED: package.json] |
-| @vitest/coverage-v8 | 4.1.4 | Coverage reporter | Already configured [VERIFIED: vitest.config.ts] |
+| Library                   | Version | Purpose                  | Why Standard                                    |
+| ------------------------- | ------- | ------------------------ | ----------------------------------------------- |
+| react                     | 18.x    | Component rendering      | Project dependency [VERIFIED: codebase]         |
+| @testing-library/react    | 16.3.0  | Component test rendering | Already installed [VERIFIED: package.json]      |
+| @testing-library/dom      | 10.4.1  | DOM assertions           | Already installed [VERIFIED: package.json]      |
+| @testing-library/jest-dom | 6.9.1   | Extended matchers        | Already installed [VERIFIED: package.json]      |
+| vitest                    | 4.1.4   | Test runner              | Project standard [VERIFIED: package.json]       |
+| @vitest/coverage-v8       | 4.1.4   | Coverage reporter        | Already configured [VERIFIED: vitest.config.ts] |
 
 ### No new dependencies required
 
@@ -260,9 +263,7 @@ Representative JSX (quoted verbatim from DispositionOverlay.tsx):
   <span className={styles.metricLabel}>Tokens</span>{' '}
   <span
     className={
-      tokensExceeded && pressureDramatization
-        ? styles.pressureDramatic
-        : styles.metricValue
+      tokensExceeded && pressureDramatization ? styles.pressureDramatic : styles.metricValue
     }
   >
     {tokensExceeded
@@ -274,19 +275,17 @@ Representative JSX (quoted verbatim from DispositionOverlay.tsx):
 
 ```tsx
 // Source: DispositionOverlay.tsx lines 159-172 — pressure marker (anchor with detail link)
-{tokensExceeded && (
-  <a
-    className={
-      pressureDramatization
-        ? styles.pressureMarker
-        : styles.pressureMarkerSubdued
-    }
-    data-source-fields={useSourceFields(['spentTokensToday', 'idleBehavior'])}
-    href={agentDetailHref}
-  >
-    Tokens over budget — open agent detail →
-  </a>
-)}
+{
+  tokensExceeded && (
+    <a
+      className={pressureDramatization ? styles.pressureMarker : styles.pressureMarkerSubdued}
+      data-source-fields={useSourceFields(['spentTokensToday', 'idleBehavior'])}
+      href={agentDetailHref}
+    >
+      Tokens over budget — open agent detail →
+    </a>
+  );
+}
 ```
 
 [VERIFIED: DispositionOverlay.tsx]
@@ -303,11 +302,9 @@ const pressureDramatization: boolean =
 ```
 
 It is passed as a prop to `DispositionOverlay` at line 1384:
+
 ```tsx
-<DispositionOverlay
-  snapshot={snapshot}
-  pressureDramatization={pressureDramatization}
-/>
+<DispositionOverlay snapshot={snapshot} pressureDramatization={pressureDramatization} />
 ```
 
 The new `PressureOverlay` receives the same prop verbatim. No new env-var. No new detection logic. [VERIFIED: CommandView.tsx]
@@ -315,11 +312,13 @@ The new `PressureOverlay` receives the same prop verbatim. No new env-var. No ne
 ### Pattern 5: Hash-Route Deep Links (existing)
 
 From `CommandView.tsx` (task detail links at lines 1971, 1985):
+
 ```tsx
 href={`#/tasks/${encodeURIComponent(t.namespace)}/${encodeURIComponent(t.name)}`}
 ```
 
 From `App.tsx` lines 17-21 (routes):
+
 - `#/` (or no hash) → TaskList
 - `#/tasks/<namespace>/<name>` → TaskDetail
 - `#/gateway` → GatewayPage
@@ -370,13 +369,13 @@ expect(second).toMatchSnapshot();
 
 ## Don't Hand-Roll
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| Test environment setup | New jsdom setup | Existing `vitest.config.ts` (already configured with jsdom + react plugin) | Phase 1 set this up; Phase 2 inherits it |
-| CSS-hash-agnostic snapshots | Raw `innerHTML` string snapshots | `data-source-field` attribute selectors + textContent | CSS modules generate build-time hashes; raw HTML snapshots would fail on every rebuild |
-| `pressureDramatization` detection | New env-var / new hook | `VITE_PRESSURE_DRAMATIZATION` already wired at module scope in `CommandView.tsx:83` | Phase 1 established this; Phase 2 passes the same boolean prop |
-| `isDevBuild()` reimplementation | New prod/dev check | `isDevBuild()` from `source-binding.ts` | Handles NODE_ENV, Vite import.meta.env.PROD/DEV, and safe-default; already tested |
-| Pressure endpoint | `/api/pressure` workbench-api route | UI-side derivation in `pressure.ts` | Explicitly locked out of scope in all three constraint documents |
+| Problem                           | Don't Build                         | Use Instead                                                                         | Why                                                                                    |
+| --------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Test environment setup            | New jsdom setup                     | Existing `vitest.config.ts` (already configured with jsdom + react plugin)          | Phase 1 set this up; Phase 2 inherits it                                               |
+| CSS-hash-agnostic snapshots       | Raw `innerHTML` string snapshots    | `data-source-field` attribute selectors + textContent                               | CSS modules generate build-time hashes; raw HTML snapshots would fail on every rebuild |
+| `pressureDramatization` detection | New env-var / new hook              | `VITE_PRESSURE_DRAMATIZATION` already wired at module scope in `CommandView.tsx:83` | Phase 1 established this; Phase 2 passes the same boolean prop                         |
+| `isDevBuild()` reimplementation   | New prod/dev check                  | `isDevBuild()` from `source-binding.ts`                                             | Handles NODE_ENV, Vite import.meta.env.PROD/DEV, and safe-default; already tested      |
+| Pressure endpoint                 | `/api/pressure` workbench-api route | UI-side derivation in `pressure.ts`                                                 | Explicitly locked out of scope in all three constraint documents                       |
 
 ---
 
@@ -393,6 +392,7 @@ expect(second).toMatchSnapshot();
 `originalUserMessage?`, `payload?`, `result?`, `expectedTools?`, `parentDistillation?`, `parentTask?`, `containerStatuses`, `children?`, `artifacts?`, `successCount?`, `failureCount?`, `inFlightCount?`, `traceLink?`, `pilotEvidence?`
 
 `TaskPilotEvidence` internal fields (`pilotEvidence.*`):
+
 - `pilotEvidence.audit.{labels, annotations, tenant?, createdBy?, managedBy?, parentTaskUid?}`
 - `pilotEvidence.policy.{agentResolved, tools?, capabilities?, allowedChildAgents?, allowedChildTemplates?, maxConcurrentChildren?, maxInFlightTasks?}`
 - `pilotEvidence.taskGraph.{childCount?, successCount?, failureCount?, inFlightCount?, aggregatePhase?, parentTask?}`
@@ -406,17 +406,17 @@ expect(second).toMatchSnapshot();
 
 ### Finding 2: Per-pressure-type source fields with TaskSummary-only fallbacks
 
-| Pressure Kind | Ideal Source | In TaskSummary Snapshot? | TaskSummary Fallback |
-|---------------|-------------|--------------------------|---------------------|
-| context | `pilotEvidence.policy.maxConcurrentChildren` + `pilotEvidence.taskGraph.inFlightCount` ratio | NO (TaskDetail only) | `childCount >= 2 && phase === 'Dispatched'` as weak heuristic; or defer firing unless pilotEvidence is reachable |
-| gateway saturation | `GatewayCapacityRow.inFlight / GatewayCapacityRow.currentCap >= 0.8` | YES (gatewayCapacity is in snapshot) | N/A — all fields available |
-| policy denial | audit-event SSE kind (existing SSE stream) | PARTIAL — SSE `cache` events are `{kind, op, key}`; NO structured audit-event kind in current SSE shape | Fallback: `phase === 'Failed' && error` containing "policy" or "capability" string match (ASSUMED heuristic; fragile) — recommend BLOCKING on this type unless a clean source field is found |
-| verifier failure | `pilotEvidence.verification.passed === false` | NO (TaskDetail only) | `phase === 'Failed' && error` containing "verifier" — weak; CONTEXT.md already documents this fallback |
-| artifact debt | `artifactCount === 0 && phase === 'Completed'` | YES — `artifactCount` is on TaskSummary | N/A — available in snapshot |
-| trace gap | `traceLink === undefined` on terminal task | NO (`traceLink` only on TaskDetail) | `phase === 'Completed' || phase === 'Failed'` AND we cannot verify traceLink from snapshot → marker fires as "trace link unknown"; links to TaskDetail |
-| pod failure | `phase === 'Failed' && podName !== undefined` | YES — both fields on TaskSummary | N/A — good enough for v0.2 |
-| quota wall | `dispositions[agentKey].overBudget === true` | YES — dispositions Map is in snapshot (Phase 1) | N/A — use disposition overlay's overBudget field; detailLink → `#/tasks/<ns>/<name>` for most recent task |
-| stale telemetry | SSE heartbeat staleness via `lastEventAt` | YES — `CommandSnapshot.lastEventAt: number` is already in the snapshot | N/A — available |
+| Pressure Kind      | Ideal Source                                                                                 | In TaskSummary Snapshot?                                                                                | TaskSummary Fallback                                                                                                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | ---------------------------------------------------------------------------------------------------------------------------- |
+| context            | `pilotEvidence.policy.maxConcurrentChildren` + `pilotEvidence.taskGraph.inFlightCount` ratio | NO (TaskDetail only)                                                                                    | `childCount >= 2 && phase === 'Dispatched'` as weak heuristic; or defer firing unless pilotEvidence is reachable                                                                             |
+| gateway saturation | `GatewayCapacityRow.inFlight / GatewayCapacityRow.currentCap >= 0.8`                         | YES (gatewayCapacity is in snapshot)                                                                    | N/A — all fields available                                                                                                                                                                   |
+| policy denial      | audit-event SSE kind (existing SSE stream)                                                   | PARTIAL — SSE `cache` events are `{kind, op, key}`; NO structured audit-event kind in current SSE shape | Fallback: `phase === 'Failed' && error` containing "policy" or "capability" string match (ASSUMED heuristic; fragile) — recommend BLOCKING on this type unless a clean source field is found |
+| verifier failure   | `pilotEvidence.verification.passed === false`                                                | NO (TaskDetail only)                                                                                    | `phase === 'Failed' && error` containing "verifier" — weak; CONTEXT.md already documents this fallback                                                                                       |
+| artifact debt      | `artifactCount === 0 && phase === 'Completed'`                                               | YES — `artifactCount` is on TaskSummary                                                                 | N/A — available in snapshot                                                                                                                                                                  |
+| trace gap          | `traceLink === undefined` on terminal task                                                   | NO (`traceLink` only on TaskDetail)                                                                     | `phase === 'Completed'                                                                                                                                                                       |     | phase === 'Failed'` AND we cannot verify traceLink from snapshot → marker fires as "trace link unknown"; links to TaskDetail |
+| pod failure        | `phase === 'Failed' && podName !== undefined`                                                | YES — both fields on TaskSummary                                                                        | N/A — good enough for v0.2                                                                                                                                                                   |
+| quota wall         | `dispositions[agentKey].overBudget === true`                                                 | YES — dispositions Map is in snapshot (Phase 1)                                                         | N/A — use disposition overlay's overBudget field; detailLink → `#/tasks/<ns>/<name>` for most recent task                                                                                    |
+| stale telemetry    | SSE heartbeat staleness via `lastEventAt`                                                    | YES — `CommandSnapshot.lastEventAt: number` is already in the snapshot                                  | N/A — available                                                                                                                                                                              |
 
 [VERIFIED: types.ts, state.ts; policy-denial fallback is ASSUMED fragile]
 
@@ -440,6 +440,7 @@ The `<aside>` uses CSS module class `styles.card`. The pressure overlay should f
 ### Finding 5: `pressureDramatization` flag — exact wiring
 
 Module-scope constant in `CommandView.tsx`:
+
 ```typescript
 // Source: CommandView.tsx line 83-85
 const pressureDramatization: boolean =
@@ -457,7 +458,7 @@ Passed to `DispositionOverlay` at line 1382-1385. The new `PressureOverlay` rece
 
 ```typescript
 // Source: layout.ts lines 103, 53-57
-export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds): LayoutResult
+export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds): LayoutResult;
 
 export interface LayoutResult {
   readonly gateway: { x: number; y: number };
@@ -473,6 +474,7 @@ The CC-02 scene-graph snapshot is `JSON.stringify(computeLayout(agentNodes, boun
 ### Finding 7: Canvas-side orphan assertion — "TASK-ORPHAN" vs "AGENT-ORPHAN" distinction
 
 The current `agentNodes useMemo` has TWO kinds of agents in the final array:
+
 1. Agents from `snapshot.agents` (fully backed by `AgentSummaryRow`)
 2. Agents synthesized from `snapshot.tasks` whose `targetAgent` is NOT in `snapshot.agents` (lines 188-199)
 
@@ -521,6 +523,7 @@ packages/workbench-ui/src/command/__snapshots__/
 One snapshot file exists (Phase 1 Test 7 — reload stability). [VERIFIED: filesystem]
 
 The Phase 2 planner adds:
+
 - `PressureOverlay.test.tsx.snap` (from CC-04 snapshot tests)
 - `cc-reload-stability.test.tsx.snap` (from CC-02 test, or inline snapshot in the test file)
 
@@ -565,14 +568,14 @@ function isDevBuild(): boolean {
   const proc = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } })
     .process;
   const nodeEnv = proc?.env?.NODE_ENV;
-  if (nodeEnv === 'production') return false;        // (1) explicit prod marker
+  if (nodeEnv === 'production') return false; // (1) explicit prod marker
   try {
     const env = (import.meta as unknown as { env?: { DEV?: boolean; PROD?: boolean } }).env;
-    if (env?.PROD === true) return false;             // (2) Vite PROD flag
-    if (env?.DEV === true) return true;              // (3) Vite DEV flag
-  } catch { }
+    if (env?.PROD === true) return false; // (2) Vite PROD flag
+    if (env?.DEV === true) return true; // (3) Vite DEV flag
+  } catch {}
   if (nodeEnv !== undefined) return nodeEnv !== 'production'; // (4) other NODE_ENV
-  return true;                                        // (5) safe default = dev
+  return true; // (5) safe default = dev
 }
 ```
 
@@ -588,11 +591,13 @@ Test pattern: `vi.stubEnv('NODE_ENV', 'production')` disables assertions (step 1
 Two viable approaches:
 
 **Option A — Widen to generic:**
+
 ```typescript
 export function assertSourceField<T extends object, K extends keyof T & string>(
   row: T, field: K
 ): void { ... }
 ```
+
 This breaks the closed-enum guarantee at the TypeScript level (any object + any keyof works). Less safe but simpler.
 
 **Option B — Per-DTO overloads:**
@@ -603,16 +608,19 @@ Add `assertAgentSourceField`, `assertTaskSourceField`, `assertGatewaySourceField
 ### Finding 15: Existing hash-route deep link pattern (verbatim from code)
 
 From `CommandView.tsx` AgentPanel (line 1971, 1985):
+
 ```tsx
 href={`#/tasks/${encodeURIComponent(t.namespace)}/${encodeURIComponent(t.name)}`}
 ```
 
 From `CommandView.tsx` TaskPanel (line 2036):
+
 ```tsx
 href={`#/tasks/${encodeURIComponent(t.namespace)}/${encodeURIComponent(t.name)}`}
 ```
 
 GatewayPage route from `App.tsx`:
+
 ```
 #/gateway   → GatewayPage
 #/cluster   → ClusterPage
@@ -737,36 +745,38 @@ export type PressureFieldName = typeof PRESSURE_TYPES[number]['kind'];
 // Source: CommandView.tsx AgentPanel (line 1898), extended for CC-03
 // Mirror of DispositionOverlay.tsx's pattern for data-source-fields
 
-{a?.capabilities && a.capabilities.length > 0 ? (
-  <div
-    className={styles.panelKv}
-    data-source-field={useSourceField('capabilities' as AgentSummaryFieldName)}
-  >
-    <span>Capabilities</span>
-    <span>{a.capabilities.join(', ')}</span>
-  </div>
-) : null}
+{
+  a?.capabilities && a.capabilities.length > 0 ? (
+    <div
+      className={styles.panelKv}
+      data-source-field={useSourceField('capabilities' as AgentSummaryFieldName)}
+    >
+      <span>Capabilities</span>
+      <span>{a.capabilities.join(', ')}</span>
+    </div>
+  ) : null;
+}
 ```
 
 ---
 
 ## State of the Art
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| Direct DTO field access without source-binding | `assertSourceField` + `data-source-field` DOM attributes | Phase 1 (DISP-04) | Dev-time contract enforcement; Phase 2 generalizes |
-| Single overlay type (DispositionOverlay) | Multiple overlays (Disposition + Pressure) | Phase 2 (this phase) | Each overlay is independently testable |
-| No fixture directory | `__fixtures__/cc-snapshot.json` | Phase 2 Wave 0 | Enables deterministic reload-stability tests |
+| Old Approach                                   | Current Approach                                         | When Changed         | Impact                                             |
+| ---------------------------------------------- | -------------------------------------------------------- | -------------------- | -------------------------------------------------- |
+| Direct DTO field access without source-binding | `assertSourceField` + `data-source-field` DOM attributes | Phase 1 (DISP-04)    | Dev-time contract enforcement; Phase 2 generalizes |
+| Single overlay type (DispositionOverlay)       | Multiple overlays (Disposition + Pressure)               | Phase 2 (this phase) | Each overlay is independently testable             |
+| No fixture directory                           | `__fixtures__/cc-snapshot.json`                          | Phase 2 Wave 0       | Enables deterministic reload-stability tests       |
 
 ---
 
 ## Assumptions Log
 
-| # | Claim | Section | Risk if Wrong |
-|---|-------|---------|---------------|
-| A1 | Policy denial pressure can be approximated with `phase === 'Failed' && error?.includes('policy')` | Finding #2 | Marker fires for non-policy failures, OR misses policy denials with different error text. Risk: LOW accuracy pressure signal. The CONTEXT.md already documents this as a known gap. |
-| A2 | `computeLayout` return value is JSON-serializable (no circular references, no functions) | Finding #4 (Pitfall 4) | If not serializable, `JSON.stringify(computeLayout(...))` in the CC-02 test throws. Inspection shows `LayoutResult` contains `{gateway: {x,y}, agents: Map<string, AgentPosition>, factions: Map<string, ...>}` — Maps are NOT JSON-serializable by default; planner must convert to object or use `Array.from` in the snapshot assertion. |
-| A3 | The agentNodes orphan throw is acceptable even if it fires during transient SSE reconnect | Finding #7 | Tests that render CommandView with a live SSE connection may get unexpected throws. In practice, tests mock `subscribeCacheEvents` (established pattern in state.test.ts), so this is test-safe. |
+| #   | Claim                                                                                             | Section                | Risk if Wrong                                                                                                                                                                                                                                                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A1  | Policy denial pressure can be approximated with `phase === 'Failed' && error?.includes('policy')` | Finding #2             | Marker fires for non-policy failures, OR misses policy denials with different error text. Risk: LOW accuracy pressure signal. The CONTEXT.md already documents this as a known gap.                                                                                                                                                        |
+| A2  | `computeLayout` return value is JSON-serializable (no circular references, no functions)          | Finding #4 (Pitfall 4) | If not serializable, `JSON.stringify(computeLayout(...))` in the CC-02 test throws. Inspection shows `LayoutResult` contains `{gateway: {x,y}, agents: Map<string, AgentPosition>, factions: Map<string, ...>}` — Maps are NOT JSON-serializable by default; planner must convert to object or use `Array.from` in the snapshot assertion. |
+| A3  | The agentNodes orphan throw is acceptable even if it fires during transient SSE reconnect         | Finding #7             | Tests that render CommandView with a live SSE connection may get unexpected throws. In practice, tests mock `subscribeCacheEvents` (established pattern in state.test.ts), so this is test-safe.                                                                                                                                           |
 
 **Note on A2 (CRITICAL):** `Map` objects serialize to `{}` with `JSON.stringify`. The CC-02 scene-graph snapshot must use `Array.from(layout.agents.entries())` or a custom serializer, NOT raw `JSON.stringify(layoutRef.current)`. The planner must handle this explicitly in the test design.
 
@@ -793,18 +803,19 @@ export type PressureFieldName = typeof PRESSURE_TYPES[number]['kind'];
 
 ## Environment Availability
 
-| Dependency | Required By | Available | Version | Fallback |
-|------------|------------|-----------|---------|----------|
-| Node.js | vitest, workbench-api start | Yes | 23.11.1 | — |
-| pnpm | `pnpm -C packages/workbench-ui test` | Confirmed (project uses pnpm workspace) [VERIFIED: package.json] | — | — |
-| vitest (workbench-ui) | All tests | Yes | 4.1.4 (installed) | — |
-| @testing-library/react | DispositionOverlay.test.tsx pattern | Yes | 16.3.0 (installed) | — |
-| workbench-api (for fixture capture) | CC-02 fixture | Needs running instance | — | Hand-craft fixture from types.ts shapes |
-| K8s cluster (for live workbench-api) | CC-02 fixture capture with real data | Homelab only (GitOps) | — | Hand-craft fixture |
+| Dependency                           | Required By                          | Available                                                        | Version            | Fallback                                |
+| ------------------------------------ | ------------------------------------ | ---------------------------------------------------------------- | ------------------ | --------------------------------------- |
+| Node.js                              | vitest, workbench-api start          | Yes                                                              | 23.11.1            | —                                       |
+| pnpm                                 | `pnpm -C packages/workbench-ui test` | Confirmed (project uses pnpm workspace) [VERIFIED: package.json] | —                  | —                                       |
+| vitest (workbench-ui)                | All tests                            | Yes                                                              | 4.1.4 (installed)  | —                                       |
+| @testing-library/react               | DispositionOverlay.test.tsx pattern  | Yes                                                              | 16.3.0 (installed) | —                                       |
+| workbench-api (for fixture capture)  | CC-02 fixture                        | Needs running instance                                           | —                  | Hand-craft fixture from types.ts shapes |
+| K8s cluster (for live workbench-api) | CC-02 fixture capture with real data | Homelab only (GitOps)                                            | —                  | Hand-craft fixture                      |
 
 **Missing dependencies with no fallback:** None.
 
 **Missing dependencies with fallback:**
+
 - Live workbench-api for fixture capture → hand-craft `cc-snapshot.json` using `types.ts` shapes directly. The fixture is committed to git; it doesn't require a live cluster after that.
 
 ---
@@ -813,30 +824,30 @@ export type PressureFieldName = typeof PRESSURE_TYPES[number]['kind'];
 
 ### Test Framework
 
-| Property | Value |
-|----------|-------|
-| Framework | vitest 4.1.4 |
-| Config file | `packages/workbench-ui/vitest.config.ts` |
-| Quick run command | `pnpm -C packages/workbench-ui test` |
+| Property           | Value                                              |
+| ------------------ | -------------------------------------------------- |
+| Framework          | vitest 4.1.4                                       |
+| Config file        | `packages/workbench-ui/vitest.config.ts`           |
+| Quick run command  | `pnpm -C packages/workbench-ui test`               |
 | Full suite command | `pnpm -C packages/workbench-ui test -- --coverage` |
 
 Coverage thresholds: NOT configured in `vitest.config.ts` (coverage is `provider: 'v8'`, `reporter: ['text', 'lcov']` — no `thresholds`). The planner may add `thresholds: { lines: 85, ... }` to enforce CC's ≥85% on source-binding.ts + pressure.ts. [VERIFIED: vitest.config.ts]
 
 ### Phase Requirements → Test Map
 
-| Req ID | Behavior | Test Type | Automated Command | File Exists? |
-|--------|----------|-----------|-------------------|-------------|
-| CC-01 | Orphan agent assertion fires in dev | unit | `pnpm -C packages/workbench-ui test -- source-binding` | Partial — source-binding.test.ts covers disposition slice; CC-01 additions needed |
-| CC-01 | Production no-op for orphan assertion | unit | same | Partial — Test 3 pattern in source-binding.test.ts covers it; new type-specific tests needed |
-| CC-01 | Canvas-side orphan assertion in agentNodes useMemo | unit | `pnpm -C packages/workbench-ui test -- cc-orphan` | No — Wave 0 gap |
-| CC-02 | Reload-stability DOM snapshot matches across remounts | snapshot | `pnpm -C packages/workbench-ui test -- cc-reload` | No — Wave 0 gap |
-| CC-02 | Reload-stability scene-graph (computeLayout output) matches | snapshot | same | No — Wave 0 gap |
-| CC-03 | AgentPanel renders capabilities/modelClass/counters with data-source-field | unit | `pnpm -C packages/workbench-ui test -- AgentPanel` | No — Wave 0 gap |
-| CC-03 | TaskPanel renders timestamps/suspicious/artifact-count with data-source-field | unit | `pnpm -C packages/workbench-ui test -- TaskPanel` | No — Wave 0 gap |
-| CC-03 | GatewayPanel renders with data-source-fields + open-in-GatewayPage link | unit | `pnpm -C packages/workbench-ui test -- GatewayPanel` | No — Wave 0 gap |
-| CC-04 | Each of 9 pressure types fires when source data is present | unit | `pnpm -C packages/workbench-ui test -- pressure` | No — Wave 0 gap |
-| CC-04 | Each of 9 pressure types does NOT fire when source data is absent | unit | same | No — Wave 0 gap |
-| CC-04 | PressureOverlay renders markers with data-source-field + pressureDramatization | snapshot | `pnpm -C packages/workbench-ui test -- PressureOverlay` | No — Wave 0 gap |
+| Req ID | Behavior                                                                       | Test Type | Automated Command                                       | File Exists?                                                                                 |
+| ------ | ------------------------------------------------------------------------------ | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| CC-01  | Orphan agent assertion fires in dev                                            | unit      | `pnpm -C packages/workbench-ui test -- source-binding`  | Partial — source-binding.test.ts covers disposition slice; CC-01 additions needed            |
+| CC-01  | Production no-op for orphan assertion                                          | unit      | same                                                    | Partial — Test 3 pattern in source-binding.test.ts covers it; new type-specific tests needed |
+| CC-01  | Canvas-side orphan assertion in agentNodes useMemo                             | unit      | `pnpm -C packages/workbench-ui test -- cc-orphan`       | No — Wave 0 gap                                                                              |
+| CC-02  | Reload-stability DOM snapshot matches across remounts                          | snapshot  | `pnpm -C packages/workbench-ui test -- cc-reload`       | No — Wave 0 gap                                                                              |
+| CC-02  | Reload-stability scene-graph (computeLayout output) matches                    | snapshot  | same                                                    | No — Wave 0 gap                                                                              |
+| CC-03  | AgentPanel renders capabilities/modelClass/counters with data-source-field     | unit      | `pnpm -C packages/workbench-ui test -- AgentPanel`      | No — Wave 0 gap                                                                              |
+| CC-03  | TaskPanel renders timestamps/suspicious/artifact-count with data-source-field  | unit      | `pnpm -C packages/workbench-ui test -- TaskPanel`       | No — Wave 0 gap                                                                              |
+| CC-03  | GatewayPanel renders with data-source-fields + open-in-GatewayPage link        | unit      | `pnpm -C packages/workbench-ui test -- GatewayPanel`    | No — Wave 0 gap                                                                              |
+| CC-04  | Each of 9 pressure types fires when source data is present                     | unit      | `pnpm -C packages/workbench-ui test -- pressure`        | No — Wave 0 gap                                                                              |
+| CC-04  | Each of 9 pressure types does NOT fire when source data is absent              | unit      | same                                                    | No — Wave 0 gap                                                                              |
+| CC-04  | PressureOverlay renders markers with data-source-field + pressureDramatization | snapshot  | `pnpm -C packages/workbench-ui test -- PressureOverlay` | No — Wave 0 gap                                                                              |
 
 ### Sampling Rate
 
@@ -866,16 +877,16 @@ Security enforcement is nominally enabled per default config, but this phase int
 
 ## Project Constraints (from CLAUDE.md)
 
-| Directive | Phase 2 Compliance |
-|-----------|-------------------|
-| TypeScript primary, strict mode, ESM, Node 22 target | All new files are `.ts`/`.tsx` with ESM imports and strict types |
-| MIT license header on every `.ts` source file | Required on `pressure.ts`, `PressureOverlay.tsx`, `PressureOverlay.test.tsx`, `PressureOverlay.module.css` (CSS doesn't need it; .ts/.tsx do) |
-| Conventional commits with `phase-02-...` scope | `feat(phase-02-source-binding): ...`, `feat(phase-02-pressure): ...`, etc. |
-| No squash-on-merge | Each atomic task commit survives; GSD enforces |
-| Tests: vitest, co-located `*.test.ts`, ≥85% on source-binding.ts and pressure.ts, ≥75% on glue code | Enforced by phase test posture |
-| No new CRD, no new workbench-api endpoint, no imperative kubectl | All Phase 2 work is in `packages/workbench-ui/` |
-| `gh pr create` and `gh pr merge` are NOT a unit | PR created, merge requires explicit consent |
-| GitOps only on homelab (verify via Job manifests, not imperative kubectl) | Not applicable — Phase 2 is pure UI; no cluster verification needed |
+| Directive                                                                                           | Phase 2 Compliance                                                                                                                            |
+| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript primary, strict mode, ESM, Node 22 target                                                | All new files are `.ts`/`.tsx` with ESM imports and strict types                                                                              |
+| MIT license header on every `.ts` source file                                                       | Required on `pressure.ts`, `PressureOverlay.tsx`, `PressureOverlay.test.tsx`, `PressureOverlay.module.css` (CSS doesn't need it; .ts/.tsx do) |
+| Conventional commits with `phase-02-...` scope                                                      | `feat(phase-02-source-binding): ...`, `feat(phase-02-pressure): ...`, etc.                                                                    |
+| No squash-on-merge                                                                                  | Each atomic task commit survives; GSD enforces                                                                                                |
+| Tests: vitest, co-located `*.test.ts`, ≥85% on source-binding.ts and pressure.ts, ≥75% on glue code | Enforced by phase test posture                                                                                                                |
+| No new CRD, no new workbench-api endpoint, no imperative kubectl                                    | All Phase 2 work is in `packages/workbench-ui/`                                                                                               |
+| `gh pr create` and `gh pr merge` are NOT a unit                                                     | PR created, merge requires explicit consent                                                                                                   |
+| GitOps only on homelab (verify via Job manifests, not imperative kubectl)                           | Not applicable — Phase 2 is pure UI; no cluster verification needed                                                                           |
 
 ---
 

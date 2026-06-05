@@ -163,9 +163,7 @@ async function main(): Promise<void> {
       token: architectToken,
       model: architectModel,
     });
-    console.log(
-      `[workbench-api] architect configured → ${architectUrl} (model ${architectModel})`,
-    );
+    console.log(`[workbench-api] architect configured → ${architectUrl} (model ${architectModel})`);
   } else {
     console.log(
       '[workbench-api] architect NOT configured (set KAGENT_ARCHITECT_GATEWAY_URL + KAGENT_ARCHITECT_GATEWAY_TOKEN + KAGENT_ARCHITECT_MODEL). /api/architect/* will not be mounted.',
