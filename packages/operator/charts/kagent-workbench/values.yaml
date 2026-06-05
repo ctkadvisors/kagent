@@ -73,6 +73,22 @@ api:
     admin:
       secretName: ''
       secretKey: 'token'
+  # kagent Studio Architect (chat-to-create). When enabled, the
+  # workbench-api mounts `/api/architect/*` and routes generation through
+  # the gateway's OpenAI-compatible `/v1` surface (model-agnostic). The
+  # `/draft` generate path needs only this; the `/try` write path
+  # additionally requires `rbac.actions.create` AND the kagent-draft Role
+  # the GitOps overlay grants the workbench ServiceAccount. Token reuses
+  # the gateway's `kagent-llm-gateway-token` Secret (same homelab posture
+  # as gatewayAdmin). Leave `enabled: false` to omit the feature.
+  architect:
+    enabled: false
+    gatewayUrl: '' # in-cluster OpenAI-compatible base, e.g. http://kagent-llm-gateway.kagent-system.svc.cluster.local:4000/v1
+    model: '' # e.g. workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
+    tokenSecret:
+      name: 'kagent-llm-gateway-token'
+      key: 'token'
+    draftNamespace: 'kagent-draft'
   # Header-trust auth gate. The workbench-api requires every non-probe
   # request to carry an `X-Forwarded-User` header (set upstream by
   # Traefik forward-auth or oauth2-proxy). The default is `true` —

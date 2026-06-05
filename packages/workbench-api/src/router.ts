@@ -27,6 +27,7 @@ import type { SnapshotCache } from './cache.js';
 import type { GatewayClient } from './gateway-client.js';
 import type { SseBroker } from './sse.js';
 import { agentsRoute } from './routes/agents.js';
+import { architectRoute, type ArchitectLike } from './routes/architect.js';
 import { clusterRoute } from './routes/cluster.js';
 import { dispositionsRoute } from './routes/dispositions.js';
 import { gatewayRoute } from './routes/gateway.js';
@@ -85,6 +86,15 @@ export interface RouterDeps {
    * return 503 — same opt-in posture as `customApi` for POST.
    */
   readonly gatewayClient?: GatewayClient;
+  /**
+   * kagent Studio Architect chat client (gateway-backed). When omitted,
+   * `/api/architect/*` is not mounted — same opt-in posture as
+   * `gatewayClient`. The write side (`/try`) additionally requires
+   * `customApi`; the read/generate side (`/draft`) only needs this.
+   */
+  readonly architect?: ArchitectLike;
+  /** Namespace Studio drafts are instantiated into. Default 'kagent-draft'. */
+  readonly draftNamespace?: string;
   /**
    * Always-available read-side K8s client. The Gateway page uses it to
    * enrich capacity rows with the underlying ModelEndpoint CR's
@@ -235,6 +245,22 @@ export function buildRouter(deps: RouterDeps): Hono {
       ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
     }),
   );
+
+  // kagent Studio — `/api/architect/*` (chat-to-create). Mounted only
+  // when an Architect chat client is wired (gateway env present). The
+  // `/draft` generate path needs only the client; `/try` additionally
+  // gates on `customApi` internally (503 when absent). MUST be mounted
+  // before the `/api/*` not-found reservation below (first-match-wins).
+  if (deps.architect !== undefined) {
+    app.route(
+      '/api/architect',
+      architectRoute({
+        architect: deps.architect,
+        ...(deps.customApi !== undefined && { customApi: deps.customApi }),
+        ...(deps.draftNamespace !== undefined && { draftNamespace: deps.draftNamespace }),
+      }),
+    );
+  }
 
   // Reserve the API namespace before the SPA proxy catches unmatched
   // GETs. Without this, `/api/typo` can return the UI's index.html

@@ -52,6 +52,7 @@ import { AuditPublisher } from '@kagent/audit-events';
 
 import { resolveAuthRequired } from './auth.js';
 import { SnapshotCache } from './cache.js';
+import { ArchitectClient } from './architect-client.js';
 import { createGatewayClient, type GatewayClient } from './gateway-client.js';
 import { createInformerSet, type InformerSet } from './informer.js';
 import { buildRouter } from './router.js';
@@ -142,6 +143,36 @@ async function main(): Promise<void> {
       '[workbench-api] gateway client NOT configured (set WORKBENCH_GATEWAY_BASE_URL + WORKBENCH_GATEWAY_ADMIN_TOKEN). /api/gateway/* routes will 503.',
     );
   }
+  // kagent Studio Architect — chat-to-create brain. Routed through the
+  // gateway's OpenAI-compatible /v1 surface (model-agnostic; CF Scout by
+  // default). When the env trio is unset, /api/architect/* is not mounted.
+  const architectUrl = process.env.KAGENT_ARCHITECT_GATEWAY_URL;
+  const architectToken = process.env.KAGENT_ARCHITECT_GATEWAY_TOKEN;
+  const architectModel = process.env.KAGENT_ARCHITECT_MODEL;
+  let architect: ArchitectClient | undefined;
+  if (
+    typeof architectUrl === 'string' &&
+    architectUrl.length > 0 &&
+    typeof architectToken === 'string' &&
+    architectToken.length > 0 &&
+    typeof architectModel === 'string' &&
+    architectModel.length > 0
+  ) {
+    architect = new ArchitectClient({
+      baseUrl: architectUrl,
+      token: architectToken,
+      model: architectModel,
+    });
+    console.log(
+      `[workbench-api] architect configured → ${architectUrl} (model ${architectModel})`,
+    );
+  } else {
+    console.log(
+      '[workbench-api] architect NOT configured (set KAGENT_ARCHITECT_GATEWAY_URL + KAGENT_ARCHITECT_GATEWAY_TOKEN + KAGENT_ARCHITECT_MODEL). /api/architect/* will not be mounted.',
+    );
+  }
+  const draftNamespace = process.env.KAGENT_DRAFT_NAMESPACE ?? 'kagent-draft';
+
   if (!authRequired) {
     console.warn(
       '[workbench-api] WORKBENCH_AUTH_REQUIRED=false — auth is DISABLED. ' +
@@ -204,6 +235,7 @@ async function main(): Promise<void> {
     ...(typeof defaultNamespace === 'string' &&
       defaultNamespace.length > 0 && { defaultNamespace }),
     ...(gatewayClient !== undefined && { gatewayClient }),
+    ...(architect !== undefined && { architect, draftNamespace }),
     ...(readCustomApi !== undefined && { readCustomApi }),
     ...(readCoreApi !== undefined && { coreApi: readCoreApi }),
     writesEnabled,

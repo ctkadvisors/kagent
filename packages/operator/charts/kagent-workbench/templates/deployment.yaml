@@ -156,6 +156,27 @@ spec:
                   key: {{ .admin.secretKey | quote }}
             {{- end }}
             {{- end }}
+            # kagent Studio Architect (chat-to-create) wiring — emitted
+            # only when api.architect.enabled. URL + model are plain env;
+            # the bearer token is sourced from the gateway token Secret.
+            # When absent, the workbench-api does NOT mount /api/architect/*.
+            # The /try write path additionally needs rbac.actions.create
+            # plus the kagent-draft Role the GitOps overlay grants this SA.
+            {{- if .Values.api.architect.enabled }}
+            - name: KAGENT_ARCHITECT_GATEWAY_URL
+              value: {{ .Values.api.architect.gatewayUrl | quote }}
+            - name: KAGENT_ARCHITECT_MODEL
+              value: {{ .Values.api.architect.model | quote }}
+            - name: KAGENT_ARCHITECT_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.architect.tokenSecret.name | quote }}
+                  key: {{ .Values.api.architect.tokenSecret.key | quote }}
+            {{- if .Values.api.architect.draftNamespace }}
+            - name: KAGENT_DRAFT_NAMESPACE
+              value: {{ .Values.api.architect.draftNamespace | quote }}
+            {{- end }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.api.healthPath }}

@@ -546,3 +546,69 @@ export function useReviewQueue(): {
 
   return { rows, loading, error, refresh };
 }
+
+// ── kagent Studio — Architect (chat to create) ──────────────────────
+
+/** Result of POST /api/architect/draft. */
+export interface ArchitectDraftResult {
+  readonly ok: boolean;
+  readonly candidateYaml: string;
+  readonly preview: unknown;
+}
+
+/** Result of POST /api/architect/try. */
+export interface ArchitectTryResult {
+  readonly namespace: string;
+  readonly name: string;
+  readonly uid?: string;
+  readonly _links?: { readonly langfuse?: string };
+}
+
+/**
+ * POST /api/architect/draft — turn a natural-language goal into a
+ * validated AgentTemplate candidate (generation + self-correct happens
+ * server-side). 422 means the Architect could not produce a valid
+ * candidate; surface the error to the user.
+ */
+export async function architectDraft(goal: string): Promise<ArchitectDraftResult> {
+  const res = await fetch('/api/architect/draft', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ goal }),
+  });
+  if (!res.ok) {
+    let detail = `${String(res.status)} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (typeof body.error === 'string') detail = body.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(`architectDraft: ${detail}`);
+  }
+  return (await res.json()) as ArchitectDraftResult;
+}
+
+/**
+ * POST /api/architect/try — instantiate a candidate as an AgentTemplate
+ * in the kagent-draft namespace. 503 = write surface disabled on the
+ * chart; 422 = candidate failed validation.
+ */
+export async function architectTry(candidateYaml: string): Promise<ArchitectTryResult> {
+  const res = await fetch('/api/architect/try', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ candidateYaml }),
+  });
+  if (res.status !== 201) {
+    let detail = `${String(res.status)} ${res.statusText}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (typeof body.error === 'string') detail = body.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(`architectTry: ${detail}`);
+  }
+  return (await res.json()) as ArchitectTryResult;
+}

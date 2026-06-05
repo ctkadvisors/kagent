@@ -86,6 +86,9 @@ export function TaskList(): React.JSX.Element {
       <div className={styles.header}>
         <h1 className={styles.title}>Tasks</h1>
         <div className={styles.headerActions}>
+          <a className={styles.navLink} href="#/architect">
+            Architect →
+          </a>
           <a className={styles.navLink} href="#/command">
             Command →
           </a>

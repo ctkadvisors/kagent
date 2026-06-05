@@ -23,6 +23,7 @@
 
 import { useEffect, useState } from 'react';
 
+import { ArchitectPage } from './ArchitectPage.js';
 import { ClusterPage } from './ClusterPage.js';
 import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
@@ -56,7 +57,18 @@ interface ReviewRoute {
   readonly kind: 'review';
 }
 
-type Route = DetailRoute | ListRoute | GatewayRoute | ClusterRoute | CommandRoute | ReviewRoute;
+interface ArchitectRoute {
+  readonly kind: 'architect';
+}
+
+type Route =
+  | DetailRoute
+  | ListRoute
+  | GatewayRoute
+  | ClusterRoute
+  | CommandRoute
+  | ReviewRoute
+  | ArchitectRoute;
 
 function parseHash(hash: string): Route {
   // Strip leading `#` and any leading `/`. Tolerate trailing slashes.
@@ -66,6 +78,7 @@ function parseHash(hash: string): Route {
   if (clean === 'cluster') return { kind: 'cluster' };
   if (clean === 'command') return { kind: 'command' };
   if (clean === 'review') return { kind: 'review' };
+  if (clean === 'architect') return { kind: 'architect' };
   const parts = clean.split('/');
   if (parts.length === 3 && parts[0] === 'tasks') {
     const ns = parts[1];
@@ -140,6 +153,15 @@ export function App(): React.JSX.Element {
   if (route.kind === 'review') {
     return (
       <ReviewPage
+        onBack={() => {
+          window.location.hash = '#/';
+        }}
+      />
+    );
+  }
+  if (route.kind === 'architect') {
+    return (
+      <ArchitectPage
         onBack={() => {
           window.location.hash = '#/';
         }}
