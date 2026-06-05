@@ -92,7 +92,7 @@ export const FlowOverlay: FC<FlowOverlayProps> = ({
                   const sfs = gauge.sourceFields;
                   const hasCapacity = gauge.capacity !== undefined && gauge.capacity > 0;
                   const fillPct = hasCapacity
-                    ? Math.min(100, Math.round((gauge.value / gauge.capacity!) * 100))
+                    ? Math.min(100, Math.round((gauge.value / gauge.capacity) * 100))
                     : undefined;
                   return (
                     <li key={stableKey} className={styles.row}>

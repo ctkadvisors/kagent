@@ -117,7 +117,6 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const { rows: reviewRows } = useReviewQueue();
   const snapshot = useMemo(
     () => ({ ...baseSnapshot, reviewQueueRowCount: reviewRows.length }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [baseSnapshot, reviewRows.length],
   );
   const [selection, setSelection] = useState<SelectionState>({
