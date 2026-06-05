@@ -1,0 +1,252 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * AppShell — the persistent navigational spine that turns six separate
+ * routes into one console. Left rail (lifecycle-grouped nav) + top bar
+ * (section title + global KPIs + live status) + scrollable content slot.
+ */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-rows: 100%;
+  height: 100%;
+  background: var(--bg-base);
+}
+
+/* ── Left rail ──────────────────────────────────────────── */
+.rail {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-deep);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: var(--s-4) 0 var(--s-3);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 0 var(--s-4) var(--s-5);
+}
+
+.brandMark {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-2);
+  background: linear-gradient(135deg, var(--accent), #d97706);
+  display: grid;
+  place-items: center;
+  color: var(--on-accent);
+  font-weight: 800;
+  font-size: 15px;
+  box-shadow: var(--shadow-1);
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.brandName {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+.brandSub {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
+}
+
+.group {
+  padding: var(--s-3) var(--s-3) 0;
+}
+.groupLabel {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--fg-muted);
+  padding: 0 var(--s-3);
+  margin-bottom: var(--s-2);
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  margin: 2px 0;
+  border-radius: var(--r-2);
+  color: var(--fg-dim);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+  border-left: 2px solid transparent;
+}
+.navItem:hover {
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+.navItemActive {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+.navItemActive .icon {
+  color: var(--accent);
+}
+
+.icon {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  display: grid;
+  place-items: center;
+}
+
+.badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.railFooter {
+  margin-top: auto;
+  padding: var(--s-4) var(--s-5) 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+/* ── Main column ────────────────────────────────────────── */
+.main {
+  display: grid;
+  grid-template-rows: var(--topbar-h) 1fr;
+  min-width: 0;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  padding: 0 var(--s-5);
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-base), var(--bg-deep));
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.kpis {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: var(--s-3);
+}
+
+.kpi {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.kpiNum {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+.kpiLabel {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.kpiActive .kpiNum {
+  color: var(--info);
+}
+.kpiOk .kpiNum {
+  color: var(--ok);
+}
+.kpiWarn .kpiNum {
+  color: var(--warn);
+}
+.kpiDanger .kpiNum {
+  color: var(--danger);
+}
+
+.live {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--live);
+  box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.5);
+  animation: pulse 2s infinite;
+}
+.dotStale {
+  background: var(--warn);
+  animation: none;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(34, 211, 238, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0);
+  }
+}
+
+.content {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  .rail {
+    display: none;
+  }
+  .kpis {
+    display: none;
+  }
+}

@@ -1,0 +1,312 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * Architect — "chat to create" surface. A conversational column: an
+ * empty-state with example prompts, a message thread of goals and the
+ * AgentTemplate candidates the Architect drafts, and a sticky composer.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 940px;
+  margin: 0 auto;
+}
+
+.thread {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--s-6) var(--s-5) var(--s-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+/* ── Empty state ────────────────────────────────────────── */
+.empty {
+  margin: auto;
+  text-align: center;
+  max-width: 560px;
+  padding: var(--s-6) 0;
+}
+.emptyMark {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-3);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  margin: 0 auto var(--s-4);
+}
+.emptyTitle {
+  font-size: 20px;
+  margin: 0 0 var(--s-2);
+}
+.emptyBody {
+  color: var(--fg-dim);
+  margin: 0 0 var(--s-5);
+  font-size: 14px;
+}
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  justify-content: center;
+}
+.example {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--fg-dim);
+  border-radius: var(--r-pill);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+.example:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+/* ── Messages ───────────────────────────────────────────── */
+.userMsg {
+  align-self: flex-end;
+  max-width: 78%;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+  color: var(--fg);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-3) var(--r-3) 4px var(--r-3);
+  font-size: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.architectMsg {
+  align-self: flex-start;
+  width: 100%;
+  display: flex;
+  gap: var(--s-3);
+}
+.avatar {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: var(--r-2);
+  background: linear-gradient(135deg, var(--accent), #d97706);
+  color: var(--on-accent);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.card {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  overflow: hidden;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.cardTitle {
+  font-weight: 650;
+  font-size: 13.5px;
+}
+.draftTag {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--info);
+  background: var(--info-dim);
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4) 0;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: 6px 10px;
+}
+.fieldLabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-muted);
+}
+.fieldValue {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.yaml {
+  margin: var(--s-3) var(--s-4) 0;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--s-3) var(--s-4);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-4);
+}
+
+.btn {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--fg);
+  border-radius: var(--r-1);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.btnPrimary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.btnPrimary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tried {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--ok);
+  font-family: var(--font-mono);
+}
+.tried a {
+  color: var(--live);
+}
+
+.errorMsg {
+  align-self: flex-start;
+  display: flex;
+  gap: var(--s-3);
+  width: 100%;
+}
+.errorBody {
+  flex: 1;
+  background: var(--danger-dim);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: var(--r-3);
+  padding: var(--s-3) var(--s-4);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--fg-dim);
+  font-size: 13px;
+  padding-left: 42px;
+}
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Composer ───────────────────────────────────────────── */
+.composer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-base);
+  padding: var(--s-3) var(--s-5) var(--s-4);
+}
+.composerInner {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-end;
+  background: var(--bg-deep);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-3);
+  padding: var(--s-2);
+  transition: border-color 0.12s ease;
+}
+.composerInner:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  resize: none;
+  padding: var(--s-2) var(--s-3);
+  font-size: 14px;
+  line-height: 1.5;
+  max-height: 180px;
+  color: var(--fg);
+}
+.input:focus {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+.send {
+  flex-shrink: 0;
+}
+.hint {
+  margin: 6px 4px 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}

@@ -1,201 +1,204 @@
 .wrapper {
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    Segoe UI,
-    Roboto,
-    sans-serif;
-  padding: 1.5rem;
-  color: #1a202c;
+  padding: var(--s-5);
+  color: var(--fg);
 }
 
 .header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  margin-bottom: 1rem;
+  margin-bottom: var(--s-4);
 }
 
 .title {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 650;
   margin: 0;
 }
 
 .connection {
-  font-size: 0.75rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-family: var(--font-mono);
 }
 
 .headerActions {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: var(--s-3);
 }
 
 .newTaskButton {
-  background: #2563eb;
-  color: white;
+  background: var(--accent);
+  color: var(--on-accent);
   border: none;
-  padding: 0.375rem 0.875rem;
-  border-radius: 0.375rem;
-  font-size: 0.8125rem;
-  font-weight: 500;
+  padding: 8px 14px;
+  border-radius: var(--r-1);
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
-  font-family: inherit;
 }
-
 .newTaskButton:hover {
-  background: #1d4ed8;
+  background: var(--accent-hover);
 }
 
 .navLink {
-  color: #4b5563;
+  color: var(--fg-dim);
   text-decoration: none;
-  font-size: 0.8125rem;
+  font-size: 13px;
   font-weight: 500;
-  padding: 0.375rem 0.625rem;
-  border: 1px solid #d1d5db;
-  border-radius: 0.375rem;
-  background: #ffffff;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--bg-raised);
 }
-
 .navLink:hover {
-  background: #f3f4f6;
-  border-color: #9ca3af;
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
 .connectionLive {
-  color: #047857;
+  color: var(--ok);
 }
-
 .connectionStale {
-  color: #b45309;
+  color: var(--warn);
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 13px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
 }
 
 .table th,
 .table td {
   text-align: left;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .table th {
-  background: #f7fafc;
-  font-weight: 600;
-  font-size: 0.75rem;
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  font-weight: 650;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #4a5568;
+  color: var(--fg-dim);
+  z-index: 1;
+}
+
+.table tbody tr {
+  transition: background 0.1s ease;
+}
+.table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .phasePill {
   display: inline-block;
-  padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  background: #edf2f7;
-  color: #4a5568;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 650;
+  background: var(--bg-panel);
+  color: var(--fg-dim);
 }
-
 .phasePending {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warn-dim);
+  color: var(--warn);
 }
-
 .phaseDispatched {
-  background: #dbeafe;
-  color: #1e3a8a;
+  background: var(--info-dim);
+  color: var(--info);
 }
-
 .phaseCompleted {
-  background: #d1fae5;
-  color: #065f46;
+  background: var(--ok-dim);
+  color: var(--ok);
 }
-
 .phaseFailed {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--danger-dim);
+  color: var(--danger);
 }
 
 .suspicious {
   display: inline-block;
-  margin-left: 0.25rem;
-  font-size: 0.75rem;
-  padding: 0.125rem 0.375rem;
-  border-radius: 0.25rem;
-  background: #fef3c7;
-  color: #92400e;
+  margin-left: 4px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: var(--r-1);
+  background: var(--warn-dim);
+  color: var(--warn);
 }
 
 .countChip {
   display: inline-block;
-  margin-right: 0.375rem;
-  padding: 0.125rem 0.4rem;
-  border-radius: 0.25rem;
-  background: #edf2f7;
-  color: #4a5568;
-  font-size: 0.75rem;
+  margin-right: 6px;
+  padding: 2px 7px;
+  border-radius: var(--r-1);
+  background: var(--bg-panel);
+  color: var(--fg-dim);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-
 .countChipMuted {
-  color: #a0aec0;
+  color: var(--fg-muted);
 }
 
 .aggregatePill {
   display: inline-block;
-  padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  background: #edf2f7;
-  color: #4a5568;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 650;
+  background: var(--bg-panel);
+  color: var(--fg-dim);
 }
-
 .aggregateAllComplete {
-  background: #d1fae5;
-  color: #065f46;
+  background: var(--ok-dim);
+  color: var(--ok);
 }
-
 .aggregateAnyFailed {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--danger-dim);
+  color: var(--danger);
 }
-
 .aggregatePartiallyComplete {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warn-dim);
+  color: var(--warn);
 }
 
 .empty {
-  padding: 2rem;
+  padding: var(--s-6);
   text-align: center;
-  color: #718096;
+  color: var(--fg-muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-2);
 }
 
 .error {
-  padding: 1rem;
-  background: #fee2e2;
-  color: #991b1b;
-  border-radius: 0.375rem;
-  margin-bottom: 1rem;
+  padding: var(--s-4);
+  background: var(--danger-dim);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-1);
+  margin-bottom: var(--s-4);
+  font-family: var(--font-mono);
+  font-size: 13px;
 }
 
 .linkCell {
-  color: #2563eb;
+  color: var(--accent);
   text-decoration: none;
   font-weight: 500;
+  font-family: var(--font-mono);
 }
-
 .linkCell:hover {
   text-decoration: underline;
 }

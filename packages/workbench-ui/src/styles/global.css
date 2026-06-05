@@ -1,0 +1,174 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Knuteson
+ *
+ * Mission Control design system — the single source of truth for the
+ * kagent Workbench look. Every page consumes these tokens; no surface
+ * hardcodes a raw hex outside this file. Palette is derived from the
+ * Command Center (the dark surface we standardized on): deep navy
+ * slate scale + amber signature accent + standard semantic colors.
+ */
+
+:root {
+  /* Surfaces — deep navy, darkest → raised */
+  --bg-deep: #050b18;
+  --bg-base: #0a1628;
+  --bg-raised: #14213d;
+  --bg-panel: #1f2a44;
+  --bg-hover: #1c2c4d;
+
+  /* Borders */
+  --border: #1f2a44;
+  --border-strong: #334155;
+
+  /* Text */
+  --fg: #e2e8f0;
+  --fg-dim: #94a3b8;
+  --fg-muted: #64748b;
+
+  /* Brand accent — amber */
+  --accent: #fbbf24;
+  --accent-hover: #fcd34d;
+  --accent-dim: rgba(251, 191, 36, 0.14);
+  --accent-border: rgba(251, 191, 36, 0.4);
+  --on-accent: #1a1206;
+
+  /* Semantic */
+  --ok: #34d399;
+  --ok-dim: rgba(52, 211, 153, 0.14);
+  --warn: #fbbf24;
+  --warn-dim: rgba(251, 191, 36, 0.14);
+  --danger: #f87171;
+  --danger-dim: rgba(248, 113, 113, 0.14);
+  --info: #60a5fa;
+  --info-dim: rgba(96, 165, 250, 0.14);
+  --live: #22d3ee;
+  --live-dim: rgba(34, 211, 238, 0.14);
+
+  /* Typography */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, ui-sans-serif,
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Radius */
+  --r-1: 5px;
+  --r-2: 8px;
+  --r-3: 12px;
+  --r-pill: 9999px;
+
+  /* Spacing scale */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* Elevation */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* Shell metrics */
+  --rail-w: 232px;
+  --topbar-h: 56px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+/* Inputs/buttons inherit the dark system instead of OS chrome. */
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--fg);
+}
+
+textarea,
+input[type='text'],
+input[type='number'],
+input[type='search'] {
+  background: var(--bg-deep);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  padding: var(--s-2) var(--s-3);
+  color: var(--fg);
+}
+textarea:focus,
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+textarea::placeholder,
+input::placeholder {
+  color: var(--fg-muted);
+}
+
+/* Slim, dark scrollbars so the deep navy stays uniform. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--r-pill);
+  border: 2px solid var(--bg-base);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Reusable focus ring for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

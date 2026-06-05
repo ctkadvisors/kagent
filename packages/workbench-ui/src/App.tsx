@@ -23,6 +23,7 @@
 
 import { useEffect, useState } from 'react';
 
+import { AppShell } from './AppShell.js';
 import { ArchitectPage } from './ArchitectPage.js';
 import { ClusterPage } from './ClusterPage.js';
 import { CommandView } from './CommandView.js';
@@ -110,63 +111,34 @@ function useHashRoute(): Route {
   return route;
 }
 
+const goHome = (): void => {
+  window.location.hash = '#/';
+};
+
 export function App(): React.JSX.Element {
   const route = useHashRoute();
-  if (route.kind === 'detail') {
-    return (
-      <TaskDetail
-        namespace={route.namespace}
-        name={route.name}
-        onBack={() => {
-          window.location.hash = '#/';
-        }}
-      />
-    );
-  }
-  if (route.kind === 'gateway') {
-    return (
-      <GatewayPage
-        onBack={() => {
-          window.location.hash = '#/';
-        }}
-      />
-    );
-  }
-  if (route.kind === 'cluster') {
-    return (
-      <ClusterPage
-        onBack={() => {
-          window.location.hash = '#/';
-        }}
-      />
-    );
-  }
+
+  // The Command Center renders full-bleed (no shell): it is an immersive
+  // RTS canvas with its own chrome, and a fixed left rail would shrink
+  // the map. Every other route lives inside the shared shell.
   if (route.kind === 'command') {
-    return (
-      <CommandView
-        onBack={() => {
-          window.location.hash = '#/';
-        }}
-      />
-    );
+    return <CommandView onBack={goHome} />;
   }
-  if (route.kind === 'review') {
-    return (
-      <ReviewPage
-        onBack={() => {
-          window.location.hash = '#/';
-        }}
-      />
-    );
+
+  let content: React.JSX.Element;
+  if (route.kind === 'detail') {
+    content = <TaskDetail namespace={route.namespace} name={route.name} onBack={goHome} />;
+  } else if (route.kind === 'gateway') {
+    content = <GatewayPage onBack={goHome} />;
+  } else if (route.kind === 'cluster') {
+    content = <ClusterPage onBack={goHome} />;
+  } else if (route.kind === 'review') {
+    content = <ReviewPage onBack={goHome} />;
+  } else if (route.kind === 'architect') {
+    content = <ArchitectPage onBack={goHome} />;
+  } else {
+    content = <TaskList />;
   }
-  if (route.kind === 'architect') {
-    return (
-      <ArchitectPage
-        onBack={() => {
-          window.location.hash = '#/';
-        }}
-      />
-    );
-  }
-  return <TaskList />;
+
+  return <AppShell>{content}</AppShell>;
 }

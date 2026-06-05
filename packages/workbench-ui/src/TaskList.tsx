@@ -86,18 +86,6 @@ export function TaskList(): React.JSX.Element {
       <div className={styles.header}>
         <h1 className={styles.title}>Tasks</h1>
         <div className={styles.headerActions}>
-          <a className={styles.navLink} href="#/architect">
-            Architect →
-          </a>
-          <a className={styles.navLink} href="#/command">
-            Command →
-          </a>
-          <a className={styles.navLink} href="#/cluster">
-            Cluster →
-          </a>
-          <a className={styles.navLink} href="#/gateway">
-            Gateway →
-          </a>
           <button
             type="button"
             className={styles.newTaskButton}
@@ -176,7 +164,8 @@ export function TaskList(): React.JSX.Element {
                 </td>
                 <td>{renderGraphCell(t)}</td>
                 <td>
-                  {t.targetAgent ?? (t.targetCapability !== undefined ? `cap:${t.targetCapability}` : '—')}
+                  {t.targetAgent ??
+                    (t.targetCapability !== undefined ? `cap:${t.targetCapability}` : '—')}
                 </td>
                 <td>{t.createdAt ?? '—'}</td>
                 <td>{t.podName ?? '—'}</td>
