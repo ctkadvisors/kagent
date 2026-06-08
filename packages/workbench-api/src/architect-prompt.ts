@@ -31,7 +31,8 @@ AgentTemplate candidate, emitted as YAML and NOTHING else (no prose, no code fen
 
 The YAML MUST conform to the AgentTemplateSpec contract:
   agentSpec:                  # REQUIRED object — the agent body
-    model: string             # e.g. "workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct"
+    modelClass: string        # prefer "text-generator-default" unless tools are required
+    # model: string           # optional escape hatch; use only for literal physical models
     systemPrompt: string      # the agent's behaviour; may use \${param.X} placeholders
     tools: [string]           # optional
     llmParams:                # optional
@@ -50,6 +51,10 @@ The YAML MUST conform to the AgentTemplateSpec contract:
   toolAllowlist: [string]     # optional; omit = no tools
 
 Rules:
+- Use agentSpec.modelClass, not agentSpec.model, for logical classes such as
+  "text-generator-default", "tool-caller-default", or "reasoner-default".
+- Default no-tool agents to modelClass: text-generator-default.
+- Use modelClass: tool-caller-default only when tools are requested.
 - Default budget to maxIterations 6, maxCostUsdPerRun 0.10, maxParallelInstances 1 unless the user is explicit.
 - Never include credentials or tools the user did not ask for.
 - Output ONLY the YAML document — no backticks, no commentary.`;

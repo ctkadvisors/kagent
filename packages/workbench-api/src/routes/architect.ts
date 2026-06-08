@@ -26,6 +26,7 @@ import {
   API_VERSION,
   parseAgentTemplateSpec,
   traceLink,
+  type AgentTemplateSpec,
   type AgentTask,
 } from '@kagent/dto';
 
@@ -58,6 +59,11 @@ const WRITE_DISABLED =
 const AGENTTEMPLATE_PLURAL = 'agenttemplates';
 const AGENT_PLURAL = 'agents';
 const AGENTTASK_PLURAL = 'agenttasks';
+const ARCHITECT_MODEL_CLASS_ALIASES = new Set([
+  'tool-caller-default',
+  'text-generator-default',
+  'reasoner-default',
+]);
 
 /** Strip accidental ``` fences the model may add despite instructions. */
 function stripFences(s: string): string {
@@ -75,6 +81,31 @@ function slugify(input: string): string {
       .replace(/(^-|-$)/g, '')
       .slice(0, 40) || 'agent'
   );
+}
+
+function normalizeArchitectAgentSpec(
+  agentSpec: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const model = agentSpec['model'];
+  const modelClass = agentSpec['modelClass'];
+  if (
+    typeof model === 'string' &&
+    ARCHITECT_MODEL_CLASS_ALIASES.has(model.trim()) &&
+    (typeof modelClass !== 'string' || modelClass.trim() === '')
+  ) {
+    const normalized = { ...agentSpec };
+    delete normalized['model'];
+    normalized['modelClass'] = model.trim();
+    return normalized;
+  }
+  return { ...agentSpec };
+}
+
+function normalizeArchitectTemplateSpec(spec: AgentTemplateSpec): Record<string, unknown> {
+  return {
+    ...(spec as unknown as Record<string, unknown>),
+    agentSpec: normalizeArchitectAgentSpec(spec.agentSpec),
+  };
 }
 
 export function architectRoute(deps: ArchitectRouteDeps): Hono {
@@ -125,6 +156,7 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
     const taskName = `${templateName}-run`;
     const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
 
+    const normalizedSpec = normalizeArchitectTemplateSpec(parsed.spec);
     const templateManifest = {
       apiVersion: `${API_GROUP}/${API_VERSION}`,
       kind: 'AgentTemplate',
@@ -133,9 +165,7 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
         namespace: ns,
         labels: { 'kagent.knuteson.io/draft': 'true' },
       },
-      // AgentTemplateSpec has no index signature; cast through unknown
-      // (same idiom as routes/review-queue.ts accept handler).
-      spec: parsed.spec as unknown as Record<string, unknown>,
+      spec: normalizedSpec,
     };
     const agentManifest = {
       apiVersion: `${API_GROUP}/${API_VERSION}`,
@@ -151,7 +181,7 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
           'kagent.knuteson.io/from-template': templateName,
         },
       },
-      spec: { ...parsed.spec.agentSpec },
+      spec: normalizeArchitectAgentSpec(parsed.spec.agentSpec),
     };
     const runConfig: Record<string, unknown> = {};
     if (parsed.spec.budget?.maxIterations !== undefined) {

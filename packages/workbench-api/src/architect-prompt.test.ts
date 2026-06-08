@@ -15,6 +15,13 @@ describe('buildArchitectMessages', () => {
     expect(msgs.at(-1)).toEqual({ role: 'user', content: 'a summarizer agent' });
   });
 
+  it('steers logical routing through modelClass instead of model aliases', () => {
+    const system = buildArchitectMessages({ userGoal: 'a summarizer agent' })[0]?.content ?? '';
+    expect(system).toContain('modelClass');
+    expect(system).toContain('Use agentSpec.modelClass, not agentSpec.model');
+    expect(system).toContain('text-generator-default');
+  });
+
   it('appends a repair turn carrying the validation error when provided', () => {
     const msgs = buildArchitectMessages({
       userGoal: 'x',

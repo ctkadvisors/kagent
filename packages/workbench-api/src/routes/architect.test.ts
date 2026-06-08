@@ -16,6 +16,12 @@ const VALID = [
   '  maxIterations: 6',
   '',
 ].join('\n');
+const MODEL_CLASS_ALIAS_AS_MODEL = [
+  'agentSpec:',
+  '  model: text-generator-default',
+  '  systemPrompt: summarize the input',
+  '',
+].join('\n');
 
 function deps(over: Partial<ArchitectRouteDeps> = {}): ArchitectRouteDeps {
   return {
@@ -197,6 +203,38 @@ describe('POST /api/architect/try', () => {
       goal: 'summarize this payload',
       candidateYaml: VALID,
     });
+  });
+
+  it('normalizes known model-class aliases emitted in agentSpec.model before creating CRs', async () => {
+    const createNamespacedCustomObject = vi.fn(() =>
+      Promise.resolve({ metadata: { name: 'created', namespace: 'kagent-draft', uid: 'u1' } }),
+    );
+    const app = architectRoute(
+      deps({
+        customApi: { createNamespacedCustomObject } as never,
+        draftNamespace: 'kagent-draft',
+        generateName: () => 'abc123',
+      }),
+    );
+    const res = await app.request('/try', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ candidateYaml: MODEL_CLASS_ALIAS_AS_MODEL }),
+    });
+    expect(res.status).toBe(201);
+
+    const templateArg = createNamespacedCustomObject.mock.calls[0]![0] as {
+      body: { spec: { agentSpec: Record<string, unknown> } };
+    };
+    const agentArg = createNamespacedCustomObject.mock.calls[1]![0] as {
+      body: { spec: Record<string, unknown> };
+    };
+    expect(templateArg.body.spec.agentSpec).toMatchObject({
+      modelClass: 'text-generator-default',
+    });
+    expect(templateArg.body.spec.agentSpec['model']).toBeUndefined();
+    expect(agentArg.body.spec).toMatchObject({ modelClass: 'text-generator-default' });
+    expect(agentArg.body.spec['model']).toBeUndefined();
   });
 
   it('422s when candidateYaml fails validation', async () => {
