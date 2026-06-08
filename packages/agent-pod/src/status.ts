@@ -28,11 +28,12 @@
  *
  * Fix: send the patch as RFC 6902 JSON Patch with a `test` op asserting
  * `status.phase` IS one of the non-terminal values (`Pending` /
- * `Dispatched`). The apiserver enforces the test atomically; on test
- * failure it returns `412 Precondition Failed` per the SUBSTRATE-V1.md
- * §3.2 contract. We DROP the patch silently on 412 — terminal phase
- * already written by another writer is the correct end state. Any
- * other error (network, 4xx, 5xx) propagates to the caller.
+ * `Dispatched`). The apiserver enforces the test atomically. Kubernetes
+ * distributions differ in how they report a failed JSON Patch `test`:
+ * SUBSTRATE-V1.md §3.2 names `412 Precondition Failed`, while live K3s
+ * reports `422 Invalid`. We treat both as precondition candidates, then
+ * confirm the current status before dropping. A patch is only dropped
+ * when the AgentTask is already terminal; otherwise the error propagates.
  *
  * NOTE: the test op encodes the disjunction by trying each candidate
  * value in sequence — JSON Patch `test` matches a single value, so we
@@ -206,32 +207,65 @@ export function buildJsonPatchOps(patch: StatusPatch, expectedPhase: string): Js
 }
 
 /**
- * True iff the error is the apiserver's "json-patch precondition
- * (test op) failed" response. The SUBSTRATE-V1.md §3.2 contract names
- * this as 412 Precondition Failed; we match the contract.
+ * True iff the error is an apiserver response shape that can represent
+ * "json-patch precondition (test op) failed". The SUBSTRATE-V1.md §3.2
+ * contract names this as 412 Precondition Failed; live K3s returns 422
+ * Invalid for the same failed JSON Patch `test`. `writeStatus` only
+ * swallows these after a follow-up status read confirms a terminal
+ * AgentTask phase, so genuine invalid 422s still propagate.
  *
  * Exported for tests so the differentiation against 409 Conflict and
- * 422 Unprocessable Entity (which MUST propagate) is asserted at the
- * type-level there.
+ * ordinary server errors is asserted at the type-level there.
  */
 export function isPreconditionFailed(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const code = (err as { code?: unknown }).code;
-  return code === 412;
+  return code === 412 || code === 422;
+}
+
+function errorCode(err: unknown): string {
+  if (typeof err !== 'object' || err === null) return 'unknown';
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'number' || typeof code === 'string') return String(code);
+  return 'unknown';
+}
+
+function statusPhase(obj: unknown): string | undefined {
+  if (typeof obj !== 'object' || obj === null) return undefined;
+  const status = (obj as { status?: unknown }).status;
+  if (typeof status !== 'object' || status === null) return undefined;
+  const phase = (status as { phase?: unknown }).phase;
+  return typeof phase === 'string' ? phase : undefined;
+}
+
+function isTerminalPhase(phase: string | undefined): boolean {
+  return phase === 'Completed' || phase === 'Failed';
+}
+
+async function readCurrentStatusPhase(
+  config: PodConfig,
+  api: CustomObjectsApi,
+): Promise<string | undefined> {
+  const obj: unknown = await api.getNamespacedCustomObjectStatus({
+    group: API_GROUP,
+    version: API_VERSION,
+    namespace: config.taskNamespace,
+    plural: PLURAL,
+    name: config.taskName,
+  });
+  return statusPhase(obj);
 }
 
 /**
  * Write the status patch to the cluster using a JSON-Patch with a
- * `test` op precondition (audit C2 H8 fix). On 412 Precondition Failed
- * — meaning another writer (the operator's job-watch) terminalized
- * `status.phase` already — we DROP silently: terminal-state-written-by-
- * another-writer is the correct end state. On any other error we
- * propagate.
+ * `test` op precondition (audit C2 H8 fix). On 412/422 precondition
+ * candidates, we try each expected non-terminal phase. If every guarded
+ * patch fails, we read the live status. Only a confirmed terminal phase
+ * is dropped; otherwise the last precondition-like error propagates.
  *
  * The test op tries `Dispatched` first (the dominant pre-terminal
  * phase by the time the pod is patching), then `Pending` (rare;
- * dispatcher hadn't promoted yet). If both 412, the task IS terminal
- * already and we drop.
+ * dispatcher hadn't promoted yet).
  */
 export async function writeStatus(
   config: PodConfig,
@@ -262,16 +296,22 @@ export async function writeStatus(
       throw err;
     }
   }
-  // All NON_TERMINAL_PHASES_TO_TRY returned 412 — the AgentTask is
-  // already in a terminal phase. Drop silently per H8 fix contract.
-  // Log a single info line so the race is observable in pod logs but
-  // not alarming.
+  const currentPhase = await readCurrentStatusPhase(config, api);
+  if (!isTerminalPhase(currentPhase)) {
+    throw lastPreconditionErr;
+  }
+
+  // All NON_TERMINAL_PHASES_TO_TRY returned a precondition-like error,
+  // and the follow-up status read confirms the AgentTask is already in
+  // a terminal phase. Drop silently per H8 fix contract. Log a single
+  // info line so the race is observable in pod logs but not alarming.
   const detail =
     lastPreconditionErr instanceof Error
       ? lastPreconditionErr.message
       : String(lastPreconditionErr);
+  const code = errorCode(lastPreconditionErr);
   console.log(
-    `[kagent-agent-pod] status patch dropped: another writer already terminalized ${config.taskNamespace}/${config.taskName} (412 Precondition Failed: ${detail})`,
+    `[kagent-agent-pod] status patch dropped: another writer already terminalized ${config.taskNamespace}/${config.taskName} (code=${code}, phase=${currentPhase}: ${detail})`,
   );
 }
 

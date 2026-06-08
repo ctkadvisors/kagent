@@ -324,9 +324,9 @@ describe('isPreconditionFailed (H8)', () => {
     expect(isPreconditionFailed(err)).toBe(false);
   });
 
-  it('returns false for 422 Unprocessable Entity — must propagate, not be swallowed', () => {
+  it('returns true for code=422 because K3s reports JSON Patch test failure as Invalid', () => {
     const err = Object.assign(new Error('invalid'), { code: 422 });
-    expect(isPreconditionFailed(err)).toBe(false);
+    expect(isPreconditionFailed(err)).toBe(true);
   });
 
   it('returns false for 500 Server Error', () => {
@@ -346,7 +346,7 @@ describe('isPreconditionFailed (H8)', () => {
   });
 });
 
-describe('writeStatus (H8) — JSON Patch with test op + 412 swallowing', () => {
+describe('writeStatus (H8) — JSON Patch with test op + 412/422 guarded writes', () => {
   const podConfig: Pick<PodConfig, 'taskNamespace' | 'taskName'> = {
     taskNamespace: 'default',
     taskName: 'task-1',
@@ -359,9 +359,14 @@ describe('writeStatus (H8) — JSON Patch with test op + 412 swallowing', () => 
     structuralVerdict: { suspicious: [] },
   };
 
-  function makeMockApi(impl: (req: unknown, opts: unknown) => Promise<unknown>): CustomObjectsApi {
+  function makeMockApi(
+    impl: (req: unknown, opts: unknown) => Promise<unknown>,
+    getStatusImpl: () => Promise<unknown> = () =>
+      Promise.resolve({ status: { phase: 'Completed' } }),
+  ): CustomObjectsApi {
     return {
       patchNamespacedCustomObjectStatus: vi.fn(impl),
+      getNamespacedCustomObjectStatus: vi.fn(getStatusImpl),
     } as unknown as CustomObjectsApi;
   }
 
@@ -456,6 +461,26 @@ describe('writeStatus (H8) — JSON Patch with test op + 412 swallowing', () => 
     expect(calls).toBe(2);
   });
 
+  it('Dispatched test fails 422, Pending test succeeds → succeeds without throwing', async () => {
+    // Live K3s reports a JSON Patch `test` mismatch as 422 Invalid
+    // rather than 412 Precondition Failed. It is still a retryable
+    // phase-guard failure when the next expected phase matches.
+    let calls = 0;
+    const getStatus = vi.fn(() => Promise.reject(new Error('status read should not run')));
+    const api = makeMockApi((req) => {
+      calls += 1;
+      const body = (req as { body?: Array<{ op: string; value: unknown }> }).body ?? [];
+      const testOp = body[0];
+      if (testOp?.op === 'test' && testOp.value === 'Dispatched') {
+        return Promise.reject(Object.assign(new Error('invalid json patch test'), { code: 422 }));
+      }
+      return Promise.resolve({});
+    }, getStatus);
+    await writeStatus(podConfig as PodConfig, completedPatch, api);
+    expect(calls).toBe(2);
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+
   it('412 differentiation — 409 Conflict propagates (NOT swallowed)', async () => {
     const api = makeMockApi(() =>
       Promise.reject(Object.assign(new Error('conflict on resourceVersion'), { code: 409 })),
@@ -465,13 +490,41 @@ describe('writeStatus (H8) — JSON Patch with test op + 412 swallowing', () => 
     );
   });
 
-  it('412 differentiation — 422 Unprocessable Entity propagates (NOT swallowed)', async () => {
-    const api = makeMockApi(() =>
-      Promise.reject(Object.assign(new Error('invalid'), { code: 422 })),
+  it('422 differentiation — propagates when the task is still non-terminal', async () => {
+    const api = makeMockApi(
+      () => Promise.reject(Object.assign(new Error('invalid'), { code: 422 })),
+      () => Promise.resolve({ status: { phase: 'Pending' } }),
     );
     await expect(writeStatus(podConfig as PodConfig, completedPatch, api)).rejects.toThrow(
       /invalid/,
     );
+  });
+
+  it('422 differentiation — swallowed only when status read confirms terminal phase', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      let patchCalls = 0;
+      let getCalls = 0;
+      const api = makeMockApi(
+        () => {
+          patchCalls += 1;
+          return Promise.reject(Object.assign(new Error('invalid json patch test'), { code: 422 }));
+        },
+        () => {
+          getCalls += 1;
+          return Promise.resolve({ status: { phase: 'Failed' } });
+        },
+      );
+      await writeStatus(podConfig as PodConfig, completedPatch, api);
+      expect(patchCalls).toBe(2);
+      expect(getCalls).toBe(1);
+      const messages = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(messages).toContain('status patch dropped');
+      expect(messages).toContain('default/task-1');
+      expect(messages).toContain('422');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('412 differentiation — 500 Server Error propagates', async () => {
