@@ -38,6 +38,7 @@ import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node
 import {
   assertIsReviewQueueRow,
   parseAgentTemplateSpec,
+  traceLink as buildTraceLink,
   type ArtifactRefSummary,
   type ReviewQueueRow,
 } from '@kagent/dto';
@@ -807,8 +808,8 @@ export function classifyTask(
     typeof task.spec?.targetAgent === 'string' ? task.spec.targetAgent : undefined;
   const model = undefined; // AgentTaskSpec has no model field (tasks use targetAgent → Agent.spec.model)
   const traceLink =
-    typeof langfuseBaseUrl === 'string' && uid.length > 0
-      ? `${langfuseBaseUrl}/traces/${uid}`
+    typeof langfuseBaseUrl === 'string'
+      ? (buildTraceLink(task, { provider: 'langfuse', baseUrl: langfuseBaseUrl })?.url ?? undefined)
       : undefined;
   const artifactCount = Array.isArray(status['artifacts'])
     ? (status['artifacts'] as unknown[]).length

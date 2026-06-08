@@ -83,7 +83,10 @@ interface BootedServer {
 
 function bootServer(
   overrides: Partial<
-    Pick<ServerDeps, 'apiKeyLookup' | 'modelIndex' | 'routerDeps' | 'adminReadToken'>
+    Pick<
+      ServerDeps,
+      'apiKeyLookup' | 'modelIndex' | 'routerDeps' | 'adminReadToken' | 'readinessProbe'
+    >
   > = {},
 ): Promise<BootedServer> {
   return new Promise((resolve, reject) => {
@@ -98,7 +101,7 @@ function bootServer(
       usageRepo: new StubUsageRepo(),
       adminToken: ADMIN_TOKEN,
       ...(overrides.adminReadToken !== undefined && { adminReadToken: overrides.adminReadToken }),
-      readinessProbe: () => Promise.resolve(true),
+      readinessProbe: overrides.readinessProbe ?? (() => Promise.resolve(true)),
     };
     const handler = buildHandler(deps);
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -119,6 +122,22 @@ function bootServer(
     server.on('error', reject);
   });
 }
+
+describe('GET /readyz', () => {
+  it('returns 503 when the readiness probe reports not ready', async () => {
+    const booted = await bootServer({
+      readinessProbe: () => Promise.resolve(false),
+    });
+    try {
+      const res = await fetch(`${booted.url}/readyz`);
+
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ status: 'not_ready' });
+    } finally {
+      await booted.close();
+    }
+  });
+});
 
 describe('POST /admin/keys', () => {
   let booted: BootedServer;

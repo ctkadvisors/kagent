@@ -168,6 +168,25 @@ describe('GET /api/review-queue', () => {
     expect(body.items[0]?.taskRef.name).toBe('researcher-verifier-fail-01');
   });
 
+  it('uses canonical derived Langfuse trace links when configured', async () => {
+    const task = allFixtureTasks.find((t) => t.metadata.name === 'researcher-verifier-fail-01');
+    expect(task).toBeDefined();
+
+    const { fetch } = mountAndFetch({
+      cache: makeStubCache([task!]),
+      now: () => fixedNow,
+      langfuseBaseUrl: 'https://langfuse.example.com',
+    });
+
+    const body = (await (await fetch()).json()) as { items: ReviewQueueRow[] };
+
+    expect(body.items[0]?.traceLink).toMatch(
+      /^https:\/\/langfuse\.example\.com\/trace\/[0-9a-f]{32}$/,
+    );
+    expect(body.items[0]?.traceLink).not.toContain('/traces/');
+    expect(body.items[0]?.traceLink).not.toContain('uid-verifier-fail-01');
+  });
+
   // ------------------------------------------------------------------
   // Test 4 — suspicious-detector fires
   // ------------------------------------------------------------------

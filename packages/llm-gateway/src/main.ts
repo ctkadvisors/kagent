@@ -16,8 +16,9 @@
  *
  * Mirrors `packages/agent-pod/src/main.ts` shape: top-level `main()`,
  * direct-invocation guard, signal handlers translate to graceful
- * close. K8s readiness pings the DB so the cluster doesn't route
- * traffic until pg is reachable.
+ * close. K8s readiness checks DB reachability and the ModelEndpoint
+ * watch so the cluster doesn't route traffic against a stale model
+ * cache.
  */
 
 import { dirname, resolve } from 'node:path';
@@ -119,7 +120,7 @@ async function main(): Promise<void> {
     // narrower token so a workbench memory-disclosure CVE cannot
     // mint or revoke `/v1/chat/completions` API keys.
     ...(cfg.adminApiTokenReadonly !== null && { adminReadToken: cfg.adminApiTokenReadonly }),
-    readinessProbe: () => pingPool(pool),
+    readinessProbe: async () => (await pingPool(pool)) && watch.health.isReady(),
     routerDeps: {
       modelIndex,
       inFlight,

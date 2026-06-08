@@ -18,6 +18,7 @@
  *   - `phase=Pending|Dispatched|Completed|Failed` — repeat for OR.
  *   - `targetAgent=<name>` — exact match.
  *   - `since=<ISO 8601>` — only tasks with creationTimestamp >= since.
+ *   - `limit=<n>` — return at most n rows after filtering/sorting.
  *
  * Sort: descending by creationTimestamp. The list view's "newest
  * first" expectation is hardcoded here so the UI doesn't have to
@@ -110,6 +111,11 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
     const targetAgent = url.searchParams.get('targetAgent') ?? undefined;
     const since = url.searchParams.get('since') ?? undefined;
     const sinceMs = since !== null && since !== undefined ? Date.parse(since) : NaN;
+    const limitRaw = url.searchParams.get('limit');
+    const limit =
+      limitRaw !== null && limitRaw.length > 0
+        ? Number.parseInt(limitRaw, 10)
+        : Number.POSITIVE_INFINITY;
 
     const tasks = deps.cache.listTasks();
     const summaries: TaskSummary[] = tasks
@@ -144,7 +150,9 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
       })
       .sort((a, b) => compareIsoDesc(a.createdAt, b.createdAt));
 
-    return c.json({ items: summaries });
+    const limited = Number.isFinite(limit) && limit > 0 ? summaries.slice(0, limit) : summaries;
+
+    return c.json({ items: limited });
   });
 
   app.post('/api/tasks', async (c) => {

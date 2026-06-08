@@ -44,6 +44,22 @@ describe('ArchitectPage candidate validation', () => {
     vi.clearAllMocks();
   });
 
+  it('fills the composer from an example without submitting a draft', () => {
+    renderPage();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'A summarizer that condenses long docs into 5 bullet points',
+      }),
+    );
+
+    expect(mockDraft).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText(/Describe an agent/i)).toHaveProperty(
+      'value',
+      'A summarizer that condenses long docs into 5 bullet points',
+    );
+  });
+
   it('disables Try live and shows YAML parse guidance when candidate YAML is malformed', async () => {
     mockDraft.mockResolvedValue({
       ok: true,

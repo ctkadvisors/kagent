@@ -230,6 +230,39 @@ describe('tasksRoute', () => {
     expect(body.items[0]?.error).toBe('deadline exceeded');
   });
 
+  it('applies a positive limit after newest-first sorting', async () => {
+    const cache = new SnapshotCache();
+    cache.upsertTask(
+      makeTask({
+        name: 'oldest',
+        phase: 'Completed',
+        createdAt: '2026-04-27T10:00:00Z',
+      }),
+    );
+    cache.upsertTask(
+      makeTask({
+        name: 'middle',
+        phase: 'Completed',
+        createdAt: '2026-04-27T11:00:00Z',
+      }),
+    );
+    cache.upsertTask(
+      makeTask({
+        name: 'newest',
+        phase: 'Completed',
+        createdAt: '2026-04-27T12:00:00Z',
+      }),
+    );
+
+    const res = await buildApp(cache).request('/api/tasks?limit=2');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      readonly items: readonly { readonly name: string }[];
+    };
+    expect(body.items.map((item) => item.name)).toEqual(['newest', 'middle']);
+  });
+
   it('returns task detail with joined pod container status', async () => {
     const cache = new SnapshotCache();
     cache.upsertAgent(makeAgent('researcher', 'kagent-system'));

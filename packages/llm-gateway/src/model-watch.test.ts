@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isModelEndpoint, normalizeBounds } from './model-watch.js';
+import { createModelEndpointWatchHealth, isModelEndpoint, normalizeBounds } from './model-watch.js';
 import type { ModelEndpoint } from './types.js';
 
 describe('isModelEndpoint', () => {
@@ -101,5 +101,73 @@ describe('normalizeBounds (B5)', () => {
 
   it('clamps a negative minSafe to 1', () => {
     expect(normalizeBounds(makeEp(-5))).toEqual({ seed: 2, max: 8, minSafe: 1 });
+  });
+});
+
+describe('ModelEndpoint watch health', () => {
+  it('starts stale until the informer has successfully started', () => {
+    const health = createModelEndpointWatchHealth(() => 1000);
+
+    expect(health.isReady()).toBe(false);
+    expect(health.snapshot()).toEqual({
+      ready: false,
+      status: 'starting',
+      lastStartedAtMs: null,
+      lastErrorAtMs: null,
+      lastStoppedAtMs: null,
+    });
+  });
+
+  it('marks the watch stale on informer error so readiness can fail closed', () => {
+    const health = createModelEndpointWatchHealth(() => 1000);
+
+    health.markStarted();
+    expect(health.isReady()).toBe(true);
+
+    health.markError(new Error('watch 403'));
+
+    expect(health.isReady()).toBe(false);
+    expect(health.snapshot()).toEqual({
+      ready: false,
+      status: 'stale',
+      lastStartedAtMs: 1000,
+      lastErrorAtMs: 1000,
+      lastStoppedAtMs: null,
+    });
+  });
+
+  it('returns to ready only after a successful restart', () => {
+    let now = 1000;
+    const health = createModelEndpointWatchHealth(() => now);
+
+    health.markStarted();
+    now = 2000;
+    health.markError(new Error('watch closed'));
+    now = 3000;
+    health.markStarted();
+
+    expect(health.snapshot()).toEqual({
+      ready: true,
+      status: 'ready',
+      lastStartedAtMs: 3000,
+      lastErrorAtMs: 2000,
+      lastStoppedAtMs: null,
+    });
+  });
+
+  it('marks the watch not ready after stop', () => {
+    const health = createModelEndpointWatchHealth(() => 1000);
+
+    health.markStarted();
+    health.markStopped();
+
+    expect(health.isReady()).toBe(false);
+    expect(health.snapshot()).toEqual({
+      ready: false,
+      status: 'stopped',
+      lastStartedAtMs: 1000,
+      lastErrorAtMs: null,
+      lastStoppedAtMs: 1000,
+    });
   });
 });

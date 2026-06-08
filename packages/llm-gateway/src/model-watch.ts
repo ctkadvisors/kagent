@@ -15,8 +15,9 @@
  * Wave 1B owns the canonical CRD definition + RBAC; this module
  * assumes the gateway's ServiceAccount has `modelendpoints:[get,
  * list, watch]` granted by Wave 1C's chart. Without that grant the
- * informer surfaces a 403 in `onError` and the gateway logs +
- * keeps the LAST known cache state until RBAC is fixed.
+ * informer surfaces a 403 in `onError`, marks readiness stale, and
+ * restarts the watch. That makes stale routing cache state visible
+ * to Kubernetes readiness instead of silently serving old routes.
  */
 
 import {
@@ -44,12 +45,68 @@ const PLURAL = 'modelendpoints';
 
 export interface ModelEndpointWatchOptions {
   readonly namespace: string;
+  readonly restartDelayMs?: number;
+}
+
+export type ModelEndpointWatchStatus = 'starting' | 'ready' | 'stale' | 'stopped';
+
+export interface ModelEndpointWatchHealthSnapshot {
+  readonly ready: boolean;
+  readonly status: ModelEndpointWatchStatus;
+  readonly lastStartedAtMs: number | null;
+  readonly lastErrorAtMs: number | null;
+  readonly lastStoppedAtMs: number | null;
+}
+
+export interface ModelEndpointWatchHealth {
+  isReady(): boolean;
+  snapshot(): ModelEndpointWatchHealthSnapshot;
+  markStarted(): void;
+  markError(err: unknown): void;
+  markStopped(): void;
 }
 
 export interface ModelEndpointWatch {
   readonly informer: Informer<ModelEndpoint>;
+  readonly health: ModelEndpointWatchHealth;
   start(): Promise<void>;
   stop(): Promise<void>;
+}
+
+export function createModelEndpointWatchHealth(
+  now: () => number = () => Date.now(),
+): ModelEndpointWatchHealth {
+  let status: ModelEndpointWatchStatus = 'starting';
+  let lastStartedAtMs: number | null = null;
+  let lastErrorAtMs: number | null = null;
+  let lastStoppedAtMs: number | null = null;
+
+  return {
+    isReady(): boolean {
+      return status === 'ready';
+    },
+    snapshot(): ModelEndpointWatchHealthSnapshot {
+      return {
+        ready: status === 'ready',
+        status,
+        lastStartedAtMs,
+        lastErrorAtMs,
+        lastStoppedAtMs,
+      };
+    },
+    markStarted(): void {
+      status = 'ready';
+      lastStartedAtMs = now();
+    },
+    markError(_err: unknown): void {
+      status = 'stale';
+      lastErrorAtMs = now();
+    },
+    markStopped(): void {
+      status = 'stopped';
+      lastStoppedAtMs = now();
+    },
+  };
 }
 
 /**
@@ -83,6 +140,26 @@ export function createModelEndpointWatch(
 
   const watchPath = `/apis/${KAGENT_GROUP}/${KAGENT_VERSION}/namespaces/${encodeURIComponent(opts.namespace)}/${PLURAL}`;
   const informer = makeInformer<ModelEndpoint>(kc, watchPath, listFn);
+  const health = createModelEndpointWatchHealth();
+  const restartDelayMs = opts.restartDelayMs ?? 5_000;
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const startAndMark = async (): Promise<void> => {
+    await informer.start();
+    health.markStarted();
+  };
+
+  const scheduleRestart = (): void => {
+    if (restartTimer !== null) return;
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      void startAndMark().catch((err: unknown) => {
+        health.markError(err);
+        console.error('[llm-gateway] model-endpoint watch restart failed:', err);
+        scheduleRestart();
+      });
+    }, restartDelayMs);
+  };
 
   // Audit-rev2 L12 — track which (namespace/name) bedrock CRs we've
   // already warned about so a steady-state cluster doesn't spam the
@@ -145,19 +222,29 @@ export function createModelEndpointWatch(
     modelIndex.delete(ep.spec.model, identity);
   });
   informer.on('error', (err) => {
+    health.markError(err);
     console.error('[llm-gateway] model-endpoint watch error:', err);
-    setTimeout(() => {
-      void informer.start();
-    }, 5_000);
+    scheduleRestart();
   });
 
   return {
     informer,
-    start(): Promise<void> {
-      return informer.start();
+    health,
+    async start(): Promise<void> {
+      try {
+        await startAndMark();
+      } catch (err) {
+        health.markError(err);
+        throw err;
+      }
     },
-    stop(): Promise<void> {
-      return informer.stop();
+    async stop(): Promise<void> {
+      if (restartTimer !== null) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+      await informer.stop();
+      health.markStopped();
     },
   };
 }

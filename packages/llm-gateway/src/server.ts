@@ -11,7 +11,7 @@
  *   GET  /admin/capacity        — admin auth → AIMD + in-flight snapshot
  *   GET  /admin/usage[?...]     — admin auth → usage_records query
  *   GET  /healthz               — always 200 (process is up)
- *   GET  /readyz                — 200 only when DB pings clean
+ *   GET  /readyz                — 200 only when runtime deps are ready
  *
  * Style mirrors `packages/operator/src/template-server.ts`: no
  * Express, just `createServer` + a request handler. Body-parse cap
@@ -135,7 +135,7 @@ export function buildHandler(
       return;
     }
 
-    // Readiness — gated on DB reachability.
+    // Readiness — gated on runtime dependency health.
     if (method === 'GET' && url === '/readyz') {
       const ready = await deps.readinessProbe();
       writeJson(res, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready' });

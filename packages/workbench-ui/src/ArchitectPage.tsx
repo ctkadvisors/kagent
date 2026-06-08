@@ -250,7 +250,9 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
                   key={ex}
                   type="button"
                   className={styles.example}
-                  onClick={() => submit(ex)}
+                  onClick={() => {
+                    setGoal(ex);
+                  }}
                 >
                   {ex}
                 </button>
