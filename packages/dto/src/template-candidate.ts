@@ -24,7 +24,7 @@
  *     try/catch wrapping every call.
  *
  * The YAML must conform to the AgentTemplateSpec shape at minimum:
- *   - `agentSpec`: object (required)
+ *   - `agentSpec`: object with `model` or `modelClass` (required)
  *   - `templateVersion`: number (optional; defaults to 1)
  *   - `parameters`: array of AgentTemplateParameter (optional)
  *   - `budget`: AgentTemplateBudget object (optional)
@@ -71,8 +71,10 @@ export interface AgentTemplateBudget {
  * Mirror of `AgentTemplateSpec` in operator/src/crds/types.ts:1103-1117.
  * Kept in sync manually; see module JSDoc for the LM-4 rationale.
  *
- * Acceptance rule: `agentSpec` is the ONLY required field. All others
- * are optional and forwarded verbatim to the created AgentTemplate CR.
+ * Acceptance rule: `agentSpec` is the only required top-level field,
+ * and it must declare `model` or `modelClass` so the template can
+ * materialize into an Agent CR. All other fields are optional and
+ * forwarded verbatim to the created AgentTemplate CR.
  */
 export interface AgentTemplateSpec {
   readonly templateVersion?: number | undefined;
@@ -101,7 +103,8 @@ export type ParseAgentTemplateSpecResult =
  * Validation performed:
  *   1. YAML must parse without error (no malformed YAML).
  *   2. Root must be a non-null object (not an array, string, null, etc.).
- *   3. `agentSpec` field must be present and be a non-null object.
+ *   3. `agentSpec` field must be present, be a non-null object, and
+ *      declare a non-empty `model` or `modelClass`.
  *   4. `templateVersion` (when present) must be a positive integer.
  *   5. `parameters` (when present) must be a non-empty array of objects,
  *      each with a `name` (string) and `type` (one of the 3 known types).
@@ -143,6 +146,16 @@ export function parseAgentTemplateSpec(yaml: string): ParseAgentTemplateSpecResu
     Array.isArray(doc['agentSpec'])
   ) {
     return { ok: false, error: 'AgentTemplateSpec: agentSpec must be a non-null object' };
+  }
+  const agentSpec = doc['agentSpec'] as Record<string, unknown>;
+  const hasModel = typeof agentSpec['model'] === 'string' && agentSpec['model'].trim() !== '';
+  const hasModelClass =
+    typeof agentSpec['modelClass'] === 'string' && agentSpec['modelClass'].trim() !== '';
+  if (!hasModel && !hasModelClass) {
+    return {
+      ok: false,
+      error: 'AgentTemplateSpec: agentSpec must declare model or modelClass',
+    };
   }
 
   // --- Step 4: templateVersion (optional) — must be a positive integer when present

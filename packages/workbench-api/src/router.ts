@@ -258,6 +258,7 @@ export function buildRouter(deps: RouterDeps): Hono {
         architect: deps.architect,
         ...(deps.customApi !== undefined && { customApi: deps.customApi }),
         ...(deps.draftNamespace !== undefined && { draftNamespace: deps.draftNamespace }),
+        ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
       }),
     );
   }

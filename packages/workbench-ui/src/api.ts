@@ -561,7 +561,17 @@ export interface ArchitectTryResult {
   readonly namespace: string;
   readonly name: string;
   readonly uid?: string;
-  readonly _links?: { readonly langfuse?: string };
+  readonly templateName: string;
+  readonly templateUid?: string;
+  readonly agentName: string;
+  readonly agentUid?: string;
+  readonly taskName: string;
+  readonly taskUid?: string;
+  readonly _links?: {
+    readonly detail?: string;
+    readonly ui?: string;
+    readonly langfuse?: string;
+  };
 }
 
 /**
@@ -590,15 +600,21 @@ export async function architectDraft(goal: string): Promise<ArchitectDraftResult
 }
 
 /**
- * POST /api/architect/try — instantiate a candidate as an AgentTemplate
- * in the kagent-draft namespace. 503 = write surface disabled on the
- * chart; 422 = candidate failed validation.
+ * POST /api/architect/try — persist the candidate, launch a draft
+ * AgentTask in kagent-draft, and return task/trace links. 503 = write
+ * surface disabled on the chart; 422 = candidate failed validation.
  */
-export async function architectTry(candidateYaml: string): Promise<ArchitectTryResult> {
+export async function architectTry(
+  candidateYaml: string,
+  goal?: string,
+): Promise<ArchitectTryResult> {
   const res = await fetch('/api/architect/try', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ candidateYaml }),
+    body: JSON.stringify({
+      candidateYaml,
+      ...(goal !== undefined && goal.trim() !== '' && { goal: goal.trim() }),
+    }),
   });
   if (res.status !== 201) {
     let detail = `${String(res.status)} ${res.statusText}`;

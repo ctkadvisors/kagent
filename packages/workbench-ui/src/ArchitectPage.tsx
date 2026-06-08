@@ -7,9 +7,9 @@
  * `#/architect` — kagent Studio "chat to create".
  *
  * Describe an agent in natural language → the Architect (gateway-backed)
- * returns a validated AgentTemplate candidate → "Try it live"
- * instantiates it into the kagent-draft namespace, where it traces in
- * Langfuse.
+ * returns a validated AgentTemplate candidate → "Try it live" persists
+ * it, materializes a draft Agent, and creates an AgentTask in the
+ * kagent-draft namespace.
  *
  * Conversational surface: a scrolling thread of goals + drafted
  * candidates with a sticky composer. All dynamic text renders via JSX
@@ -43,6 +43,12 @@ interface ErrorMsg {
 }
 type Message = DraftMsg | UserMsg | ErrorMsg;
 
+interface TriedState {
+  readonly taskLabel: string;
+  readonly taskHref?: string;
+  readonly traceHref?: string;
+}
+
 const EXAMPLES = [
   'A summarizer that condenses long docs into 5 bullet points',
   'A triage agent that labels incoming GitHub issues by severity',
@@ -70,7 +76,7 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
   const [goal, setGoal] = useState('');
   const [messages, setMessages] = useState<readonly Message[]>([]);
   const [busy, setBusy] = useState(false);
-  const [tried, setTried] = useState<Record<number, string>>({});
+  const [tried, setTried] = useState<Record<number, TriedState>>({});
   const [copied, setCopied] = useState<number | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const idRef = useRef(0);
@@ -107,12 +113,15 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
 
   const onTry = (msg: DraftMsg): void => {
     setBusy(true);
-    architectTry(msg.draft.candidateYaml)
+    architectTry(msg.draft.candidateYaml, msg.goal)
       .then((r) => {
-        const link = r._links?.langfuse;
         setTried((t) => ({
           ...t,
-          [msg.id]: link ?? `${r.namespace}/${r.name}`,
+          [msg.id]: {
+            taskLabel: `${r.namespace}/${r.taskName}`,
+            ...(r._links?.ui !== undefined && { taskHref: r._links.ui }),
+            ...(r._links?.langfuse !== undefined && { traceHref: r._links.langfuse }),
+          },
         }));
       })
       .catch((e: unknown) => {
@@ -155,8 +164,8 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
             </div>
             <h2 className={styles.emptyTitle}>Describe the agent you want to build</h2>
             <p className={styles.emptyBody}>
-              The Architect drafts a validated AgentTemplate you can try live in the
-              <code> kagent-draft </code> namespace — fully traced in Langfuse.
+              The Architect drafts a validated AgentTemplate, then launches a draft AgentTask in
+              <code> kagent-draft </code> for traceable smoke testing.
             </p>
             <div className={styles.examples}>
               {EXAMPLES.map((ex) => (
@@ -190,7 +199,7 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
             );
           }
           const fields = summarize(msg.draft.preview);
-          const triedLink = tried[msg.id];
+          const triedState = tried[msg.id];
           return (
             <div key={msg.id} className={styles.architectMsg}>
               <div className={styles.avatar}>k</div>
@@ -214,23 +223,32 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
                   <button
                     type="button"
                     className={`${styles.btn} ${styles.btnPrimary}`}
-                    disabled={busy || triedLink !== undefined}
+                    disabled={busy || triedState !== undefined}
                     onClick={() => onTry(msg)}
                   >
-                    {triedLink !== undefined ? '✓ Running in draft' : 'Try it live'}
+                    {triedState !== undefined ? 'Task created' : 'Try it live'}
                   </button>
                   <button type="button" className={styles.btn} onClick={() => onCopy(msg)}>
                     {copied === msg.id ? 'Copied ✓' : 'Copy YAML'}
                   </button>
-                  {triedLink !== undefined ? (
+                  {triedState !== undefined ? (
                     <span className={styles.tried}>
-                      {triedLink.startsWith('http') ? (
-                        <a href={triedLink} target="_blank" rel="noreferrer">
-                          View trace in Langfuse →
-                        </a>
+                      {triedState.taskHref !== undefined ? (
+                        <a href={triedState.taskHref}>Open task</a>
                       ) : (
-                        `Created ${triedLink}`
+                        `Created ${triedState.taskLabel}`
                       )}
+                      {triedState.traceHref !== undefined ? (
+                        <>
+                          {' · '}
+                          <a href={triedState.traceHref} target="_blank" rel="noreferrer">
+                            View trace in Langfuse →
+                          </a>
+                        </>
+                      ) : null}
+                      {triedState.taskHref !== undefined && triedState.traceHref === undefined ? (
+                        <> · {triedState.taskLabel}</>
+                      ) : null}
                     </span>
                   ) : null}
                 </div>

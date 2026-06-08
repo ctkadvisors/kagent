@@ -26,6 +26,7 @@ import {
   fetchDispositions,
   fetchReviewQueue,
   acceptReviewQueueRow,
+  architectTry,
   rejectReviewQueueRow,
   requestReview,
   ReviewActionApiError,
@@ -366,5 +367,46 @@ describe('requestReview (REV-01)', () => {
     expect(body).toEqual({ reviewerId: 'operator@kagent', reasonText: 'spot audit' });
     expect(body['requestedBy']).toBeUndefined();
     expect(body['note']).toBeUndefined();
+  });
+});
+
+describe('architectTry', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts candidate YAML plus goal and returns task-oriented links', async () => {
+    mockFetchWithStatus(201, {
+      namespace: 'kagent-draft',
+      templateName: 'draft-abc123',
+      agentName: 'draft-abc123-agent',
+      taskName: 'draft-abc123-run',
+      taskUid: 'task-u1',
+      _links: {
+        detail: '/api/tasks/kagent-draft/draft-abc123-run',
+        ui: '/#/tasks/kagent-draft/draft-abc123-run',
+        langfuse: 'https://langfuse.example/trace/abc123',
+      },
+    });
+
+    const result = await architectTry('agentSpec:\n  model: m1\n', 'summarize this payload');
+
+    expect(result.taskName).toBe('draft-abc123-run');
+    expect(result._links?.ui).toBe('/#/tasks/kagent-draft/draft-abc123-run');
+    expect(result._links?.langfuse).toBe('https://langfuse.example/trace/abc123');
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/architect/try');
+    expect(init.method).toBe('POST');
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).toEqual({
+      candidateYaml: 'agentSpec:\n  model: m1\n',
+      goal: 'summarize this payload',
+    });
   });
 });

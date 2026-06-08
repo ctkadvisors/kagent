@@ -104,36 +104,99 @@ describe('POST /api/architect/try', () => {
     expect(res.status).toBe(503);
   });
 
-  it('creates an AgentTemplate in kagent-draft and returns its ref', async () => {
-    const createNamespacedCustomObject = vi.fn(() =>
-      Promise.resolve({ metadata: { name: 'draft-abc123', namespace: 'kagent-draft', uid: 'u1' } }),
-    );
+  it('creates an AgentTemplate, draft Agent, and live AgentTask with trace links', async () => {
+    const createNamespacedCustomObject = vi.fn((arg: { plural: string }) => {
+      if (arg.plural === 'agenttemplates') {
+        return Promise.resolve({
+          metadata: { name: 'draft-abc123', namespace: 'kagent-draft', uid: 'template-u1' },
+        });
+      }
+      if (arg.plural === 'agents') {
+        return Promise.resolve({
+          metadata: { name: 'draft-abc123-agent', namespace: 'kagent-draft', uid: 'agent-u1' },
+        });
+      }
+      return Promise.resolve({
+        metadata: { name: 'draft-abc123-run', namespace: 'kagent-draft', uid: 'task-u1' },
+      });
+    });
     const app = architectRoute(
       deps({
         customApi: { createNamespacedCustomObject } as never,
         draftNamespace: 'kagent-draft',
+        langfuseBaseUrl: 'https://lf.example',
         generateName: () => 'abc123',
       }),
     );
     const res = await app.request('/try', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ candidateYaml: VALID }),
+      body: JSON.stringify({ candidateYaml: VALID, goal: 'summarize this payload' }),
     });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { namespace: string; name: string; uid?: string };
+    const body = (await res.json()) as {
+      namespace: string;
+      templateName: string;
+      agentName: string;
+      taskName: string;
+      taskUid?: string;
+      _links?: { detail?: string; ui?: string; langfuse?: string };
+    };
     expect(body.namespace).toBe('kagent-draft');
-    expect(body.uid).toBe('u1');
-    expect(createNamespacedCustomObject).toHaveBeenCalledTimes(1);
-    const arg = createNamespacedCustomObject.mock.calls[0]![0] as {
+    expect(body.templateName).toBe('draft-abc123');
+    expect(body.agentName).toBe('draft-abc123-agent');
+    expect(body.taskName).toBe('draft-abc123-run');
+    expect(body.taskUid).toBe('task-u1');
+    expect(body._links?.detail).toBe('/api/tasks/kagent-draft/draft-abc123-run');
+    expect(body._links?.ui).toBe('/#/tasks/kagent-draft/draft-abc123-run');
+    expect(body._links?.langfuse).toMatch(/^https:\/\/lf\.example\/trace\/[0-9a-f]{32}$/);
+
+    expect(createNamespacedCustomObject).toHaveBeenCalledTimes(3);
+    const templateArg = createNamespacedCustomObject.mock.calls[0]![0] as {
       group: string;
       plural: string;
       namespace: string;
-      body: { kind: string; metadata: { namespace: string } };
+      body: { kind: string; metadata: { name: string; namespace: string } };
     };
-    expect(arg.plural).toBe('agenttemplates');
-    expect(arg.namespace).toBe('kagent-draft');
-    expect(arg.body.kind).toBe('AgentTemplate');
+    expect(templateArg.plural).toBe('agenttemplates');
+    expect(templateArg.namespace).toBe('kagent-draft');
+    expect(templateArg.body.kind).toBe('AgentTemplate');
+    expect(templateArg.body.metadata.name).toBe('draft-abc123');
+
+    const agentArg = createNamespacedCustomObject.mock.calls[1]![0] as {
+      plural: string;
+      namespace: string;
+      body: { kind: string; metadata: { name: string }; spec: { model: string } };
+    };
+    expect(agentArg.plural).toBe('agents');
+    expect(agentArg.namespace).toBe('kagent-draft');
+    expect(agentArg.body.kind).toBe('Agent');
+    expect(agentArg.body.metadata.name).toBe('draft-abc123-agent');
+    expect(agentArg.body.spec.model).toBe('m1');
+
+    const taskArg = createNamespacedCustomObject.mock.calls[2]![0] as {
+      plural: string;
+      namespace: string;
+      body: {
+        kind: string;
+        metadata: { name: string };
+        spec: {
+          targetAgent: string;
+          originalUserMessage: string;
+          payload: Record<string, unknown>;
+        };
+      };
+    };
+    expect(taskArg.plural).toBe('agenttasks');
+    expect(taskArg.namespace).toBe('kagent-draft');
+    expect(taskArg.body.kind).toBe('AgentTask');
+    expect(taskArg.body.metadata.name).toBe('draft-abc123-run');
+    expect(taskArg.body.spec.targetAgent).toBe('draft-abc123-agent');
+    expect(taskArg.body.spec.originalUserMessage).toBe('summarize this payload');
+    expect(taskArg.body.spec.payload).toMatchObject({
+      goal: 'summarize this payload',
+      candidateYaml: VALID,
+    });
   });
 
   it('422s when candidateYaml fails validation', async () => {

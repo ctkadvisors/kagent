@@ -127,6 +127,18 @@ agentSpec:
     expect(result.spec.budget).toBeUndefined();
   });
 
+  it('accepts agentSpec with modelClass instead of model', () => {
+    const yaml = `
+agentSpec:
+  modelClass: "text-generator-default"
+  systemPrompt: "Reply tersely."
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok:true');
+    expect(result.spec.agentSpec['modelClass']).toBe('text-generator-default');
+  });
+
   it('accepts parameters with toolSelection type', () => {
     const yaml = `
 agentSpec:
@@ -212,6 +224,17 @@ agentSpec: "not-an-object"
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected ok:false');
     expect(result.error).toMatch(/agentSpec must be a non-null object/);
+  });
+
+  it('returns ok:false when agentSpec lacks model and modelClass', () => {
+    const yaml = `
+agentSpec:
+  systemPrompt: "missing a runnable model binding"
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/agentSpec must declare model or modelClass/);
   });
 
   it('returns ok:false when templateVersion is not a positive integer', () => {

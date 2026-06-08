@@ -11,16 +11,23 @@
  *     self-correct loop (re-prompt with the validator error) → return the
  *     candidate + parsed preview. READ-side: never mutates the cluster.
  *
- *   POST /api/architect/try    — take a validated candidate YAML and
- *     instantiate it as an AgentTemplate CR in the kagent-draft namespace
- *     (live iteration zone, NOT ArgoCD-managed). WRITE-side: gated on a
- *     CustomObjectsApi being configured (mirrors routes/review-queue.ts).
+ *   POST /api/architect/try    — take a validated candidate YAML,
+ *     persist it as an AgentTemplate CR, materialize a draft Agent, and
+ *     create an AgentTask in the kagent-draft namespace (live iteration
+ *     zone, NOT ArgoCD-managed). WRITE-side: gated on a CustomObjectsApi
+ *     being configured (mirrors routes/review-queue.ts).
  *
  * Promote-to-git + lifecycle ops are Phase 2/3 (see the Studio spec).
  */
 import { Hono } from 'hono';
 import type { CustomObjectsApi } from '@kubernetes/client-node';
-import { API_GROUP, API_VERSION, parseAgentTemplateSpec } from '@kagent/dto';
+import {
+  API_GROUP,
+  API_VERSION,
+  parseAgentTemplateSpec,
+  traceLink,
+  type AgentTask,
+} from '@kagent/dto';
 
 import { buildArchitectMessages } from '../architect-prompt.js';
 import { readCreatedMeta } from './tasks.js';
@@ -40,12 +47,17 @@ export interface ArchitectRouteDeps {
   readonly customApi?: CustomObjectsApi;
   /** Namespace drafts land in. Default 'kagent-draft'. */
   readonly draftNamespace?: string;
+  /** Browser-reachable Langfuse base URL for the created AgentTask trace link. */
+  readonly langfuseBaseUrl?: string;
   /** Test seam for the instance-name suffix. */
   readonly generateName?: () => string;
 }
 
 const WRITE_DISABLED =
   'write surface disabled (no CustomObjects client configured); set actions.create=true on the chart';
+const AGENTTEMPLATE_PLURAL = 'agenttemplates';
+const AGENT_PLURAL = 'agents';
+const AGENTTASK_PLURAL = 'agenttasks';
 
 /** Strip accidental ``` fences the model may add despite instructions. */
 function stripFences(s: string): string {
@@ -99,6 +111,7 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
     const ns = deps.draftNamespace ?? 'kagent-draft';
     const body = (await c.req.json().catch(() => ({}))) as {
       candidateYaml?: unknown;
+      goal?: unknown;
       name?: unknown;
     };
     const yaml = typeof body.candidateYaml === 'string' ? body.candidateYaml : '';
@@ -107,13 +120,16 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
 
     const base = typeof body.name === 'string' && body.name.trim() !== '' ? body.name : 'draft';
     const suffix = (deps.generateName ?? (() => Math.random().toString(36).slice(2, 8)))();
-    const name = `${slugify(base)}-${suffix}`;
+    const templateName = `${slugify(base)}-${suffix}`;
+    const agentName = `${templateName}-agent`;
+    const taskName = `${templateName}-run`;
+    const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
 
-    const manifest = {
+    const templateManifest = {
       apiVersion: `${API_GROUP}/${API_VERSION}`,
       kind: 'AgentTemplate',
       metadata: {
-        name,
+        name: templateName,
         namespace: ns,
         labels: { 'kagent.knuteson.io/draft': 'true' },
       },
@@ -121,28 +137,116 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
       // (same idiom as routes/review-queue.ts accept handler).
       spec: parsed.spec as unknown as Record<string, unknown>,
     };
+    const agentManifest = {
+      apiVersion: `${API_GROUP}/${API_VERSION}`,
+      kind: 'Agent',
+      metadata: {
+        name: agentName,
+        namespace: ns,
+        labels: {
+          'kagent.knuteson.io/draft': 'true',
+          'app.kubernetes.io/created-by': 'kagent-workbench-api',
+        },
+        annotations: {
+          'kagent.knuteson.io/from-template': templateName,
+        },
+      },
+      spec: { ...parsed.spec.agentSpec },
+    };
+    const runConfig: Record<string, unknown> = {};
+    if (parsed.spec.budget?.maxIterations !== undefined) {
+      runConfig.maxIterations = parsed.spec.budget.maxIterations;
+    }
+    if (parsed.spec.budget?.maxCostUsdPerRun !== undefined) {
+      runConfig.costLimitUsd = parsed.spec.budget.maxCostUsdPerRun;
+    }
+    const taskManifest = {
+      apiVersion: `${API_GROUP}/${API_VERSION}`,
+      kind: 'AgentTask',
+      metadata: {
+        name: taskName,
+        namespace: ns,
+        labels: {
+          'kagent.knuteson.io/draft': 'true',
+          'app.kubernetes.io/created-by': 'kagent-workbench-api',
+        },
+        annotations: {
+          'kagent.knuteson.io/from-template': templateName,
+        },
+      },
+      spec: {
+        targetAgent: agentName,
+        originalUserMessage: goal.length > 0 ? goal : `Run draft agent ${agentName}`,
+        payload: {
+          ...(goal.length > 0 && { goal }),
+          candidateYaml: yaml,
+          templateName,
+        },
+        ...(Object.keys(runConfig).length > 0 && { runConfig }),
+      },
+    };
 
     try {
-      const created: unknown = await deps.customApi.createNamespacedCustomObject({
+      const createdTemplate: unknown = await deps.customApi.createNamespacedCustomObject({
         group: API_GROUP,
         version: API_VERSION,
         namespace: ns,
-        plural: 'agenttemplates',
-        body: manifest,
+        plural: AGENTTEMPLATE_PLURAL,
+        body: templateManifest,
       });
-      const meta = readCreatedMeta(created);
+      const templateMeta = readCreatedMeta(createdTemplate);
+      const createdAgent: unknown = await deps.customApi.createNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace: ns,
+        plural: AGENT_PLURAL,
+        body: agentManifest,
+      });
+      const agentMeta = readCreatedMeta(createdAgent);
+      const createdTask: unknown = await deps.customApi.createNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace: ns,
+        plural: AGENTTASK_PLURAL,
+        body: taskManifest,
+      });
+      const taskMeta = readCreatedMeta(createdTask);
+      const taskRef = {
+        apiVersion: `${API_GROUP}/${API_VERSION}`,
+        kind: 'AgentTask',
+        metadata: {
+          namespace: taskMeta.namespace ?? ns,
+          name: taskMeta.name ?? taskName,
+          ...(taskMeta.uid !== undefined && { uid: taskMeta.uid }),
+        },
+        spec: { targetAgent: agentMeta.name ?? agentName, payload: {} },
+      } as AgentTask;
+      const langfuse = traceLink(taskRef, {
+        provider: 'langfuse',
+        ...(deps.langfuseBaseUrl !== undefined && { baseUrl: deps.langfuseBaseUrl }),
+      });
       return c.json(
         {
-          namespace: meta.namespace ?? ns,
-          name: meta.name ?? name,
-          ...(meta.uid !== undefined && { uid: meta.uid }),
-          _links: { langfuse: 'https://langfuse.knuteson.io' },
+          namespace: taskMeta.namespace ?? ns,
+          name: taskMeta.name ?? taskName,
+          ...(taskMeta.uid !== undefined && { uid: taskMeta.uid }),
+          templateName: templateMeta.name ?? templateName,
+          ...(templateMeta.uid !== undefined && { templateUid: templateMeta.uid }),
+          agentName: agentMeta.name ?? agentName,
+          ...(agentMeta.uid !== undefined && { agentUid: agentMeta.uid }),
+          taskName: taskMeta.name ?? taskName,
+          ...(taskMeta.uid !== undefined && { taskUid: taskMeta.uid }),
+          _links: {
+            detail: `/api/tasks/${encodeURIComponent(taskMeta.namespace ?? ns)}/${encodeURIComponent(taskMeta.name ?? taskName)}`,
+            ui: `/#/tasks/${encodeURIComponent(taskMeta.namespace ?? ns)}/${encodeURIComponent(taskMeta.name ?? taskName)}`,
+            ...(langfuse?.url !== undefined && { langfuse: langfuse.url }),
+          },
         },
         201,
       );
     } catch (err) {
       const status = (err as { code?: number })?.code === 409 ? 409 : 500;
-      return c.json({ error: 'failed to create AgentTemplate in draft namespace' }, status);
+      return c.json({ error: 'failed to create draft AgentTask in draft namespace' }, status);
     }
   });
 

@@ -7,10 +7,11 @@
  * Architect chat client — talks to the kagent LLM gateway's
  * OpenAI-compatible `/v1/chat/completions` surface (NOT the `/admin/*`
  * surface that `gateway-client.ts` uses). The workbench-api presents the
- * gateway bearer token; the gateway governs + Langfuse-traces the call,
- * so the chat-to-create conversation is itself observable in Langfuse
- * (dogfooding). Errors are scrubbed: a 5xx must not leak the gateway's
- * pod identity back to the workbench client.
+ * gateway bearer token, so the gateway still governs model access and
+ * usage accounting. The draft-generation call itself is not an
+ * AgentTask; Langfuse traces come from the live draft AgentTask created
+ * by `/api/architect/try`. Errors are scrubbed: a 5xx must not leak the
+ * gateway's pod identity back to the workbench client.
  */
 import type { ChatMessage } from './architect-prompt.js';
 
