@@ -133,6 +133,41 @@ describe('tasksRoute', () => {
     expect(body.items[0]?.model).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
   });
 
+  it('attaches traceLink to task summaries when langfuseBaseUrl is configured', async () => {
+    const cache = new SnapshotCache();
+    cache.upsertTask(
+      makeTask({
+        name: 'traced',
+        uid: 'uid-trace-fixture',
+        phase: 'Completed',
+        createdAt: '2026-04-27T11:00:00Z',
+      }),
+    );
+
+    const app = tasksRoute({
+      cache,
+      langfuseBaseUrl: 'https://langfuse.example.com',
+    });
+    const res = await app.request('/api/tasks');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      readonly items: readonly {
+        readonly traceLink?: {
+          readonly provider: string;
+          readonly runId: string;
+          readonly url: string;
+        };
+      }[];
+    };
+    expect(body.items[0]?.traceLink?.provider).toBe('langfuse');
+    expect(body.items[0]?.traceLink?.runId).toBe('uid-trace-fixture');
+    expect(body.items[0]?.traceLink?.url).toMatch(
+      /^https:\/\/langfuse\.example\.com\/trace\/[0-9a-f]{32}$/,
+    );
+    expect(body.items[0]?.traceLink?.url).not.toContain('uid-trace-fixture');
+  });
+
   it('filters by namespace, phase, targetAgent, and since', async () => {
     const cache = new SnapshotCache();
     cache.upsertTask(

@@ -199,6 +199,58 @@ describe('POST /admin/keys', () => {
   });
 });
 
+describe('POST /v1/chat/completions safety responses', () => {
+  it('emits Retry-After on provider dispatch disabled responses', async () => {
+    const key = 'sk-test-live-key';
+    const modelIndex = new ModelIndex();
+    modelIndex.upsert({
+      apiVersion: 'kagent.knuteson.io/v1alpha1',
+      kind: 'ModelEndpoint',
+      metadata: { name: 'm', namespace: 'kagent-system' },
+      spec: {
+        model: 'm',
+        backendKind: 'mock',
+        backendUrl: 'http://mock',
+        inFlight: { seed: 1, max: 1 },
+      },
+    });
+    const booted = await bootServer({
+      apiKeyLookup: () =>
+        Promise.resolve({
+          keyHash: hashApiKey(key),
+          keyPrefix: 'sk-test',
+          status: 'active',
+          expiresAt: null,
+        }),
+      routerDeps: {
+        modelIndex,
+        inFlight: new InFlightCounter(),
+        aimd: new AimdController({ seed: 1, max: 1, minSafe: 1 }),
+        usage: new StubUsageRepo(),
+        providerDispatchDisabled: true,
+      } as unknown as RouterDeps,
+    });
+    try {
+      const res = await fetch(`${booted.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${key}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'm',
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+
+      expect(res.status).toBe(503);
+      expect(res.headers.get('retry-after')).toBe('5');
+    } finally {
+      await booted.close();
+    }
+  });
+});
+
 describe('GET /admin/keys', () => {
   let booted: BootedServer;
   beforeEach(async () => {

@@ -137,7 +137,17 @@ describe('taskSummary', () => {
     expect(s.phase).toBeUndefined();
     expect(s.error).toBeUndefined();
     expect(s.suspicious).toBeUndefined();
+    expect(s.traceLink).toBeUndefined();
     expect(s.createdAt).toBe('2026-04-26T12:00:00.000Z');
+  });
+
+  it('carries an optional trace link on list rows when the caller supplies one', () => {
+    const t = makeTask({ name: 'traced-task' });
+    const link = traceLink(t, { provider: 'langfuse', baseUrl: 'https://langfuse.example.com' });
+
+    const s = taskSummary(t, { traceLink: link ?? undefined });
+
+    expect(s.traceLink).toEqual(link);
   });
 
   it('handles a Dispatched (in-progress) task', () => {

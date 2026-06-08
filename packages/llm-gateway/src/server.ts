@@ -421,10 +421,23 @@ export function buildHandler(
           );
           return;
         case 'provider_dispatch_disabled':
+          res.setHeader('Retry-After', String(result.retryAfterSec));
           writeJson(
             res,
             503,
             createOpenAIError(`${result.message} for ${result.model}`, 'service_unavailable_error'),
+          );
+          return;
+        case 'provider_config_error':
+          writeJson(
+            res,
+            400,
+            createOpenAIError(
+              `provider configuration error for ${result.model}: ${result.message}`,
+              'invalid_request_error',
+              'model',
+              'provider_config_error',
+            ),
           );
           return;
         case 'provider_failure_backoff':

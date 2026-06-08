@@ -115,6 +115,23 @@ describe('ModelIndex', () => {
     expect(idx.upsert(ep('m'))).toEqual({ kind: 'applied' });
   });
 
+  it('upsert from the same CR under a new spec.model evicts the old model name', () => {
+    const idx = new ModelIndex();
+    idx.upsert(ep('workers-ai/@cf/meta/llama-3.3-70b-instruct', {}, { name: 'workers-70b' }));
+
+    expect(
+      idx.upsert(
+        ep('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast', {}, { name: 'workers-70b' }),
+      ),
+    ).toEqual({ kind: 'applied' });
+
+    expect(idx.lookup('workers-ai/@cf/meta/llama-3.3-70b-instruct')).toBeNull();
+    expect(idx.lookup('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast')).not.toBeNull();
+    expect(idx.list().map((item) => item.spec.model)).toEqual([
+      'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    ]);
+  });
+
   it('upsert from a DIFFERENT CR with the same model name returns kind=collision (M20)', () => {
     const idx = new ModelIndex();
     const first = ep('llama', { backendUrl: 'http://a:11434' }, { name: 'llama-jetson' });

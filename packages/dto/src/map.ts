@@ -45,6 +45,7 @@ export interface TaskSummaryOptions {
   readonly job?: V1Job;
   readonly pod?: V1Pod;
   readonly agent?: Agent;
+  readonly traceLink?: TraceLink;
 }
 
 /**
@@ -90,6 +91,9 @@ export function taskSummary(task: AgentTask, opts: TaskSummaryOptions = {}): Tas
     }),
     ...(status?.aggregatePhase !== undefined && {
       aggregatePhase: status.aggregatePhase,
+    }),
+    ...(opts.traceLink !== undefined && {
+      traceLink: opts.traceLink,
     }),
   };
 }

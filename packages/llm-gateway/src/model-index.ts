@@ -70,10 +70,12 @@ function crIdentity(ep: ModelEndpoint): string {
 
 export class ModelIndex {
   private readonly map = new Map<string, IndexEntry>();
+  private readonly identityToModel = new Map<string, string>();
 
   /** Replace the entire index — used on initial K8s list. */
   replaceAll(endpoints: readonly ModelEndpoint[]): void {
     this.map.clear();
+    this.identityToModel.clear();
     for (const ep of endpoints) this.upsert(ep);
   }
 
@@ -108,7 +110,17 @@ export class ModelIndex {
         },
       };
     }
+
+    const priorModel = this.identityToModel.get(incomingIdentity);
+    if (priorModel !== undefined && priorModel !== endpoint.spec.model) {
+      const prior = this.map.get(priorModel);
+      if (prior?.identity === incomingIdentity) {
+        this.map.delete(priorModel);
+      }
+    }
+
     this.map.set(endpoint.spec.model, { endpoint, identity: incomingIdentity });
+    this.identityToModel.set(incomingIdentity, endpoint.spec.model);
     return { kind: 'applied' };
   }
 
@@ -128,6 +140,7 @@ export class ModelIndex {
     if (existing === undefined) return;
     if (existing.identity === crIdentityHint) {
       this.map.delete(modelName);
+      this.identityToModel.delete(crIdentityHint);
     }
   }
 

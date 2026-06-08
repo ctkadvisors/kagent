@@ -167,8 +167,8 @@ describe('route', () => {
       return Promise.reject(
         new BackendError({
           backend: 'mock',
-          status: 400,
-          message: 'mock error 400: No such model',
+          status: 500,
+          message: 'mock error 500: upstream exploded',
         }),
       );
     });
@@ -202,6 +202,65 @@ describe('route', () => {
       inputTokens: 0,
       outputTokens: 0,
       taskUid: 'task-backoff',
+    });
+  });
+
+  it('classifies provider invalid-model 400s as non-retryable config errors and opens backoff', async () => {
+    const deps = {
+      ...buildDeps(modelEp('workers-ai/@cf/meta/bad-model', 8, 8)),
+      failureBackoff: new FailureBackoffController({
+        failureThreshold: 1,
+        backoffSeconds: 300,
+        clock: () => 10_000,
+      }),
+    };
+    let providerCalls = 0;
+    const provider = new FakeProvider('mock', () => {
+      providerCalls += 1;
+      return Promise.reject(
+        new BackendError({
+          backend: 'cloudflare',
+          status: 400,
+          message:
+            'cloudflare error 400: {"message":"AiError: No such model: No such model @cf/meta/bad-model or task"}',
+        }),
+      );
+    });
+    const ctx = {
+      requestId: 'r-invalid-model',
+      request: {
+        model: 'workers-ai/@cf/meta/bad-model',
+        messages: [{ role: 'user' as const, content: 'hi' }],
+      },
+      apiKeyPrefix: 'sk-pfx',
+      taskUid: 'task-invalid-model',
+      agentName: 'researcher',
+      providerOverride: provider,
+    };
+
+    const first = await route(deps, ctx);
+    const second = await route(deps, ctx);
+
+    expect(first.kind).toBe('provider_config_error');
+    if (first.kind === 'provider_config_error') {
+      expect(first.statusCode).toBe(400);
+      expect(first.message).toContain('No such model');
+    }
+    expect(second.kind).toBe('provider_failure_backoff');
+    expect(providerCalls).toBe(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deps.usage.events.at(-2)).toMatchObject({
+      statusCode: 400,
+      inputTokens: 0,
+      outputTokens: 0,
+      taskUid: 'task-invalid-model',
+    });
+    expect(deps.usage.events.at(-1)).toMatchObject({
+      statusCode: 503,
+      inputTokens: 0,
+      outputTokens: 0,
+      taskUid: 'task-invalid-model',
     });
   });
 

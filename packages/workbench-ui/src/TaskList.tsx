@@ -129,6 +129,7 @@ export function TaskList(): React.JSX.Element {
               <th>Name</th>
               <th>Namespace</th>
               <th>Phase</th>
+              <th>Trace</th>
               <th>Children / Artifacts</th>
               <th>Target</th>
               <th>Created</th>
@@ -161,6 +162,20 @@ export function TaskList(): React.JSX.Element {
                         </span>
                       ))
                     : null}
+                </td>
+                <td>
+                  {t.traceLink?.url !== undefined ? (
+                    <a
+                      href={t.traceLink.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={styles.traceLink}
+                    >
+                      open trace
+                    </a>
+                  ) : (
+                    <span className={styles.countChipMuted}>—</span>
+                  )}
                 </td>
                 <td>{renderGraphCell(t)}</td>
                 <td>

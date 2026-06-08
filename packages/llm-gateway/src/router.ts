@@ -14,6 +14,7 @@
  *   - `at_cap`            — current in-flight ≥ AIMD cap; HTTP 429 + Retry-After
  *   - `unknown_model`     — no ModelEndpoint registered; HTTP 400
  *   - `backend_throttled` — upstream returned 429/503 (H13); HTTP 429/503 + Retry-After
+ *   - `provider_config_error` — upstream returned a non-retryable provider config error; HTTP 400
  *   - `dispatch_error`    — provider threw a non-throttle error; HTTP 502 (AIMD-decreased)
  *
  * Pure orchestration — does NOT touch HTTP wire format. The server
@@ -131,6 +132,7 @@ export type RouteResult =
   | {
       readonly kind: 'provider_dispatch_disabled';
       readonly statusCode: 503;
+      readonly retryAfterSec: number;
       readonly model: string;
       readonly message: string;
     }
@@ -138,6 +140,13 @@ export type RouteResult =
       readonly kind: 'provider_failure_backoff';
       readonly statusCode: 503;
       readonly retryAfterSec: number;
+      readonly model: string;
+      readonly backend: string;
+      readonly message: string;
+    }
+  | {
+      readonly kind: 'provider_config_error';
+      readonly statusCode: 400;
       readonly model: string;
       readonly backend: string;
       readonly message: string;
@@ -193,6 +202,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
     return {
       kind: 'provider_dispatch_disabled',
       statusCode: 503,
+      retryAfterSec: DEFAULT_BACKEND_RETRY_AFTER_SECONDS,
       model: endpoint.model,
       message: 'provider dispatch disabled',
     };
@@ -281,6 +291,38 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
       latencyMs: result.latencyMs,
     };
   } catch (err: unknown) {
+    if (err instanceof BackendError && isNonRetryableProviderConfigError(err)) {
+      deps.aimd.onError(endpoint.model, backendUrl);
+      deps.failureBackoff?.recordFailure(endpoint.model, backendUrl);
+      const sanitisedMessage = sanitizeUpstreamErrorBody(err.message);
+      void deps.usage
+        .record({
+          apiKeyPrefix: ctx.apiKeyPrefix,
+          requestId: ctx.requestId,
+          model: endpoint.model,
+          backend,
+          backendUrl,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: Date.now() - startedAt,
+          statusCode: 400,
+          streaming: false,
+          taskUid: ctx.taskUid,
+          agentName: ctx.agentName,
+          errorMessage: sanitisedMessage,
+        })
+        .catch(() => {
+          /* swallow — primary error already in flight */
+        });
+      return {
+        kind: 'provider_config_error',
+        statusCode: 400,
+        model: endpoint.model,
+        backend,
+        message: sanitisedMessage,
+      };
+    }
+
     // H13 — typed BackendError with status 429/503 routes to the
     // backend_throttled discriminator. AIMD still gets `onError` so
     // the local cap halves; we want the upstream's pressure to be
@@ -387,4 +429,15 @@ function recordZeroTokenFailure(
     .catch(() => {
       /* swallow — request is already blocked */
     });
+}
+
+function isNonRetryableProviderConfigError(err: BackendError): boolean {
+  if (err.status !== 400 && err.status !== 404) return false;
+  const message = err.message.toLowerCase();
+  return (
+    message.includes('no such model') ||
+    message.includes('invalid model') ||
+    message.includes('model not found') ||
+    message.includes('unknown model')
+  );
 }

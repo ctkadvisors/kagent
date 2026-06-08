@@ -108,6 +108,12 @@ export interface TaskSummary {
    * `status.aggregatePhase` from the operator's task-graph projection.
    */
   readonly aggregatePhase?: AggregatePhase;
+
+  /**
+   * Optional trace deep-link for list-row observability. API facades
+   * attach this when they know the configured trace provider base URL.
+   */
+  readonly traceLink?: TraceLink;
 }
 
 /* =====================================================================

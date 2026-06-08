@@ -72,6 +72,8 @@ export interface TaskSummary {
   readonly childCount?: number;
   /** Aggregate phase across `children`, distinct from `phase`. */
   readonly aggregatePhase?: AggregatePhase;
+  /** Optional Langfuse/OTel trace deep-link for list-row observability. */
+  readonly traceLink?: TraceLinkSummary;
 }
 
 /**

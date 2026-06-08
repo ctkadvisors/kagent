@@ -140,7 +140,7 @@ function ep(model: string, max = 4, seed = 2, url = 'http://x'): ModelEndpoint {
   return {
     apiVersion: 'kagent.knuteson.io/v1alpha1',
     kind: 'ModelEndpoint',
-    metadata: { name: 'm' },
+    metadata: { name: model.replace(/[^a-z0-9-]/g, '-') },
     spec: {
       model,
       backendKind: 'mock',

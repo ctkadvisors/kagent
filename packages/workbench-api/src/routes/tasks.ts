@@ -133,7 +133,14 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
         const ns2 = t.metadata.namespace ?? 'default';
         const agentName = t.spec.targetAgent;
         const agent = agentName !== undefined ? deps.cache.getAgent(ns2, agentName) : undefined;
-        return taskSummary(t, { ...(agent !== undefined && { agent }) });
+        const link =
+          deps.langfuseBaseUrl !== undefined
+            ? traceLink(t, { provider: 'langfuse', baseUrl: deps.langfuseBaseUrl })
+            : null;
+        return taskSummary(t, {
+          ...(agent !== undefined && { agent }),
+          ...(link !== null && { traceLink: link }),
+        });
       })
       .sort((a, b) => compareIsoDesc(a.createdAt, b.createdAt));
 
