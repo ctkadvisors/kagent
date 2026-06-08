@@ -324,6 +324,10 @@ export async function reconcileAgentTask(
   task: AgentTask,
   deps: ReconcileDeps,
 ): Promise<ReconcileResult> {
+  if (hasDeletionTimestamp(task.metadata.deletionTimestamp)) {
+    return { action: 'skipped', reason: 'deleting' };
+  }
+
   const phase = task.status?.phase;
   if (phase === 'Completed' || phase === 'Failed' || phase === 'Dispatched') {
     return { action: 'skipped', reason: `phase=${phase}` };
@@ -1123,6 +1127,10 @@ function isConflict(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const e = err as { code?: unknown; statusCode?: unknown };
   return e.code === 409 || e.statusCode === 409;
+}
+
+function hasDeletionTimestamp(value: unknown): boolean {
+  return value !== undefined && value !== null;
 }
 
 /**

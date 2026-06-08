@@ -423,6 +423,12 @@ export interface AdmittedTaskAuditFields {
 
 export type EmitTaskAdmittedFn = (fields: AdmittedTaskAuditFields) => Promise<void>;
 
+export type CanUnsuspendJobResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
+export type CanUnsuspendJobFn = (job: V1Job) => Promise<CanUnsuspendJobResult>;
+
 export interface AdmissionDeps {
   /**
    * Master switch. When false, `evaluate()` is a no-op. The
@@ -469,6 +475,13 @@ export interface AdmissionDeps {
     ref: { readonly namespace: string; readonly name: string },
     reason: string,
   ) => Promise<void>;
+  /**
+   * Optional final safety gate immediately before `spec.suspend=false`.
+   * Production wiring uses this to re-check that the owning AgentTask is
+   * still live and all ConfigMap/Secret mount prerequisites exist. When
+   * absent, admission preserves the historical scheduler-only behavior.
+   */
+  readonly canUnsuspendJob?: CanUnsuspendJobFn;
 }
 
 export interface AdmissionSummary {
@@ -580,6 +593,14 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
   // matches reality. Sequential lets us course-correct on 409 by
   // re-evaluating from scratch.
   for (const entry of decision1.admittable) {
+    const guard = await canUnsuspend(deps, entry.job);
+    if (!guard.ok) {
+      skipped++;
+      console.warn(
+        `[kagent-operator] admission: keeping ${entry.ref.namespace}/${entry.ref.name} suspended: ${guard.reason}`,
+      );
+      continue;
+    }
     try {
       await deps.unsuspendJob(entry.ref.namespace, entry.ref.name);
       admitted++;
@@ -609,6 +630,14 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
     // skipped queue. Use whichever is larger for the summary.
     skipped = Math.max(skipped, decision2.skipped);
     for (const entry of decision2.admittable) {
+      const guard = await canUnsuspend(deps, entry.job);
+      if (!guard.ok) {
+        skipped++;
+        console.warn(
+          `[kagent-operator] admission: keeping ${entry.ref.namespace}/${entry.ref.name} suspended: ${guard.reason}`,
+        );
+        continue;
+      }
       try {
         await deps.unsuspendJob(entry.ref.namespace, entry.ref.name);
         admitted++;
@@ -636,6 +665,18 @@ async function runEvaluatePass(deps: AdmissionDeps): Promise<AdmissionSummary> {
     ...(errors > 0 && { errors }),
   };
   return summary;
+}
+
+async function canUnsuspend(deps: AdmissionDeps, job: V1Job): Promise<CanUnsuspendJobResult> {
+  if (deps.canUnsuspendJob === undefined) return { ok: true };
+  try {
+    return await deps.canUnsuspendJob(job);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `pre-unsuspend guard failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /**

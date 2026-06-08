@@ -31,8 +31,10 @@ import type { ModelIndex } from './model-index.js';
 import type { UsageRecorder } from './usage-recorder.js';
 import type { ProviderFactoryOptions } from './providers/provider-factory.js';
 import { buildProvider } from './providers/provider-factory.js';
+import type { FailureBackoffController } from './failure-backoff.js';
 import type {
   AIProvider,
+  BackendKind,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ProviderRequest,
@@ -59,6 +61,18 @@ export interface RouterDeps {
   readonly providerFactoryOpts?: ProviderFactoryOptions;
   /** Optional API key bag — keyed by BackendKind name. */
   readonly backendApiKeys?: Readonly<Record<string, string>>;
+  /**
+   * Emergency hard switch. When true, the gateway accepts the request
+   * and records a zero-token 503, but does not call any upstream
+   * provider.
+   */
+  readonly providerDispatchDisabled?: boolean;
+  /**
+   * Per-model/backend failure circuit. Repeated provider failures open
+   * a local backoff window so a bad model route cannot hammer the
+   * upstream gateway.
+   */
+  readonly failureBackoff?: FailureBackoffController;
 }
 
 /** Per-request context — comes off the HTTP request. */
@@ -115,6 +129,20 @@ export type RouteResult =
       readonly message: string;
     }
   | {
+      readonly kind: 'provider_dispatch_disabled';
+      readonly statusCode: 503;
+      readonly model: string;
+      readonly message: string;
+    }
+  | {
+      readonly kind: 'provider_failure_backoff';
+      readonly statusCode: 503;
+      readonly retryAfterSec: number;
+      readonly model: string;
+      readonly backend: string;
+      readonly message: string;
+    }
+  | {
       readonly kind: 'dispatch_error';
       readonly statusCode: 502;
       readonly model: string;
@@ -152,6 +180,45 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
     minSafe: lookup.minSafe,
   });
 
+  if (deps.providerDispatchDisabled === true) {
+    recordZeroTokenFailure(
+      deps,
+      ctx,
+      endpoint.model,
+      backend,
+      backendUrl,
+      503,
+      'provider dispatch disabled',
+    );
+    return {
+      kind: 'provider_dispatch_disabled',
+      statusCode: 503,
+      model: endpoint.model,
+      message: 'provider dispatch disabled',
+    };
+  }
+
+  const failureBackoff = deps.failureBackoff?.beforeRequest(endpoint.model, backendUrl);
+  if (failureBackoff !== undefined && !failureBackoff.ok) {
+    recordZeroTokenFailure(
+      deps,
+      ctx,
+      endpoint.model,
+      backend,
+      backendUrl,
+      503,
+      failureBackoff.message,
+    );
+    return {
+      kind: 'provider_failure_backoff',
+      statusCode: 503,
+      retryAfterSec: failureBackoff.retryAfterSec,
+      model: endpoint.model,
+      backend,
+      message: failureBackoff.message,
+    };
+  }
+
   const cap = deps.aimd.currentCap(endpoint.model, backendUrl);
   const inFlight = deps.inFlight.current(endpoint.model, backendUrl);
   if (inFlight >= cap) {
@@ -184,6 +251,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
   const startedAt = Date.now();
   try {
     const result = await provider.chatCompletion(providerRequest);
+    deps.failureBackoff?.recordSuccess(endpoint.model, backendUrl);
     deps.aimd.onSuccess(endpoint.model, backendUrl, result.latencyMs);
     void deps.usage
       .record({
@@ -219,6 +287,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
     // visible in our admission control, not just propagated.
     if (err instanceof BackendError && (err.status === 429 || err.status === 503)) {
       deps.aimd.onError(endpoint.model, backendUrl);
+      deps.failureBackoff?.recordFailure(endpoint.model, backendUrl);
       const sanitisedMessage = sanitizeUpstreamErrorBody(err.message);
       const retryAfterSec = err.retryAfter ?? DEFAULT_BACKEND_RETRY_AFTER_SECONDS;
       const upstreamStatus = err.status;
@@ -252,6 +321,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
     }
 
     deps.aimd.onError(endpoint.model, backendUrl);
+    deps.failureBackoff?.recordFailure(endpoint.model, backendUrl);
     // H15 — even on the dispatch_error path, run the message through
     // the same scrub + truncate pipeline. Provider exceptions can
     // include upstream bodies (e.g. a BackendError with status outside
@@ -287,4 +357,34 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
   } finally {
     deps.inFlight.release(endpoint.model, backendUrl);
   }
+}
+
+function recordZeroTokenFailure(
+  deps: RouterDeps,
+  ctx: RouteContext,
+  model: string,
+  backend: BackendKind,
+  backendUrl: string,
+  statusCode: number,
+  errorMessage: string,
+): void {
+  void deps.usage
+    .record({
+      apiKeyPrefix: ctx.apiKeyPrefix,
+      requestId: ctx.requestId,
+      model,
+      backend,
+      backendUrl,
+      inputTokens: 0,
+      outputTokens: 0,
+      latencyMs: 0,
+      statusCode,
+      streaming: false,
+      taskUid: ctx.taskUid,
+      agentName: ctx.agentName,
+      errorMessage,
+    })
+    .catch(() => {
+      /* swallow — request is already blocked */
+    });
 }

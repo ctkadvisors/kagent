@@ -173,6 +173,12 @@ spec:
               value: {{ .Values.agentPod.imagePullSecret | quote }}
             - name: KAGENT_AGENT_POD_SERVICE_ACCOUNT
               value: {{ .Values.agentPod.serviceAccountName | quote }}
+            {{- with .Values.agentPod.nodeSelector }}
+            # Placement for spawned AgentTask pods. JSON-encoded so the
+            # operator can parse and apply it to Job pod templates.
+            - name: KAGENT_AGENT_POD_NODE_SELECTOR_JSON
+              value: {{ . | toJson | quote }}
+            {{- end }}
             {{- with .Values.agentPod.litellmBaseUrl }}
             - name: KAGENT_AGENT_POD_LITELLM_BASE_URL
               value: {{ . | quote }}

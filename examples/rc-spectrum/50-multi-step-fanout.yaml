@@ -17,7 +17,7 @@
 #   status.aggregatePhase         'AllComplete'
 #   distinct child models in pilotEvidence.taskGraph children:
 #     at least one of `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`
-#     AND at least one of `workers-ai/@cf/meta/llama-3.3-70b-instruct`.
+#     AND at least one of `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`.
 apiVersion: kagent.knuteson.io/v1alpha1
 kind: AgentTask
 metadata:

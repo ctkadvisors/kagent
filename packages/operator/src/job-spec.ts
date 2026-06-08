@@ -284,6 +284,12 @@ export interface BuildJobSpecOptions {
    */
   readonly runtimeClassName?: string;
   /**
+   * Optional nodeSelector applied to every spawned agent-pod Job. Cluster
+   * operators use this to keep LLM/runtime pods off control-plane or
+   * reconciler-only nodes.
+   */
+  readonly nodeSelector?: Readonly<Record<string, string>>;
+  /**
    * Extra env vars appended to the agent-pod container after the
    * KAGENT_TASK_*, KAGENT_AGENT_* defaults. Used by the operator to
    * plumb agent-pod runtime config (e.g. KAGENT_LITELLM_BASE_URL,
@@ -948,6 +954,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         ...(opts.imagePullSecret !== undefined && {
           imagePullSecrets: [{ name: opts.imagePullSecret }],
         }),
+        ...(opts.nodeSelector !== undefined && { nodeSelector: { ...opts.nodeSelector } }),
         ...(podSecurityContext !== undefined && { securityContext: podSecurityContext }),
         ...(podVolumes.length > 0 && { volumes: podVolumes }),
         ...(cacheInitContainers.length > 0 && { initContainers: cacheInitContainers }),

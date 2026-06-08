@@ -78,6 +78,26 @@ describe('parseEnv', () => {
     expect(cfg.modelEndpointNamespace).toBe('gateway-ns');
   });
 
+  it('parses KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED as the hard provider-call kill switch', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      ADMIN_API_TOKEN: 'tok-123',
+      KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED: 'true',
+    });
+    expect(cfg.providerDispatchDisabled).toBe(true);
+  });
+
+  it('parses provider failure backoff controls', () => {
+    const cfg = parseEnv({
+      DATABASE_URL: 'postgres://u:p@h:5432/d',
+      ADMIN_API_TOKEN: 'tok-123',
+      KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_THRESHOLD: '2',
+      KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_SECONDS: '90',
+    });
+    expect(cfg.providerFailureBackoffThreshold).toBe(2);
+    expect(cfg.providerFailureBackoffSeconds).toBe(90);
+  });
+
   it('throws when neither DATABASE_URL nor split-env is set', () => {
     expect(() => parseEnv({ ADMIN_API_TOKEN: 'tok' })).toThrow(/DATABASE_URL/);
   });

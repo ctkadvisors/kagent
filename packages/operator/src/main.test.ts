@@ -55,6 +55,8 @@ const TOUCHED_VARS = [
   // Audit-rev2 L5 — security-context env vars (fail-closed parser).
   'KAGENT_AGENT_POD_SECURITY_CONTEXT',
   'KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT',
+  // Spawned agent-pod placement.
+  'KAGENT_AGENT_POD_NODE_SELECTOR_JSON',
 ] as const;
 
 let snapshot: Partial<Record<(typeof TOUCHED_VARS)[number], string | undefined>>;
@@ -943,6 +945,18 @@ describe('parseSecurityContextEnv — audit-rev2 L5 fail-closed', () => {
   it('THROWS on malformed CONTAINER security context too', () => {
     process.env.KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT = '{[}';
     expect(() => buildJobSpecOptionsFromEnv()).toThrow(/malformed JSON/);
+  });
+});
+
+describe('buildJobSpecOptionsFromEnv — spawned agent-pod placement', () => {
+  it('parses KAGENT_AGENT_POD_NODE_SELECTOR_JSON into BuildJobSpecOptions.nodeSelector', () => {
+    process.env.KAGENT_AGENT_POD_NODE_SELECTOR_JSON = JSON.stringify({
+      'node-type': 'compute-worker',
+    });
+
+    const opts = buildJobSpecOptionsFromEnv();
+
+    expect(opts.nodeSelector).toEqual({ 'node-type': 'compute-worker' });
   });
 });
 

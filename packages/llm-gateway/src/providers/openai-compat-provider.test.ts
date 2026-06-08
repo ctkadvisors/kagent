@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { OpenAIProvider } from './openai-provider.js';
+import { CloudflareProvider } from './cloudflare-provider.js';
 import { LocalAIProvider } from './localai-provider.js';
 import type { ProviderRequest } from '../types.js';
 
@@ -119,6 +120,54 @@ describe('OpenAICompatProvider via OpenAIProvider', () => {
     });
     const cap = captured as unknown as CapturedCall;
     expect(cap.headers.Authorization).toBeUndefined();
+  });
+
+  it('Cloudflare /compat forwards workers-ai model id and uses cf-aig-authorization', async () => {
+    let captured: CapturedCall | null = null;
+    const fakeFetch = vi.fn((url: string, init?: RequestInit) => {
+      captured = {
+        url,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        bodyText: typeof init?.body === 'string' ? init.body : '',
+      };
+      return Promise.resolve(
+        jsonResponse({
+          id: 'x',
+          object: 'chat.completion',
+          created: 1,
+          model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+          choices: [
+            { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    });
+    const provider = new CloudflareProvider(
+      'https://gateway.ai.cloudflare.com/v1/acct/homelab/compat',
+      fakeFetch as unknown as typeof fetch,
+    );
+    await provider.chatCompletion({
+      config: {
+        backendKind: 'cloudflare',
+        modelId: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        providerModelId: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        apiKey: 'cf-token',
+      },
+      request: {
+        model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      requestId: 'r',
+    });
+    const cap = captured as unknown as CapturedCall;
+    expect(cap.url).toBe(
+      'https://gateway.ai.cloudflare.com/v1/acct/homelab/compat/chat/completions',
+    );
+    expect(cap.headers.Authorization).toBeUndefined();
+    expect(cap.headers['cf-aig-authorization']).toBe('Bearer cf-token');
+    const body = JSON.parse(cap.bodyText) as Record<string, unknown>;
+    expect(body.model).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast');
   });
 
   it('throws on non-2xx with status code in message', async () => {

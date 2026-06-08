@@ -86,7 +86,7 @@ function makeFakeK8s(opts?: {
 
 function buildSpec(over?: Partial<AgentSpecEnv>): AgentSpecEnv {
   return {
-    model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct',
+    model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     allowedChildAgents: ['summarizer', 'researcher'],
     maxConcurrentChildren: 5,
     ...over,

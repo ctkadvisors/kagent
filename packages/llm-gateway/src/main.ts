@@ -31,6 +31,7 @@ import { applyMigrations, loadMigrationsFromDir } from './db/migrations.js';
 import { createPool, pingPool } from './db/pool.js';
 import { createUsageRepo } from './db/usage.js';
 import { parseEnv } from './env.js';
+import { FailureBackoffController } from './failure-backoff.js';
 import { InFlightCounter } from './inflight-counter.js';
 import { ModelIndex } from './model-index.js';
 import { createModelEndpointWatch } from './model-watch.js';
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
 
   const configuredBackends = Object.keys(cfg.backendApiKeys).sort().join(',') || '<none>';
   console.log(
-    `[llm-gateway] boot port=${String(cfg.port)} ns=${cfg.modelEndpointNamespace} backendApiKeys=[${configuredBackends}]`,
+    `[llm-gateway] boot port=${String(cfg.port)} ns=${cfg.modelEndpointNamespace} backendApiKeys=[${configuredBackends}] providerDispatchDisabled=${String(cfg.providerDispatchDisabled)} failureBackoff=${String(cfg.providerFailureBackoffThreshold)}x/${String(cfg.providerFailureBackoffSeconds)}s`,
   );
 
   // Audit B7: split-credential path wins over legacy DSN. parseEnv
@@ -81,6 +82,10 @@ async function main(): Promise<void> {
   // — we pick conservative numbers (seed=1, max=4, minSafe=1) so a
   // zero-traffic startup can't flood a backend.
   const aimd = new AimdController({ seed: 1, max: 4, minSafe: 1 });
+  const failureBackoff = new FailureBackoffController({
+    failureThreshold: cfg.providerFailureBackoffThreshold,
+    backoffSeconds: cfg.providerFailureBackoffSeconds,
+  });
 
   const kc = new KubeConfig();
   try {
@@ -121,6 +126,8 @@ async function main(): Promise<void> {
       aimd,
       usage: usageRecorder,
       backendApiKeys: cfg.backendApiKeys,
+      providerDispatchDisabled: cfg.providerDispatchDisabled,
+      failureBackoff,
     },
   });
 

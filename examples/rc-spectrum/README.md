@@ -26,7 +26,7 @@ Both via the homelab's Cloudflare AI Gateway `/compat` endpoint
 (see `new_localai/k8s-kustomized/overlays/production/kagent/model-endpoints.yaml`):
 
 - `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`
-- `workers-ai/@cf/meta/llama-3.3-70b-instruct`
+- `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
 
 The `model-endpoints.yaml` ModelEndpoint CRs feed both the
 operator's admission reconciler (per-model in-flight cap) and the
@@ -37,12 +37,14 @@ need to know.
 ## Apply / re-run
 
 ```bash
-# One-shot apply (new namespace).
+# One-shot apply. In GitOps, new_localai bootstraps the namespace and
+# mirrored secrets before this bundle syncs.
+kubectl create namespace kagent-rc-spectrum --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -k examples/rc-spectrum/
 
-# Re-run after a bundle edit. Argo's Sync hook + BeforeHookCreation
-# delete-policy already does this on every commit-triggered sync;
-# manual re-run pattern:
+# Manual re-run pattern. Do not model these AgentTasks as Argo hooks:
+# deleting long-running runtime CRs during sync races generated
+# ownerRef/volume-mount churn in production.
 kubectl delete agenttasks -n kagent-rc-spectrum --all
 kubectl apply -k examples/rc-spectrum/
 ```

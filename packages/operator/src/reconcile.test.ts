@@ -180,6 +180,33 @@ describe('reconcileAgentTask — skip paths', () => {
     expect(deps.mocks.dispatcher.published).toHaveLength(0);
   });
 
+  it('skips deleting AgentTasks before resolving agents or creating runtime resources', async () => {
+    const task = makeTask({
+      metadata: {
+        name: 't1',
+        namespace: 'default',
+        uid: 'task-uid-1',
+        deletionTimestamp: new Date('2026-06-08T17:00:00.000Z'),
+      },
+    });
+    const deps = makeDeps({
+      coreApi: {},
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+    });
+
+    const result = await reconcileAgentTask(task, deps);
+
+    expect(result).toEqual({ action: 'skipped', reason: 'deleting' });
+    expect(deps.mocks.customApi.patchNamespacedCustomObjectStatus).not.toHaveBeenCalled();
+    expect(deps.mocks.customApi.getNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(deps.mocks.coreApi?.createNamespacedConfigMap).not.toHaveBeenCalled();
+    expect(deps.mocks.coreApi?.createNamespacedSecret).not.toHaveBeenCalled();
+    expect(deps.mocks.batchApi.createNamespacedJob).not.toHaveBeenCalled();
+    expect(deps.mocks.dispatcher.published).toHaveLength(0);
+  });
+
   it('does NOT skip when phase is undefined (treated as Pending)', async () => {
     const task = makeTask();
     const deps = makeDeps({

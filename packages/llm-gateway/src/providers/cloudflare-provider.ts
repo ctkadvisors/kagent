@@ -4,6 +4,7 @@
  */
 
 import { OpenAICompatProvider } from './openai-compat-provider.js';
+import type { ProviderRequest } from '../types.js';
 
 /**
  * Cloudflare AI Gateway — `/{accountId}/{gatewayId}/workers-ai/v1/chat/completions`
@@ -21,5 +22,16 @@ export class CloudflareProvider extends OpenAICompatProvider {
     fetchImpl: typeof fetch = fetch,
   ) {
     super({ defaultBaseUrl: baseUrl, requiresApiKey: true }, fetchImpl);
+  }
+
+  protected override buildHeaders(request: ProviderRequest): Record<string, string> {
+    const apiKey = request.config.apiKey;
+    if (apiKey === undefined || apiKey.length === 0) {
+      throw new Error(`${this.name} backend requires an apiKey`);
+    }
+    return {
+      'Content-Type': 'application/json',
+      'cf-aig-authorization': `Bearer ${apiKey}`,
+    };
   }
 }

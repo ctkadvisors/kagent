@@ -638,6 +638,13 @@ describe('buildJobSpec', () => {
     expect(job.spec?.template?.spec?.securityContext).toBeUndefined();
   });
 
+  it('applies caller-provided nodeSelector to the spawned pod template', () => {
+    const job = buildJobSpec(sampleAgent, sampleTask, {
+      nodeSelector: { 'node-type': 'compute-worker' },
+    });
+    expect(job.spec?.template?.spec?.nodeSelector).toEqual({ 'node-type': 'compute-worker' });
+  });
+
   it('omits the /tmp emptyDir when readOnlyRootFilesystem is overridden to false', () => {
     const job = buildJobSpec(sampleAgent, sampleTask, {
       containerSecurityContext: {

@@ -50,6 +50,16 @@
  *   PORT                       (default 4000)
  *   BACKEND_TIMEOUT_MS         (default 60000)
  *   MODEL_ENDPOINT_NAMESPACE   (default 'kagent-system')
+ *   KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED
+ *                              (default false) — hard kill switch:
+ *                              accept / record requests, but make no
+ *                              upstream provider calls.
+ *   KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_THRESHOLD
+ *                              (default 3) — consecutive provider
+ *                              failures before the per-model/backend
+ *                              circuit opens.
+ *   KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_SECONDS
+ *                              (default 300) — circuit-open window.
  *
  * Optional backend API keys (per-backend; empty/absent = backend
  * unauthenticated, which is correct for ollama/localai/exo/mock and
@@ -128,12 +138,17 @@ export interface GatewayConfig {
   readonly port: number;
   readonly backendTimeoutMs: number;
   readonly modelEndpointNamespace: string;
+  readonly providerDispatchDisabled: boolean;
+  readonly providerFailureBackoffThreshold: number;
+  readonly providerFailureBackoffSeconds: number;
   readonly backendApiKeys: BackendApiKeys;
 }
 
 const DEFAULT_PORT = 4000;
 const DEFAULT_BACKEND_TIMEOUT_MS = 60_000;
 const DEFAULT_NAMESPACE = 'kagent-system';
+const DEFAULT_PROVIDER_FAILURE_BACKOFF_THRESHOLD = 3;
+const DEFAULT_PROVIDER_FAILURE_BACKOFF_SECONDS = 300;
 
 /**
  * Order matches `BackendKind` union — keep in sync. Each entry is
@@ -227,6 +242,21 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
     'BACKEND_TIMEOUT_MS',
   );
   const modelEndpointNamespace = (env.MODEL_ENDPOINT_NAMESPACE ?? DEFAULT_NAMESPACE).trim();
+  const providerDispatchDisabled = parseBoolean(
+    env.KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED,
+    false,
+    'KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED',
+  );
+  const providerFailureBackoffThreshold = parsePositiveInt(
+    env.KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_THRESHOLD,
+    DEFAULT_PROVIDER_FAILURE_BACKOFF_THRESHOLD,
+    'KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_THRESHOLD',
+  );
+  const providerFailureBackoffSeconds = parsePositiveInt(
+    env.KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_SECONDS,
+    DEFAULT_PROVIDER_FAILURE_BACKOFF_SECONDS,
+    'KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_SECONDS',
+  );
   const backendApiKeys = parseBackendApiKeys(env);
 
   return Object.freeze({
@@ -238,6 +268,9 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
     backendTimeoutMs,
     modelEndpointNamespace:
       modelEndpointNamespace.length > 0 ? modelEndpointNamespace : DEFAULT_NAMESPACE,
+    providerDispatchDisabled,
+    providerFailureBackoffThreshold,
+    providerFailureBackoffSeconds,
     backendApiKeys,
   });
 }
@@ -320,4 +353,12 @@ function parsePositiveInt(raw: string | undefined, fallback: number, key: string
     throw new Error(`invalid env ${key}: ${raw} (must be positive integer)`);
   }
   return n;
+}
+
+function parseBoolean(raw: string | undefined, fallback: boolean, key: string): boolean {
+  if (raw === undefined || raw.length === 0) return fallback;
+  const v = raw.trim().toLowerCase();
+  if (v === 'true' || v === '1' || v === 'yes') return true;
+  if (v === 'false' || v === '0' || v === 'no') return false;
+  throw new Error(`invalid env ${key}: ${raw} (must be true|false)`);
 }

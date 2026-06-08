@@ -97,6 +97,9 @@ agentPod:
   # AgentTask's status subresource.
   rbac:
     create: true
+  # Node selector applied to Pods spawned for AgentTasks. Leave empty to
+  # let the default scheduler choose any node.
+  nodeSelector: {}
 
   # OpenAI-compat inference endpoint the agent loop calls. When set,
   # the operator injects this as KAGENT_LITELLM_BASE_URL on every

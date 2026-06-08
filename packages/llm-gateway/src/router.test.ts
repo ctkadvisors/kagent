@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AimdController } from './aimd.js';
 import { BackendError } from './backend-error.js';
+import { FailureBackoffController } from './failure-backoff.js';
 import { InFlightCounter } from './inflight-counter.js';
 import { ModelIndex } from './model-index.js';
 import { route, type RouterDeps } from './router.js';
@@ -114,6 +115,94 @@ describe('route', () => {
     });
     expect(result.kind).toBe('unknown_model');
     expect(result.statusCode).toBe(400);
+  });
+
+  it('returns 503 and does not call the provider when dispatch is disabled', async () => {
+    const deps = { ...buildDeps(modelEp('m')), providerDispatchDisabled: true };
+    let providerCalled = false;
+    const provider = new FakeProvider('mock', () => {
+      providerCalled = true;
+      return Promise.resolve({
+        response: chatResponse(),
+        inputTokens: 1,
+        outputTokens: 1,
+        latencyMs: 1,
+      });
+    });
+    const result = await route(deps, {
+      requestId: 'r-disabled',
+      request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
+      apiKeyPrefix: 'sk-pfx',
+      taskUid: 'task-disabled',
+      agentName: 'researcher',
+      providerOverride: provider,
+    });
+
+    expect(result.kind).toBe('provider_dispatch_disabled');
+    expect(result.statusCode).toBe(503);
+    expect(providerCalled).toBe(false);
+    expect(deps.inFlight.current('m', 'http://x')).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deps.usage.events.at(-1)).toMatchObject({
+      statusCode: 503,
+      inputTokens: 0,
+      outputTokens: 0,
+      taskUid: 'task-disabled',
+    });
+  });
+
+  it('opens a provider-failure backoff circuit and stops calling the backend after repeated failures', async () => {
+    const deps = {
+      ...buildDeps(modelEp('m', 8, 8)),
+      failureBackoff: new FailureBackoffController({
+        failureThreshold: 2,
+        backoffSeconds: 60,
+        clock: () => 1_000,
+      }),
+    };
+    let providerCalls = 0;
+    const provider = new FakeProvider('mock', () => {
+      providerCalls += 1;
+      return Promise.reject(
+        new BackendError({
+          backend: 'mock',
+          status: 400,
+          message: 'mock error 400: No such model',
+        }),
+      );
+    });
+    const ctx = {
+      requestId: 'r-backoff',
+      request: { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] },
+      apiKeyPrefix: 'sk-pfx',
+      taskUid: 'task-backoff',
+      agentName: 'researcher',
+      providerOverride: provider,
+    };
+
+    const first = await route(deps, ctx);
+    const second = await route(deps, ctx);
+    const third = await route(deps, ctx);
+
+    expect(first.kind).toBe('dispatch_error');
+    expect(second.kind).toBe('dispatch_error');
+    expect(third.kind).toBe('provider_failure_backoff');
+    if (third.kind === 'provider_failure_backoff') {
+      expect(third.statusCode).toBe(503);
+      expect(third.retryAfterSec).toBe(60);
+      expect(third.message).toContain('provider failure backoff');
+    }
+    expect(providerCalls).toBe(2);
+    expect(deps.inFlight.current('m', 'http://x')).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(deps.usage.events.at(-1)).toMatchObject({
+      statusCode: 503,
+      inputTokens: 0,
+      outputTokens: 0,
+      taskUid: 'task-backoff',
+    });
   });
 
   it('returns 200 + records usage on a successful dispatch', async () => {

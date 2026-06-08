@@ -16,6 +16,7 @@ import {
   AppsV1Api,
   CoreV1Api,
   type CoreV1Event,
+  type CustomObjectsApi,
   type Informer,
   type KubernetesListObject,
   type ObjectCache,
@@ -58,6 +59,7 @@ import {
   buildAdmissionReconciler,
   unsuspendJobApi,
   type AdmissionReconciler,
+  type CanUnsuspendJobResult,
   type EmitTaskAdmittedFn,
 } from './admission.js';
 import { decideBlackboardAction } from './blackboard-router.js';
@@ -663,6 +665,10 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
     'KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT',
     env.KAGENT_AGENT_POD_CONTAINER_SECURITY_CONTEXT,
   );
+  const agentPodNodeSelector = parseStringMapEnv(
+    'KAGENT_AGENT_POD_NODE_SELECTOR_JSON',
+    env.KAGENT_AGENT_POD_NODE_SELECTOR_JSON,
+  );
 
   // RuntimeClass mapping per Agent.spec.sandboxProfile (WS-C). Helm
   // values `agentPod.runtimeClasses.{default,strict}` plumb through as
@@ -716,6 +722,7 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
       }),
     ...(podSecurityContext !== undefined && { podSecurityContext }),
     ...(containerSecurityContext !== undefined && { containerSecurityContext }),
+    ...(agentPodNodeSelector !== undefined && { nodeSelector: agentPodNodeSelector }),
     ...(runtimeClassesMap !== undefined && { runtimeClasses: runtimeClassesMap }),
     ...(extraEnv.length > 0 && { extraEnv }),
     // Phase-2 modelClass — always thread through, even when empty. The
@@ -764,6 +771,38 @@ function parseSecurityContextEnv<T>(varName: string, raw: string | undefined): T
   return parsed as T;
 }
 
+function parseStringMapEnv(
+  varName: string,
+  raw: string | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (typeof raw !== 'string' || raw.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `[kagent-operator] ${varName} is malformed JSON — refusing to boot with default fall-through (agent-pod placement must fail closed): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `[kagent-operator] ${varName} is not a JSON object — refusing to boot with default fall-through (agent-pod placement must fail closed)`,
+    );
+  }
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value !== 'string') {
+      throw new Error(
+        `[kagent-operator] ${varName}.${key} is not a string — refusing to boot with default fall-through (agent-pod placement must fail closed)`,
+      );
+    }
+    if (key.length > 0 && value.length > 0) out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /**
  * Wiring container for the LLM-gateway admission reconciler. Built
  * lazily by `main()` only when KAGENT_ADMISSION_CONTROL_ENABLED=true
@@ -794,6 +833,7 @@ interface AdmissionWiring {
 interface BuildAdmissionWiringInput {
   readonly kc: import('@kubernetes/client-node').KubeConfig;
   readonly batchApi: import('@kubernetes/client-node').BatchV1Api;
+  readonly coreApi: CoreV1Api;
   readonly customApi: import('@kubernetes/client-node').CustomObjectsApi;
   readonly watchNamespace: string | undefined;
   /**
@@ -827,7 +867,7 @@ interface BuildAdmissionWiringInput {
  *     without booting the entire operator (future smoke test).
  */
 function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring {
-  const { kc, batchApi, customApi, watchNamespace } = input;
+  const { kc, batchApi, coreApi, customApi, watchNamespace } = input;
   const managedBySelector = 'kagent.knuteson.io/managed-by=kagent-operator';
 
   // ---- Job informer (admission-cache flavor) -------------------------
@@ -928,6 +968,7 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
       const agent = agentInformer.get(name, namespace);
       return agent !== undefined && isAgent(agent) ? agent : undefined;
     },
+    canUnsuspendJob: (job) => canUnsuspendManagedAgentJob(job, { coreApi, customApi }),
     unsuspendJob: (namespace, name) => unsuspendJobApi(batchApi, namespace, name),
     // Wave 0 Audit — pass through optional task.admitted emission hook.
     ...(input.emitAudit !== undefined && { emitAudit: input.emitAudit }),
@@ -1030,6 +1071,129 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
       return a !== undefined && isAgent(a) ? a : undefined;
     },
   };
+}
+
+async function canUnsuspendManagedAgentJob(
+  job: V1Job,
+  deps: { readonly coreApi: CoreV1Api; readonly customApi: CustomObjectsApi },
+): Promise<CanUnsuspendJobResult> {
+  const namespace = job.metadata?.namespace ?? 'default';
+  const jobName = job.metadata?.name ?? '(no-name)';
+  if (hasDeletionTimestamp(job.metadata?.deletionTimestamp)) {
+    return { ok: false, reason: 'Job is deleting' };
+  }
+
+  const ownerRef = job.metadata?.ownerReferences?.find((ref) => ref.kind === 'AgentTask');
+  const taskName = job.metadata?.labels?.['kagent.knuteson.io/task'] ?? ownerRef?.name;
+  if (typeof taskName !== 'string' || taskName.length === 0) {
+    return { ok: false, reason: 'missing owning AgentTask reference' };
+  }
+
+  let task: AgentTask;
+  try {
+    const res: unknown = await deps.customApi.getNamespacedCustomObject({
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace,
+      plural: 'agenttasks',
+      name: taskName,
+    });
+    task = res as AgentTask;
+  } catch (err) {
+    if (isKubeNotFound(err)) {
+      return { ok: false, reason: `owning AgentTask ${namespace}/${taskName} not found` };
+    }
+    return {
+      ok: false,
+      reason: `failed to verify owning AgentTask ${namespace}/${taskName}: ${errorMessage(err)}`,
+    };
+  }
+
+  if (hasDeletionTimestamp(task.metadata?.deletionTimestamp)) {
+    return { ok: false, reason: `owning AgentTask ${namespace}/${taskName} is deleting` };
+  }
+  const taskUid = task.metadata?.uid;
+  if (
+    typeof ownerRef?.uid === 'string' &&
+    ownerRef.uid.length > 0 &&
+    typeof taskUid === 'string' &&
+    taskUid.length > 0 &&
+    ownerRef.uid !== taskUid
+  ) {
+    return {
+      ok: false,
+      reason: `owning AgentTask UID mismatch for ${namespace}/${taskName}`,
+    };
+  }
+
+  for (const volume of job.spec?.template?.spec?.volumes ?? []) {
+    const configMapName = volume.configMap?.name;
+    if (typeof configMapName === 'string' && configMapName.length > 0) {
+      const exists = await readConfigMapExists(deps.coreApi, namespace, configMapName);
+      if (!exists.ok) return exists;
+    }
+    const secretName = volume.secret?.secretName;
+    if (typeof secretName === 'string' && secretName.length > 0) {
+      const exists = await readSecretExists(deps.coreApi, namespace, secretName);
+      if (!exists.ok) return exists;
+    }
+  }
+
+  if (jobName === '(no-name)') return { ok: false, reason: 'Job is missing metadata.name' };
+  return { ok: true };
+}
+
+async function readConfigMapExists(
+  coreApi: CoreV1Api,
+  namespace: string,
+  name: string,
+): Promise<CanUnsuspendJobResult> {
+  try {
+    await coreApi.readNamespacedConfigMap({ namespace, name });
+    return { ok: true };
+  } catch (err) {
+    if (isKubeNotFound(err)) return { ok: false, reason: `missing ConfigMap ${namespace}/${name}` };
+    return {
+      ok: false,
+      reason: `failed to verify ConfigMap ${namespace}/${name}: ${errorMessage(err)}`,
+    };
+  }
+}
+
+async function readSecretExists(
+  coreApi: CoreV1Api,
+  namespace: string,
+  name: string,
+): Promise<CanUnsuspendJobResult> {
+  try {
+    await coreApi.readNamespacedSecret({ namespace, name });
+    return { ok: true };
+  } catch (err) {
+    if (isKubeNotFound(err)) return { ok: false, reason: `missing Secret ${namespace}/${name}` };
+    return {
+      ok: false,
+      reason: `failed to verify Secret ${namespace}/${name}: ${errorMessage(err)}`,
+    };
+  }
+}
+
+function hasDeletionTimestamp(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+function isKubeNotFound(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const candidate = err as { code?: unknown; statusCode?: unknown; body?: unknown };
+  if (candidate.code === 404 || candidate.statusCode === 404) return true;
+  if (typeof candidate.body === 'object' && candidate.body !== null) {
+    const body = candidate.body as { code?: unknown; reason?: unknown };
+    return body.code === 404 || body.reason === 'NotFound';
+  }
+  return false;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -2616,6 +2780,7 @@ async function main(): Promise<void> {
     ? buildAdmissionWiring({
         kc,
         batchApi,
+        coreApi,
         customApi,
         watchNamespace,
         ...(emitTaskAdmitted !== undefined && { emitAudit: emitTaskAdmitted }),

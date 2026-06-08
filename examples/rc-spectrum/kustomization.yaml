@@ -5,8 +5,9 @@
 #
 #   kubectl apply -k examples/rc-spectrum/
 #
-# Resources land in the `kagent-rc-spectrum` namespace. The bundle
-# assumes the `kagent-operator` chart is already installed in
+# Resources land in the `kagent-rc-spectrum` namespace. Create that
+# namespace before a standalone `kubectl apply -k`. The bundle assumes
+# the `kagent-operator` chart is already installed in
 # `kagent-system` (or wherever the operator runs), and that the
 # `kagent-llm-gateway-token` + Langfuse + OTLP-headers secrets are
 # mirrored into kagent-rc-spectrum (the new_localai overlay's
@@ -32,12 +33,12 @@ labels:
 
 commonAnnotations:
   kagent.knuteson.io/evidence-bundle: rc-spectrum-1
-  # Bump this string to force Argo to re-create every CR in this
-  # bundle on the next sync — same pattern as rc-pilot's `rc-run`.
+  # Run identifier stamped onto all resources for evidence filtering.
+  # Do not make AgentTasks Argo hooks: long-running runtime CRs must not
+  # be deleted/recreated by hook lifecycle.
   kagent.knuteson.io/rc-run: rc-spectrum-1
 
 resources:
-  - 00-namespace.yaml
   - 01-agents.yaml
   - 10-research-deep.yaml
   - 20-code-generator.yaml
@@ -45,18 +46,3 @@ resources:
   - 40-model-compare-scout.yaml
   - 41-model-compare-llama70.yaml
   - 50-multi-step-fanout.yaml
-
-# Same Replace=true / Sync-hook pattern rc-pilot uses so each
-# Argo sync (i.e. each commit on main) re-runs the spectrum:
-# AgentTasks are run-once per the operator's idempotency guard,
-# so we delete + recreate them through the Argo Sync hook.
-patches:
-  - target:
-      kind: AgentTask
-    patch: |-
-      - op: add
-        path: /metadata/annotations/argocd.argoproj.io~1hook
-        value: Sync
-      - op: add
-        path: /metadata/annotations/argocd.argoproj.io~1hook-delete-policy
-        value: BeforeHookCreation

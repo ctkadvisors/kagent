@@ -39,7 +39,7 @@ function makeTemplate(over?: Partial<AgentTemplateSpec>): AgentTemplate {
     toolAllowlist: ['fetch_url', 'web_search'],
     toolDefaults: ['fetch_url'],
     agentSpec: {
-      model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct',
+      model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
       sandboxProfile: 'default',
       systemPrompt: 'Summarize "${param.topic}" in approximately ${param.wordBudget} words.',
     },
@@ -75,7 +75,7 @@ describe('buildAgentManifest', () => {
       systemPrompt: string;
       tools: string[];
     };
-    expect(spec.model).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct');
+    expect(spec.model).toBe('workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast');
     expect(spec.systemPrompt).toBe('Summarize "rust async runtimes" in approximately 200 words.');
     expect(spec.tools).toEqual(['fetch_url']);
 

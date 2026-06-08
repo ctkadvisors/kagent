@@ -1002,6 +1002,37 @@ describe('buildAdmissionReconciler', () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
+  it('runs a pre-unsuspend guard and leaves unsafe Jobs suspended', async () => {
+    const guardedJob = makeJob({
+      name: 'j1',
+      agent: 'a',
+      model: 'm1',
+      suspended: true,
+      creationTimestamp: '2026-05-03T10:00:00Z',
+    });
+    const guardSpy = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: 'owning AgentTask is deleting',
+    });
+    const patchSpy = vi.fn().mockResolvedValue(undefined);
+    const deps = {
+      enabled: true,
+      listJobs: () => [guardedJob],
+      listModelEndpoints: () => [makeModelEndpoint({ name: 'me1', model: 'm1', seed: 1, max: 4 })],
+      lookupAgent: () => undefined,
+      unsuspendJob: patchSpy,
+      canUnsuspendJob: guardSpy,
+    } as AdmissionDeps;
+    const reconciler = buildAdmissionReconciler(deps);
+
+    const summary = await reconciler.evaluate();
+
+    expect(summary.admitted).toBe(0);
+    expect(summary.skipped).toBe(1);
+    expect(guardSpy).toHaveBeenCalledWith(guardedJob);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
   it('uses ModelEndpoint.status.observedInFlight in the live evaluate path', async () => {
     const suspended = [
       makeJob({

@@ -179,7 +179,7 @@ spec:
   toolAllowlist: ["fetch_url", "web_search"]
   toolDefaults:  ["fetch_url"]
   agentSpec:                                 # fed into the Agent CRD's spec verbatim, after substitution
-    model: "workers-ai/@cf/meta/llama-3.3-70b-instruct"
+    model: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
     sandboxProfile: default
     systemPrompt: |
       You summarize the topic "${param.topic}" in approximately ${param.wordBudget} words.
@@ -206,7 +206,7 @@ metadata:
       name: research-rust-async-2026-04-26
       uid: f1c2...
 spec:
-  model: "workers-ai/@cf/meta/llama-3.3-70b-instruct"
+  model: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
   sandboxProfile: default
   systemPrompt: |
     You summarize the topic "rust async runtimes" in approximately 200 words.

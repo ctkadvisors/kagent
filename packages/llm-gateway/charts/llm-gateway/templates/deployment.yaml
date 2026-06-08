@@ -79,6 +79,12 @@ spec:
               value: {{ .Values.service.port | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            - name: KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED
+              value: {{ .Values.providerDispatch.disabled | quote }}
+            - name: KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_THRESHOLD
+              value: {{ .Values.failureBackoff.threshold | quote }}
+            - name: KAGENT_LLM_GATEWAY_FAILURE_BACKOFF_SECONDS
+              value: {{ .Values.failureBackoff.seconds | quote }}
             # Database connection (audit B7).
             #
             # BUNDLED MODE: Project the chart-auto-generated split

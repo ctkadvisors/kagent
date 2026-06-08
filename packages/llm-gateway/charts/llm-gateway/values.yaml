@@ -33,6 +33,20 @@ service:
   type: ClusterIP
   port: 4000
 
+# Provider dispatch safety controls.
+providerDispatch:
+  # Emergency hard kill switch. When true, /v1/chat/completions records
+  # zero-token 503 rows but does not call any upstream provider.
+  disabled: false
+
+# Automatic per-(model, backendUrl) failure circuit. After N
+# consecutive provider failures, the gateway returns 503 + Retry-After
+# locally for the configured window instead of repeating the same
+# upstream call.
+failureBackoff:
+  threshold: 3
+  seconds: 300
+
 # Bearer token clients use to authenticate. Recommended: provide via Secret.
 adminApiToken:
   secretName: '' # required when enabled=true

@@ -6,7 +6,7 @@
 # The bundle deliberately spans:
 #   - two CF AI Gateway models on the same `/compat` endpoint:
 #       * workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct
-#       * workers-ai/@cf/meta/llama-3.3-70b-instruct
+#       * workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast
 #     (both already documented as known-good against the homelab
 #     gateway in docs/MODEL-ROUTING.md and docs/V0.1-COMPARISON.md)
 #   - varied workload shapes: deep research (single-shot, long
@@ -37,7 +37,7 @@ metadata:
     kagent.knuteson.io/role: rc-spectrum
     kagent.knuteson.io/scenario: researcher
 spec:
-  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct'
+  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast'
   version: 0.1.0
   systemPrompt: |
     You are a precise technical researcher. Produce structured,
@@ -148,7 +148,7 @@ metadata:
     kagent.knuteson.io/role: rc-spectrum
     kagent.knuteson.io/scenario: summarizer-70b
 spec:
-  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct'
+  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast'
   version: 0.1.0
   systemPrompt: 'You are a precise technical assistant. Answer in 2-3 sentences.'
   sandboxProfile: default

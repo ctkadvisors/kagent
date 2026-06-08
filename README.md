@@ -43,7 +43,7 @@ The list below is "in the cluster, executing real work, observable in evidence p
 ### Inference + observability
 
 - ✅ LLM Gateway (`@kagent/llm-gateway`) — OpenAI-compat proxy with AIMD in-flight cap per ModelEndpoint, per-backend API key fan-out, structured usage events to a Postgres backend, admin surface (`/admin/*`) consumed by the workbench's `#/gateway` page.
-- ✅ Cloudflare AI Gateway integration via the OpenAI-compat `/compat` endpoint — `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct` and `workers-ai/@cf/meta/llama-3.3-70b-instruct` wired as ModelEndpoint CRs against the homelab's CF gateway.
+- ✅ Cloudflare AI Gateway integration via the OpenAI-compat `/compat` endpoint — `workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct` and `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` wired as ModelEndpoint CRs against the homelab's CF gateway.
 - ✅ Langfuse-native OTel trace export (`@kagent/trace-sinks` `OtelTraceSink`) — gen_ai semconv + Langfuse-flavored attrs so spans render as Generations/Tools in the UI.
 - ✅ Structured run-end detectors: `f1_orchestration_lock`, `f2_synthesis_vacuity`, `f3_truncated_synthesis`, `refusal`, `context_pressure_ignored`, `usage_source` markers for token-usage provenance.
 

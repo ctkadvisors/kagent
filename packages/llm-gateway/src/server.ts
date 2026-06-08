@@ -420,6 +420,24 @@ export function buildHandler(
             ),
           );
           return;
+        case 'provider_dispatch_disabled':
+          writeJson(
+            res,
+            503,
+            createOpenAIError(`${result.message} for ${result.model}`, 'service_unavailable_error'),
+          );
+          return;
+        case 'provider_failure_backoff':
+          res.setHeader('Retry-After', String(result.retryAfterSec));
+          writeJson(
+            res,
+            503,
+            createOpenAIError(
+              `${result.message} (backend=${result.backend})`,
+              'service_unavailable_error',
+            ),
+          );
+          return;
         case 'dispatch_error':
           writeJson(
             res,
