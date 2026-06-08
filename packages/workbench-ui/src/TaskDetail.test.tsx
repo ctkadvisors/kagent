@@ -43,7 +43,8 @@ describe('TaskDetail refresh behavior', () => {
   let unsubscribe: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockFetchTaskDetail.mockReset();
+    mockSubscribeCacheEvents.mockReset();
     onCache = undefined;
     unsubscribe = vi.fn();
     mockSubscribeCacheEvents.mockImplementation((cacheHandler: (ev: CacheChangeEvent) => void) => {
@@ -71,6 +72,25 @@ describe('TaskDetail refresh behavior', () => {
     });
 
     expect(mockFetchTaskDetail).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refetches terminal task detail on direct task cache events', async () => {
+    mockFetchTaskDetail
+      .mockResolvedValueOnce(makeDetail({ phase: 'Completed', result: 'old' }))
+      .mockResolvedValueOnce(makeDetail({ phase: 'Completed', result: 'new' }));
+
+    renderDetail();
+
+    expect(await screen.findByText('Completed')).toBeTruthy();
+    expect(mockFetchTaskDetail).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      onCache?.({ kind: 'task', op: 'upsert', key: 'kagent-draft/draft-run' });
+    });
+
+    await waitFor(() => {
+      expect(mockFetchTaskDetail).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('still refetches non-terminal task detail on related cache events', async () => {

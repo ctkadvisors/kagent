@@ -313,6 +313,20 @@ parameters:
     expect(result.error).toMatch(/parameters\[0\].type/);
   });
 
+  it('returns ok:false when a parameter name does not match the CRD pattern', () => {
+    const yaml = `
+agentSpec:
+  model: "workers-ai/llama-4"
+parameters:
+  - name: release-notes
+    type: string
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/parameters\[0\]\.name.*pattern/);
+  });
+
   it('returns ok:false when budget is not an object', () => {
     const yaml = `
 agentSpec:
@@ -325,6 +339,56 @@ budget: "not-an-object"
     expect(result.error).toMatch(/budget must be a non-null object/);
   });
 
+  it('returns ok:false when revisionHistoryLimit is outside the CRD range', () => {
+    const yaml = `
+agentSpec:
+  model: "workers-ai/llama-4"
+revisionHistoryLimit: 1001
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/revisionHistoryLimit.*integer in \[1, 1000\]/);
+  });
+
+  it('returns ok:false when idleTtlSeconds is outside the CRD range', () => {
+    const yaml = `
+agentSpec:
+  model: "workers-ai/llama-4"
+idleTtlSeconds: 59
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/idleTtlSeconds.*integer in \[60, 86400\]/);
+  });
+
+  it('returns ok:false when budget.maxIterations is a float', () => {
+    const yaml = `
+agentSpec:
+  model: "workers-ai/llama-4"
+budget:
+  maxIterations: 1.5
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/budget.maxIterations.*integer in \[1, 1000\]/);
+  });
+
+  it('returns ok:false when budget.maxParallelInstances is outside the CRD range', () => {
+    const yaml = `
+agentSpec:
+  model: "workers-ai/llama-4"
+budget:
+  maxParallelInstances: 10001
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/budget.maxParallelInstances.*integer in \[1, 10000\]/);
+  });
+
   it('returns ok:false when toolAllowlist is not an array', () => {
     const yaml = `
 agentSpec:
@@ -335,6 +399,21 @@ toolAllowlist: http
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected ok:false');
     expect(result.error).toMatch(/toolAllowlist must be an array/);
+  });
+
+  it('returns ok:false when toolDefaults is not a subset of toolAllowlist', () => {
+    const yaml = `
+agentSpec:
+  model: "workers-ai/llama-4"
+toolAllowlist:
+  - http
+toolDefaults:
+  - write_artifact
+`;
+    const result = parseAgentTemplateSpec(yaml);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok:false');
+    expect(result.error).toMatch(/toolDefaults.*toolAllowlist/);
   });
 
   it('returns ok:false when empty string is passed', () => {

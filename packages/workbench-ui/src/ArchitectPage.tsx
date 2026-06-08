@@ -142,6 +142,7 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
   const [tried, setTried] = useState<Record<number, TriedState>>({});
   const [copied, setCopied] = useState<number | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  const latestMessageRef = useRef<HTMLDivElement | null>(null);
   const idRef = useRef(0);
 
   const nextId = (): number => {
@@ -150,7 +151,19 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
   };
 
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: 'smooth' });
+    const thread = threadRef.current;
+    if (thread === null) return;
+    if (busy) {
+      thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
+      return;
+    }
+    const latest = messages[messages.length - 1];
+    if (latest === undefined) return;
+    if (latest.kind === 'draft') {
+      latestMessageRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
+    thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
   }, [messages, busy]);
 
   const submit = (text: string): void => {
@@ -247,16 +260,17 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
         ) : null}
 
         {messages.map((msg) => {
+          const latestRef = msg.id === messages[messages.length - 1]?.id ? latestMessageRef : null;
           if (msg.kind === 'user') {
             return (
-              <div key={msg.id} className={styles.userMsg}>
+              <div key={msg.id} className={styles.userMsg} ref={latestRef}>
                 {msg.text}
               </div>
             );
           }
           if (msg.kind === 'error') {
             return (
-              <div key={msg.id} className={styles.errorMsg}>
+              <div key={msg.id} className={styles.errorMsg} ref={latestRef}>
                 <div className={styles.avatar}>k</div>
                 <div className={styles.errorBody}>{msg.text}</div>
               </div>
@@ -266,7 +280,7 @@ export function ArchitectPage(_props: ArchitectPageProps): React.JSX.Element {
           const triedState = tried[msg.id];
           const validation = validateArchitectCandidate(msg.draft.candidateYaml);
           return (
-            <div key={msg.id} className={styles.architectMsg}>
+            <div key={msg.id} className={styles.architectMsg} ref={latestRef}>
               <div className={styles.avatar}>k</div>
               <div className={styles.card}>
                 <div className={styles.cardHead}>

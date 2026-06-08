@@ -31,7 +31,7 @@ import {
 } from '@kagent/dto';
 
 import { buildArchitectMessages } from '../architect-prompt.js';
-import { readCreatedMeta } from './tasks.js';
+import { extractK8sStatus, readCreatedMeta } from './tasks.js';
 
 /** Minimal surface of ArchitectClient the route needs (test-injectable). */
 export interface ArchitectLike {
@@ -59,11 +59,31 @@ const WRITE_DISABLED =
 const AGENTTEMPLATE_PLURAL = 'agenttemplates';
 const AGENT_PLURAL = 'agents';
 const AGENTTASK_PLURAL = 'agenttasks';
+const WORKBENCH_CREATED_BY = 'kagent-workbench-api';
+const OPERATOR_MANAGED_BY = 'kagent-operator';
 const ARCHITECT_MODEL_CLASS_ALIASES = new Set([
   'tool-caller-default',
   'text-generator-default',
   'reasoner-default',
 ]);
+
+interface CreatedDraftResource {
+  readonly plural: string;
+  readonly namespace: string;
+  readonly name: string;
+}
+
+interface NamespacedObjectDeleter {
+  deleteNamespacedCustomObject(args: {
+    group: string;
+    version: string;
+    namespace: string;
+    plural: string;
+    name: string;
+  }): Promise<unknown>;
+}
+
+type DraftCreateErrorStatus = 403 | 404 | 409 | 422 | 500;
 
 /** Strip accidental ``` fences the model may add despite instructions. */
 function stripFences(s: string): string {
@@ -186,6 +206,59 @@ function materializeArchitectAgentSpec(spec: AgentTemplateSpec): ArchitectMateri
   };
 }
 
+function templateOwnerReferences(
+  templateMeta: ReturnType<typeof readCreatedMeta>,
+  fallbackName: string,
+): readonly Record<string, unknown>[] | undefined {
+  if (templateMeta.uid === undefined) return undefined;
+  return [
+    {
+      apiVersion: `${API_GROUP}/${API_VERSION}`,
+      kind: 'AgentTemplate',
+      name: templateMeta.name ?? fallbackName,
+      uid: templateMeta.uid,
+      controller: false,
+      blockOwnerDeletion: false,
+    },
+  ];
+}
+
+async function cleanupCreatedDraftResources(
+  customApi: CustomObjectsApi,
+  resources: readonly CreatedDraftResource[],
+): Promise<void> {
+  const maybeDeleter = customApi as CustomObjectsApi & Partial<NamespacedObjectDeleter>;
+  if (typeof maybeDeleter.deleteNamespacedCustomObject !== 'function') return;
+  for (const resource of [...resources].reverse()) {
+    try {
+      await maybeDeleter.deleteNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace: resource.namespace,
+        plural: resource.plural,
+        name: resource.name,
+      });
+    } catch (cleanupErr: unknown) {
+      const detail = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+      console.error(
+        '[workbench-api] POST /api/architect/try — cleanup failed',
+        JSON.stringify({
+          namespace: resource.namespace,
+          plural: resource.plural,
+          name: resource.name,
+          status: extractK8sStatus(cleanupErr) ?? null,
+          message: detail,
+        }),
+      );
+    }
+  }
+}
+
+function draftCreateErrorStatus(status: number | undefined): DraftCreateErrorStatus {
+  if (status === 403 || status === 404 || status === 409 || status === 422) return status;
+  return 500;
+}
+
 export function architectRoute(deps: ArchitectRouteDeps): Hono {
   const app = new Hono();
   const maxRepairs = deps.maxRepairs ?? 2;
@@ -216,7 +289,8 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
 
   // ── POST /try ──────────────────────────────────────────────────────
   app.post('/try', async (c) => {
-    if (!deps.customApi) return c.json({ error: WRITE_DISABLED }, 503);
+    const customApi = deps.customApi;
+    if (!customApi) return c.json({ error: WRITE_DISABLED }, 503);
     const ns = deps.draftNamespace ?? 'kagent-draft';
     const body = (await c.req.json().catch(() => ({}))) as {
       candidateYaml?: unknown;
@@ -245,7 +319,10 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
       metadata: {
         name: templateName,
         namespace: ns,
-        labels: { 'kagent.knuteson.io/draft': 'true' },
+        labels: {
+          'kagent.knuteson.io/draft': 'true',
+          'app.kubernetes.io/created-by': WORKBENCH_CREATED_BY,
+        },
       },
       spec: normalizedSpec,
     };
@@ -257,7 +334,9 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
         namespace: ns,
         labels: {
           'kagent.knuteson.io/draft': 'true',
-          'app.kubernetes.io/created-by': 'kagent-workbench-api',
+          'kagent.knuteson.io/managed-by': OPERATOR_MANAGED_BY,
+          'kagent.knuteson.io/from-template': templateName,
+          'app.kubernetes.io/created-by': WORKBENCH_CREATED_BY,
         },
         annotations: {
           'kagent.knuteson.io/from-template': templateName,
@@ -280,7 +359,9 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
         namespace: ns,
         labels: {
           'kagent.knuteson.io/draft': 'true',
-          'app.kubernetes.io/created-by': 'kagent-workbench-api',
+          'kagent.knuteson.io/managed-by': OPERATOR_MANAGED_BY,
+          'kagent.knuteson.io/from-template': templateName,
+          'app.kubernetes.io/created-by': WORKBENCH_CREATED_BY,
         },
         annotations: {
           'kagent.knuteson.io/from-template': templateName,
@@ -298,8 +379,9 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
       },
     };
 
+    const createdResources: CreatedDraftResource[] = [];
     try {
-      const createdTemplate: unknown = await deps.customApi.createNamespacedCustomObject({
+      const createdTemplate: unknown = await customApi.createNamespacedCustomObject({
         group: API_GROUP,
         version: API_VERSION,
         namespace: ns,
@@ -307,20 +389,43 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
         body: templateManifest,
       });
       const templateMeta = readCreatedMeta(createdTemplate);
-      const createdAgent: unknown = await deps.customApi.createNamespacedCustomObject({
+      createdResources.push({
+        plural: AGENTTEMPLATE_PLURAL,
+        namespace: templateMeta.namespace ?? ns,
+        name: templateMeta.name ?? templateName,
+      });
+      const ownerReferences = templateOwnerReferences(templateMeta, templateName);
+      const createdAgent: unknown = await customApi.createNamespacedCustomObject({
         group: API_GROUP,
         version: API_VERSION,
         namespace: ns,
         plural: AGENT_PLURAL,
-        body: agentManifest,
+        body: {
+          ...agentManifest,
+          metadata: {
+            ...agentManifest.metadata,
+            ...(ownerReferences !== undefined && { ownerReferences }),
+          },
+        },
       });
       const agentMeta = readCreatedMeta(createdAgent);
-      const createdTask: unknown = await deps.customApi.createNamespacedCustomObject({
+      createdResources.push({
+        plural: AGENT_PLURAL,
+        namespace: agentMeta.namespace ?? ns,
+        name: agentMeta.name ?? agentName,
+      });
+      const createdTask: unknown = await customApi.createNamespacedCustomObject({
         group: API_GROUP,
         version: API_VERSION,
         namespace: ns,
         plural: AGENTTASK_PLURAL,
-        body: taskManifest,
+        body: {
+          ...taskManifest,
+          metadata: {
+            ...taskManifest.metadata,
+            ...(ownerReferences !== undefined && { ownerReferences }),
+          },
+        },
       });
       const taskMeta = readCreatedMeta(createdTask);
       const taskRef = {
@@ -356,9 +461,14 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
         },
         201,
       );
-    } catch (err) {
-      const status = (err as { code?: number })?.code === 409 ? 409 : 500;
-      return c.json({ error: 'failed to create draft AgentTask in draft namespace' }, status);
+    } catch (err: unknown) {
+      await cleanupCreatedDraftResources(customApi, createdResources);
+      const status = extractK8sStatus(err);
+      const responseStatus = draftCreateErrorStatus(status);
+      return c.json(
+        { error: 'failed to create draft resources in draft namespace' },
+        responseStatus,
+      );
     }
   });
 

@@ -32,6 +32,7 @@ type IconKey = 'architect' | 'command' | 'tasks' | 'cluster' | 'gateway' | 'revi
 interface NavItem {
   readonly hash: string;
   readonly label: string;
+  readonly shortLabel?: string;
   readonly icon: IconKey;
   readonly badge?: 'review';
 }
@@ -45,7 +46,7 @@ const NAV: readonly NavGroup[] = [
   {
     label: 'Operate',
     items: [
-      { hash: '#/command', label: 'Command Center', icon: 'command' },
+      { hash: '#/command', label: 'Command Center', shortLabel: 'Command', icon: 'command' },
       { hash: '#/', label: 'Tasks', icon: 'tasks' },
     ],
   },
@@ -208,6 +209,7 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
 
   const stale = now - lastEventAt > STALE_MS;
   const title = TITLES[hash] ?? 'Workbench';
+  const navItems = NAV.flatMap((group) => group.items);
 
   return (
     <div className={styles.shell}>
@@ -276,6 +278,27 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
 
         <main className={styles.content}>{children}</main>
       </div>
+
+      <nav className={styles.mobileNav} aria-label="Primary">
+        {navItems.map((item) => {
+          const active = hash === normalizeHash(item.hash);
+          const showBadge = item.badge === 'review' && reviewCount !== null && reviewCount > 0;
+          return (
+            <a
+              key={item.hash}
+              href={item.hash}
+              className={`${styles.mobileNavItem} ${active ? styles.mobileNavItemActive : ''}`}
+              aria-current={active ? 'page' : undefined}
+            >
+              <span className={styles.mobileIcon}>
+                <Icon name={item.icon} />
+              </span>
+              <span className={styles.mobileNavLabel}>{item.shortLabel ?? item.label}</span>
+              {showBadge ? <span className={styles.mobileBadge}>{reviewCount}</span> : null}
+            </a>
+          );
+        })}
+      </nav>
     </div>
   );
 }

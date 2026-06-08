@@ -200,12 +200,36 @@ describe('POST /api/architect/try', () => {
     const agentArg = createNamespacedCustomObject.mock.calls[1]![0] as {
       plural: string;
       namespace: string;
-      body: { kind: string; metadata: { name: string }; spec: { model: string } };
+      body: {
+        kind: string;
+        metadata: {
+          name: string;
+          labels: Record<string, string>;
+          annotations: Record<string, string>;
+          ownerReferences?: readonly { kind: string; name: string; uid: string }[];
+        };
+        spec: { model: string };
+      };
     };
     expect(agentArg.plural).toBe('agents');
     expect(agentArg.namespace).toBe('kagent-draft');
     expect(agentArg.body.kind).toBe('Agent');
     expect(agentArg.body.metadata.name).toBe('draft-abc123-agent');
+    expect(agentArg.body.metadata.labels).toMatchObject({
+      'kagent.knuteson.io/managed-by': 'kagent-operator',
+      'kagent.knuteson.io/from-template': 'draft-abc123',
+      'app.kubernetes.io/created-by': 'kagent-workbench-api',
+    });
+    expect(agentArg.body.metadata.annotations).toMatchObject({
+      'kagent.knuteson.io/from-template': 'draft-abc123',
+    });
+    expect(agentArg.body.metadata.ownerReferences).toEqual([
+      expect.objectContaining({
+        kind: 'AgentTemplate',
+        name: 'draft-abc123',
+        uid: 'template-u1',
+      }),
+    ]);
     expect(agentArg.body.spec.model).toBe('m1');
 
     const taskArg = createNamespacedCustomObject.mock.calls[2]![0] as {
@@ -213,7 +237,12 @@ describe('POST /api/architect/try', () => {
       namespace: string;
       body: {
         kind: string;
-        metadata: { name: string };
+        metadata: {
+          name: string;
+          labels: Record<string, string>;
+          annotations: Record<string, string>;
+          ownerReferences?: readonly { kind: string; name: string; uid: string }[];
+        };
         spec: {
           targetAgent: string;
           originalUserMessage: string;
@@ -225,6 +254,21 @@ describe('POST /api/architect/try', () => {
     expect(taskArg.namespace).toBe('kagent-draft');
     expect(taskArg.body.kind).toBe('AgentTask');
     expect(taskArg.body.metadata.name).toBe('draft-abc123-run');
+    expect(taskArg.body.metadata.labels).toMatchObject({
+      'kagent.knuteson.io/managed-by': 'kagent-operator',
+      'kagent.knuteson.io/from-template': 'draft-abc123',
+      'app.kubernetes.io/created-by': 'kagent-workbench-api',
+    });
+    expect(taskArg.body.metadata.annotations).toMatchObject({
+      'kagent.knuteson.io/from-template': 'draft-abc123',
+    });
+    expect(taskArg.body.metadata.ownerReferences).toEqual([
+      expect.objectContaining({
+        kind: 'AgentTemplate',
+        name: 'draft-abc123',
+        uid: 'template-u1',
+      }),
+    ]);
     expect(taskArg.body.spec.targetAgent).toBe('draft-abc123-agent');
     expect(taskArg.body.spec.originalUserMessage).toBe('summarize this payload');
     expect(taskArg.body.spec.payload).toMatchObject({
@@ -320,6 +364,82 @@ describe('POST /api/architect/try', () => {
     expect(body.error).toBe('invalid candidate');
     expect(body.detail).toMatch(/parameter "topic" requires a default/i);
     expect(createNamespacedCustomObject).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the created AgentTemplate and returns the K8s status when Agent creation fails', async () => {
+    const createNamespacedCustomObject = vi.fn((arg: { plural: string }) => {
+      if (arg.plural === 'agenttemplates') {
+        return Promise.resolve({
+          metadata: { name: 'draft-abc123', namespace: 'kagent-draft', uid: 'template-u1' },
+        });
+      }
+      return Promise.reject(Object.assign(new Error('forbidden'), { body: { code: 403 } }));
+    });
+    const deleteNamespacedCustomObject = vi.fn(() => Promise.resolve({}));
+    const app = architectRoute(
+      deps({
+        customApi: { createNamespacedCustomObject, deleteNamespacedCustomObject } as never,
+        draftNamespace: 'kagent-draft',
+        generateName: () => 'abc123',
+      }),
+    );
+
+    const res = await app.request('/try', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ candidateYaml: VALID }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(deleteNamespacedCustomObject).toHaveBeenCalledOnce();
+    expect(deleteNamespacedCustomObject.mock.calls[0]![0]).toMatchObject({
+      namespace: 'kagent-draft',
+      plural: 'agenttemplates',
+      name: 'draft-abc123',
+    });
+  });
+
+  it('cleans up created Agent and AgentTemplate when AgentTask creation fails', async () => {
+    const createNamespacedCustomObject = vi.fn((arg: { plural: string }) => {
+      if (arg.plural === 'agenttemplates') {
+        return Promise.resolve({
+          metadata: { name: 'draft-abc123', namespace: 'kagent-draft', uid: 'template-u1' },
+        });
+      }
+      if (arg.plural === 'agents') {
+        return Promise.resolve({
+          metadata: { name: 'draft-abc123-agent', namespace: 'kagent-draft', uid: 'agent-u1' },
+        });
+      }
+      return Promise.reject(Object.assign(new Error('not found'), { statusCode: 404 }));
+    });
+    const deleteNamespacedCustomObject = vi.fn(() => Promise.resolve({}));
+    const app = architectRoute(
+      deps({
+        customApi: { createNamespacedCustomObject, deleteNamespacedCustomObject } as never,
+        draftNamespace: 'kagent-draft',
+        generateName: () => 'abc123',
+      }),
+    );
+
+    const res = await app.request('/try', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ candidateYaml: VALID }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(deleteNamespacedCustomObject).toHaveBeenCalledTimes(2);
+    expect(deleteNamespacedCustomObject.mock.calls[0]![0]).toMatchObject({
+      namespace: 'kagent-draft',
+      plural: 'agents',
+      name: 'draft-abc123-agent',
+    });
+    expect(deleteNamespacedCustomObject.mock.calls[1]![0]).toMatchObject({
+      namespace: 'kagent-draft',
+      plural: 'agenttemplates',
+      name: 'draft-abc123',
+    });
   });
 
   it('422s when candidateYaml fails validation', async () => {

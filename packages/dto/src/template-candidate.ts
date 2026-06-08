@@ -41,6 +41,7 @@ import { parse as parseYaml } from 'yaml';
 export type AgentTemplateParameterType = 'string' | 'integer' | 'toolSelection';
 
 const KNOWN_PARAMETER_TYPES: readonly string[] = ['string', 'integer', 'toolSelection'];
+const PARAMETER_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
 /**
  * A single named parameter slot for the template.
@@ -105,12 +106,13 @@ export type ParseAgentTemplateSpecResult =
  *   2. Root must be a non-null object (not an array, string, null, etc.).
  *   3. `agentSpec` field must be present, be a non-null object, and
  *      declare a non-empty `model` or `modelClass`.
- *   4. `templateVersion` (when present) must be a positive integer.
+ *   4. Numeric CRD-constrained fields must be integers inside their CRD ranges.
  *   5. `parameters` (when present) must be a non-empty array of objects,
- *      each with a `name` (string) and `type` (one of the 3 known types).
+ *      each with a CRD-valid `name` and `type` (one of the 3 known types).
  *   6. `budget` (when present) must be a non-null object.
  *   7. `toolAllowlist` (when present) must be an array of strings.
- *   8. `toolDefaults` (when present) must be an array of strings.
+ *   8. `toolDefaults` (when present) must be an array of strings and, when
+ *      a `toolAllowlist` exists, a subset of that allowlist.
  *
  * @param yaml - Raw YAML string from the artifact blob.
  * @returns `{ ok: true, spec }` on success; `{ ok: false, error }` on failure.
@@ -169,6 +171,17 @@ export function parseAgentTemplateSpec(yaml: string): ParseAgentTemplateSpecResu
     }
   }
 
+  const revisionHistoryLimitResult = integerInRange(
+    doc['revisionHistoryLimit'],
+    'revisionHistoryLimit',
+    1,
+    1000,
+  );
+  if (revisionHistoryLimitResult !== null) return revisionHistoryLimitResult;
+
+  const idleTtlSecondsResult = integerInRange(doc['idleTtlSeconds'], 'idleTtlSeconds', 60, 86400);
+  if (idleTtlSecondsResult !== null) return idleTtlSecondsResult;
+
   // --- Step 5: parameters (optional) — array of valid parameter objects
   if (doc['parameters'] !== undefined) {
     if (!Array.isArray(doc['parameters'])) {
@@ -184,6 +197,12 @@ export function parseAgentTemplateSpec(yaml: string): ParseAgentTemplateSpecResu
         return {
           ok: false,
           error: `AgentTemplateSpec: parameters[${i}].name must be a non-empty string`,
+        };
+      }
+      if (!PARAMETER_NAME_PATTERN.test(param['name'])) {
+        return {
+          ok: false,
+          error: `AgentTemplateSpec: parameters[${i}].name must match pattern ${PARAMETER_NAME_PATTERN.source}`,
         };
       }
       const paramType = param['type'];
@@ -207,25 +226,32 @@ export function parseAgentTemplateSpec(yaml: string): ParseAgentTemplateSpecResu
       return { ok: false, error: 'AgentTemplateSpec: budget must be a non-null object' };
     }
     const budget = doc['budget'] as Record<string, unknown>;
-    // Validate individual budget fields if present
-    if (budget['maxIterations'] !== undefined && typeof budget['maxIterations'] !== 'number') {
-      return { ok: false, error: 'AgentTemplateSpec: budget.maxIterations must be a number' };
-    }
+    const maxIterationsResult = integerInRange(
+      budget['maxIterations'],
+      'budget.maxIterations',
+      1,
+      1000,
+    );
+    if (maxIterationsResult !== null) return maxIterationsResult;
+
     if (
       budget['maxCostUsdPerRun'] !== undefined &&
-      typeof budget['maxCostUsdPerRun'] !== 'number'
-    ) {
-      return { ok: false, error: 'AgentTemplateSpec: budget.maxCostUsdPerRun must be a number' };
-    }
-    if (
-      budget['maxParallelInstances'] !== undefined &&
-      typeof budget['maxParallelInstances'] !== 'number'
+      (typeof budget['maxCostUsdPerRun'] !== 'number' ||
+        !Number.isFinite(budget['maxCostUsdPerRun']) ||
+        budget['maxCostUsdPerRun'] < 0)
     ) {
       return {
         ok: false,
-        error: 'AgentTemplateSpec: budget.maxParallelInstances must be a number',
+        error: 'AgentTemplateSpec: budget.maxCostUsdPerRun must be a non-negative finite number',
       };
     }
+    const maxParallelInstancesResult = integerInRange(
+      budget['maxParallelInstances'],
+      'budget.maxParallelInstances',
+      1,
+      10000,
+    );
+    if (maxParallelInstancesResult !== null) return maxParallelInstancesResult;
   }
 
   // --- Step 7: toolAllowlist (optional) — array of strings
@@ -256,9 +282,36 @@ export function parseAgentTemplateSpec(yaml: string): ParseAgentTemplateSpecResu
         };
       }
     }
+    if (Array.isArray(doc['toolAllowlist'])) {
+      const allowlist = new Set(doc['toolAllowlist']);
+      const missing = doc['toolDefaults'].filter((tool) => !allowlist.has(tool));
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          error: `AgentTemplateSpec: toolDefaults must be a subset of toolAllowlist; missing ${missing.join(', ')}`,
+        };
+      }
+    }
   }
 
   // All checks passed — cast to AgentTemplateSpec (shape is structurally validated)
   const spec: AgentTemplateSpec = doc as unknown as AgentTemplateSpec;
   return { ok: true, spec };
+}
+
+function integerInRange(
+  value: unknown,
+  field: string,
+  min: number,
+  max: number,
+): ParseAgentTemplateSpecResult | null {
+  if (value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    const rendered = typeof value === 'number' ? value.toString() : typeof value;
+    return {
+      ok: false,
+      error: `AgentTemplateSpec: ${field} must be an integer in [${min.toString()}, ${max.toString()}], got ${rendered}`,
+    };
+  }
+  return null;
 }

@@ -77,7 +77,9 @@ export function TaskDetail(props: TaskDetailProps): React.JSX.Element {
         // enough to reverse-map from the event alone, so refetch on any
         // Job/Pod event; detail views are few and the API serves from
         // memory.
-        if (ev.key === targetKey || ev.kind === 'job' || ev.kind === 'pod') {
+        if (ev.key === targetKey) {
+          refetch({ force: true });
+        } else if (ev.kind === 'job' || ev.kind === 'pod') {
           refetch();
         }
       },

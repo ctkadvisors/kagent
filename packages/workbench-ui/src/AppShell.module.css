@@ -239,6 +239,10 @@
   min-height: 0;
 }
 
+.mobileNav {
+  display: none;
+}
+
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
@@ -248,5 +252,86 @@
   }
   .kpis {
     display: none;
+  }
+  .main {
+    padding-bottom: 64px;
+  }
+  .topbar {
+    gap: var(--s-3);
+    padding: 0 var(--s-3);
+  }
+  .sectionTitle {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mobileNav {
+    position: fixed;
+    z-index: 20;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    height: 64px;
+    padding: 4px max(6px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-bottom))
+      max(6px, env(safe-area-inset-right));
+    background: var(--bg-deep);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -12px 28px rgba(2, 6, 23, 0.35);
+  }
+  .mobileNavItem {
+    position: relative;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border-radius: var(--r-2);
+    color: var(--fg-muted);
+    font-size: 10.5px;
+    font-weight: 650;
+  }
+  .mobileNavItemActive {
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+  .mobileIcon {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+  }
+  .mobileNavLabel {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mobileBadge {
+    position: absolute;
+    top: 4px;
+    right: calc(50% - 22px);
+    min-width: 17px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: var(--r-pill);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 10px;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (max-width: 430px) {
+  .live {
+    display: none;
+  }
+  .mobileNavItem {
+    font-size: 9.5px;
   }
 }

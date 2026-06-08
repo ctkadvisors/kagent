@@ -36,6 +36,7 @@ describe('ArchitectPage candidate validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = vi.fn();
   });
 
   afterEach(() => {
