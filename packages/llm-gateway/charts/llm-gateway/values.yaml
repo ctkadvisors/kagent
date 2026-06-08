@@ -133,16 +133,18 @@ database:
       requests: { cpu: 100m, memory: 256Mi }
       limits: { cpu: 500m, memory: 512Mi }
 
-# Migration Job runs as Helm post-install/post-upgrade hook. Idempotent.
+# Optional migration Job. The gateway process applies migrations on startup, so
+# keep the hook disabled unless the image ships a dedicated migrate entrypoint.
 migrations:
-  enabled: true
+  enabled: false
   # When empty, inherits from `image.*` above. Override only if migrations
   # ship in a sidecar/different image; for v1 they're baked into the same
   # gateway image and run via `node dist/migrate.js`.
   image: {}
-  # Command run by the Job container. The default points at the gateway
-  # image's bundled migration entrypoint.
+  # Command run by the Job container when the hook is enabled.
   command: ['node', 'dist/migrate.js']
+  # When empty, migration pods inherit the gateway pod nodeSelector below.
+  nodeSelector: {}
 
 # RBAC for the gateway's K8s API access. Reads ModelEndpoint CRs (cap
 # definitions) and patches their /status subresource (AIMD observed

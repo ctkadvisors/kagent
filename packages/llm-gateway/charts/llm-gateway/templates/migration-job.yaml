@@ -20,6 +20,7 @@ running Pod).
 */}}
 {{- if and .Values.enabled .Values.migrations.enabled -}}
 {{- include "llm-gateway.validateValues" . -}}
+{{- $migrationNodeSelector := default .Values.nodeSelector .Values.migrations.nodeSelector -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -50,6 +51,10 @@ spec:
       serviceAccountName: {{ include "llm-gateway.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $migrationNodeSelector }}
+      nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       securityContext:

@@ -185,7 +185,7 @@ See `values.yaml` for the full surface and inline rationale. Key knobs:
 | `database.bundled` | `false` | Opt-in in-cluster Postgres |
 | `database.dsnSecretRef.name` | `''` | REQUIRED when `bundled=false` |
 | `adminApiToken.secretName` | `''` | Bearer token for clients (chart fails install without one) |
-| `migrations.enabled` | `true` | Helm post-install/post-upgrade Job |
+| `migrations.enabled` | `false` | Optional Helm post-install/post-upgrade Job; gateway applies migrations on startup |
 
 ## Bitnami postgresql dependency
 
