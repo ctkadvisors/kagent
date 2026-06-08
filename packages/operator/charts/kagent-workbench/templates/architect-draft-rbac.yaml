@@ -1,0 +1,50 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Architect draft namespace RBAC. The packaged chart defaults Architect
+drafts into the Helm release namespace so the normal actions Role and
+agent-pod ServiceAccount are enough for `/api/architect/try`.
+
+When operators set api.architect.draftNamespace to a separate namespace
+such as `kagent-draft`, the workbench-api ServiceAccount also needs
+write verbs in that namespace for the three resources `/try` creates:
+AgentTemplate, Agent, and AgentTask.
+
+This template intentionally covers only the workbench-api writer. The
+agent-pod runtime ServiceAccount/RBAC in the draft namespace belongs
+to the operator chart or the GitOps overlay that provisions that
+workload namespace.
+*/}}
+{{- $draftNamespace := default .Release.Namespace .Values.api.architect.draftNamespace -}}
+{{- if and .Values.api.architect.enabled .Values.rbac.create .Values.rbac.actions.create .Values.api.architect.draftRbac.create (ne $draftNamespace .Release.Namespace) -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-architect-draft
+  namespace: {{ $draftNamespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workbench-architect
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttemplates', 'agents', 'agenttasks']
+    verbs: ['create', 'get', 'list', 'watch', 'delete', 'patch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-architect-draft
+  namespace: {{ $draftNamespace }}
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workbench-architect
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kagent-workbench.fullname" . }}-architect-draft
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-workbench.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

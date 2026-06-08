@@ -29,6 +29,8 @@ Phase 4 (REV-01 / REV-02) extended this Role with:
     (review-decision, review-decided-by, review-decided-at, review-requested, etc.)
   - `agenttemplates: [create]` — for AgentTemplate CR creation on accept
     of a candidate-template row (promotion path).
+  - `agents: [create]` — for Architect `/try`, which materializes a
+    draft Agent before creating the AgentTask.
 
 The READ-SIDE verbs for agenttemplates ([get,list,watch]) live in
 clusterrole.yaml — same split-by-function convention as existing
@@ -60,6 +62,12 @@ rules:
   # Read-side [get,list,watch] lives in clusterrole.yaml (split-by-function).
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttemplates']
+    verbs: ['create']
+  # Architect `/api/architect/try`: materialize the draft Agent in the
+  # release namespace when api.architect.draftNamespace is blank/default.
+  # Cross-namespace Architect drafts use architect-draft-rbac.yaml.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agents']
     verbs: ['create']
   # ModelEndpoint mutation — drives the Gateway page's
   # "save bounds" button. Patches `spec.inFlight.{seed,max,minSafe}`

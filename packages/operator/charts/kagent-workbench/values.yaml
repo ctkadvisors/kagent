@@ -88,7 +88,17 @@ api:
     tokenSecret:
       name: 'kagent-llm-gateway-token'
       key: 'token'
-    draftNamespace: 'kagent-draft'
+    # Empty means the Helm release namespace. That keeps a packaged
+    # chart install runnable with the release-scoped action Role and
+    # agent-pod ServiceAccount. Set a namespace such as `kagent-draft`
+    # for a separate live-iteration zone.
+    draftNamespace: ''
+    # When draftNamespace differs from the release namespace, render
+    # the workbench-api Role + RoleBinding required by /api/architect/try
+    # in that namespace. Runtime agent-pod prerequisites for that
+    # namespace are still supplied by the operator chart or GitOps.
+    draftRbac:
+      create: true
   # Header-trust auth gate. The workbench-api requires every non-probe
   # request to carry an `X-Forwarded-User` header (set upstream by
   # Traefik forward-auth or oauth2-proxy). The default is `true` —

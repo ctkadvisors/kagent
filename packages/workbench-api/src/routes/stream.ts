@@ -157,23 +157,29 @@ export function streamRoute(deps: StreamRouteDeps): Hono {
         safeWrite(formatHeartbeat());
       }, HEARTBEAT_MS);
 
+      const aborted = new Promise<void>((resolve) => {
+        stream.onAbort(() => {
+          resolve();
+        });
+      });
+
       // Send an initial heartbeat so the client knows the connection
       // is live (some EventSource impls don't fire `open` until the
-      // first event arrives).
-      const initial = formatHeartbeat();
-      await stream.writeSSE({ event: initial.event, data: initial.data });
+      // first event arrives). Use safeWrite instead of awaiting the
+      // first write: test and slow-client harnesses may not pull the
+      // body immediately, but abort cleanup must already be registered.
+      safeWrite(formatHeartbeat());
 
       // Wait for client disconnect. Hono closes the stream when the
       // request aborts; we hook into that to clean up the subscription
       // and the heartbeat timer.
-      await new Promise<void>((resolve) => {
-        stream.onAbort(() => {
-          sub.unsubscribe();
-          clearInt(heartbeatHandle);
-          release();
-          resolve();
-        });
-      });
+      try {
+        await aborted;
+      } finally {
+        sub.unsubscribe();
+        clearInt(heartbeatHandle);
+        release();
+      }
     });
   });
 

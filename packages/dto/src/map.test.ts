@@ -521,6 +521,29 @@ describe('traceLink', () => {
     });
   });
 
+  it('prefers the trace ID embedded in runConfig.traceparent for child-task Langfuse URLs', () => {
+    const inheritedTraceId = '0123456789abcdef0123456789abcdef';
+    const childUid = 'child-task-uid';
+    const t = makeTask({
+      uid: childUid,
+      spec: {
+        runConfig: {
+          traceparent: `00-${inheritedTraceId}-fedcba9876543210-01`,
+        },
+      },
+    });
+    const uidDerivedTraceId = createHash('sha256').update(childUid).digest('hex').slice(0, 32);
+
+    expect(traceLink(t, { provider: 'langfuse', baseUrl: 'https://langfuse.knuteson.io' })).toEqual(
+      {
+        provider: 'langfuse',
+        runId: childUid,
+        url: `https://langfuse.knuteson.io/trace/${inheritedTraceId}`,
+      },
+    );
+    expect(inheritedTraceId).not.toBe(uidDerivedTraceId);
+  });
+
   it('renders Jaeger trace URL using sha256-derived trace ID', () => {
     const t = makeTask({});
     const expectedTraceId = createHash('sha256')

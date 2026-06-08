@@ -124,11 +124,21 @@ export interface Agent {
 
 export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
 
+export interface AgentTaskRunConfig {
+  readonly tokenLimit?: number;
+  readonly costLimitUsd?: number;
+  readonly maxIterations?: number;
+  readonly timeoutSeconds?: number;
+  /** W3C Trace Context value stamped on child tasks by spawn_child_task. */
+  readonly traceparent?: string;
+}
+
 export interface AgentTaskSpec {
   readonly targetAgent?: string;
   readonly targetCapability?: string;
   readonly payload: unknown;
   readonly timeoutSeconds?: number;
+  readonly runConfig?: AgentTaskRunConfig;
   readonly parentTask?: string;
   readonly originalUserMessage?: string;
   readonly parentDistillation?: string;

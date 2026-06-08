@@ -160,9 +160,11 @@ spec:
             # only when api.architect.enabled. URL + model are plain env;
             # the bearer token is sourced from the gateway token Secret.
             # When absent, the workbench-api does NOT mount /api/architect/*.
-            # The /try write path additionally needs rbac.actions.create
-            # plus the kagent-draft Role the GitOps overlay grants this SA.
+            # The /try write path additionally needs rbac.actions.create.
+            # A blank draftNamespace defaults to the release namespace;
+            # cross-namespace drafts need the architect-draft RoleBinding.
             {{- if .Values.api.architect.enabled }}
+            {{- $architectDraftNamespace := default .Release.Namespace .Values.api.architect.draftNamespace }}
             - name: KAGENT_ARCHITECT_GATEWAY_URL
               value: {{ .Values.api.architect.gatewayUrl | quote }}
             - name: KAGENT_ARCHITECT_MODEL
@@ -172,10 +174,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.api.architect.tokenSecret.name | quote }}
                   key: {{ .Values.api.architect.tokenSecret.key | quote }}
-            {{- if .Values.api.architect.draftNamespace }}
             - name: KAGENT_DRAFT_NAMESPACE
-              value: {{ .Values.api.architect.draftNamespace | quote }}
-            {{- end }}
+              value: {{ $architectDraftNamespace | quote }}
             {{- end }}
           livenessProbe:
             httpGet:

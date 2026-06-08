@@ -22,6 +22,34 @@ const MODEL_CLASS_ALIAS_AS_MODEL = [
   '  systemPrompt: summarize the input',
   '',
 ].join('\n');
+const PARAMETERIZED_WITH_DEFAULTS = [
+  'parameters:',
+  '  - name: topic',
+  '    type: string',
+  '    required: true',
+  '    default: Kubernetes operators',
+  'toolAllowlist:',
+  '  - fetch_url',
+  '  - web_search',
+  'toolDefaults:',
+  '  - fetch_url',
+  'agentSpec:',
+  '  model: m1',
+  '  systemPrompt: "summarize ${param.topic}"',
+  '  tools:',
+  '    - web_search',
+  '',
+].join('\n');
+const PARAMETERIZED_WITHOUT_REQUIRED_DEFAULT = [
+  'parameters:',
+  '  - name: topic',
+  '    type: string',
+  '    required: true',
+  'agentSpec:',
+  '  model: m1',
+  '  systemPrompt: "summarize ${param.topic}"',
+  '',
+].join('\n');
 
 function deps(over: Partial<ArchitectRouteDeps> = {}): ArchitectRouteDeps {
   return {
@@ -235,6 +263,63 @@ describe('POST /api/architect/try', () => {
     expect(templateArg.body.spec.agentSpec['model']).toBeUndefined();
     expect(agentArg.body.spec).toMatchObject({ modelClass: 'text-generator-default' });
     expect(agentArg.body.spec['model']).toBeUndefined();
+  });
+
+  it('renders default parameter values and toolDefaults before creating the draft Agent', async () => {
+    const createNamespacedCustomObject = vi.fn((arg: { plural: string }) =>
+      Promise.resolve({
+        metadata: {
+          name:
+            arg.plural === 'agenttemplates'
+              ? 'draft-abc123'
+              : arg.plural === 'agents'
+                ? 'draft-abc123-agent'
+                : 'draft-abc123-run',
+          namespace: 'kagent-draft',
+          uid: `${arg.plural}-uid`,
+        },
+      }),
+    );
+    const app = architectRoute(
+      deps({
+        customApi: { createNamespacedCustomObject } as never,
+        draftNamespace: 'kagent-draft',
+        generateName: () => 'abc123',
+      }),
+    );
+    const res = await app.request('/try', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ candidateYaml: PARAMETERIZED_WITH_DEFAULTS }),
+    });
+    expect(res.status).toBe(201);
+
+    const agentArg = createNamespacedCustomObject.mock.calls[1]![0] as {
+      body: { spec: { systemPrompt?: string; tools?: readonly string[] } };
+    };
+    expect(agentArg.body.spec.systemPrompt).toBe('summarize Kubernetes operators');
+    expect(agentArg.body.spec.tools).toEqual(['fetch_url']);
+  });
+
+  it('422s instead of creating partial resources when /try has a required parameter without a default', async () => {
+    const createNamespacedCustomObject = vi.fn();
+    const app = architectRoute(
+      deps({
+        customApi: { createNamespacedCustomObject } as never,
+        draftNamespace: 'kagent-draft',
+        generateName: () => 'abc123',
+      }),
+    );
+    const res = await app.request('/try', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ candidateYaml: PARAMETERIZED_WITHOUT_REQUIRED_DEFAULT }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error?: string; detail?: string };
+    expect(body.error).toBe('invalid candidate');
+    expect(body.detail).toMatch(/parameter "topic" requires a default/i);
+    expect(createNamespacedCustomObject).not.toHaveBeenCalled();
   });
 
   it('422s when candidateYaml fails validation', async () => {

@@ -101,10 +101,88 @@ function normalizeArchitectAgentSpec(
   return { ...agentSpec };
 }
 
-function normalizeArchitectTemplateSpec(spec: AgentTemplateSpec): Record<string, unknown> {
+function normalizeArchitectTemplateSpec(spec: AgentTemplateSpec): AgentTemplateSpec {
   return {
-    ...(spec as unknown as Record<string, unknown>),
+    ...spec,
     agentSpec: normalizeArchitectAgentSpec(spec.agentSpec),
+  };
+}
+
+type ArchitectMaterializeResult =
+  | { readonly ok: true; readonly agentSpec: Record<string, unknown> }
+  | { readonly ok: false; readonly error: string };
+
+const PARAM_RE = /\$\{param\.([a-zA-Z][a-zA-Z0-9_]*)\}/g;
+
+function architectDefaultParameterValues(spec: AgentTemplateSpec): ArchitectMaterializeResult & {
+  readonly values?: Record<string, string>;
+} {
+  const values: Record<string, string> = {};
+  for (const param of spec.parameters ?? []) {
+    if (param.default !== undefined) {
+      values[param.name] = param.default;
+      continue;
+    }
+    if (param.required ?? true) {
+      return {
+        ok: false,
+        error: `parameter "${param.name}" requires a default for Architect live try`,
+      };
+    }
+  }
+  return { ok: true, agentSpec: {}, values };
+}
+
+function renderParamRefs(value: unknown, params: Readonly<Record<string, string>>): unknown {
+  if (typeof value === 'string') {
+    return value.replace(PARAM_RE, (match, key: string) => params[key] ?? match);
+  }
+  if (Array.isArray(value)) return value.map((v) => renderParamRefs(v, params));
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = renderParamRefs(v, params);
+    }
+    return out;
+  }
+  return value;
+}
+
+function resolveArchitectTools(
+  spec: AgentTemplateSpec,
+  params: Readonly<Record<string, string>>,
+): readonly string[] {
+  const allow = new Set(spec.toolAllowlist ?? []);
+  let requested: readonly string[] | undefined;
+  for (const param of spec.parameters ?? []) {
+    if (param.type !== 'toolSelection') continue;
+    const value = params[param.name];
+    if (value === undefined || value.length === 0) continue;
+    requested = value
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    break;
+  }
+  const candidates = requested ?? spec.toolDefaults ?? [];
+  return candidates.filter((tool) => allow.has(tool));
+}
+
+function materializeArchitectAgentSpec(spec: AgentTemplateSpec): ArchitectMaterializeResult {
+  const defaults = architectDefaultParameterValues(spec);
+  if (!defaults.ok) return defaults;
+  const rendered = renderParamRefs(spec.agentSpec, defaults.values ?? {});
+  const renderedSpec: Record<string, unknown> =
+    rendered !== null && typeof rendered === 'object' && !Array.isArray(rendered)
+      ? (rendered as Record<string, unknown>)
+      : {};
+  const tools = resolveArchitectTools(spec, defaults.values ?? {});
+  return {
+    ok: true,
+    agentSpec: {
+      ...renderedSpec,
+      ...(tools.length > 0 && { tools }),
+    },
   };
 }
 
@@ -157,6 +235,10 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
     const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
 
     const normalizedSpec = normalizeArchitectTemplateSpec(parsed.spec);
+    const materializedAgent = materializeArchitectAgentSpec(normalizedSpec);
+    if (!materializedAgent.ok) {
+      return c.json({ error: 'invalid candidate', detail: materializedAgent.error }, 422);
+    }
     const templateManifest = {
       apiVersion: `${API_GROUP}/${API_VERSION}`,
       kind: 'AgentTemplate',
@@ -181,7 +263,7 @@ export function architectRoute(deps: ArchitectRouteDeps): Hono {
           'kagent.knuteson.io/from-template': templateName,
         },
       },
-      spec: normalizeArchitectAgentSpec(parsed.spec.agentSpec),
+      spec: materializedAgent.agentSpec,
     };
     const runConfig: Record<string, unknown> = {};
     if (parsed.spec.budget?.maxIterations !== undefined) {

@@ -33,29 +33,42 @@ export interface TaskDetailProps {
   readonly onBack: () => void;
 }
 
+function isTerminalPhase(phase: TaskDetail['phase']): boolean {
+  return phase === 'Completed' || phase === 'Failed';
+}
+
 export function TaskDetail(props: TaskDetailProps): React.JSX.Element {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastEventAt, setLastEventAt] = useState<number>(Date.now());
   const refetchAbortRef = useRef<AbortController | null>(null);
+  const terminalDetailRef = useRef(false);
 
-  const refetch = (): void => {
+  const refetch = (opts: { readonly force?: boolean } = {}): void => {
+    if (terminalDetailRef.current && opts.force !== true) return;
     refetchAbortRef.current?.abort();
     const ctrl = new AbortController();
     refetchAbortRef.current = ctrl;
     fetchTaskDetail(props.namespace, props.name, ctrl.signal)
       .then((d) => {
+        terminalDetailRef.current = isTerminalPhase(d.phase);
         setDetail(d);
         setError(null);
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (refetchAbortRef.current === ctrl) {
+          refetchAbortRef.current = null;
+        }
       });
   };
 
   useEffect(() => {
-    refetch();
+    terminalDetailRef.current = false;
+    refetch({ force: true });
     const targetKey = `${props.namespace}/${props.name}`;
     const unsubscribe = subscribeCacheEvents(
       (ev) => {
@@ -103,7 +116,7 @@ export function TaskDetail(props: TaskDetailProps): React.JSX.Element {
           {/* Phase 4 / REV-02 / D-03-A: inline review entry point (above DetailBody).
               ReviewActions returns null when the task does not meet any of the 4 trigger
               conditions (phase===Failed | suspicious.length>0 | review-requested | template-candidate). */}
-          <ReviewActions task={detail} onDecision={refetch} />
+          <ReviewActions task={detail} onDecision={() => refetch({ force: true })} />
           <DetailBody detail={detail} />
         </>
       ) : null}

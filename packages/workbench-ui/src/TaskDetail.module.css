@@ -54,10 +54,11 @@
   border: 1px solid var(--border);
   padding: var(--s-3);
   border-radius: var(--r-2);
-  overflow-x: auto;
+  overflow: visible;
   margin: 0;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: normal;
   color: var(--fg-dim);
 }
 

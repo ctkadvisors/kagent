@@ -18,7 +18,7 @@
     "build": "tsc -p .",
     "clean": "rm -rf dist .tsbuildinfo",
     "crd:check": "tsx scripts/check-crd-drift.ts",
-    "chart:render-check": "bash scripts/check-runtime-class-render.sh"
+    "chart:render-check": "bash scripts/check-runtime-class-render.sh && bash scripts/check-workbench-architect-rbac-render.sh"
   },
   "files": [
     "dist",

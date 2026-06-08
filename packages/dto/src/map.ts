@@ -313,6 +313,7 @@ export interface TraceLinkOptions {
 export function traceLink(task: AgentTask, opts: TraceLinkOptions): TraceLink | null {
   const uid = task.metadata.uid;
   if (typeof uid !== 'string' || uid.length === 0) return null;
+  const traceId = traceIdFromTraceparent(task.spec.runConfig?.traceparent) ?? deriveTraceId(uid);
 
   const link: { provider: TraceLink['provider']; runId: string; url?: string } = {
     provider: opts.provider,
@@ -320,7 +321,7 @@ export function traceLink(task: AgentTask, opts: TraceLinkOptions): TraceLink | 
   };
 
   if (opts.baseUrl !== undefined) {
-    link.url = renderTraceUrl(opts.provider, opts.baseUrl, uid);
+    link.url = renderTraceUrl(opts.provider, opts.baseUrl, traceId);
   }
 
   return link;
@@ -344,19 +345,28 @@ function deriveTraceId(runId: string): string {
   return createHash('sha256').update(runId).digest('hex').slice(0, 32);
 }
 
-function renderTraceUrl(provider: TraceLink['provider'], baseUrl: string, runId: string): string {
+function traceIdFromTraceparent(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const m = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/.exec(value);
+  if (m === null) return undefined;
+  const traceId = m[1] ?? '';
+  const spanId = m[2] ?? '';
+  if (/^0+$/.test(traceId) || /^0+$/.test(spanId)) return undefined;
+  return traceId;
+}
+
+function renderTraceUrl(provider: TraceLink['provider'], baseUrl: string, traceId: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
   switch (provider) {
     case 'langfuse':
       // Langfuse trace URLs follow `<host>/trace/<traceId>` per the
-      // self-hosted UI route. The trace ID is the deterministic
-      // `sha256(runId)[0..32]` derivation the OtelTraceSink emits, NOT
-      // the raw AgentTask UID — see `deriveTraceId` above.
-      return `${trimmed}/trace/${deriveTraceId(runId)}`;
+      // self-hosted UI route. The trace ID is either inherited from a
+      // child task's traceparent or derived from the task UID.
+      return `${trimmed}/trace/${traceId}`;
     case 'jaeger':
       // Jaeger UI: `<host>/trace/<traceId>`. Same OTel 32-hex trace ID
       // semantics as Langfuse.
-      return `${trimmed}/trace/${deriveTraceId(runId)}`;
+      return `${trimmed}/trace/${traceId}`;
     case 'otel-collector':
       // OTel collector has no UI; return the OTLP endpoint as-is so a
       // CLI consumer can curl it. Workbench callers usually pass

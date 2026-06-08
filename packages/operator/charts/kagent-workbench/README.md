@@ -1,6 +1,6 @@
 # kagent-workbench Helm chart
 
-Read-only operator console over the [kagent](https://github.com/ctkadvisors/kagent) control plane. Surfaces `Agent`, `AgentTask`, `AgentCapability`, and the operator-owned `Job`s/`Pod`s through a thin API facade (`kagent-workbench-api`) plus a React/Vite UI (`kagent-workbench-ui`) sidecar.
+Operator console over the [kagent](https://github.com/ctkadvisors/kagent) control plane. Surfaces `Agent`, `AgentTask`, `AgentCapability`, and the operator-owned `Job`s/`Pod`s through a thin API facade (`kagent-workbench-api`) plus a React/Vite UI (`kagent-workbench-ui`) sidecar. The default read surface is write-proof; create/review/Architect writes are gated behind the separate `rbac.actions.create` values path.
 
 This chart is the **deployment** surface. The `workbench-api` and `workbench-ui` packages live in the same kagent monorepo (`packages/workbench-api/`, `packages/workbench-ui/`). The chart references them by image name only — see [`values.yaml`](./values.yaml).
 
@@ -17,12 +17,16 @@ A single Pod with two containers, plus the supporting RBAC / Service / optional 
 | `ServiceAccount`      | `kagent-workbench` (default)  | bound to the read-only ClusterRole below                             |
 | `ClusterRole`         | `<fullname>-reader`           | get/list/watch on kagent CRDs + Jobs + Pods + Events; **no writes**  |
 | `ClusterRoleBinding`  | `<fullname>-reader`           | binds the SA to the reader ClusterRole                               |
+| `Role`                | `<fullname>-actions`          | optional release-namespace write surface when `rbac.actions.create=true` |
+| `RoleBinding`         | `<fullname>-actions`          | binds the SA to the action Role                                      |
+| `Role`                | `<fullname>-architect-draft`  | optional cross-namespace Architect draft writer                      |
+| `RoleBinding`         | `<fullname>-architect-draft`  | binds the release SA into the draft namespace                        |
 | `Ingress` _or_        | `<release>-kagent-workbench`  | rendered when `ingress.enabled=true` and `ingress.authMiddleware=''` |
 | `IngressRoute`        | `<release>-kagent-workbench`  | rendered when `ingress.enabled=true` and `ingress.authMiddleware!='` |
 
 The `ui` container is a sidecar (nginx-alpine baking the Vite `dist/` build), not a separate Deployment. The `api` container proxies non-`/api` requests to the sidecar over loopback. Lifecycle is coupled (no UI without API), and the network hop is loopback-only — one Pod is the right unit.
 
-**RBAC is read-only.** Write actions (cancel/retry/create-task) are scoped for v0.2 behind a separate ClusterRole keyed off an `actions.enabled` values flag (not yet implemented). Splitting it keeps the read-only MVP install accidentally-write-proof.
+**RBAC is split by function.** The reader ClusterRole has no write verbs. Write actions live in a separate namespaced Role keyed off `rbac.actions.create`; Architect cross-namespace drafts add a second namespaced Role only when `api.architect.draftNamespace` differs from the release namespace.
 
 ## Install
 
@@ -55,6 +59,9 @@ curl -fsS http://localhost:8080/healthz
 | `api.healthPath`               | `/healthz`                                           | Liveness + readiness probe path. Owned by the workbench-api package. |
 | `api.langfuseBaseUrl`          | `''`                                                 | Optional. Plumbed as `LANGFUSE_BASE_URL`; reserved for "open trace" links. |
 | `api.authRequired`             | `'true'`                                             | Fail-closed header-trust auth. Only literal `false` disables it.   |
+| `api.architect.enabled`        | `false`                                             | Mount `/api/architect/*` when gateway URL, model, and token Secret are configured. |
+| `api.architect.draftNamespace` | `''`                                                | Empty defaults drafts to the Helm release namespace. Set `kagent-draft` for a separate live-iteration namespace. |
+| `api.architect.draftRbac.create` | `true`                                            | When drafts use a separate namespace, render the workbench writer Role/RoleBinding there. |
 | `api.resources`                | `50m / 128Mi → 500m / 256Mi`                         | Bump when watching many AgentTasks.                                |
 | `ui.image.repository`          | `ghcr.io/ctkadvisors/kagent-workbench-ui`            | workbench-ui static-asset image. Public ghcr.io package.            |
 | `ui.image.tag`                 | `''` (defaults to `Chart.appVersion`)                |                                                                    |
@@ -67,6 +74,7 @@ curl -fsS http://localhost:8080/healthz
 | `serviceAccount.name`          | `kagent-workbench`                                   | Empty → defaults to the chart fullname.                            |
 | `serviceAccount.annotations`   | `{}`                                                 |                                                                    |
 | `rbac.create`                  | `true`                                               | Cluster-scoped read-only ClusterRole + binding.                    |
+| `rbac.actions.create`          | `true`                                               | Namespaced write Role for task creation, reviews, gateway edits, and release-namespace Architect `/try`. |
 | `service.type`                 | `ClusterIP`                                          |                                                                    |
 | `service.port`                 | `80`                                                 | Service-side API port targeting the api container's named port.     |
 | `service.uiPort`               | `81`                                                 | Service-side UI port targeting the ui sidecar's named port; debug/port-forward only. |
@@ -151,7 +159,16 @@ Cluster-scoped read-only. The exact verbs are documented inline in [`templates/c
 
 `Pod` and `Job` reads are cluster-wide because the operator runs cluster-scoped. The workbench-api filters on the label `kagent.knuteson.io/managed-by=kagent-operator` in code — the API code is the trust boundary for selector enforcement, since RBAC at the Kubernetes layer cannot scope by label.
 
-**No write verbs.** Write actions ship in a separate ClusterRole behind an `actions.enabled` flag in v0.2.
+The reader ClusterRole has no write verbs. The optional actions Role is release-namespace scoped and grants only the write verbs needed by implemented API actions:
+
+| Resource group                                              | Verbs              | Surface |
+| ----------------------------------------------------------- | ------------------ | ------- |
+| `kagent.knuteson.io/agenttasks`                             | `create,patch`     | create-task + review annotations |
+| `kagent.knuteson.io/agenttemplates`                         | `create`           | review promotion + Architect `/try` |
+| `kagent.knuteson.io/agents`                                 | `create`           | Architect `/try` when drafts use the release namespace |
+| `kagent.knuteson.io/modelendpoints`                         | `patch,update`     | Gateway bounds edits |
+
+When `api.architect.draftNamespace` is set to a namespace other than the release namespace, `api.architect.draftRbac.create=true` renders a draft-namespace Role/RoleBinding for `agenttemplates`, `agents`, and `agenttasks`. The agent-pod runtime ServiceAccount/RBAC for that workload namespace is still provisioned by the operator chart or GitOps overlay.
 
 ## Auth (WS-A)
 
