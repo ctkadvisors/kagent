@@ -13,6 +13,7 @@ import type { PodConfig } from './env.js';
 import {
   buildCancelledResult,
   buildShutdownPlan,
+  selectSubstrateToolNames,
   buildTokenUtilizationBridge,
   selectPublishCapabilityBundle,
 } from './main.js';
@@ -69,6 +70,76 @@ describe('buildCancelledResult (WS-G — pre-runner / mid-cancel synthesis)', ()
   it('reflects the SIGINT signal name in the error message', () => {
     const result = buildCancelledResult(baseConfig, 'SIGINT');
     expect(result.error?.message).toBe('cancelled: SIGINT received');
+  });
+});
+
+describe('selectSubstrateToolNames (boot-time substrate provider gate)', () => {
+  it('selects no substrate tools for a no-tools Agent even when operator spawn/template env is enabled', () => {
+    expect(
+      selectSubstrateToolNames(
+        {
+          model: 'workers-ai/x',
+          tools: [],
+          allowedChildAgents: [],
+          allowedChildTemplates: [],
+        },
+        {
+          spawnEnabled: true,
+          templateServerUrl: 'http://kagent-operator.kagent-system.svc.cluster.local:8085',
+        },
+      ),
+    ).toEqual([]);
+  });
+
+  it('selects spawn, wait, and template tools when the Agent declares child-spawn intent', () => {
+    expect(
+      selectSubstrateToolNames(
+        {
+          model: 'workers-ai/x',
+          tools: [],
+          allowedChildAgents: ['summarizer'],
+        },
+        {
+          spawnEnabled: true,
+          templateServerUrl: 'http://kagent-operator.kagent-system.svc.cluster.local:8085',
+        },
+      ),
+    ).toEqual([
+      'spawn_child_task',
+      'wait_for_child_task',
+      'wait_for_children_all',
+      'ensure_agent_from_template',
+    ]);
+  });
+
+  it('selects only explicitly listed substrate tools when no implicit spawn intent exists', () => {
+    expect(
+      selectSubstrateToolNames(
+        {
+          model: 'workers-ai/x',
+          tools: ['wait_for_child_task', 'ensure_agent_from_template'],
+        },
+        {
+          spawnEnabled: true,
+          templateServerUrl: 'http://kagent-operator.kagent-system.svc.cluster.local:8085',
+        },
+      ),
+    ).toEqual(['wait_for_child_task', 'ensure_agent_from_template']);
+  });
+
+  it('respects the operator spawn kill switch even when the Agent declares intent', () => {
+    expect(
+      selectSubstrateToolNames(
+        {
+          model: 'workers-ai/x',
+          allowedChildTemplates: ['researcher'],
+        },
+        {
+          spawnEnabled: false,
+          templateServerUrl: 'http://kagent-operator.kagent-system.svc.cluster.local:8085',
+        },
+      ),
+    ).toEqual([]);
   });
 });
 

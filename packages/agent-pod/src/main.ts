@@ -39,11 +39,14 @@ import {
 import type { RunBudget, TraceSink } from '@kagent/agent-loop';
 import type { CapabilityBundle } from '@kagent/capability-types';
 
-import type { PodConfig } from './env.js';
+import type { AgentSpecEnv, PodConfig } from './env.js';
 import { parseEnv } from './env.js';
 import type { RunResult } from './runner.js';
 import type { ToolProvider } from '@kagent/agent-loop';
-import { InProcessToolProvider } from '@kagent/in-process-tool-provider';
+import {
+  InProcessToolProvider,
+  type InProcessToolDefinition,
+} from '@kagent/in-process-tool-provider';
 
 import { defineBlackboardTools } from './builtin-tools.js';
 import { definePublishEvent } from './builtin-tools-publish.js';
@@ -155,6 +158,75 @@ export function buildCancelledResult(config: PodConfig, signalName: NodeJS.Signa
     },
     error: { message: `cancelled: ${signalName} received` },
   };
+}
+
+const SPAWN_CHILD_TOOL_NAME = 'spawn_child_task';
+const WAIT_FOR_CHILD_TOOL_NAME = 'wait_for_child_task';
+const WAIT_FOR_CHILDREN_ALL_TOOL_NAME = 'wait_for_children_all';
+const ENSURE_AGENT_FROM_TEMPLATE_TOOL_NAME = 'ensure_agent_from_template';
+
+export type SubstrateToolName =
+  | typeof SPAWN_CHILD_TOOL_NAME
+  | typeof WAIT_FOR_CHILD_TOOL_NAME
+  | typeof WAIT_FOR_CHILDREN_ALL_TOOL_NAME
+  | typeof ENSURE_AGENT_FROM_TEMPLATE_TOOL_NAME;
+
+const ORDERED_SUBSTRATE_SPAWN_TOOL_NAMES: readonly SubstrateToolName[] = [
+  SPAWN_CHILD_TOOL_NAME,
+  WAIT_FOR_CHILD_TOOL_NAME,
+  WAIT_FOR_CHILDREN_ALL_TOOL_NAME,
+];
+
+function hasNonEmptyList(values: readonly unknown[] | undefined): boolean {
+  return values !== undefined && values.length > 0;
+}
+
+function agentDeclaresSpawnIntent(agentSpec: AgentSpecEnv): boolean {
+  return (
+    hasNonEmptyList(agentSpec.allowedChildAgents) ||
+    hasNonEmptyList(agentSpec.allowedChildTemplates)
+  );
+}
+
+function hasExplicitTool(agentSpec: AgentSpecEnv, toolName: SubstrateToolName): boolean {
+  return agentSpec.tools !== undefined && agentSpec.tools.includes(toolName);
+}
+
+/**
+ * Select the substrate tools main.ts should register for this Agent.
+ *
+ * The operator-level spawn flag is a kill switch, not blanket
+ * authorization. An Agent gets spawn/template tools only when it
+ * declares graph intent (`allowedChildAgents`/`allowedChildTemplates`)
+ * or explicitly lists the specific substrate tool name in
+ * `Agent.spec.tools`. This keeps no-tools Architect drafts from
+ * boot-failing against the runner's strict allowlist.
+ */
+export function selectSubstrateToolNames(
+  agentSpec: AgentSpecEnv,
+  options: {
+    readonly spawnEnabled: boolean;
+    readonly templateServerUrl?: string;
+  },
+): readonly SubstrateToolName[] {
+  if (!options.spawnEnabled) return [];
+
+  const hasSpawnIntent = agentDeclaresSpawnIntent(agentSpec);
+  const out: SubstrateToolName[] = [];
+  for (const name of ORDERED_SUBSTRATE_SPAWN_TOOL_NAMES) {
+    if (hasSpawnIntent || hasExplicitTool(agentSpec, name)) out.push(name);
+  }
+
+  const templateUrl = options.templateServerUrl;
+  if (
+    typeof templateUrl === 'string' &&
+    templateUrl.length > 0 &&
+    (hasSpawnIntent || hasExplicitTool(agentSpec, ENSURE_AGENT_FROM_TEMPLATE_TOOL_NAME))
+  ) {
+    out.push(ENSURE_AGENT_FROM_TEMPLATE_TOOL_NAME);
+  }
+
+  return out;
 }
 
 async function main(): Promise<void> {
@@ -378,7 +450,10 @@ async function main(): Promise<void> {
         })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
       : undefined;
 
-  // WS-K + WS-L — wire substrate task-graph tools when the flag is on.
+  // WS-K + WS-L — wire substrate task-graph tools when the flag is on
+  // AND the Agent declares graph intent or explicit substrate tool
+  // names. The operator flag is the cluster kill switch; the Agent
+  // spec remains the authority for each task's tool surface.
   // Default-OFF per AGENT-SELF-SERVICE.md §11 Q5 — opt-in via Helm
   // value `agentPod.spawnChild.enabled` flipping
   // `KAGENT_SPAWN_CHILD_ENABLED=true`. spawn AND wait tools share the
@@ -388,8 +463,14 @@ async function main(): Promise<void> {
   // clamp) are the application-layer trust boundary; the env knob is
   // the operator-layer kill switch.
   const spawnEnabled = process.env.KAGENT_SPAWN_CHILD_ENABLED === 'true';
+  const templateServerUrl = process.env.KAGENT_TEMPLATE_SERVER_URL;
+  const selectedSubstrateToolNames = selectSubstrateToolNames(config.agentSpec, {
+    spawnEnabled,
+    ...(typeof templateServerUrl === 'string' && { templateServerUrl }),
+  });
   let substrateTools: ToolProvider | undefined;
-  if (spawnEnabled) {
+  if (selectedSubstrateToolNames.length > 0) {
+    const selected = new Set<SubstrateToolName>(selectedSubstrateToolNames);
     const k8s = createInClusterK8sTaskCreator();
     const parent = {
       uid: config.taskId,
@@ -432,27 +513,40 @@ async function main(): Promise<void> {
     const maxDepth =
       Number.isInteger(maxDepthParsed) && maxDepthParsed >= 0 ? maxDepthParsed : undefined;
 
-    const spawnDefs = defineSpawnChildTask({
-      parent,
-      parentAgentName: config.agentName,
-      parentAgentSpec: config.agentSpec,
-      k8s,
-      ...(capabilityBundle !== undefined && { parentCapability: capabilityBundle }),
-      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
-      ...(getTraceparent !== undefined && { getTraceparent }),
-      ...(maxDepth !== undefined && { maxDepth }),
-      ...(emitCapUsed !== undefined && { emitCapUsed }),
-    });
-    const waitChildDef = defineWaitForChildTask({
-      parent,
-      k8s,
-      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
-    });
-    const waitAllDef = defineWaitForChildrenAll({
-      parent,
-      k8s,
-      ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
-    });
+    const subTools: InProcessToolDefinition[] = [];
+    if (selected.has(SPAWN_CHILD_TOOL_NAME)) {
+      subTools.push(
+        defineSpawnChildTask({
+          parent,
+          parentAgentName: config.agentName,
+          parentAgentSpec: config.agentSpec,
+          k8s,
+          ...(capabilityBundle !== undefined && { parentCapability: capabilityBundle }),
+          ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+          ...(getTraceparent !== undefined && { getTraceparent }),
+          ...(maxDepth !== undefined && { maxDepth }),
+          ...(emitCapUsed !== undefined && { emitCapUsed }),
+        }),
+      );
+    }
+    if (selected.has(WAIT_FOR_CHILD_TOOL_NAME)) {
+      subTools.push(
+        defineWaitForChildTask({
+          parent,
+          k8s,
+          ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+        }),
+      );
+    }
+    if (selected.has(WAIT_FOR_CHILDREN_ALL_TOOL_NAME)) {
+      subTools.push(
+        defineWaitForChildrenAll({
+          parent,
+          k8s,
+          ...(remainingBudgetSeconds !== undefined && { remainingBudgetSeconds }),
+        }),
+      );
+    }
     // Audit-rev2 NM5 — `get_my_context` is now wired UNIVERSALLY in
     // `runAgentTask` (`resolveToolProviders`'s `kagent-universal-context`
     // provider), regardless of `spawnEnabled`. Lifting it out of the
@@ -463,14 +557,16 @@ async function main(): Promise<void> {
     // `remainingBudgetSeconds` deps through `RunDeps`, so the
     // production observation contract (live snapshot at tool-call
     // time) is unchanged.
-    const subTools = [spawnDefs, waitChildDef, waitAllDef];
     // WS-M — append the template tool when the operator's
     // template-server URL was injected. Trust boundary: cluster-internal
     // network only (the operator Service is ClusterIP). Tool errors
     // surface as `policy_denied:` to the LLM, identical shape to
     // spawn_child's allowlist refusals.
-    const templateServerUrl = process.env.KAGENT_TEMPLATE_SERVER_URL;
-    if (typeof templateServerUrl === 'string' && templateServerUrl.length > 0) {
+    if (
+      selected.has(ENSURE_AGENT_FROM_TEMPLATE_TOOL_NAME) &&
+      typeof templateServerUrl === 'string' &&
+      templateServerUrl.length > 0
+    ) {
       subTools.push(
         defineEnsureAgentFromTemplate({
           serverUrl: templateServerUrl,
@@ -485,7 +581,13 @@ async function main(): Promise<void> {
       id: 'kagent-substrate',
       tools: subTools,
     });
-    console.log('[kagent-agent-pod] substrate tools ENABLED (spawn_child_task + wait_*)');
+    console.log(
+      `[kagent-agent-pod] substrate tools ENABLED (${selectedSubstrateToolNames.join(', ')})`,
+    );
+  } else if (spawnEnabled) {
+    console.log(
+      '[kagent-agent-pod] substrate tools SKIPPED (no Agent.spec spawn/template intent or explicit substrate tool names)',
+    );
   }
 
   // === Wave 3 — Blackboard ===
