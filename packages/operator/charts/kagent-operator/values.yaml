@@ -348,7 +348,7 @@ agentPod:
   # deliberately enabled this exposes neither the tool nor the server.
   templates:
     enabled: false
-    serverPort: 8081
+    serverPort: 8085
 
   # RuntimeClass mapping (WS-C / Phase 6 prep) — `Agent.spec.sandboxProfile`
   # is resolved against this map per-Agent. The operator's reconcile loop

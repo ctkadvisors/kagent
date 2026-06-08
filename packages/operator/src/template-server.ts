@@ -244,7 +244,7 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
 export function startTemplateServer(
   port: number,
   deps: TemplateServerDeps,
-): { readonly server: Server; close(): Promise<void> } {
+): Promise<{ readonly server: Server; close(): Promise<void> } | undefined> {
   const handler = buildInstantiateHandler(deps);
   const server = createServer((req, res) => {
     void handler(req, res).catch((err: unknown) => {
@@ -259,18 +259,27 @@ export function startTemplateServer(
       }
     });
   });
-  server.listen(port);
-  return {
-    server,
-    close(): Promise<void> {
-      return new Promise((resolve, reject) => {
-        server.close((err) => {
-          if (err) reject(err);
-          else resolve();
-        });
+  return new Promise((resolve) => {
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      console.warn(
+        `[template-server] bind failed (port=${port.toString()}): ${err.message} — template instantiation + JWKS disabled`,
+      );
+      resolve(undefined);
+    });
+    server.listen(port, () => {
+      resolve({
+        server,
+        close(): Promise<void> {
+          return new Promise((closeResolve, reject) => {
+            server.close((err) => {
+              if (err) reject(err);
+              else closeResolve();
+            });
+          });
+        },
       });
-    },
-  };
+    });
+  });
 }
 
 /* =====================================================================

@@ -2760,26 +2760,28 @@ async function main(): Promise<void> {
   // in-cluster HTTP surface hosts both template instantiation and the
   // JWKS endpoint used by agent-pod cap verification.
   if (process.env.KAGENT_TEMPLATES_ENABLED === 'true' || capCa !== undefined) {
-    const port = Number.parseInt(process.env.KAGENT_TEMPLATE_SERVER_PORT ?? '8081', 10);
+    const port = Number.parseInt(process.env.KAGENT_TEMPLATE_SERVER_PORT ?? '8085', 10);
     const releaseNamespace = watchNamespace ?? process.env.KAGENT_RELEASE_NAMESPACE ?? 'default';
-    const tplServer = startTemplateServer(port, {
+    const tplServer = await startTemplateServer(port, {
       customApi,
       resolveNamespace: () => releaseNamespace,
       templatesEnabled: process.env.KAGENT_TEMPLATES_ENABLED === 'true',
       ...(capCa !== undefined && { jwksProvider: () => capCa.jwks() }),
     });
-    console.log(
-      `[kagent-operator] template-server listening on :${String(port)} (namespace=${releaseNamespace})`,
-    );
-    const previous = onShutdownExtra;
-    onShutdownExtra = async (): Promise<void> => {
-      try {
-        await tplServer.close();
-      } catch (err) {
-        console.error('[kagent-operator] template-server close failed:', err);
-      }
-      if (previous !== undefined) await previous();
-    };
+    if (tplServer !== undefined) {
+      console.log(
+        `[kagent-operator] template-server listening on :${String(port)} (namespace=${releaseNamespace})`,
+      );
+      const previous = onShutdownExtra;
+      onShutdownExtra = async (): Promise<void> => {
+        try {
+          await tplServer.close();
+        } catch (err) {
+          console.error('[kagent-operator] template-server close failed:', err);
+        }
+        if (previous !== undefined) await previous();
+      };
+    }
   }
 
   // === Wave 1 — Workspace controller ===

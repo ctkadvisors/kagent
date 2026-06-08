@@ -3,6 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { describe, expect, it } from 'vitest';
@@ -12,6 +13,7 @@ import type { AgentTemplate } from './crds/types.js';
 import { API_GROUP_VERSION } from './crds/types.js';
 import {
   buildInstantiateHandler,
+  startTemplateServer,
   type InstantiatePostBody,
   type InstantiatePostError,
   type InstantiatePostResponse,
@@ -332,5 +334,35 @@ describe('template-server JWKS endpoint (v0.3.0-capabilities)', () => {
     await handler(req, res);
     await new Promise((r) => setImmediate(r));
     expect(out.status).toBe(405);
+  });
+});
+
+describe('startTemplateServer', () => {
+  it('returns undefined instead of crashing when the port is already bound', async () => {
+    const occupied = createServer();
+    await new Promise<void>((resolve) => {
+      occupied.listen(0, () => {
+        resolve();
+      });
+    });
+    const address = occupied.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('test server did not bind to a TCP port');
+    }
+
+    try {
+      const handle = await startTemplateServer(address.port, {
+        customApi: makeFakeCustomApi({ templates: new Map() }),
+        resolveNamespace: () => 'kagent-system',
+      });
+
+      expect(handle).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => {
+        occupied.close(() => {
+          resolve();
+        });
+      });
+    }
   });
 });
