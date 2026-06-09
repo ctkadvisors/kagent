@@ -118,3 +118,31 @@ export type {
   ParseAgentTemplateSpecResult,
 } from './template-candidate.js';
 export { parseAgentTemplateSpec } from './template-candidate.js';
+
+// Local AgentCore runtime plane — task-scoped browser/code sessions.
+// Shared by the operator, agent-pod gateway provider, workbench, and
+// tool-gateway package so every consumer uses the same ownership key and
+// env isolation contract.
+export type {
+  BrowserToolName,
+  CodeInterpreterToolName,
+  ToolKind,
+  ToolRuntimeToolName,
+  ToolSessionEnvContext,
+  ToolSessionIdentity,
+  ToolSessionRecord,
+} from './tool-session.js';
+export {
+  BROWSER_TOOL_NAMES,
+  CODE_INTERPRETER_TOOL_NAMES,
+  DEFAULT_TOOL_SESSION_ENV,
+  FORBIDDEN_TOOL_SESSION_ENV_KEYS,
+  TOOL_KINDS,
+  buildToolSessionKey,
+  filterToolSessionEnv,
+  isBrowserTool,
+  isCodeInterpreterTool,
+  isForbiddenToolSessionEnvKey,
+  isToolKind,
+  isToolRuntimeTool,
+} from './tool-session.js';
