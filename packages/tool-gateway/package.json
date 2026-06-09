@@ -1,0 +1,34 @@
+{
+  "name": "@kagent/tool-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local tool runtime gateway for per-AgentTask browser and code-runner sessions.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kagent/agent-loop": "workspace:*",
+    "@kagent/dto": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
