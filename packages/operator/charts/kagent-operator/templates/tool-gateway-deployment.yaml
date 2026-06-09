@@ -1,0 +1,105 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Tool runtime gateway — local AgentCore-compatible browser/code tool
+front door. It is default-off and ClusterIP-only; spawned agent-pods
+reach it through KAGENT_TOOL_GATEWAY_URL when toolRuntime.enabled=true.
+*/}}
+{{- if .Values.toolRuntime.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+spec:
+  replicas: {{ .Values.toolRuntime.gateway.replicas }}
+  selector:
+    matchLabels:
+      {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tool-gateway
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tool-gateway
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: tool-gateway
+          image: {{ include "kagent-operator.toolGateway.image" . | quote }}
+          imagePullPolicy: {{ .Values.toolRuntime.gateway.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.toolRuntime.gateway.port }}
+              protocol: TCP
+          env:
+            - name: KAGENT_TOOL_GATEWAY_PORT
+              value: {{ .Values.toolRuntime.gateway.port | quote }}
+            - name: KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT
+              value: {{ .Values.toolRuntime.gateway.workspaceRoot | quote }}
+            - name: KAGENT_TOOL_RUNTIME_PAUSED
+              value: {{ .Values.toolRuntime.paused | ternary "true" "false" | quote }}
+            {{- $steelBaseUrl := .Values.toolRuntime.browser.steel.baseUrl -}}
+            {{- if and .Values.toolRuntime.browser.steel.enabled (not $steelBaseUrl) }}
+            {{- $steelBaseUrl = printf "http://%s-steel.%s.svc.cluster.local:%v" (include "kagent-operator.fullname" .) .Release.Namespace .Values.toolRuntime.browser.steel.port -}}
+            {{- end }}
+            {{- with $steelBaseUrl }}
+            - name: KAGENT_STEEL_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.toolRuntime.browser.steel.connectBaseUrl }}
+            - name: KAGENT_STEEL_CONNECT_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.toolRuntime.browser.steel.apiKeySecret.name }}
+            - name: KAGENT_STEEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.toolRuntime.browser.steel.apiKeySecret.key | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.toolRuntime.gateway.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      {{- with .Values.toolRuntime.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.toolRuntime.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.toolRuntime.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

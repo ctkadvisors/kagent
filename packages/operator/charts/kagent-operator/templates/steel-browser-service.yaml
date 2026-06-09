@@ -1,0 +1,30 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+ClusterIP Service for optional self-hosted Steel Browser.
+*/}}
+{{- if and .Values.toolRuntime.enabled .Values.toolRuntime.browser.steel.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-steel
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: steel-browser
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: steel-browser
+  ports:
+    - name: http
+      port: {{ .Values.toolRuntime.browser.steel.port }}
+      targetPort: http
+      protocol: TCP
+    - name: cdp
+      port: {{ .Values.toolRuntime.browser.steel.debugPort }}
+      targetPort: cdp
+      protocol: TCP
+{{- end }}

@@ -38,6 +38,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
 spec:
   replicas: {{ .Values.replicaCount }}
   # Recreate (not RollingUpdate). A rolling update would briefly run
@@ -54,6 +55,7 @@ spec:
     metadata:
       labels:
         {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -394,6 +396,14 @@ spec:
             {{- if .Values.agentPod.templates.enabled }}
             - name: KAGENT_AGENT_POD_TEMPLATE_SERVER_URL
               value: 'http://{{ include "kagent-operator.fullname" . }}-templates.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.agentPod.templates.serverPort }}'
+            {{- end }}
+            {{- if .Values.toolRuntime.enabled }}
+            # Local AgentCore-compatible tool runtime gateway. The
+            # operator forwards this into spawned Jobs as
+            # KAGENT_TOOL_GATEWAY_URL when Agent.spec.tools includes
+            # browser.* or code_interpreter.* tools.
+            - name: KAGENT_AGENT_POD_TOOL_GATEWAY_URL
+              value: {{ default (printf "http://%s-tool-gateway.%s.svc.cluster.local:%v" (include "kagent-operator.fullname" .) .Release.Namespace .Values.toolRuntime.gateway.port) .Values.toolRuntime.gateway.url | quote }}
             {{- end }}
             # Wave 5 / GA hardening — per-task capability JWT minting.
             # When enabled, the operator reads the chart-mounted signing

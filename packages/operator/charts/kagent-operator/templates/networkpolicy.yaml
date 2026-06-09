@@ -35,6 +35,7 @@ spec:
   podSelector:
     matchLabels:
       {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: operator
   policyTypes:
     - Ingress
     - Egress

@@ -40,6 +40,74 @@ image:
   tag: ''
   pullPolicy: IfNotPresent
 
+toolRuntime:
+  # Local AgentCore-compatible runtime plane for task-scoped tools.
+  # Default OFF: existing installs do not deploy browser/code runtimes
+  # or expose browser.* / code_interpreter.* gateway plumbing until a
+  # cluster operator opts in.
+  enabled: false
+  # Kill switch: when true, the gateway stays live for /healthz but
+  # /readyz fails and tool invocations return tool_runtime_paused.
+  paused: false
+  gateway:
+    image:
+      repository: ghcr.io/ctkadvisors/kagent-tool-gateway
+      tag: ''
+      pullPolicy: IfNotPresent
+    replicas: 1
+    port: 8080
+    # Override only when the gateway is deployed outside this chart.
+    url: ''
+    workspaceRoot: /tmp/kagent-tool-gateway-workspaces
+    resources:
+      requests:
+        cpu: '100m'
+        memory: '256Mi'
+      limits:
+        cpu: '1'
+        memory: '1Gi'
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+  code:
+    # Current backend is a task-scoped local runner inside the gateway
+    # pod. The chart keeps the agent-sandbox hook explicit so a later
+    # backend can switch to SandboxClaim/SandboxTemplate without
+    # changing Agent.spec.tools.
+    backend: local
+    agentSandbox:
+      enabled: false
+      sandboxTemplateName: kagent-code-runner
+  browser:
+    steel:
+      # Self-host Steel in-cluster. When disabled, set baseUrl to an
+      # existing Steel service (for example a Fly.io instance or a
+      # separately managed K3s Deployment).
+      enabled: false
+      baseUrl: ''
+      connectBaseUrl: ''
+      apiKeySecret:
+        name: ''
+        key: api-key
+      image:
+        repository: ghcr.io/steel-dev/steel-browser
+        tag: latest
+        pullPolicy: IfNotPresent
+      port: 3000
+      debugPort: 9223
+      cache:
+        emptyDir: {}
+      resources:
+        requests:
+          cpu: '500m'
+          memory: '1Gi'
+        limits:
+          cpu: '2'
+          memory: '4Gi'
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+
 # Image pull secret(s) for private registries. Empty = no secret.
 # Example: imagePullSecrets: [{ name: ghcr-pull }]
 imagePullSecrets: []

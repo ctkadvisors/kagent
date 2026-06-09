@@ -1,0 +1,26 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+ClusterIP Service for the task tool-runtime gateway.
+*/}}
+{{- if .Values.toolRuntime.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+  ports:
+    - name: http
+      port: {{ .Values.toolRuntime.gateway.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
