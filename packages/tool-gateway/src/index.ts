@@ -6,6 +6,20 @@
 export { buildSandboxEnv, findForbiddenEnvKeys } from './env-policy.js';
 export { InMemoryToolSessionManager } from './session-manager.js';
 export { LocalCodeRunner } from './code-runner.js';
+export { SteelBrowserAdapter } from './browser-steel.js';
+export type {
+  BrowserAutomationDriver,
+  BrowserExtractTextOptions,
+  BrowserExtractTextResult,
+  BrowserGotoOptions,
+  BrowserGotoResult,
+  BrowserScreenshotOptions,
+  BrowserScreenshotResult,
+  BrowserViewport,
+  StartSteelBrowserSessionInput,
+  SteelBrowserAdapterOptions,
+  SteelBrowserSession,
+} from './browser-steel.js';
 export type {
   CodeRunnerFile,
   CodeRunnerListEntry,
