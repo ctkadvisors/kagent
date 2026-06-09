@@ -1,0 +1,56 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+RBAC needed only when the tool gateway is configured to broker code
+sessions through kubernetes-sigs/agent-sandbox SandboxClaim objects.
+*/}}
+{{- if and .Values.toolRuntime.enabled .Values.toolRuntime.code.agentSandbox.enabled -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates", "sandboxwarmpools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tool-gateway
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kagent-operator.fullname" . }}-tool-gateway
+{{- end }}

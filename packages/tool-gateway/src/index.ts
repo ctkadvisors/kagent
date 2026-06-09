@@ -6,6 +6,10 @@
 export { buildSandboxEnv, findForbiddenEnvKeys } from './env-policy.js';
 export { InMemoryToolSessionManager } from './session-manager.js';
 export { LocalCodeRunner } from './code-runner.js';
+export {
+  buildExternalToolRegistry,
+  parseExternalToolProviderConfig,
+} from './external-providers.js';
 export { SteelBrowserAdapter } from './browser-steel.js';
 export { ToolGatewayHttpHandler } from './http-server.js';
 export { createPlaywrightCdpDriver } from './playwright-driver.js';
@@ -52,7 +56,17 @@ export type {
   ExecuteCodeInput,
   ExecuteCommandInput,
   LocalCodeRunnerOptions,
+  StartedCommand,
 } from './code-runner.js';
+export type {
+  BuildExternalToolRegistryOptions,
+  ExternalHttpProviderSpec,
+  ExternalMcpStdioProviderSpec,
+  ExternalRemoteMcpProviderSpec,
+  ExternalToolProviderConfig,
+  ExternalToolProviderSpec,
+  ExternalToolRegistry,
+} from './external-providers.js';
 export type {
   InMemoryToolSessionManagerOptions,
   StartToolSessionInput,

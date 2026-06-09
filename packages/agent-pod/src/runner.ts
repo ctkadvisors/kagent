@@ -49,7 +49,7 @@ import { defineGetMyContext, InProcessToolProvider, resolveBuiltinTools } from '
 import type { AgentSpecEnv, PodConfig } from './env.js';
 import { agentHasArtifactInputOrOutput } from './env.js';
 import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
-import { requestedRuntimeToolNames, ToolGatewayProvider } from './tool-gateway-provider.js';
+import { requestedGatewayToolNames, ToolGatewayProvider } from './tool-gateway-provider.js';
 
 /**
  * Substrate-defined artifact handle. Structurally identical to the
@@ -293,6 +293,11 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // the operator sees a `Failed` AgentTask with a clear runner error
   // rather than a silently-degraded loop.
   const toolProviders = resolveToolProviders(config, deps, { artifactRegistry });
+  if (toolProviders.length > 0) {
+    console.log(
+      `[kagent-agent-pod] tools advertised ${await describeToolProviderNames(toolProviders)}`,
+    );
+  }
 
   const executor = new AgentExecutor({
     registry,
@@ -723,23 +728,11 @@ export function resolveToolProviders(
   if (deps.toolProviders !== undefined) return deps.toolProviders;
   const out: ToolProvider[] = [];
 
-  // Audit-rev2 NM5 — universal `get_my_context` registration. The
-  // tool is `UNIVERSAL` in the substrate-tool allowlist policy
-  // (`UNIVERSAL_TOOLS`), but production previously only registered it
-  // inside main.ts's `if (spawnEnabled)` block. Tests driving
-  // `runAgentTask` directly with `Agent.spec.tools=['get_my_context']`
-  // got "unknown built-in tool" because the introspection tool wasn't
-  // in any provider's registry. Lifting it into `resolveToolProviders`
-  // (no env flag, no spawnEnabled gate) closes the gap so the runner
-  // is internally consistent: every UNIVERSAL_TOOLS entry has a
-  // universal wireup. Tool-call deps (tokenUtilizationSnapshot,
-  // remainingBudgetSeconds) are forwarded from RunDeps; production
-  // wires them via main.ts's bridge, tests inject directly.
-  //
-  // Wired at the top of the function so its descriptor name lands in
-  // `externallyProvidedNames` BEFORE `resolveBuiltinTools` (so an
-  // Agent that lists `get_my_context` in spec.tools doesn't trip the
-  // unknown-built-in guard).
+  // Audit-rev2 NM5 made `get_my_context` universally wireable. Keep
+  // that behavior for Agents that explicitly ask for it, but do not
+  // advertise the descriptor implicitly: some local OpenAI-compatible
+  // runtimes render tools through brittle prompt templates, and hidden
+  // extra descriptors can break otherwise-valid runtime tool calls.
   // NM5 — `capabilityBundle` is intentionally OMITTED from the
   // universal wireup's `defineGetMyContext` deps. `RunDeps.capability-
   // Bundle` is structurally narrowed to `{ claims?: { tenant?: string } }`
@@ -752,25 +745,28 @@ export function resolveToolProviders(
   // it should drive the tool through the operator chart's full wireup
   // (which includes the cap bundle via cap-consumer). Tests that need
   // to assert the cap surface drive `defineGetMyContext` directly.
-  const universalContextProvider = new InProcessToolProvider({
-    id: 'kagent-universal-context',
-    tools: [
-      defineGetMyContext({
-        podConfig: config,
-        ...(deps.remainingBudgetSeconds !== undefined && {
-          remainingBudgetSeconds: deps.remainingBudgetSeconds,
-        }),
-        ...(deps.tokenUtilizationSnapshot !== undefined && {
-          tokenUtilizationSnapshot: deps.tokenUtilizationSnapshot,
-        }),
-      }),
-    ],
-  });
-  const runtimeToolNames = requestedRuntimeToolNames(config.agentSpec.tools);
+  const wantsUniversalContext = config.agentSpec.tools?.includes('get_my_context') === true;
+  const universalContextProvider = wantsUniversalContext
+    ? new InProcessToolProvider({
+        id: 'kagent-universal-context',
+        tools: [
+          defineGetMyContext({
+            podConfig: config,
+            ...(deps.remainingBudgetSeconds !== undefined && {
+              remainingBudgetSeconds: deps.remainingBudgetSeconds,
+            }),
+            ...(deps.tokenUtilizationSnapshot !== undefined && {
+              tokenUtilizationSnapshot: deps.tokenUtilizationSnapshot,
+            }),
+          }),
+        ],
+      })
+    : undefined;
+  const gatewayToolNames = requestedGatewayToolNames(config.agentSpec.tools);
   const toolGatewayProvider =
-    runtimeToolNames.length === 0
+    gatewayToolNames.length === 0
       ? undefined
-      : buildToolGatewayProvider(config, deps, runtimeToolNames);
+      : buildToolGatewayProvider(config, deps, gatewayToolNames);
 
   // Collect tool names served by the substrate / blackboard / events
   // providers so resolveBuiltinTools accepts them as known when an
@@ -782,17 +778,11 @@ export function resolveToolProviders(
   // mirrors the pattern in builtin-tools.test.ts where tests narrow
   // the same way.
   const externallyProvidedNames = new Set<string>();
-  // NM5 — include the universally-wired get_my_context up front. Note
-  // that when main.ts's spawnEnabled path also injects a substrate
-  // provider serving get_my_context, the runner sees the name twice
-  // in the dedupe set (no-op set add). We strip the duplicate by
-  // filtering the spawn provider's descriptor list against the
-  // universal registry below — only ONE registration of
-  // get_my_context survives so the executor's tool-name lookup
-  // doesn't have a doubled key.
+  for (const toolName of gatewayToolNames) {
+    externallyProvidedNames.add(toolName);
+  }
   for (const provider of [
     universalContextProvider,
-    toolGatewayProvider,
     deps.spawnTools,
     deps.blackboardTools,
     deps.eventsTools,
@@ -819,11 +809,7 @@ export function resolveToolProviders(
     externallyProvidedNames,
   });
   if (builtin !== null) out.push(builtin);
-  // NM5 — universal context provider is always pushed, even when the
-  // agent didn't list `get_my_context`. The executor's tool-call
-  // dispatch will only invoke it if the LLM emits a tool_call with
-  // that name; presence in the registry is harmless when unused.
-  out.push(universalContextProvider);
+  if (universalContextProvider !== undefined) out.push(universalContextProvider);
   if (toolGatewayProvider !== undefined) out.push(toolGatewayProvider);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
   // v0.4.1-blackboard
@@ -833,14 +819,24 @@ export function resolveToolProviders(
   return out;
 }
 
+async function describeToolProviderNames(providers: readonly ToolProvider[]): Promise<string> {
+  const parts: string[] = [];
+  for (const provider of providers) {
+    const descriptors = await provider.describeTools();
+    const names = descriptors.map((descriptor) => descriptor.name).join(',');
+    parts.push(`${provider.id}=[${names}]`);
+  }
+  return parts.join(' ');
+}
+
 function buildToolGatewayProvider(
   config: PodConfig,
   deps: RunDeps,
-  runtimeToolNames: readonly string[],
+  gatewayToolNames: readonly string[],
 ): ToolProvider {
   if (config.toolGatewayUrl === undefined) {
     throw new Error(
-      'KAGENT_TOOL_GATEWAY_URL is required when Agent.spec.tools includes browser.* or code_interpreter.* runtime tools',
+      'KAGENT_TOOL_GATEWAY_URL is required when Agent.spec.tools includes browser.*, code_interpreter.*, mcp.*, or http.* gateway tools',
     );
   }
 
@@ -852,7 +848,7 @@ function buildToolGatewayProvider(
       taskUid: config.taskId,
       agentName: config.agentName,
     },
-    tools: runtimeToolNames,
+    tools: gatewayToolNames,
   });
 }
 

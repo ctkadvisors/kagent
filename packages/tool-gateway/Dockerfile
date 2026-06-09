@@ -21,6 +21,8 @@ WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/agent-loop/package.json packages/agent-loop/
 COPY packages/dto/package.json packages/dto/
+COPY packages/http-tool-provider/package.json packages/http-tool-provider/
+COPY packages/mcp-tool-provider/package.json packages/mcp-tool-provider/
 COPY packages/tool-gateway/package.json packages/tool-gateway/
 
 RUN pnpm install --frozen-lockfile --prod=false
@@ -29,6 +31,8 @@ COPY tsconfig.base.json ./
 COPY scripts ./scripts
 COPY packages/agent-loop packages/agent-loop
 COPY packages/dto packages/dto
+COPY packages/http-tool-provider packages/http-tool-provider
+COPY packages/mcp-tool-provider packages/mcp-tool-provider
 COPY packages/tool-gateway packages/tool-gateway
 
 RUN pnpm --filter @kagent/tool-gateway... build

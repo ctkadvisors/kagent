@@ -59,6 +59,14 @@ toolRuntime:
     # Override only when the gateway is deployed outside this chart.
     url: ''
     workspaceRoot: /tmp/kagent-tool-gateway-workspaces
+    # External gateway tools. Use mcp.* names for MCP servers and http.*
+    # names for ad hoc HTTP tools so Agent.spec.tools can grant them
+    # explicitly without treating every unknown name as gateway-managed.
+    externalProviders: []
+    # Raw override for operators that want to provide the exact JSON
+    # consumed by KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON. When set,
+    # this wins over externalProviders above.
+    externalProvidersJson: ''
     resources:
       requests:
         cpu: '100m'
@@ -78,6 +86,26 @@ toolRuntime:
     agentSandbox:
       enabled: false
       sandboxTemplateName: kagent-code-runner
+      runtimeClassName: ''
+      image:
+        repository: ghcr.io/ctkadvisors/kagent-code-runner
+        tag: ''
+        pullPolicy: IfNotPresent
+      port: 8080
+      envVarsInjectionPolicy: Disallowed
+      networkPolicyManagement: Managed
+      ttlSecondsAfterFinished: 300
+      warmPool:
+        enabled: false
+        replicas: 1
+        updateStrategy: OnReplenish
+      resources:
+        requests:
+          cpu: '100m'
+          memory: '256Mi'
+        limits:
+          cpu: '1'
+          memory: '1Gi'
   browser:
     steel:
       # Self-host Steel in-cluster. When disabled, set baseUrl to an
@@ -86,6 +114,14 @@ toolRuntime:
       enabled: false
       baseUrl: ''
       connectBaseUrl: ''
+      # Steel's session WebSocket proxy rejects non-IP/non-localhost Host
+      # headers, so the in-cluster deployment advertises its Pod IP in
+      # session URLs. A session is tied to the browser pod anyway.
+      advertisePodIp: true
+      # Local k3s reliability default. Steel's fingerprint generator can
+      # reject the packaged Chromium/fingerprint constraints before the
+      # browser launches; leave spoofing off unless a workload needs it.
+      skipFingerprintInjection: true
       apiKeySecret:
         name: ''
         key: api-key

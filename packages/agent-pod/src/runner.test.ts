@@ -401,60 +401,48 @@ function toolCallingLlm(toolName: string, args: Record<string, unknown>): LLMCli
 }
 
 describe('resolveToolProviders — Agent.spec.tools wiring', () => {
-  /*
-   * Audit-rev2 NM5 — `resolveToolProviders` now ALWAYS appends the
-   * `kagent-universal-context` provider exposing `get_my_context`
-   * (the introspection tool is `UNIVERSAL` per the substrate-tool
-   * allowlist). The legacy "returns []" / single-built-in-provider
-   * assertions are updated to filter that universal provider out
-   * of the count + name set, so the rest of the tool-wiring contract
-   * is asserted independently.
-   */
-  const filterUniversalContext = (providers: readonly ToolProvider[]): readonly ToolProvider[] =>
-    providers.filter((p) => p.id !== 'kagent-universal-context');
-
-  it('returns [] of non-universal providers when Agent.spec.tools is undefined', () => {
+  it('returns [] when Agent.spec.tools is undefined', () => {
     const cfg: PodConfig = { ...baseConfig, agentSpec: { ...baseConfig.agentSpec } };
-    expect(filterUniversalContext(resolveToolProviders(cfg, {}))).toEqual([]);
+    expect(resolveToolProviders(cfg, {})).toEqual([]);
   });
 
-  it('returns [] of non-universal providers when Agent.spec.tools is the empty array', () => {
+  it('returns [] when Agent.spec.tools is the empty array', () => {
     const cfg: PodConfig = {
       ...baseConfig,
       agentSpec: { ...baseConfig.agentSpec, tools: [] },
     };
-    expect(filterUniversalContext(resolveToolProviders(cfg, {}))).toEqual([]);
+    expect(resolveToolProviders(cfg, {})).toEqual([]);
   });
 
-  it('builds one built-in provider exposing exactly the named built-in tools (universal-context appended separately)', () => {
+  it('builds one built-in provider exposing exactly the named built-in tools', () => {
     const cfg: PodConfig = {
       ...baseConfig,
       agentSpec: { ...baseConfig.agentSpec, tools: ['http_get', 'extract_text'] },
     };
     const providers = resolveToolProviders(cfg, {});
-    const builtIn = filterUniversalContext(providers);
-    expect(builtIn).toHaveLength(1);
-    const desc = builtIn[0]!.describeTools() as ToolDescriptor[];
+    expect(providers).toHaveLength(1);
+    const desc = providers[0]!.describeTools() as ToolDescriptor[];
     const names = desc.map((d) => d.name).sort();
     expect(names).toEqual(['extract_text', 'http_get']);
   });
 
-  it('NM5 — universal-context provider is always present and exposes get_my_context', () => {
+  it('does not advertise get_my_context unless the Agent asks for it', () => {
     const cfg: PodConfig = { ...baseConfig, agentSpec: { ...baseConfig.agentSpec } };
     const providers = resolveToolProviders(cfg, {});
     const universal = providers.find((p) => p.id === 'kagent-universal-context');
-    expect(universal).toBeDefined();
-    const desc = universal!.describeTools() as ToolDescriptor[];
-    const names = desc.map((d) => d.name);
-    expect(names).toEqual(['get_my_context']);
+    expect(universal).toBeUndefined();
   });
 
-  it('NM5 — get_my_context in Agent.spec.tools no longer throws "unknown built-in tool"', () => {
+  it('NM5 — get_my_context in Agent.spec.tools wires the universal-context provider', () => {
     const cfg: PodConfig = {
       ...baseConfig,
       agentSpec: { ...baseConfig.agentSpec, tools: ['get_my_context'] },
     };
-    expect(() => resolveToolProviders(cfg, {})).not.toThrow();
+    const providers = resolveToolProviders(cfg, {});
+    const universal = providers.find((p) => p.id === 'kagent-universal-context');
+    expect(universal).toBeDefined();
+    const desc = universal!.describeTools() as ToolDescriptor[];
+    expect(desc.map((d) => d.name)).toEqual(['get_my_context']);
   });
 
   it('wires the gateway provider when Agent.spec.tools asks for browser or code runtime tools', () => {
@@ -475,6 +463,23 @@ describe('resolveToolProviders — Agent.spec.tools wiring', () => {
       'browser.goto',
       'code_interpreter.execute_code',
     ]);
+    expect(providers.some((provider) => provider.id === 'kagent-universal-context')).toBe(false);
+  });
+
+  it('wires the gateway provider when Agent.spec.tools asks for external mcp/http gateway tools', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      toolGatewayUrl: 'http://tool-gateway.kagent-system.svc',
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        tools: ['mcp.project.lookup', 'http.github.get_issue'],
+      },
+    };
+
+    const providers = resolveToolProviders(cfg, {});
+    const gateway = providers.find((provider) => provider.id === 'kagent-tool-gateway');
+
+    expect(gateway).toBeDefined();
   });
 
   it('fails fast when Agent.spec.tools asks for runtime tools but no gateway URL is configured', () => {
@@ -483,6 +488,18 @@ describe('resolveToolProviders — Agent.spec.tools wiring', () => {
       agentSpec: {
         ...baseConfig.agentSpec,
         tools: ['browser.goto'],
+      },
+    };
+
+    expect(() => resolveToolProviders(cfg, {})).toThrow(/KAGENT_TOOL_GATEWAY_URL/);
+  });
+
+  it('fails fast when Agent.spec.tools asks for external gateway tools but no gateway URL is configured', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        tools: ['mcp.project.lookup'],
       },
     };
 

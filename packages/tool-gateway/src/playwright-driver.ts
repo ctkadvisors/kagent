@@ -96,103 +96,110 @@ class PlaywrightCdpDriver implements BrowserAutomationDriver {
   ) {}
 
   async goto(cdpUrl: string, url: string, options: BrowserGotoOptions): Promise<BrowserGotoResult> {
-    const page = await this.pageFor(cdpUrl);
-    await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: this.resolveTimeout(options.timeoutMs),
-    });
+    return this.withPage(cdpUrl, async (page) => {
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: this.resolveTimeout(options.timeoutMs),
+      });
 
-    return {
-      url: page.url(),
-      title: await page.title(),
-    };
+      return {
+        url: page.url(),
+        title: await page.title(),
+      };
+    });
   }
 
   async click(cdpUrl: string, options: BrowserClickOptions): Promise<BrowserInteractionResult> {
-    const page = await this.pageFor(cdpUrl);
-    const timeout = this.resolveTimeout(options.timeoutMs);
-    if (options.selector !== undefined) {
-      await page.locator(options.selector).click({ timeout });
-      return { ok: true };
-    }
-    if (options.text !== undefined) {
-      await page.getByText(options.text, { exact: false }).click({ timeout });
-      return { ok: true, matched: 'text' };
-    }
+    return this.withPage(cdpUrl, async (page) => {
+      const timeout = this.resolveTimeout(options.timeoutMs);
+      if (options.selector !== undefined) {
+        await page.locator(options.selector).click({ timeout });
+        return { ok: true };
+      }
+      if (options.text !== undefined) {
+        await page.getByText(options.text, { exact: false }).click({ timeout });
+        return { ok: true, matched: 'text' };
+      }
 
-    throw new Error('browser_click_invalid: selector or text is required');
+      throw new Error('browser_click_invalid: selector or text is required');
+    });
   }
 
   async screenshot(
     cdpUrl: string,
     options: BrowserScreenshotOptions,
   ): Promise<BrowserScreenshotResult> {
-    const page = await this.pageFor(cdpUrl);
-    const bytes = await page.screenshot({
-      type: 'png',
-      ...(options.fullPage !== undefined && { fullPage: options.fullPage }),
+    return this.withPage(cdpUrl, async (page) => {
+      const bytes = await page.screenshot({
+        type: 'png',
+        ...(options.fullPage !== undefined && { fullPage: options.fullPage }),
+      });
+      return {
+        mimeType: 'image/png',
+        base64: bytes.toString('base64'),
+      };
     });
-    return {
-      mimeType: 'image/png',
-      base64: bytes.toString('base64'),
-    };
   }
 
   async select(cdpUrl: string, options: BrowserSelectOptions): Promise<BrowserInteractionResult> {
-    const page = await this.pageFor(cdpUrl);
-    await page.selectOption(options.selector, options.value, {
-      timeout: this.resolveTimeout(options.timeoutMs),
+    return this.withPage(cdpUrl, async (page) => {
+      await page.selectOption(options.selector, options.value, {
+        timeout: this.resolveTimeout(options.timeoutMs),
+      });
+      return { ok: true };
     });
-    return { ok: true };
   }
 
   async extractText(
     cdpUrl: string,
     options: BrowserExtractTextOptions,
   ): Promise<BrowserExtractTextResult> {
-    const page = await this.pageFor(cdpUrl);
-    const text = await page.evaluate<string>(
-      'document.body?.innerText ?? document.documentElement?.textContent ?? ""',
-    );
+    return this.withPage(cdpUrl, async (page) => {
+      const text = await page.evaluate<string>(
+        'document.body?.innerText ?? document.documentElement?.textContent ?? ""',
+      );
 
-    return {
-      text:
-        options.maxChars === undefined || text.length <= options.maxChars
-          ? text
-          : text.slice(0, options.maxChars),
-    };
+      return {
+        text:
+          options.maxChars === undefined || text.length <= options.maxChars
+            ? text
+            : text.slice(0, options.maxChars),
+      };
+    });
   }
 
   async typeText(
     cdpUrl: string,
     options: BrowserTypeTextOptions,
   ): Promise<BrowserInteractionResult> {
-    const page = await this.pageFor(cdpUrl);
-    const locator = page.locator(options.selector);
-    if (locator.fill === undefined) {
-      throw new Error('browser_type_unsupported: Playwright locator.fill is unavailable');
-    }
-    await locator.fill(options.text, { timeout: this.resolveTimeout(options.timeoutMs) });
-    return { ok: true };
+    return this.withPage(cdpUrl, async (page) => {
+      const locator = page.locator(options.selector);
+      if (locator.fill === undefined) {
+        throw new Error('browser_type_unsupported: Playwright locator.fill is unavailable');
+      }
+      await locator.fill(options.text, { timeout: this.resolveTimeout(options.timeoutMs) });
+      return { ok: true };
+    });
   }
 
   async waitFor(cdpUrl: string, options: BrowserWaitForOptions): Promise<BrowserInteractionResult> {
-    const page = await this.pageFor(cdpUrl);
-    const timeout = this.resolveTimeout(options.timeoutMs);
-    if (options.selector !== undefined) {
-      await page.waitForSelector(options.selector, { timeout });
-      return { ok: true, matched: 'selector' };
-    }
-    if (options.text !== undefined) {
-      const locator = page.getByText(options.text, { exact: false });
-      if (locator.waitFor === undefined) {
-        throw new Error('browser_wait_unsupported: Playwright locator.waitFor is unavailable');
+    return this.withPage(cdpUrl, async (page) => {
+      const timeout = this.resolveTimeout(options.timeoutMs);
+      if (options.selector !== undefined) {
+        await page.waitForSelector(options.selector, { timeout });
+        return { ok: true, matched: 'selector' };
       }
-      await locator.waitFor({ timeout });
-      return { ok: true, matched: 'text' };
-    }
+      if (options.text !== undefined) {
+        const locator = page.getByText(options.text, { exact: false });
+        if (locator.waitFor === undefined) {
+          throw new Error('browser_wait_unsupported: Playwright locator.waitFor is unavailable');
+        }
+        await locator.waitFor({ timeout });
+        return { ok: true, matched: 'text' };
+      }
 
-    throw new Error('browser_wait_invalid: selector or text is required');
+      throw new Error('browser_wait_invalid: selector or text is required');
+    });
   }
 
   async closeSession(cdpUrl: string): Promise<void> {
@@ -200,13 +207,31 @@ class PlaywrightCdpDriver implements BrowserAutomationDriver {
     this.sessions.delete(cdpUrl);
     if (existing === undefined) return;
 
-    const session = await existing;
-    await session.browser.close();
+    try {
+      const session = await existing;
+      await session.browser.close();
+    } catch (err) {
+      if (!isClosedTargetError(err)) throw err;
+    }
   }
 
   private async pageFor(cdpUrl: string): Promise<PlaywrightPageLike> {
     const session = await this.sessionFor(cdpUrl);
     return session.page;
+  }
+
+  private async withPage<T>(
+    cdpUrl: string,
+    action: (page: PlaywrightPageLike) => Promise<T>,
+  ): Promise<T> {
+    const page = await this.pageFor(cdpUrl);
+    try {
+      return await action(page);
+    } catch (err) {
+      if (!isClosedTargetError(err)) throw err;
+      await this.closeSession(cdpUrl);
+      return action(await this.pageFor(cdpUrl));
+    }
   }
 
   private sessionFor(cdpUrl: string): Promise<CachedCdpSession> {
@@ -231,4 +256,13 @@ class PlaywrightCdpDriver implements BrowserAutomationDriver {
   private resolveTimeout(timeoutMs: number | undefined): number {
     return timeoutMs ?? this.defaultTimeoutMs;
   }
+}
+
+function isClosedTargetError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes('Target page, context or browser has been closed') ||
+    message.includes('Target closed') ||
+    message.includes('Browser has been closed')
+  );
 }

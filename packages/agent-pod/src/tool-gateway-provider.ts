@@ -40,7 +40,9 @@ export class ToolGatewayProvider implements ToolProvider {
   private readonly baseUrl: string;
   private readonly task: ToolGatewayTaskIdentity;
   private readonly fetchImpl: typeof fetch;
-  private readonly grantedToolNames: ReadonlySet<ToolRuntimeToolName>;
+  private readonly grantedToolNames: ReadonlySet<string>;
+  private readonly runtimeToolNames: readonly ToolRuntimeToolName[];
+  private readonly externalToolNames: readonly string[];
   private readonly descriptors: ToolDescriptor[];
 
   constructor(options: ToolGatewayProviderOptions) {
@@ -48,18 +50,22 @@ export class ToolGatewayProvider implements ToolProvider {
     this.baseUrl = trimTrailingSlash(options.baseUrl);
     this.task = options.task;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
-    this.grantedToolNames = new Set(
-      options.tools.filter((tool): tool is ToolRuntimeToolName => isToolRuntimeTool(tool)),
+    const gatewayToolNames = requestedGatewayToolNames(options.tools);
+    this.grantedToolNames = new Set(gatewayToolNames);
+    this.runtimeToolNames = gatewayToolNames.filter((tool): tool is ToolRuntimeToolName =>
+      isToolRuntimeTool(tool),
     );
-    this.descriptors = buildRuntimeToolDescriptors([...this.grantedToolNames]);
+    this.externalToolNames = gatewayToolNames.filter((tool) => isExternalGatewayToolName(tool));
+    this.descriptors = buildRuntimeToolDescriptors(this.runtimeToolNames);
   }
 
-  describeTools(_ctx?: ToolInvocationContext): ToolDescriptor[] {
-    return this.descriptors;
+  describeTools(ctx?: ToolInvocationContext): ToolDescriptor[] | Promise<ToolDescriptor[]> {
+    if (this.externalToolNames.length === 0) return this.descriptors;
+    return this.describeExternalTools(ctx);
   }
 
   async executeTool(call: ToolCall, ctx: ToolInvocationContext): Promise<ToolResult> {
-    if (!isToolRuntimeTool(call.name) || !this.grantedToolNames.has(call.name)) {
+    if (!this.grantedToolNames.has(call.name)) {
       return {
         content: `policy_denied: tool "${call.name}" was not granted to this Agent`,
         isError: true,
@@ -97,6 +103,32 @@ export class ToolGatewayProvider implements ToolProvider {
 
     return parseToolResult(await response.json());
   }
+
+  private async describeExternalTools(ctx?: ToolInvocationContext): Promise<ToolDescriptor[]> {
+    const init: RequestInit = {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-kagent-agent': this.task.agentName,
+        'x-kagent-namespace': this.task.namespace,
+        'x-kagent-task-uid': this.task.taskUid,
+        'x-kagent-tenant': this.task.tenant,
+      },
+      body: JSON.stringify({
+        task: this.task,
+        toolNames: this.externalToolNames,
+      }),
+    };
+    if (ctx?.abortSignal !== undefined) init.signal = ctx.abortSignal;
+
+    const response = await this.fetchImpl(`${this.baseUrl}/v1/tool-runtime/describe`, init);
+
+    if (!response.ok) {
+      throw new Error(`Gateway ${response.status}: ${await responseMessage(response)}`);
+    }
+
+    return [...this.descriptors, ...parseToolDescriptors(await response.json())];
+  }
 }
 
 export function requestedRuntimeToolNames(
@@ -108,6 +140,20 @@ export function requestedRuntimeToolNames(
 
   for (const tool of tools) {
     if (!isToolRuntimeTool(tool) || seen.has(tool)) continue;
+    seen.add(tool);
+    out.push(tool);
+  }
+
+  return out;
+}
+
+export function requestedGatewayToolNames(tools: readonly string[] | undefined): readonly string[] {
+  if (tools === undefined) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const tool of tools) {
+    if ((!isToolRuntimeTool(tool) && !isExternalGatewayToolName(tool)) || seen.has(tool)) continue;
     seen.add(tool);
     out.push(tool);
   }
@@ -332,6 +378,31 @@ function parseToolResult(value: unknown): ToolResult {
   };
 }
 
+function parseToolDescriptors(value: unknown): ToolDescriptor[] {
+  if (!isRecord(value) || !Array.isArray(value.tools)) return [];
+  const descriptors: ToolDescriptor[] = [];
+
+  for (const tool of value.tools) {
+    if (
+      !isRecord(tool) ||
+      typeof tool.name !== 'string' ||
+      typeof tool.description !== 'string' ||
+      !isRecord(tool.inputSchema)
+    ) {
+      continue;
+    }
+    descriptors.push({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      ...(Array.isArray(tool.tags) &&
+        tool.tags.every((tag): tag is string => typeof tag === 'string') && { tags: tool.tags }),
+    });
+  }
+
+  return descriptors;
+}
+
 function parseContent(value: unknown): string | ContentBlock[] {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value as ContentBlock[];
@@ -357,4 +428,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function trimTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+function isExternalGatewayToolName(name: string): boolean {
+  return name.startsWith('mcp.') || name.startsWith('http.');
 }

@@ -47,6 +47,19 @@ spec:
             - name: cdp
               containerPort: {{ .Values.toolRuntime.browser.steel.debugPort }}
               protocol: TCP
+          env:
+            - name: SKIP_FINGERPRINT_INJECTION
+              value: {{ .Values.toolRuntime.browser.steel.skipFingerprintInjection | ternary "true" "false" | quote }}
+            {{- if .Values.toolRuntime.browser.steel.advertisePodIp }}
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: DOMAIN
+              value: "$(POD_IP):{{ .Values.toolRuntime.browser.steel.port }}"
+            - name: CDP_DOMAIN
+              value: "$(POD_IP):{{ .Values.toolRuntime.browser.steel.port }}"
+            {{- end }}
           volumeMounts:
             - name: steel-cache
               mountPath: /app/.cache

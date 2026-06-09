@@ -57,6 +57,7 @@ function makeDriver(): BrowserAutomationDriver {
     extractText: vi.fn(() => Promise.resolve({ text: 'Visible report text' })),
     typeText: vi.fn(() => Promise.resolve({ ok: true })),
     waitFor: vi.fn(() => Promise.resolve({ ok: true, matched: 'text' })),
+    closeSession: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -118,6 +119,32 @@ describe('SteelBrowserAdapter', () => {
       cdpUrl: 'wss://connect.steel.local?apiKey=steel-key&sessionId=steel-2',
       liveViewUrl: 'http://steel.local:3000/ui/sessions/steel-2',
     });
+  });
+
+  it('invalidates cached CDP connections when Steel starts a new session', async () => {
+    const driver = makeDriver();
+    const { fetch } = makeFetch([
+      makeJsonResponse({
+        id: 'steel-1',
+        websocketUrl: 'ws://steel.local:3000/',
+      }),
+      makeJsonResponse({
+        id: 'steel-2',
+        websocketUrl: 'ws://steel.local:3000/',
+      }),
+    ]);
+    const adapter = new SteelBrowserAdapter({
+      baseUrl: 'http://steel.local:3000',
+      driver,
+      fetch,
+    });
+
+    await adapter.startSession();
+    await adapter.startSession();
+
+    expect(driver.closeSession).toHaveBeenCalledTimes(2);
+    expect(driver.closeSession).toHaveBeenNthCalledWith(1, 'ws://steel.local:3000/');
+    expect(driver.closeSession).toHaveBeenNthCalledWith(2, 'ws://steel.local:3000/');
   });
 
   it('drives navigation, screenshots, and text extraction through the injected browser driver', async () => {

@@ -78,6 +78,24 @@ describe('tool-gateway server', () => {
         KAGENT_STEEL_BASE_URL: 'http://steel.kagent-system.svc.cluster.local:3000',
         KAGENT_STEEL_API_KEY: 'steel-key',
         KAGENT_STEEL_CONNECT_BASE_URL: 'ws://steel.kagent-system.svc.cluster.local:3000',
+        KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON: JSON.stringify({
+          providers: [
+            {
+              kind: 'http',
+              id: 'project-api',
+              baseUrl: 'http://project-api.kagent-system.svc',
+              tools: [
+                {
+                  name: 'http.project.lookup',
+                  description: 'Look up project metadata.',
+                  inputSchema: { type: 'object' },
+                  method: 'POST',
+                  path: '/lookup',
+                },
+              ],
+            },
+          ],
+        }),
       }),
     ).toEqual({
       port: 9090,
@@ -86,6 +104,15 @@ describe('tool-gateway server', () => {
       steelBaseUrl: 'http://steel.kagent-system.svc.cluster.local:3000',
       steelApiKey: 'steel-key',
       steelConnectBaseUrl: 'ws://steel.kagent-system.svc.cluster.local:3000',
+      externalProviders: {
+        providers: [
+          expect.objectContaining({
+            kind: 'http',
+            id: 'project-api',
+            baseUrl: 'http://project-api.kagent-system.svc',
+          }),
+        ],
+      },
     });
   });
 

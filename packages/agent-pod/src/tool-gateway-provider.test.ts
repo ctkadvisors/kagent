@@ -3,10 +3,10 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import type { ToolInvocationContext } from '@kagent/agent-loop';
+import type { ToolDescriptor, ToolInvocationContext } from '@kagent/agent-loop';
 import { describe, expect, it, vi } from 'vitest';
 
-import { ToolGatewayProvider } from './tool-gateway-provider.js';
+import { requestedGatewayToolNames, ToolGatewayProvider } from './tool-gateway-provider.js';
 
 interface CapturedRequest {
   readonly url: string;
@@ -48,7 +48,39 @@ function ctx(signal = new AbortController().signal): ToolInvocationContext {
   return { runId: 'run-1', abortSignal: signal };
 }
 
+function syncDescriptors(value: ToolDescriptor[] | Promise<ToolDescriptor[]>): ToolDescriptor[] {
+  if (value instanceof Promise) throw new Error('expected synchronous descriptor list');
+  return value;
+}
+
+function parsedRequestBody(call: CapturedRequest | undefined): Record<string, unknown> {
+  const body = call?.init?.body;
+  if (typeof body !== 'string') throw new Error('expected string request body');
+  const parsed: unknown = JSON.parse(body);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('expected object request body');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 describe('ToolGatewayProvider', () => {
+  it('recognizes runtime plus mcp/http gateway tool names', () => {
+    expect(
+      requestedGatewayToolNames([
+        'browser.goto',
+        'code_interpreter.execute_code',
+        'mcp.project.lookup',
+        'http.github.get_issue',
+        'extract_text',
+      ]),
+    ).toEqual([
+      'browser.goto',
+      'code_interpreter.execute_code',
+      'mcp.project.lookup',
+      'http.github.get_issue',
+    ]);
+  });
+
   it('describes only requested browser and code interpreter tools', () => {
     const provider = new ToolGatewayProvider({
       baseUrl: 'http://tool-gateway.kagent-system.svc',
@@ -62,10 +94,56 @@ describe('ToolGatewayProvider', () => {
     });
 
     expect(provider.id).toBe('kagent-tool-gateway');
-    expect(provider.describeTools().map((tool) => tool.name)).toEqual([
+    expect(syncDescriptors(provider.describeTools()).map((tool) => tool.name)).toEqual([
       'browser.goto',
       'code_interpreter.execute_code',
     ]);
+  });
+
+  it('fetches external mcp/http tool descriptors from the gateway describe endpoint', async () => {
+    const { calls, fetch } = makeFetch([
+      makeJsonResponse({
+        tools: [
+          {
+            name: 'mcp.project.lookup',
+            description: 'Look up project metadata from an MCP server.',
+            inputSchema: { type: 'object', properties: { project: { type: 'string' } } },
+          },
+        ],
+      }),
+    ]);
+    const provider = new ToolGatewayProvider({
+      baseUrl: 'http://tool-gateway.kagent-system.svc',
+      fetch,
+      task: {
+        tenant: 'homelab',
+        namespace: 'kagent-draft',
+        taskUid: 'task-1',
+        agentName: 'agent',
+      },
+      tools: ['browser.goto', 'mcp.project.lookup'],
+    });
+
+    const descriptors = await provider.describeTools(ctx());
+
+    expect(descriptors.map((tool) => tool.name)).toEqual(['browser.goto', 'mcp.project.lookup']);
+    expect(descriptors[1]).toEqual({
+      name: 'mcp.project.lookup',
+      description: 'Look up project metadata from an MCP server.',
+      inputSchema: { type: 'object', properties: { project: { type: 'string' } } },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe('http://tool-gateway.kagent-system.svc/v1/tool-runtime/describe');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({
+      task: {
+        tenant: 'homelab',
+        namespace: 'kagent-draft',
+        taskUid: 'task-1',
+        agentName: 'agent',
+      },
+      toolNames: ['mcp.project.lookup'],
+    });
   });
 
   it('forwards tool calls to the gateway with task ownership metadata and abort signal', async () => {
@@ -150,6 +228,36 @@ describe('ToolGatewayProvider', () => {
       content: 'Gateway 503: tool_runtime_paused',
       isError: true,
       metadata: { status: 503 },
+    });
+  });
+
+  it('forwards granted external gateway tool calls', async () => {
+    const { calls, fetch } = makeFetch([
+      makeJsonResponse({
+        content: '{"project":"kagent"}',
+        isError: false,
+      }),
+    ]);
+    const provider = new ToolGatewayProvider({
+      baseUrl: 'http://tool-gateway.kagent-system.svc',
+      fetch,
+      task: {
+        tenant: 'homelab',
+        namespace: 'kagent-draft',
+        taskUid: 'task-1',
+        agentName: 'agent',
+      },
+      tools: ['mcp.project.lookup'],
+    });
+
+    await expect(
+      provider.executeTool(
+        { id: 'call-1', name: 'mcp.project.lookup', args: { project: 'kagent' } },
+        ctx(),
+      ),
+    ).resolves.toEqual({ content: '{"project":"kagent"}', isError: false });
+    expect(parsedRequestBody(calls[0])).toMatchObject({
+      call: { name: 'mcp.project.lookup' },
     });
   });
 

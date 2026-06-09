@@ -67,6 +67,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.toolRuntime.browser.steel.image.repository .Values.toolRuntime.browser.steel.image.tag -}}
 {{- end -}}
 
+{{- define "kagent-operator.codeRunner.image" -}}
+{{- $tag := .Values.toolRuntime.code.agentSandbox.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.toolRuntime.code.agentSandbox.image.repository $tag -}}
+{{- end -}}
+
 {{/*
 Validate values at template time. Currently guards two trapdoors:
 

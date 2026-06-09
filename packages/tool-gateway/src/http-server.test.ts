@@ -35,6 +35,27 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
   });
 }
 
+function describeRequest(
+  toolNames: readonly string[],
+  headers: Record<string, string> = {},
+): Request {
+  return new Request('http://tool-gateway.test/v1/tool-runtime/describe', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-kagent-tenant': TASK.tenant,
+      'x-kagent-namespace': TASK.namespace,
+      'x-kagent-task-uid': TASK.taskUid,
+      'x-kagent-agent': TASK.agentName,
+      ...headers,
+    },
+    body: JSON.stringify({
+      task: TASK,
+      toolNames,
+    }),
+  });
+}
+
 function requestFor(task: typeof TASK, body: unknown): Request {
   return new Request('http://tool-gateway.test/v1/tool-runtime/invoke', {
     method: 'POST',
@@ -314,6 +335,65 @@ describe('ToolGatewayHttpHandler', () => {
     expect(response.status).toBe(200);
     await expect(json(response)).resolves.toEqual({
       content: JSON.stringify({ taskUid: TASK.taskUid, query: { project: 'kagent' } }),
+      isError: false,
+    });
+  });
+
+  it('describes runtime and external provider tools for the task-scoped gateway grant', async () => {
+    const handler = makeHandler({
+      externalRegistry: {
+        describeTools: () =>
+          Promise.resolve([
+            {
+              name: 'mcp.project.lookup',
+              description: 'Look up a project record from a configured MCP server.',
+              inputSchema: { type: 'object', properties: { project: { type: 'string' } } },
+            },
+          ]),
+        executeTool: () => Promise.resolve({ content: 'not used', isError: false }),
+      },
+    });
+
+    const response = await handler.handle(
+      describeRequest(['browser.goto', 'mcp.project.lookup', 'mcp.project.missing']),
+    );
+
+    expect(response.status).toBe(200);
+    const body = asRecord(await json(response));
+    expect(Array.isArray(body.tools)).toBe(true);
+    const tools = body.tools as readonly Record<string, unknown>[];
+    expect(tools[0]?.name).toBe('browser.goto');
+    expect(tools[0]?.description).toContain('Navigate');
+    expect(tools[1]).toEqual({
+      name: 'mcp.project.lookup',
+      description: 'Look up a project record from a configured MCP server.',
+      inputSchema: { type: 'object', properties: { project: { type: 'string' } } },
+    });
+  });
+
+  it('routes configured external provider tool calls through the registry', async () => {
+    const handler = makeHandler({
+      externalRegistry: {
+        describeTools: () => Promise.resolve([]),
+        executeTool: ({ call, task }) =>
+          Promise.resolve({
+            content: JSON.stringify({ name: call.name, taskUid: task.taskUid, args: call.args }),
+            isError: false,
+          }),
+      },
+    });
+
+    const response = await handler.handle(
+      request(invokeBody('mcp.project.lookup', { project: 'kagent' })),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(json(response)).resolves.toEqual({
+      content: JSON.stringify({
+        name: 'mcp.project.lookup',
+        taskUid: TASK.taskUid,
+        args: { project: 'kagent' },
+      }),
       isError: false,
     });
   });

@@ -43,7 +43,7 @@ importers:
         version: 8.59.0(eslint@9.39.4)(typescript@5.9.3)
       vitest:
         specifier: 4.1.4
-        version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(tsx@4.21.0)(yaml@2.8.3)
+        version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(vite@6.0.7(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.8.3))
 
   packages/agent-loop: {}
 
@@ -322,6 +322,15 @@ importers:
       '@kagent/dto':
         specifier: workspace:*
         version: link:../dto
+      '@kagent/http-tool-provider':
+        specifier: workspace:*
+        version: link:../http-tool-provider
+      '@kagent/mcp-tool-provider':
+        specifier: workspace:*
+        version: link:../mcp-tool-provider
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0
       playwright-core:
         specifier: ^1.60.0
         version: 1.60.0
@@ -422,7 +431,7 @@ importers:
         version: 6.0.7(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3)
       vitest:
         specifier: 4.1.4
-        version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(tsx@4.21.0)(yaml@2.8.3)
+        version: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(vite@6.0.7(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3))
 
 packages:
 
@@ -2839,6 +2848,7 @@ packages:
       '@vitest/ui': 4.1.4
       happy-dom: '*'
       jsdom: '*'
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -3829,7 +3839,7 @@ snapshots:
       obug: 2.1.1
       std-env: 4.1.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(tsx@4.21.0)(yaml@2.8.3)
+      vitest: 4.1.4(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(vite@6.0.7(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3))
 
   '@vitest/expect@4.1.4':
     dependencies:
@@ -5319,7 +5329,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.3
 
-  vitest@4.1.4(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(tsx@4.21.0)(yaml@2.8.3):
+  vitest@4.1.4(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(vite@6.0.7(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       '@vitest/expect': 4.1.4
       '@vitest/mocker': 4.1.4(vite@6.0.7(@types/node@22.19.17)(tsx@4.21.0)(yaml@2.8.3))
@@ -5347,19 +5357,9 @@ snapshots:
       '@vitest/coverage-v8': 4.1.4(vitest@4.1.4)
       jsdom: 27.0.1
     transitivePeerDependencies:
-      - jiti
-      - less
-      - lightningcss
       - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
 
-  vitest@4.1.4(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(tsx@4.21.0)(yaml@2.8.3):
+  vitest@4.1.4(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(@vitest/coverage-v8@4.1.4)(jsdom@27.0.1)(vite@6.0.7(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3)):
     dependencies:
       '@vitest/expect': 4.1.4
       '@vitest/mocker': 4.1.4(vite@6.0.7(@types/node@24.12.2)(tsx@4.21.0)(yaml@2.8.3))
@@ -5387,17 +5387,7 @@ snapshots:
       '@vitest/coverage-v8': 4.1.4(vitest@4.1.4)
       jsdom: 27.0.1
     transitivePeerDependencies:
-      - jiti
-      - less
-      - lightningcss
       - msw
-      - sass
-      - sass-embedded
-      - stylus
-      - sugarss
-      - terser
-      - tsx
-      - yaml
 
   w3c-xmlserializer@5.0.0:
     dependencies:

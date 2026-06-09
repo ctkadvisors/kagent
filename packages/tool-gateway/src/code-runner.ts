@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -28,6 +28,10 @@ export interface CommandResult {
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
+}
+
+export interface StartedCommand {
+  readonly taskId: string;
 }
 
 export interface ExecuteCommandInput {
@@ -96,11 +100,19 @@ const DENIED_COMMANDS = new Set([
 const DEFAULT_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 
 let snippetCounter = 0;
+let commandCounter = 0;
+
+interface ActiveCommand {
+  readonly child: ChildProcessWithoutNullStreams;
+  readonly result: Promise<CommandResult>;
+}
 
 export class LocalCodeRunner {
   private readonly workspaceDir: string;
   private readonly env: Record<string, string>;
   private readonly outputLimitBytes: number;
+  private readonly activeCommands = new Map<string, ActiveCommand>();
+  private readonly completedCommands = new Map<string, CommandResult>();
 
   constructor(options: LocalCodeRunnerOptions) {
     this.workspaceDir = resolve(options.workspaceDir);
@@ -141,45 +153,41 @@ export class LocalCodeRunner {
 
   async executeCommand(input: ExecuteCommandInput): Promise<CommandResult> {
     const command = this.assertCommandAllowed(input.command);
-    const timeoutMs = input.timeoutMs ?? 30_000;
+    return this.spawnCommand(command, input.args ?? [], input.timeoutMs ?? 30_000).result;
+  }
 
-    return new Promise<CommandResult>((resolveResult, reject) => {
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
+  startCommand(input: ExecuteCommandInput): Promise<StartedCommand> {
+    const command = this.assertCommandAllowed(input.command);
+    commandCounter += 1;
+    const taskId = `cmd-${Date.now()}-${commandCounter}`;
+    const active = this.spawnCommand(command, input.args ?? [], input.timeoutMs ?? 30_000);
+    this.activeCommands.set(taskId, active);
+    void active.result.then(
+      (result) => {
+        this.activeCommands.delete(taskId);
+        this.completedCommands.set(taskId, result);
+      },
+      () => {
+        this.activeCommands.delete(taskId);
+      },
+    );
+    return Promise.resolve({ taskId });
+  }
 
-      const child = spawn(command, [...(input.args ?? [])], {
-        cwd: this.workspaceDir,
-        env: this.env,
-        shell: false,
-      });
+  async stopTask(taskId: string): Promise<CommandResult> {
+    const active = this.activeCommands.get(taskId);
+    if (active !== undefined) {
+      active.child.kill('SIGTERM');
+      return active.result;
+    }
 
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => {
-              timedOut = true;
-              child.kill('SIGKILL');
-            }, timeoutMs)
-          : null;
+    const completed = this.completedCommands.get(taskId);
+    if (completed !== undefined) {
+      this.completedCommands.delete(taskId);
+      return completed;
+    }
 
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout = this.appendBounded(stdout, chunk.toString('utf8'));
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr = this.appendBounded(stderr, chunk.toString('utf8'));
-      });
-      child.on('error', reject);
-      child.on('close', (exitCode, signal) => {
-        if (timer !== null) clearTimeout(timer);
-        resolveResult({
-          stdout,
-          stderr,
-          exitCode: timedOut ? null : exitCode,
-          signal,
-          timedOut,
-        });
-      });
-    });
+    throw new Error(`policy_denied: unknown code interpreter task id: ${taskId}`);
   }
 
   async executeCode(input: ExecuteCodeInput): Promise<CommandResult> {
@@ -250,6 +258,48 @@ export class LocalCodeRunner {
     }
 
     return commandName;
+  }
+
+  private spawnCommand(command: string, args: readonly string[], timeoutMs: number): ActiveCommand {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const child = spawn(command, [...args], {
+      cwd: this.workspaceDir,
+      env: this.env,
+      shell: false,
+    });
+
+    const result = new Promise<CommandResult>((resolveResult, reject) => {
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              timedOut = true;
+              child.kill('SIGKILL');
+            }, timeoutMs)
+          : null;
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout = this.appendBounded(stdout, chunk.toString('utf8'));
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr = this.appendBounded(stderr, chunk.toString('utf8'));
+      });
+      child.on('error', reject);
+      child.on('close', (exitCode, signal) => {
+        if (timer !== null) clearTimeout(timer);
+        resolveResult({
+          stdout,
+          stderr,
+          exitCode: timedOut ? null : exitCode,
+          signal,
+          timedOut,
+        });
+      });
+    });
+
+    return { child, result };
   }
 
   private async collectFiles(resolvedRoot: string, entries: CodeRunnerListEntry[]): Promise<void> {

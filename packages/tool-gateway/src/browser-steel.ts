@@ -152,7 +152,9 @@ export class SteelBrowserAdapter {
   async startSession(input: StartSteelBrowserSessionInput = {}): Promise<SteelBrowserSession> {
     const body = this.buildStartSessionBody(input);
     const response = await this.requestJson<SteelSessionResponse>('POST', '/v1/sessions', body);
-    return this.normalizeSession(response);
+    const session = this.normalizeSession(response);
+    await this.resetDriverSession(session.cdpUrl);
+    return session;
   }
 
   async goto(
@@ -309,6 +311,15 @@ export class SteelBrowserAdapter {
     return this.driver;
   }
 
+  private async resetDriverSession(cdpUrl: string): Promise<void> {
+    if (this.driver?.closeSession === undefined) return;
+    try {
+      await this.driver.closeSession(cdpUrl);
+    } catch (err) {
+      if (!isClosedTargetError(err)) throw err;
+    }
+  }
+
   private pickOptionalString(...values: readonly unknown[]): string | undefined {
     for (const value of values) {
       if (typeof value === 'string' && value.length > 0) {
@@ -318,6 +329,15 @@ export class SteelBrowserAdapter {
 
     return undefined;
   }
+}
+
+function isClosedTargetError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes('Target page, context or browser has been closed') ||
+    message.includes('Target closed') ||
+    message.includes('Browser has been closed')
+  );
 }
 
 function requireString(value: unknown, field: string): string {

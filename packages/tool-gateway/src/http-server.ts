@@ -3,7 +3,13 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import type { ToolCall, ToolResult } from '@kagent/agent-loop';
+import type {
+  ToolCall,
+  ToolDescriptor,
+  ToolInvocationContext,
+  ToolResult,
+} from '@kagent/agent-loop';
+import { isToolRuntimeTool, type ToolRuntimeToolName } from '@kagent/dto';
 
 import {
   SteelBrowserAdapter,
@@ -20,7 +26,9 @@ import {
   type CommandResult,
   type ExecuteCodeInput,
   type ExecuteCommandInput,
+  type StartedCommand,
 } from './code-runner.js';
+import type { ExternalToolRegistry } from './external-providers.js';
 
 export interface ToolGatewayTaskIdentity {
   readonly tenant: string;
@@ -45,6 +53,8 @@ export type ToolGatewayExternalHandler = (
 export interface ToolGatewayCodeRunner {
   readonly executeCode: (input: ExecuteCodeInput) => Promise<CommandResult>;
   readonly executeCommand: (input: ExecuteCommandInput) => Promise<CommandResult>;
+  readonly startCommand: (input: ExecuteCommandInput) => Promise<StartedCommand>;
+  readonly stopTask: (taskId: string) => Promise<CommandResult>;
   readonly readFiles: (paths: readonly string[]) => Promise<readonly CodeRunnerReadResult[]>;
   readonly writeFiles: (files: readonly CodeRunnerFile[]) => Promise<void>;
   readonly listFiles: (root?: string) => Promise<readonly CodeRunnerListEntry[]>;
@@ -57,6 +67,7 @@ export interface ToolGatewayHttpHandlerOptions {
   readonly codeRunnerFactory?: ToolGatewayCodeRunnerFactory;
   readonly browser?: SteelBrowserAdapter;
   readonly externalHandlers?: Readonly<Record<string, ToolGatewayExternalHandler>>;
+  readonly externalRegistry?: ExternalToolRegistry;
   readonly paused?: boolean;
 }
 
@@ -65,6 +76,7 @@ export class ToolGatewayHttpHandler {
   private readonly codeRunnerFactory: ToolGatewayCodeRunnerFactory | undefined;
   private readonly browser: SteelBrowserAdapter | undefined;
   private readonly externalHandlers: Readonly<Record<string, ToolGatewayExternalHandler>>;
+  private readonly externalRegistry: ExternalToolRegistry | undefined;
   private readonly browserSessions = new Map<string, SteelBrowserSession>();
   private paused: boolean;
 
@@ -73,6 +85,7 @@ export class ToolGatewayHttpHandler {
     this.codeRunnerFactory = options.codeRunnerFactory;
     this.browser = options.browser;
     this.externalHandlers = options.externalHandlers ?? {};
+    this.externalRegistry = options.externalRegistry;
     this.paused = options.paused ?? false;
   }
 
@@ -82,6 +95,10 @@ export class ToolGatewayHttpHandler {
 
   async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === 'POST' && url.pathname === '/v1/tool-runtime/describe') {
+      return this.handleDescribe(request);
+    }
+
     if (request.method !== 'POST' || url.pathname !== '/v1/tool-runtime/invoke') {
       return jsonResponse({ error: 'not_found' }, 404);
     }
@@ -106,11 +123,62 @@ export class ToolGatewayHttpHandler {
       if (external !== undefined) {
         return jsonResponse(await external({ ...invocation, request }));
       }
+      if (isExternalGatewayToolName(invocation.call.name) && this.externalRegistry !== undefined) {
+        return jsonResponse(
+          await this.externalRegistry.executeTool(invocation, toolInvocationContext(request)),
+        );
+      }
 
       return jsonResponse(await this.invokeRuntimeTool(invocation));
     } catch (err) {
       return jsonResponse(runtimeError(err));
     }
+  }
+
+  private async handleDescribe(request: Request): Promise<Response> {
+    if (this.paused) {
+      return jsonResponse({ error: 'tool_runtime_paused' }, 503);
+    }
+
+    const parsed = await parseDescribeRequest(request);
+    if (parsed === null) {
+      return jsonResponse({ error: 'invalid_request' }, 400);
+    }
+    if (!requestHeadersMatchTask(request, parsed.task)) {
+      return jsonResponse(
+        { error: 'policy_denied: task identity mismatch between headers and request body' },
+        403,
+      );
+    }
+
+    const tools = await this.describeToolsForNames(
+      parsed.toolNames,
+      toolInvocationContext(request),
+    );
+    return jsonResponse({ tools });
+  }
+
+  private async describeToolsForNames(
+    toolNames: readonly string[],
+    ctx: ToolInvocationContext,
+  ): Promise<readonly ToolDescriptor[]> {
+    const descriptors = new Map<string, ToolDescriptor>();
+
+    for (const name of toolNames) {
+      if (isToolRuntimeTool(name)) {
+        descriptors.set(name, runtimeToolDescriptor(name));
+      }
+    }
+
+    if (this.externalRegistry !== undefined) {
+      for (const tool of await Promise.resolve(this.externalRegistry.describeTools(ctx))) {
+        if (toolNames.includes(tool.name)) descriptors.set(tool.name, tool);
+      }
+    }
+
+    return toolNames
+      .map((name) => descriptors.get(name))
+      .filter((tool): tool is ToolDescriptor => tool !== undefined);
   }
 
   private async invokeRuntimeTool(invocation: ToolGatewayInvocation): Promise<ToolResult> {
@@ -122,19 +190,16 @@ export class ToolGatewayHttpHandler {
         return this.executeCode(invocation.task, invocation.call.args);
       case 'code_interpreter.execute_command':
         return this.executeCommand(invocation.task, invocation.call.args);
+      case 'code_interpreter.start_command':
+        return this.startCommand(invocation.task, invocation.call.args);
       case 'code_interpreter.read_files':
         return this.readFiles(invocation.task, invocation.call.args);
       case 'code_interpreter.write_files':
         return this.writeFiles(invocation.task, invocation.call.args);
       case 'code_interpreter.list_files':
         return this.listFiles(invocation.task, invocation.call.args);
-      case 'code_interpreter.start_command':
       case 'code_interpreter.stop_task':
-        return {
-          content: `${invocation.call.name} is not implemented by the local MVP runner`,
-          isError: true,
-          metadata: { policy: 'unsupported-runtime-tool' },
-        };
+        return this.stopTask(invocation.task, invocation.call.args);
       case 'code_interpreter.terminate_session':
         return { content: 'code_interpreter session terminated', isError: false };
       case 'browser.start_session':
@@ -183,6 +248,28 @@ export class ToolGatewayHttpHandler {
     if (input === null) return invalidArgs('code_interpreter.execute_command');
 
     const result = await runner.executeCommand(input);
+    return commandResultToToolResult(result);
+  }
+
+  private async startCommand(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const runner = this.codeRunnerFor(task);
+    const input = parseExecuteCommandInput(args);
+    if (input === null) return invalidArgs('code_interpreter.start_command');
+
+    const started = await runner.startCommand(input);
+    return {
+      content: JSON.stringify(started),
+      isError: false,
+      metadata: { taskId: started.taskId },
+    };
+  }
+
+  private async stopTask(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    if (!isRecord(args) || typeof args.taskId !== 'string' || args.taskId.length === 0) {
+      return invalidArgs('code_interpreter.stop_task');
+    }
+
+    const result = await this.codeRunnerFor(task).stopTask(args.taskId);
     return commandResultToToolResult(result);
   }
 
@@ -402,6 +489,25 @@ async function parseInvocation(request: Request): Promise<ToolGatewayInvocation 
   };
 }
 
+async function parseDescribeRequest(
+  request: Request,
+): Promise<{
+  readonly task: ToolGatewayTaskIdentity;
+  readonly toolNames: readonly string[];
+} | null> {
+  const raw = await request.json().catch(() => null);
+  if (!isRecord(raw) || !isRecord(raw.task) || !Array.isArray(raw.toolNames)) return null;
+
+  const task = parseTask(raw.task);
+  if (task === null) return null;
+  if (!raw.toolNames.every((name): name is string => typeof name === 'string')) return null;
+
+  return {
+    task,
+    toolNames: raw.toolNames,
+  };
+}
+
 function parseTask(raw: Record<string, unknown>): ToolGatewayTaskIdentity | null {
   if (
     typeof raw.tenant !== 'string' ||
@@ -549,6 +655,186 @@ function commandResultToToolResult(result: {
   };
 }
 
+function runtimeToolDescriptor(name: ToolRuntimeToolName): ToolDescriptor {
+  return {
+    name,
+    description: runtimeToolDescription(name),
+    inputSchema: runtimeToolInputSchema(name),
+    tags: runtimeToolTags(name),
+  };
+}
+
+function runtimeToolDescription(name: ToolRuntimeToolName): string {
+  switch (name) {
+    case 'browser.start_session':
+      return 'Start or fetch the task-scoped isolated browser session.';
+    case 'browser.goto':
+      return 'Navigate the task-scoped browser session to a URL.';
+    case 'browser.click':
+      return 'Click an element in the task-scoped browser session.';
+    case 'browser.type':
+      return 'Type text into an element in the task-scoped browser session.';
+    case 'browser.select':
+      return 'Select options in a dropdown in the task-scoped browser session.';
+    case 'browser.wait_for':
+      return 'Wait for visible text or a selector in the task-scoped browser session.';
+    case 'browser.screenshot':
+      return 'Capture a screenshot from the task-scoped browser session.';
+    case 'browser.extract_text':
+      return 'Extract visible text from the current browser page.';
+    case 'browser.cdp_url':
+      return 'Return the internal CDP URL for approved automation clients.';
+    case 'browser.live_view_url':
+      return 'Return the live viewer URL for human inspection.';
+    case 'browser.recording_url':
+      return 'Return the browser session recording URL when available.';
+    case 'browser.terminate_session':
+      return 'Release the task-scoped browser session.';
+    case 'code_interpreter.start_session':
+      return 'Start or fetch the task-scoped code interpreter session.';
+    case 'code_interpreter.execute_code':
+      return 'Execute inline Python, JavaScript, or TypeScript in the code workspace.';
+    case 'code_interpreter.execute_command':
+      return 'Execute an allowlisted command in the code workspace.';
+    case 'code_interpreter.start_command':
+      return 'Start a long-running allowlisted command in the code workspace.';
+    case 'code_interpreter.read_files':
+      return 'Read files under the code workspace root.';
+    case 'code_interpreter.write_files':
+      return 'Write files under the code workspace root.';
+    case 'code_interpreter.list_files':
+      return 'List files under the code workspace root.';
+    case 'code_interpreter.stop_task':
+      return 'Stop a long-running code interpreter command.';
+    case 'code_interpreter.terminate_session':
+      return 'Release the task-scoped code interpreter session.';
+  }
+}
+
+function runtimeToolTags(name: ToolRuntimeToolName): readonly string[] {
+  if (name.endsWith('.terminate_session') || name === 'code_interpreter.stop_task') {
+    return ['destructive', 'idempotent'];
+  }
+  if (
+    name === 'browser.cdp_url' ||
+    name === 'browser.live_view_url' ||
+    name === 'browser.recording_url' ||
+    name === 'browser.extract_text' ||
+    name === 'browser.screenshot' ||
+    name === 'code_interpreter.read_files' ||
+    name === 'code_interpreter.list_files'
+  ) {
+    return ['read-only'];
+  }
+  return [];
+}
+
+function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unknown> {
+  switch (name) {
+    case 'browser.goto':
+      return objectSchema(
+        {
+          url: { type: 'string', minLength: 1 },
+          timeoutMs: { type: 'number', minimum: 1 },
+        },
+        ['url'],
+      );
+    case 'browser.click':
+      return objectSchema({
+        selector: { type: 'string' },
+        text: { type: 'string' },
+        timeoutMs: { type: 'number', minimum: 1 },
+      });
+    case 'browser.type':
+      return objectSchema(
+        {
+          selector: { type: 'string', minLength: 1 },
+          text: { type: 'string' },
+        },
+        ['selector', 'text'],
+      );
+    case 'browser.select':
+      return objectSchema(
+        {
+          selector: { type: 'string', minLength: 1 },
+          value: { type: 'string', minLength: 1 },
+        },
+        ['selector', 'value'],
+      );
+    case 'browser.wait_for':
+      return objectSchema({
+        text: { type: 'string' },
+        selector: { type: 'string' },
+        timeoutMs: { type: 'number', minimum: 1 },
+      });
+    case 'browser.screenshot':
+      return objectSchema({ fullPage: { type: 'boolean' } });
+    case 'browser.extract_text':
+      return objectSchema({ maxChars: { type: 'number', minimum: 1 } });
+    case 'code_interpreter.execute_code':
+      return objectSchema(
+        {
+          language: { type: 'string', enum: ['python', 'javascript', 'typescript'] },
+          code: { type: 'string', minLength: 1 },
+          timeoutMs: { type: 'number', minimum: 1 },
+        },
+        ['language', 'code'],
+      );
+    case 'code_interpreter.execute_command':
+    case 'code_interpreter.start_command':
+      return objectSchema(
+        {
+          command: { type: 'string', minLength: 1 },
+          args: { type: 'array', items: { type: 'string' } },
+          timeoutMs: { type: 'number', minimum: 1 },
+        },
+        ['command'],
+      );
+    case 'code_interpreter.read_files':
+      return objectSchema(
+        {
+          paths: { type: 'array', items: { type: 'string', minLength: 1 }, minItems: 1 },
+        },
+        ['paths'],
+      );
+    case 'code_interpreter.write_files':
+      return objectSchema(
+        {
+          files: {
+            type: 'array',
+            minItems: 1,
+            items: objectSchema(
+              {
+                path: { type: 'string', minLength: 1 },
+                content: { type: 'string' },
+              },
+              ['path', 'content'],
+            ),
+          },
+        },
+        ['files'],
+      );
+    case 'code_interpreter.list_files':
+      return objectSchema({ root: { type: 'string' } });
+    case 'code_interpreter.stop_task':
+      return objectSchema({ taskId: { type: 'string', minLength: 1 } }, ['taskId']);
+    default:
+      return objectSchema({});
+  }
+}
+
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: readonly string[] = [],
+): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties,
+    required,
+    additionalProperties: false,
+  };
+}
+
 function invalidArgs(toolName: string): ToolResult {
   return {
     content: `invalid_args: ${toolName}`,
@@ -567,6 +853,17 @@ function runtimeError(err: unknown): ToolResult {
 
 function taskKey(task: ToolGatewayTaskIdentity): string {
   return `${task.tenant}/${task.namespace}/${task.taskUid}`;
+}
+
+function isExternalGatewayToolName(name: string): boolean {
+  return name.startsWith('mcp.') || name.startsWith('http.');
+}
+
+function toolInvocationContext(request: Request): ToolInvocationContext {
+  return {
+    runId: request.headers.get('x-kagent-run-id') ?? 'tool-gateway',
+    abortSignal: request.signal,
+  };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {

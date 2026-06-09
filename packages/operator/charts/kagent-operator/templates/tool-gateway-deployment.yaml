@@ -27,7 +27,10 @@ spec:
         {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tool-gateway
     spec:
-      automountServiceAccountToken: false
+      {{- if .Values.toolRuntime.code.agentSandbox.enabled }}
+      serviceAccountName: {{ include "kagent-operator.fullname" . }}-tool-gateway
+      {{- end }}
+      automountServiceAccountToken: {{ .Values.toolRuntime.code.agentSandbox.enabled }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -54,6 +57,14 @@ spec:
               value: {{ .Values.toolRuntime.gateway.workspaceRoot | quote }}
             - name: KAGENT_TOOL_RUNTIME_PAUSED
               value: {{ .Values.toolRuntime.paused | ternary "true" "false" | quote }}
+            {{- $externalProvidersJson := .Values.toolRuntime.gateway.externalProvidersJson -}}
+            {{- if and (not $externalProvidersJson) .Values.toolRuntime.gateway.externalProviders }}
+            {{- $externalProvidersJson = dict "providers" .Values.toolRuntime.gateway.externalProviders | toJson -}}
+            {{- end }}
+            {{- with $externalProvidersJson }}
+            - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON
+              value: {{ . | quote }}
+            {{- end }}
             {{- $steelBaseUrl := .Values.toolRuntime.browser.steel.baseUrl -}}
             {{- if and .Values.toolRuntime.browser.steel.enabled (not $steelBaseUrl) }}
             {{- $steelBaseUrl = printf "http://%s-steel.%s.svc.cluster.local:%v" (include "kagent-operator.fullname" .) .Release.Namespace .Values.toolRuntime.browser.steel.port -}}

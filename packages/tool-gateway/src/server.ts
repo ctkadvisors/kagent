@@ -12,6 +12,11 @@ import type { SteelBrowserAdapterOptions } from './browser-steel.js';
 import { LocalCodeRunner } from './code-runner.js';
 import { buildSandboxEnv } from './env-policy.js';
 import {
+  buildExternalToolRegistry,
+  parseExternalToolProviderConfig,
+  type ExternalToolProviderConfig,
+} from './external-providers.js';
+import {
   ToolGatewayHttpHandler,
   type ToolGatewayHttpHandlerOptions,
   type ToolGatewayTaskIdentity,
@@ -25,6 +30,7 @@ export interface ToolGatewayServerConfig {
   readonly steelBaseUrl?: string;
   readonly steelApiKey?: string;
   readonly steelConnectBaseUrl?: string;
+  readonly externalProviders: ExternalToolProviderConfig;
 }
 
 export interface ToolGatewayServerHandlerOptions {
@@ -42,6 +48,7 @@ export function parseToolGatewayServerConfig(
     port: number;
     workspaceRoot: string;
     paused: boolean;
+    externalProviders: ExternalToolProviderConfig;
     steelBaseUrl?: string;
     steelApiKey?: string;
     steelConnectBaseUrl?: string;
@@ -49,6 +56,9 @@ export function parseToolGatewayServerConfig(
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
     workspaceRoot: nonEmpty(env.KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT) ?? DEFAULT_WORKSPACE_ROOT,
     paused: env.KAGENT_TOOL_RUNTIME_PAUSED === 'true',
+    externalProviders: parseExternalToolProviderConfig(
+      nonEmpty(env.KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON),
+    ),
   };
   const steelBaseUrl = nonEmpty(env.KAGENT_STEEL_BASE_URL);
   const steelApiKey = nonEmpty(env.KAGENT_STEEL_API_KEY);
@@ -76,6 +86,7 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
   const options: ToolGatewayHttpHandlerOptions = {
     paused: config.paused,
     codeRunnerFactory: (task) => buildLocalCodeRunner(config.workspaceRoot, task),
+    externalRegistry: buildExternalToolRegistry(config.externalProviders),
     ...(browser !== undefined && { browser }),
   };
 

@@ -1,0 +1,76 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Optional kubernetes-sigs/agent-sandbox templates for code-interpreter
+sessions. The gateway stays the broker; sandboxes remain dumb executor
+pods with no mounted ServiceAccount token and no inherited env.
+*/}}
+{{- if and .Values.toolRuntime.enabled .Values.toolRuntime.code.agentSandbox.enabled -}}
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: {{ .Values.toolRuntime.code.agentSandbox.sandboxTemplateName | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-runner
+spec:
+  envVarsInjectionPolicy: {{ .Values.toolRuntime.code.agentSandbox.envVarsInjectionPolicy | quote }}
+  networkPolicyManagement: {{ .Values.toolRuntime.code.agentSandbox.networkPolicyManagement | quote }}
+  podTemplate:
+    metadata:
+      labels:
+        {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: code-runner
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      {{- with .Values.toolRuntime.code.agentSandbox.runtimeClassName }}
+      runtimeClassName: {{ . | quote }}
+      {{- end }}
+      containers:
+        - name: code-runner
+          image: {{ include "kagent-operator.codeRunner.image" . | quote }}
+          imagePullPolicy: {{ .Values.toolRuntime.code.agentSandbox.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.toolRuntime.code.agentSandbox.port }}
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /workspace
+            - name: TMPDIR
+              value: /tmp
+            - name: LANG
+              value: C.UTF-8
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.toolRuntime.code.agentSandbox.resources | nindent 12 }}
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- if .Values.toolRuntime.code.agentSandbox.warmPool.enabled }}
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: {{ printf "%s-warmpool" .Values.toolRuntime.code.agentSandbox.sandboxTemplateName | quote }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-runner
+spec:
+  replicas: {{ .Values.toolRuntime.code.agentSandbox.warmPool.replicas }}
+  sandboxTemplateRef:
+    name: {{ .Values.toolRuntime.code.agentSandbox.sandboxTemplateName | quote }}
+  updateStrategy:
+    type: {{ .Values.toolRuntime.code.agentSandbox.warmPool.updateStrategy | quote }}
+{{- end }}
+{{- end }}

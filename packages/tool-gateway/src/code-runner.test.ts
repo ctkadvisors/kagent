@@ -6,6 +6,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -96,6 +97,24 @@ describe('LocalCodeRunner', () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.exitCode).toBeNull();
+  });
+
+  it('starts and stops long-running commands by task id', async () => {
+    const runner = makeRunner();
+
+    const started = await runner.startCommand({
+      command: 'node',
+      args: ['-e', 'setInterval(() => console.log("tick"), 20)'],
+      timeoutMs: 10_000,
+    });
+    await sleep(80);
+    const result = await runner.stopTask(started.taskId);
+
+    expect(started.taskId).toMatch(/^cmd-/);
+    expect(result.exitCode).toBeNull();
+    expect(result.signal).not.toBeNull();
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout).toContain('tick');
   });
 
   it('executes inline JavaScript code through a temporary workspace file', async () => {
