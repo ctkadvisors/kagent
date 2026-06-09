@@ -181,7 +181,7 @@ describe('ToolGatewayHttpHandler', () => {
       });
     const handler = new ToolGatewayHttpHandler({
       browser: makeBrowser(),
-      codeRunnerFactory: ({ task }) => makeRunnerForTask(task),
+      codeRunnerFactory: (task) => makeRunnerForTask(task),
     });
     const taskA = TASK;
     const taskB = { ...TASK, taskUid: 'task-2' };

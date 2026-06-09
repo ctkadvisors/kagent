@@ -9,6 +9,12 @@ export { LocalCodeRunner } from './code-runner.js';
 export { SteelBrowserAdapter } from './browser-steel.js';
 export { ToolGatewayHttpHandler } from './http-server.js';
 export { createPlaywrightCdpDriver } from './playwright-driver.js';
+export {
+  buildToolGatewayHandler,
+  createToolGatewayServerHandler,
+  parseToolGatewayServerConfig,
+  startToolGatewayServer,
+} from './server.js';
 export type {
   BrowserAutomationDriver,
   BrowserClickOptions,
@@ -37,6 +43,7 @@ export type {
   ToolGatewayTaskIdentity,
 } from './http-server.js';
 export type { PlaywrightCdpDriverOptions, PlaywrightChromiumLike } from './playwright-driver.js';
+export type { ToolGatewayServerConfig, ToolGatewayServerHandlerOptions } from './server.js';
 export type {
   CodeRunnerFile,
   CodeRunnerListEntry,

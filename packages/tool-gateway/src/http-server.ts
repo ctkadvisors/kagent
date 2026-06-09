@@ -50,9 +50,7 @@ export interface ToolGatewayCodeRunner {
   readonly listFiles: (root?: string) => Promise<readonly CodeRunnerListEntry[]>;
 }
 
-export type ToolGatewayCodeRunnerFactory = (input: {
-  readonly task: ToolGatewayTaskIdentity;
-}) => ToolGatewayCodeRunner;
+export type ToolGatewayCodeRunnerFactory = (task: ToolGatewayTaskIdentity) => ToolGatewayCodeRunner;
 
 export interface ToolGatewayHttpHandlerOptions {
   readonly codeRunner?: ToolGatewayCodeRunner;
@@ -370,7 +368,7 @@ export class ToolGatewayHttpHandler {
 
   private codeRunnerFor(task: ToolGatewayTaskIdentity): ToolGatewayCodeRunner {
     if (this.codeRunnerFactory !== undefined) {
-      return this.codeRunnerFactory({ task });
+      return this.codeRunnerFactory(task);
     }
     if (this.codeRunner === undefined) {
       throw new Error('tool_gateway_misconfigured: code runner is not configured');
