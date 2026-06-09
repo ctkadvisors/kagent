@@ -49,6 +49,15 @@ describe('parseEnv', () => {
     expect(cfg.litellmBaseUrl).toBe('http://192.168.68.73:11434/v1');
   });
 
+  it('threads KAGENT_TOOL_GATEWAY_URL through when set and omits it when blank', () => {
+    expect(
+      parseEnv({ ...baseEnv, KAGENT_TOOL_GATEWAY_URL: 'http://tool-gateway.kagent-system.svc' })
+        .toolGatewayUrl,
+    ).toBe('http://tool-gateway.kagent-system.svc');
+    expect(parseEnv({ ...baseEnv, KAGENT_TOOL_GATEWAY_URL: '' }).toolGatewayUrl).toBeUndefined();
+    expect(parseEnv(baseEnv).toolGatewayUrl).toBeUndefined();
+  });
+
   it('threads KAGENT_LITELLM_API_KEY through when set', () => {
     const cfg = parseEnv({ ...baseEnv, KAGENT_LITELLM_API_KEY: 'sk-test' });
     expect(cfg.litellmApiKey).toBe('sk-test');

@@ -49,6 +49,7 @@ import { defineGetMyContext, InProcessToolProvider, resolveBuiltinTools } from '
 import type { AgentSpecEnv, PodConfig } from './env.js';
 import { agentHasArtifactInputOrOutput } from './env.js';
 import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
+import { requestedRuntimeToolNames, ToolGatewayProvider } from './tool-gateway-provider.js';
 
 /**
  * Substrate-defined artifact handle. Structurally identical to the
@@ -765,6 +766,11 @@ export function resolveToolProviders(
       }),
     ],
   });
+  const runtimeToolNames = requestedRuntimeToolNames(config.agentSpec.tools);
+  const toolGatewayProvider =
+    runtimeToolNames.length === 0
+      ? undefined
+      : buildToolGatewayProvider(config, deps, runtimeToolNames);
 
   // Collect tool names served by the substrate / blackboard / events
   // providers so resolveBuiltinTools accepts them as known when an
@@ -786,6 +792,7 @@ export function resolveToolProviders(
   // doesn't have a doubled key.
   for (const provider of [
     universalContextProvider,
+    toolGatewayProvider,
     deps.spawnTools,
     deps.blackboardTools,
     deps.eventsTools,
@@ -817,12 +824,36 @@ export function resolveToolProviders(
   // dispatch will only invoke it if the LLM emits a tool_call with
   // that name; presence in the registry is harmless when unused.
   out.push(universalContextProvider);
+  if (toolGatewayProvider !== undefined) out.push(toolGatewayProvider);
   if (deps.spawnTools !== undefined) out.push(deps.spawnTools);
   // v0.4.1-blackboard
   if (deps.blackboardTools !== undefined) out.push(deps.blackboardTools);
   // v0.4.0-events
   if (deps.eventsTools !== undefined) out.push(deps.eventsTools);
   return out;
+}
+
+function buildToolGatewayProvider(
+  config: PodConfig,
+  deps: RunDeps,
+  runtimeToolNames: readonly string[],
+): ToolProvider {
+  if (config.toolGatewayUrl === undefined) {
+    throw new Error(
+      'KAGENT_TOOL_GATEWAY_URL is required when Agent.spec.tools includes browser.* or code_interpreter.* runtime tools',
+    );
+  }
+
+  return new ToolGatewayProvider({
+    baseUrl: config.toolGatewayUrl,
+    task: {
+      tenant: deps.capabilityBundle?.claims?.tenant ?? 'default',
+      namespace: config.taskNamespace,
+      taskUid: config.taskId,
+      agentName: config.agentName,
+    },
+    tools: runtimeToolNames,
+  });
 }
 
 /* =====================================================================

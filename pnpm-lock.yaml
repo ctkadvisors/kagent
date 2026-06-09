@@ -85,6 +85,9 @@ importers:
       '@kagent/capability-types':
         specifier: workspace:*
         version: link:../capability-types
+      '@kagent/dto':
+        specifier: workspace:*
+        version: link:../dto
       '@kagent/events':
         specifier: workspace:*
         version: link:../events

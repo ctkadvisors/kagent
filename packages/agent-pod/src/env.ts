@@ -240,6 +240,7 @@ export interface PodConfig {
   readonly taskSpec: TaskSpecEnv;
   readonly litellmBaseUrl: string;
   readonly litellmApiKey?: string;
+  readonly toolGatewayUrl?: string;
   readonly logLevel: 'debug' | 'info';
   /**
    * Content-capture policy for OTel/Langfuse traces, parsed from
@@ -375,6 +376,10 @@ export function parseEnv(
   }
 
   const litellmBaseUrl = env.KAGENT_LITELLM_BASE_URL ?? DEFAULT_LITELLM_BASE_URL;
+  const toolGatewayUrl =
+    typeof env.KAGENT_TOOL_GATEWAY_URL === 'string' && env.KAGENT_TOOL_GATEWAY_URL.length > 0
+      ? env.KAGENT_TOOL_GATEWAY_URL
+      : undefined;
   const logLevel = env.LOG_LEVEL === 'debug' ? 'debug' : 'info';
   const traceContentMode = parseTraceContentMode(env.KAGENT_TRACE_CONTENT_MODE);
   const taskDepth = parseTaskDepth(env.KAGENT_TASK_DEPTH);
@@ -400,6 +405,7 @@ export function parseEnv(
     ...(env.KAGENT_LITELLM_API_KEY !== undefined && {
       litellmApiKey: env.KAGENT_LITELLM_API_KEY,
     }),
+    ...(toolGatewayUrl !== undefined && { toolGatewayUrl }),
     logLevel,
     traceContentMode,
     taskDepth,
