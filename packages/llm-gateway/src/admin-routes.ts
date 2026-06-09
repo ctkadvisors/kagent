@@ -154,6 +154,42 @@ export interface CapacityResponse {
   readonly rows: readonly CapacityRow[];
 }
 
+export interface ProviderDispatchControl {
+  readonly isDisabled: () => boolean;
+  readonly setDisabled: (disabled: boolean) => void;
+}
+
+export interface ProviderDispatchControlResponse {
+  readonly providerDispatchDisabled: boolean;
+}
+
+export function createProviderDispatchControl(initialDisabled: boolean): ProviderDispatchControl {
+  let disabled = initialDisabled;
+  return {
+    isDisabled: () => disabled,
+    setDisabled: (next) => {
+      disabled = next;
+    },
+  };
+}
+
+export function providerDispatchControlResponse(
+  control: ProviderDispatchControl,
+): ProviderDispatchControlResponse {
+  return { providerDispatchDisabled: control.isDisabled() };
+}
+
+export function parseProviderDispatchControlBody(raw: unknown): { readonly disabled: boolean } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('body must be a JSON object');
+  }
+  const disabled = (raw as Record<string, unknown>).disabled;
+  if (typeof disabled !== 'boolean') {
+    throw new Error('disabled must be a boolean');
+  }
+  return { disabled };
+}
+
 /**
  * /admin/capacity — joins AIMD snapshot, in-flight counter, and the
  * model-index by `(model, endpoint)`. Returns one row per known

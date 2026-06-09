@@ -23,6 +23,7 @@ import type {
   CreateTaskResponse,
   DispositionOverlayRow,
   GatewayCapacityResponse,
+  GatewayProviderDispatchState,
   GatewayUsageResponse,
   PatchInFlightRequest,
   ReviewQueueRow,
@@ -159,6 +160,26 @@ export async function createTask(req: CreateTaskRequest): Promise<CreateTaskResp
   );
 }
 
+/**
+ * DELETE /api/tasks/:namespace/:name. Deleting the AgentTask is the
+ * substrate kill path: the operator-owned Job and ConfigMap carry
+ * ownerReferences back to the AgentTask, so Kubernetes GC tears down
+ * the runtime Pod instead of merely changing Workbench-visible status.
+ */
+export async function terminateTask(namespace: string, name: string): Promise<void> {
+  const res = await fetch(
+    `/api/tasks/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new CreateTaskApiError(
+      res.status,
+      body.error ?? `terminate task: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+}
+
 export class CreateTaskApiError extends Error {
   readonly status: number;
   readonly fields: CreateTaskError['fields'] | undefined;
@@ -215,6 +236,39 @@ export async function fetchGatewayUsage(
     );
   }
   return (await res.json()) as GatewayUsageResponse;
+}
+
+export async function fetchGatewayProviderDispatch(
+  signal?: AbortSignal,
+): Promise<GatewayProviderDispatchState> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/gateway/provider-dispatch', init);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new GatewayApiError(
+      res.status,
+      body.message ?? body.error ?? `gateway dispatch: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as GatewayProviderDispatchState;
+}
+
+export async function setGatewayProviderDispatchDisabled(
+  disabled: boolean,
+): Promise<GatewayProviderDispatchState> {
+  const res = await fetch('/api/gateway/provider-dispatch', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ disabled }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new GatewayApiError(
+      res.status,
+      body.message ?? body.error ?? `gateway dispatch: ${String(res.status)} ${res.statusText}`,
+    );
+  }
+  return (await res.json()) as GatewayProviderDispatchState;
 }
 
 /**

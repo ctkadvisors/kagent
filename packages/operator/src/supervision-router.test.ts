@@ -95,11 +95,17 @@ function buildDeps(
     customPatch?: ReturnType<typeof vi.fn>;
   } = {},
 ): SupervisionRouterDeps & {
-  mocks: { customApi: MockCustomApi; audit: Record<string, ReturnType<typeof vi.fn>> };
+  terminateJobForTask?: (task: AgentTask, reason: string) => Promise<void>;
+  mocks: {
+    customApi: MockCustomApi;
+    audit: Record<string, ReturnType<typeof vi.fn>>;
+    terminateJobForTask: ReturnType<typeof vi.fn>;
+  };
 } {
   const parent = opts.parent;
   const agent = opts.agent ?? makeAgent();
   const siblings = opts.siblings ?? [];
+  const terminateJobForTask = vi.fn().mockResolvedValue(undefined);
 
   const customApi: MockCustomApi = {
     getNamespacedCustomObject:
@@ -131,9 +137,10 @@ function buildDeps(
   return {
     customApi: customApi as unknown as SupervisionRouterDeps['customApi'],
     listChildrenForParent: () => siblings,
+    terminateJobForTask,
     audit,
     now: () => new Date('2026-05-04T12:00:00Z'),
-    mocks: { customApi, audit },
+    mocks: { customApi, audit, terminateJobForTask },
   };
 }
 
@@ -468,6 +475,29 @@ describe('routeFailureForSupervision — one_for_all', () => {
       )
       .map((c) => (c[0] as { name: string }).name);
     expect(new Set(terminationPatches)).toEqual(new Set(['c1', 'c3']));
+  });
+
+  it('terminates each in-flight sibling Job so status patches do not leave spending pods alive', async () => {
+    const parent = makeTask({ name: 'p', uid: 'pu' });
+    const failed = makeTask({
+      name: 'c2',
+      uid: 'c2u',
+      parentUid: 'pu',
+      phase: 'Failed',
+      reason: 'MissingRequiredOutputs',
+    });
+    const running = makeTask({ name: 'c1', uid: 'c1u', parentUid: 'pu', phase: 'Dispatched' });
+    const queued = makeTask({ name: 'c3', uid: 'c3u', parentUid: 'pu', phase: 'Pending' });
+    const done = makeTask({ name: 'c4', uid: 'c4u', parentUid: 'pu', phase: 'Completed' });
+    const agent = makeAgent({ supervisionStrategy: 'one_for_all' });
+    const deps = buildDeps({ parent, agent, siblings: [running, failed, queued, done] });
+
+    const result = await routeFailureForSupervision(failed, deps);
+    expect(result.kind).toBe('applied');
+
+    expect(deps.mocks.terminateJobForTask).toHaveBeenCalledTimes(2);
+    const terminatedCalls = deps.mocks.terminateJobForTask.mock.calls as Array<[AgentTask, string]>;
+    expect(terminatedCalls.map(([task]) => task.metadata.name)).toEqual(['c1', 'c3']);
   });
 });
 

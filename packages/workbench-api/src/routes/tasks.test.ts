@@ -98,8 +98,8 @@ function makePod(name: string, taskName: string, namespace = 'default'): V1Pod {
   };
 }
 
-function buildApp(cache: SnapshotCache) {
-  return tasksRoute({ cache });
+function buildApp(cache: SnapshotCache, overrides: Partial<Parameters<typeof tasksRoute>[0]> = {}) {
+  return tasksRoute({ cache, ...overrides });
 }
 
 describe('tasksRoute', () => {
@@ -261,6 +261,56 @@ describe('tasksRoute', () => {
       readonly items: readonly { readonly name: string }[];
     };
     expect(body.items.map((item) => item.name)).toEqual(['newest', 'middle']);
+  });
+
+  it('deletes an AgentTask through the write client so ownerRef cleanup kills its Job', async () => {
+    const cache = new SnapshotCache();
+    cache.upsertTask(
+      makeTask({
+        name: 'running',
+        namespace: 'kagent-system',
+        targetAgent: 'researcher',
+        phase: 'Dispatched',
+      }),
+    );
+    const deleteNamespacedCustomObject = vi.fn().mockResolvedValue({});
+    const app = buildApp(cache, {
+      customApi: { deleteNamespacedCustomObject } as never,
+    });
+
+    const res = await app.request('/api/tasks/kagent-system/running', {
+      method: 'DELETE',
+    });
+
+    expect(res.status).toBe(202);
+    expect(deleteNamespacedCustomObject).toHaveBeenCalledWith({
+      group: 'kagent.knuteson.io',
+      version: 'v1alpha1',
+      namespace: 'kagent-system',
+      plural: 'agenttasks',
+      name: 'running',
+    });
+    const body = (await res.json()) as { deleted: boolean; namespace: string; name: string };
+    expect(body).toEqual({ deleted: true, namespace: 'kagent-system', name: 'running' });
+  });
+
+  it('returns 503 on DELETE when the write surface is disabled', async () => {
+    const cache = new SnapshotCache();
+    cache.upsertTask(
+      makeTask({
+        name: 'running',
+        namespace: 'kagent-system',
+        phase: 'Pending',
+      }),
+    );
+
+    const res = await buildApp(cache).request('/api/tasks/kagent-system/running', {
+      method: 'DELETE',
+    });
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('write surface disabled');
   });
 
   it('returns task detail with joined pod container status', async () => {

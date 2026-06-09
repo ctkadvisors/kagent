@@ -13,6 +13,10 @@ function makeClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
   return {
     capacity: vi.fn(() => Promise.resolve([])),
     usage: vi.fn(() => Promise.resolve([])),
+    providerDispatch: vi.fn(() => Promise.resolve({ providerDispatchDisabled: false })),
+    setProviderDispatchDisabled: vi.fn((disabled: boolean) =>
+      Promise.resolve({ providerDispatchDisabled: disabled }),
+    ),
     ...overrides,
   };
 }
@@ -340,6 +344,73 @@ describe('GET /api/gateway/usage', () => {
     const app = gatewayRoute({ gatewayClient: client });
     await app.request(makeRequest('GET', '/api/gateway/usage?limit=oops'));
     expect(usage).toHaveBeenCalledWith({});
+  });
+});
+
+describe('provider dispatch control routes', () => {
+  it('503s when gatewayClient is unconfigured', async () => {
+    const app = gatewayRoute({});
+
+    const getRes = await app.request(makeRequest('GET', '/api/gateway/provider-dispatch'));
+    expect(getRes.status).toBe(503);
+
+    const patchRes = await app.request(
+      makeRequest('PATCH', '/api/gateway/provider-dispatch', { disabled: true }),
+    );
+    expect(patchRes.status).toBe(503);
+  });
+
+  it('GET /api/gateway/provider-dispatch returns the current runtime kill-switch state', async () => {
+    const client = makeClient({
+      providerDispatch: vi.fn(() => Promise.resolve({ providerDispatchDisabled: true })),
+    });
+    const app = gatewayRoute({ gatewayClient: client });
+
+    const res = await app.request(makeRequest('GET', '/api/gateway/provider-dispatch'));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ providerDispatchDisabled: true });
+    expect(client.providerDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('PATCH /api/gateway/provider-dispatch proxies the disabled state to the gateway', async () => {
+    const setProviderDispatchDisabled = vi.fn((disabled: boolean) =>
+      Promise.resolve({ providerDispatchDisabled: disabled }),
+    );
+    const client = makeClient({ setProviderDispatchDisabled });
+    const app = gatewayRoute({ gatewayClient: client, writesEnabled: true });
+
+    const res = await app.request(
+      makeRequest('PATCH', '/api/gateway/provider-dispatch', { disabled: true }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ providerDispatchDisabled: true });
+    expect(setProviderDispatchDisabled).toHaveBeenCalledWith(true);
+  });
+
+  it('PATCH /api/gateway/provider-dispatch rejects malformed bodies', async () => {
+    const client = makeClient();
+    const app = gatewayRoute({ gatewayClient: client, writesEnabled: true });
+
+    const res = await app.request(
+      makeRequest('PATCH', '/api/gateway/provider-dispatch', { disabled: 'yes' }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(client.setProviderDispatchDisabled).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /api/gateway/provider-dispatch obeys WORKBENCH_ACTIONS_ENABLED', async () => {
+    const client = makeClient();
+    const app = gatewayRoute({ gatewayClient: client, writesEnabled: false });
+
+    const res = await app.request(
+      makeRequest('PATCH', '/api/gateway/provider-dispatch', { disabled: true }),
+    );
+
+    expect(res.status).toBe(503);
+    expect(client.setProviderDispatchDisabled).not.toHaveBeenCalled();
   });
 });
 

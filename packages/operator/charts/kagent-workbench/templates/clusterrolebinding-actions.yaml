@@ -6,8 +6,10 @@ RoleBinding — WRITE surface for the workbench-api (WS-J).
 Pairs with `clusterrole-actions.yaml` (which is now a Role, not a
 ClusterRole, per H17). Filename stays `clusterrolebinding-actions.yaml`
 for git history continuity; it now emits a RoleBinding scoped to the
-release namespace. See the comment block in `clusterrole-actions.yaml`
-for the H17 rationale.
+release namespace. When `rbac.actions.terminateAllNamespaces=true`,
+also emits a separate ClusterRoleBinding for the narrow
+agenttasks:delete-only emergency terminate ClusterRole. See the comment
+block in `clusterrole-actions.yaml` for the H17 rationale.
 */}}
 {{- if and .Values.rbac.create .Values.rbac.actions.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -22,6 +24,24 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "kagent-workbench.fullname" . }}-actions
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-workbench.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if and .Values.rbac.create .Values.rbac.actions.create .Values.rbac.actions.terminateAllNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-terminate-all-namespaces
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workbench-terminate
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kagent-workbench.fullname" . }}-terminate-all-namespaces
 subjects:
   - kind: ServiceAccount
     name: {{ include "kagent-workbench.serviceAccountName" . }}

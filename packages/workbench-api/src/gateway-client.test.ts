@@ -238,4 +238,43 @@ describe('createGatewayClient', () => {
       expect(rows[0]?.errorMessage).toBe('just a timeout, no secret here');
     });
   });
+
+  describe('providerDispatch()', () => {
+    it('GETs /admin/provider-dispatch with bearer auth', async () => {
+      const fetchSpy = fakeFetch((url, init) => {
+        expect(url).toBe('http://gw:4000/admin/provider-dispatch');
+        expect((init.headers as Record<string, string>).authorization).toBe('Bearer admin-token');
+        return jsonResponse(200, { providerDispatchDisabled: true });
+      });
+      const client = createGatewayClient({
+        baseUrl: 'http://gw:4000',
+        adminToken: 'admin-token',
+        fetch: fetchSpy,
+      });
+
+      await expect(client.providerDispatch()).resolves.toEqual({
+        providerDispatchDisabled: true,
+      });
+    });
+
+    it('PATCHes /admin/provider-dispatch with the desired disabled state', async () => {
+      const fetchSpy = fakeFetch((url, init) => {
+        expect(url).toBe('http://gw:4000/admin/provider-dispatch');
+        expect(init.method).toBe('PATCH');
+        expect((init.headers as Record<string, string>).authorization).toBe('Bearer admin-token');
+        expect((init.headers as Record<string, string>)['content-type']).toBe('application/json');
+        expect(JSON.parse(init.body as string)).toEqual({ disabled: true });
+        return jsonResponse(200, { providerDispatchDisabled: true });
+      });
+      const client = createGatewayClient({
+        baseUrl: 'http://gw:4000',
+        adminToken: 'admin-token',
+        fetch: fetchSpy,
+      });
+
+      await expect(client.setProviderDispatchDisabled(true)).resolves.toEqual({
+        providerDispatchDisabled: true,
+      });
+    });
+  });
 });

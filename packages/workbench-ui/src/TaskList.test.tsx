@@ -4,30 +4,33 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { TaskSummary } from './types.js';
 
 vi.mock('./api.js', () => ({
   fetchTasks: vi.fn(),
   subscribeCacheEvents: vi.fn(),
+  terminateTask: vi.fn(),
 }));
 
 vi.mock('./NewTaskModal.js', () => ({
   NewTaskModal: () => null,
 }));
 
-import { fetchTasks, subscribeCacheEvents } from './api.js';
+import { fetchTasks, subscribeCacheEvents, terminateTask } from './api.js';
 import { TaskList } from './TaskList.js';
 
 const mockFetchTasks = fetchTasks as ReturnType<typeof vi.fn>;
 const mockSubscribeCacheEvents = subscribeCacheEvents as ReturnType<typeof vi.fn>;
+const mockTerminateTask = terminateTask as ReturnType<typeof vi.fn>;
 
 function makeTask(overrides: Partial<TaskSummary> = {}): TaskSummary {
+  const name = overrides.name ?? 'traced-run';
   return {
-    name: 'traced-run',
+    name,
     namespace: 'kagent-draft',
-    uid: 'uid-traced-run',
+    uid: `uid-${name}`,
     phase: 'Completed',
     targetAgent: 'draft-agent',
     createdAt: '2026-06-08T17:00:00Z',
@@ -39,7 +42,9 @@ describe('TaskList trace links', () => {
   beforeEach(() => {
     mockFetchTasks.mockReset();
     mockSubscribeCacheEvents.mockReset();
+    mockTerminateTask.mockReset();
     mockSubscribeCacheEvents.mockReturnValue(vi.fn());
+    mockTerminateTask.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -66,5 +71,29 @@ describe('TaskList trace links', () => {
     await waitFor(() => {
       expect(mockFetchTasks).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('renders a terminate action for in-flight tasks and calls DELETE after confirmation', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockFetchTasks.mockResolvedValue([
+      makeTask({ name: 'queued', phase: 'Pending' }),
+      makeTask({ name: 'running', phase: 'Dispatched' }),
+      makeTask({ name: 'done', phase: 'Completed' }),
+    ]);
+
+    render(<TaskList />);
+
+    const terminateButtons = await screen.findAllByRole('button', { name: /^terminate /i });
+    expect(terminateButtons.map((btn) => btn.textContent)).toEqual([
+      'terminate queued',
+      'terminate running',
+    ]);
+
+    fireEvent.click(terminateButtons[1] as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(mockTerminateTask).toHaveBeenCalledWith('kagent-draft', 'running');
+    });
+    expect(confirmSpy).toHaveBeenCalled();
   });
 });

@@ -27,14 +27,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   fetchGatewayCapacity,
+  fetchGatewayProviderDispatch,
   fetchGatewayUsage,
   GatewayApiError,
   patchModelEndpointInFlight,
+  setGatewayProviderDispatchDisabled,
 } from './api.js';
 import styles from './GatewayPage.module.css';
 import type {
   GatewayCapacityResponse,
   GatewayCapacityRow,
+  GatewayProviderDispatchState,
   GatewayUsageResponse,
   GatewayUsageRow,
   PatchInFlightRequest,
@@ -273,6 +276,9 @@ export function GatewayPage(props: GatewayPageProps): React.JSX.Element {
   const [capacityError, setCapacityError] = useState<string | null>(null);
   const [usage, setUsage] = useState<GatewayUsageResponse | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [dispatchState, setDispatchState] = useState<GatewayProviderDispatchState | null>(null);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [dispatchSaving, setDispatchSaving] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   // Live ref so the polling effect's setInterval callback always sees
   // the freshest "should I keep polling" decision without re-creating
@@ -280,9 +286,10 @@ export function GatewayPage(props: GatewayPageProps): React.JSX.Element {
   const pollEnabledRef = useRef<boolean>(true);
 
   const refresh = useCallback(async (): Promise<void> => {
-    const [capRes, usageRes] = await Promise.allSettled([
+    const [capRes, usageRes, dispatchRes] = await Promise.allSettled([
       fetchGatewayCapacity(),
       fetchGatewayUsage({ limit: USAGE_LIMIT }),
+      fetchGatewayProviderDispatch(),
     ]);
     if (capRes.status === 'fulfilled') {
       setCapacity(capRes.value);
@@ -302,6 +309,16 @@ export function GatewayPage(props: GatewayPageProps): React.JSX.Element {
         usageRes.reason instanceof GatewayApiError
           ? `(${String(usageRes.reason.status)}) ${usageRes.reason.message}`
           : String(usageRes.reason),
+      );
+    }
+    if (dispatchRes.status === 'fulfilled') {
+      setDispatchState(dispatchRes.value);
+      setDispatchError(null);
+    } else {
+      setDispatchError(
+        dispatchRes.reason instanceof GatewayApiError
+          ? `(${String(dispatchRes.reason.status)}) ${dispatchRes.reason.message}`
+          : String(dispatchRes.reason),
       );
     }
     setLoading(false);
@@ -338,9 +355,28 @@ export function GatewayPage(props: GatewayPageProps): React.JSX.Element {
     [capacity, refresh],
   );
 
+  const handleDispatchToggle = useCallback(async (): Promise<void> => {
+    const nextDisabled = !(dispatchState?.providerDispatchDisabled ?? false);
+    setDispatchSaving(true);
+    setDispatchError(null);
+    try {
+      const next = await setGatewayProviderDispatchDisabled(nextDisabled);
+      setDispatchState(next);
+    } catch (err) {
+      setDispatchError(
+        err instanceof GatewayApiError
+          ? `(${String(err.status)}) ${err.message}`
+          : String(err),
+      );
+    } finally {
+      setDispatchSaving(false);
+    }
+  }, [dispatchState]);
+
   // Render
   const rows = capacity?.rows ?? [];
   const usageRows = useMemo(() => usage?.rows ?? [], [usage]);
+  const dispatchDisabled = dispatchState?.providerDispatchDisabled === true;
 
   return (
     <div className={styles.wrapper}>
@@ -355,6 +391,24 @@ export function GatewayPage(props: GatewayPageProps): React.JSX.Element {
           {capacity !== null
             ? `updated ${new Date(capacity.fetchedAt).toLocaleTimeString()}`
             : ''}
+        </div>
+        <div className={styles.headerActions}>
+          {dispatchError !== null && <span className={styles.dispatchError}>{dispatchError}</span>}
+          <button
+            type="button"
+            className={dispatchDisabled ? styles.resumeButton : styles.pauseButton}
+            disabled={dispatchSaving || dispatchState === null}
+            aria-pressed={dispatchDisabled}
+            onClick={() => {
+              void handleDispatchToggle();
+            }}
+          >
+            {dispatchSaving
+              ? 'saving dispatch'
+              : dispatchDisabled
+                ? 'resume dispatch'
+                : 'pause dispatch'}
+          </button>
         </div>
       </header>
 
@@ -389,4 +443,3 @@ export function GatewayPage(props: GatewayPageProps): React.JSX.Element {
     </div>
   );
 }
-

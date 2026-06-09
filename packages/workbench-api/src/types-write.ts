@@ -47,6 +47,12 @@ export interface CreateTaskResponse {
   };
 }
 
+export interface DeleteTaskResponse {
+  readonly deleted: true;
+  readonly namespace: string;
+  readonly name: string;
+}
+
 export interface CreateTaskErrorBody {
   readonly error: string;
   /** Per-field validation errors. Present on 400/422 responses. */

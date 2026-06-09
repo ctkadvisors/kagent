@@ -47,7 +47,11 @@ import {
 } from '@kagent/dto';
 
 import type { SnapshotCache } from '../cache.js';
-import type { CreateTaskErrorBody, CreateTaskResponse } from '../types-write.js';
+import type {
+  CreateTaskErrorBody,
+  CreateTaskResponse,
+  DeleteTaskResponse,
+} from '../types-write.js';
 import { validateCreateTaskBody, type ValidationError } from './validators.js';
 
 export interface TasksRouteDeps {
@@ -294,6 +298,56 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
       );
       const body: CreateTaskErrorBody = {
         error: 'internal error processing task creation; see workbench-api logs',
+      };
+      return c.json(body, 500);
+    }
+  });
+
+  app.delete('/api/tasks/:namespace/:name', async (c) => {
+    const namespace = c.req.param('namespace');
+    const name = c.req.param('name');
+
+    if (deps.customApi === undefined) {
+      const body: CreateTaskErrorBody = {
+        error:
+          'write surface disabled (no CustomObjects client configured); set actions.create=true on the chart',
+      };
+      return c.json(body, 503);
+    }
+
+    try {
+      await deps.customApi.deleteNamespacedCustomObject({
+        group: KAGENT_GROUP,
+        version: KAGENT_VERSION,
+        namespace,
+        plural: AGENTTASK_PLURAL,
+        name,
+      });
+      const response: DeleteTaskResponse = { deleted: true, namespace, name };
+      return c.json(response, 202);
+    } catch (err: unknown) {
+      const status = extractK8sStatus(err);
+      if (status === 404) {
+        return c.json({ error: 'not-found', namespace, name }, 404);
+      }
+      if (status === 403) {
+        const body: CreateTaskErrorBody = {
+          error: `RBAC denied: workbench-api ServiceAccount cannot delete AgentTask in ${namespace}`,
+        };
+        return c.json(body, 403);
+      }
+      const detail = err instanceof Error ? err.message : String(err);
+      console.error(
+        '[workbench-api] DELETE /api/tasks/:namespace/:name — unhandled K8s API error',
+        JSON.stringify({
+          namespace,
+          name,
+          status: status ?? null,
+          message: detail,
+        }),
+      );
+      const body: CreateTaskErrorBody = {
+        error: 'internal error processing task termination; see workbench-api logs',
       };
       return c.json(body, 500);
     }

@@ -34,7 +34,12 @@
 import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
 import { Hono } from 'hono';
 
-import type { GatewayClient, GatewayCapacityRow, GatewayUsageRow } from '../gateway-client.js';
+import type {
+  GatewayClient,
+  GatewayCapacityRow,
+  GatewayProviderDispatchState,
+  GatewayUsageRow,
+} from '../gateway-client.js';
 
 /**
  * `@kubernetes/client-node` v1.x's generated `patchNamespacedCustomObject`
@@ -214,6 +219,17 @@ interface UsageResponse {
   readonly fetchedAt: string;
 }
 
+function parseProviderDispatchPatchBody(raw: unknown): { readonly disabled: boolean } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('body must be a JSON object');
+  }
+  const disabled = (raw as Record<string, unknown>).disabled;
+  if (typeof disabled !== 'boolean') {
+    throw new Error('disabled must be a boolean');
+  }
+  return { disabled };
+}
+
 interface PatchInFlightBody {
   readonly seed?: number;
   readonly max?: number;
@@ -370,6 +386,67 @@ export function gatewayRoute(deps: GatewayRouteDeps): Hono {
       return c.json(body);
     } catch (err) {
       console.warn('[workbench-api] /api/gateway/usage error:', err);
+      return c.json(
+        {
+          error: 'gateway-unreachable',
+          message: err instanceof Error ? err.message : String(err),
+        },
+        502,
+      );
+    }
+  });
+
+  app.get('/api/gateway/provider-dispatch', async (c) => {
+    if (deps.gatewayClient === undefined) {
+      return c.json({ error: 'gateway-client-not-configured' }, 503);
+    }
+    try {
+      const state: GatewayProviderDispatchState = await deps.gatewayClient.providerDispatch();
+      return c.json(state);
+    } catch (err) {
+      console.warn('[workbench-api] /api/gateway/provider-dispatch error:', err);
+      return c.json(
+        {
+          error: 'gateway-unreachable',
+          message: err instanceof Error ? err.message : String(err),
+        },
+        502,
+      );
+    }
+  });
+
+  app.patch('/api/gateway/provider-dispatch', async (c) => {
+    if (deps.gatewayClient === undefined) {
+      return c.json({ error: 'gateway-client-not-configured' }, 503);
+    }
+    if (deps.writesEnabled !== true) {
+      return c.json(
+        {
+          error: 'write-surface-disabled',
+          message:
+            'workbench-api was started with WORKBENCH_ACTIONS_ENABLED=false — provider dispatch control is unavailable',
+        },
+        503,
+      );
+    }
+    let parsed: { readonly disabled: boolean };
+    try {
+      parsed = parseProviderDispatchPatchBody((await c.req.json()) as unknown);
+    } catch (err) {
+      return c.json(
+        {
+          error: 'invalid-body',
+          message: err instanceof Error ? err.message : String(err),
+        },
+        400,
+      );
+    }
+    try {
+      const state: GatewayProviderDispatchState =
+        await deps.gatewayClient.setProviderDispatchDisabled(parsed.disabled);
+      return c.json(state);
+    } catch (err) {
+      console.warn('[workbench-api] PATCH /api/gateway/provider-dispatch error:', err);
       return c.json(
         {
           error: 'gateway-unreachable',

@@ -18,6 +18,12 @@ including tenant namespaces. Restricting to the release namespace
 removes the cross-namespace blast radius. Multi-namespace dispatch is
 a future feature behind an explicit values flag, NOT a default.
 
+Emergency terminate is the one intentional exception: when
+`rbac.actions.terminateAllNamespaces=true`, this template emits a
+separate ClusterRole with ONLY `agenttasks: [delete]`. That lets the
+Workbench kill runtime tasks listed from every namespace without
+reopening cross-namespace create/patch/modelendpoint mutation.
+
 Kept distinct from `clusterrole.yaml` so an install with
 `actions.create=false` is provably write-proof: the read role grants
 no `create`/`update`/`delete` verbs anywhere; the write Role does not
@@ -27,6 +33,9 @@ exist when actions are disabled. Drop-in: bind/unbind by toggling
 Phase 4 (REV-01 / REV-02) extended this Role with:
   - `agenttasks: [patch]` — for annotation writes on accept/reject/request
     (review-decision, review-decided-by, review-decided-at, review-requested, etc.)
+  - `agenttasks: [delete]` — for Workbench terminate; deleting the
+    AgentTask is the substrate kill path because the Job/Pod are owned
+    by that CR and Kubernetes GC tears them down.
   - `agenttemplates: [create]` — for AgentTemplate CR creation on accept
     of a candidate-template row (promotion path).
   - `agents: [create]` — for Architect `/try`, which materializes a
@@ -37,9 +46,8 @@ clusterrole.yaml — same split-by-function convention as existing
 resources. An install with `actions.create=false` is provably
 review-write-proof: neither the patch verb nor the create verb exists.
 
-`/cancel` and `/retry` (WORKBENCH.md §5) are not implemented in v0.1;
-when they land they extend this Role with `agenttasks: [delete]` plus
-the corresponding write verb on `agenttasks/status`.
+`/retry` (WORKBENCH.md §5) is not implemented in v0.1; when it lands it
+extends this Role with the corresponding write verb on `agenttasks/status`.
 */}}
 {{- if and .Values.rbac.create .Values.rbac.actions.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -56,7 +64,8 @@ rules:
     # Phase 4 (REV-01 / REV-02): `patch` added for annotation writes
     # (review-decision, review-requested, review-decided-by/at companions).
     # `create` pre-dates Phase 4 — serves POST /api/tasks.
-    verbs: ['create', 'patch']
+    # `delete` serves DELETE /api/tasks/:ns/:name (terminate).
+    verbs: ['create', 'patch', 'delete']
   # Phase 4 (REV-02): agenttemplates [create] — candidate-template accept
   # path promotes a reviewed artifact into an AgentTemplate CR.
   # Read-side [get,list,watch] lives in clusterrole.yaml (split-by-function).
@@ -77,4 +86,18 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['modelendpoints']
     verbs: ['patch', 'update']
+{{- end }}
+{{- if and .Values.rbac.create .Values.rbac.actions.create .Values.rbac.actions.terminateAllNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kagent-workbench.fullname" . }}-terminate-all-namespaces
+  labels:
+    {{- include "kagent-workbench.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workbench-terminate
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['delete']
 {{- end }}

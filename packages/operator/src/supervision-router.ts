@@ -169,6 +169,12 @@ export interface SupervisionRouterDeps {
    */
   readonly resolveAgentName?: (task: AgentTask) => Promise<string | undefined>;
   /**
+   * Runtime terminator for in-flight AgentTasks. Supervision status
+   * patches alone do not stop an already-running Kubernetes Job/Pod,
+   * so production wires this to a Job delete. Tests inject a spy.
+   */
+  readonly terminateJobForTask?: (task: AgentTask, reason: string) => Promise<void>;
+  /**
    * Audit hooks (best-effort).
    */
   readonly audit?: SupervisionAuditHooks;
@@ -627,6 +633,7 @@ async function dispatchDecision(
     if (targetTask.status?.phase === 'Failed' || targetTask.status?.phase === 'Completed') {
       continue;
     }
+    await terminateJobForTask(deps, targetTask, decision.reason);
     await markTerminatedBySupervision(deps, targetTask, decision.reason);
   }
 
@@ -663,6 +670,15 @@ async function fetchTaskByUid(
   } catch {
     return null;
   }
+}
+
+async function terminateJobForTask(
+  deps: SupervisionRouterDeps,
+  task: AgentTask,
+  reason: string,
+): Promise<void> {
+  if (deps.terminateJobForTask === undefined) return;
+  await deps.terminateJobForTask(task, reason);
 }
 
 async function patchRestartCount(

@@ -198,14 +198,20 @@ serviceAccount:
 # automatically when `actions.create=true`) before the POST handler
 # wires the K8s client; without it, POST /api/tasks returns 503.
 #
-# Today actions covers `agenttasks: [create]` only. /cancel + /retry
-# (WORKBENCH.md §5) extend the same role when they land.
+# Today actions covers AgentTask creation, same-namespace termination
+# deletes, review annotation patches, Architect draft writes, and
+# ModelEndpoint bound patches. Set `terminateAllNamespaces=true` for
+# the emergency-only ClusterRole that grants ONLY `agenttasks:delete`
+# across namespaces; create/patch/modelendpoint writes remain
+# namespace-scoped. /retry (WORKBENCH.md §5) extends the same role when
+# it lands.
 # See new_localai/docs/kagent-workbench-rbac.md §2.2.
 # ---------------------------------------------------------------------
 rbac:
   create: true
   actions:
     create: true
+    terminateAllNamespaces: false
 
 # ---------------------------------------------------------------------
 # Service. Exposes port `service.port` → api container's `api.port`

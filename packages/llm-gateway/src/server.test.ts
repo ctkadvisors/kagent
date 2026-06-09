@@ -81,17 +81,31 @@ interface BootedServer {
   close(): Promise<void>;
 }
 
+interface ProviderDispatchControl {
+  readonly isDisabled: () => boolean;
+  readonly setDisabled: (disabled: boolean) => void;
+}
+
+type TestServerDeps = ServerDeps & {
+  readonly providerDispatchControl?: ProviderDispatchControl;
+};
+
 function bootServer(
   overrides: Partial<
     Pick<
-      ServerDeps,
-      'apiKeyLookup' | 'modelIndex' | 'routerDeps' | 'adminReadToken' | 'readinessProbe'
+      TestServerDeps,
+      | 'apiKeyLookup'
+      | 'modelIndex'
+      | 'routerDeps'
+      | 'adminReadToken'
+      | 'readinessProbe'
+      | 'providerDispatchControl'
     >
   > = {},
 ): Promise<BootedServer> {
   return new Promise((resolve, reject) => {
     const repo = new StubApiKeyRepo();
-    const deps: ServerDeps = {
+    const deps: TestServerDeps = {
       modelIndex: overrides.modelIndex ?? new ModelIndex(),
       inFlight: new InFlightCounter(),
       aimd: new AimdController({ seed: 1, max: 4, minSafe: 1 }),
@@ -101,6 +115,9 @@ function bootServer(
       usageRepo: new StubUsageRepo(),
       adminToken: ADMIN_TOKEN,
       ...(overrides.adminReadToken !== undefined && { adminReadToken: overrides.adminReadToken }),
+      ...(overrides.providerDispatchControl !== undefined && {
+        providerDispatchControl: overrides.providerDispatchControl,
+      }),
       readinessProbe: overrides.readinessProbe ?? (() => Promise.resolve(true)),
     };
     const handler = buildHandler(deps);
@@ -133,6 +150,82 @@ describe('GET /readyz', () => {
 
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ status: 'not_ready' });
+    } finally {
+      await booted.close();
+    }
+  });
+});
+
+describe('runtime provider dispatch control', () => {
+  it('returns current dispatch-disabled state from GET /admin/provider-dispatch', async () => {
+    const control: ProviderDispatchControl = {
+      isDisabled: () => true,
+      setDisabled: () => undefined,
+    };
+    const booted = await bootServer({ providerDispatchControl: control });
+    try {
+      const res = await fetch(`${booted.url}/admin/provider-dispatch`, {
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ providerDispatchDisabled: true });
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('PATCH /admin/provider-dispatch flips the in-memory kill switch', async () => {
+    let disabled = false;
+    const control: ProviderDispatchControl = {
+      isDisabled: () => disabled,
+      setDisabled: (next) => {
+        disabled = next;
+      },
+    };
+    const booted = await bootServer({ providerDispatchControl: control });
+    try {
+      const res = await fetch(`${booted.url}/admin/provider-dispatch`, {
+        method: 'PATCH',
+        headers: {
+          authorization: `Bearer ${ADMIN_TOKEN}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ disabled: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ providerDispatchDisabled: true });
+      expect(disabled).toBe(true);
+    } finally {
+      await booted.close();
+    }
+  });
+
+  it('rejects the read-only admin token on PATCH /admin/provider-dispatch', async () => {
+    let disabled = false;
+    const control: ProviderDispatchControl = {
+      isDisabled: () => disabled,
+      setDisabled: (next) => {
+        disabled = next;
+      },
+    };
+    const booted = await bootServer({
+      adminReadToken: READ_TOKEN,
+      providerDispatchControl: control,
+    });
+    try {
+      const res = await fetch(`${booted.url}/admin/provider-dispatch`, {
+        method: 'PATCH',
+        headers: {
+          authorization: `Bearer ${READ_TOKEN}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ disabled: true }),
+      });
+
+      expect(res.status).toBe(403);
+      expect(disabled).toBe(false);
     } finally {
       await booted.close();
     }

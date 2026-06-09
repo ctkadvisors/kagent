@@ -25,11 +25,14 @@ import type { ReviewQueueRow } from '@kagent/dto/review-queue';
 import {
   fetchDispositions,
   fetchReviewQueue,
+  fetchGatewayProviderDispatch,
   acceptReviewQueueRow,
   architectTry,
   rejectReviewQueueRow,
   requestReview,
   ReviewActionApiError,
+  setGatewayProviderDispatchDisabled,
+  terminateTask,
 } from './api.js';
 
 function makeRow(overrides: Partial<DispositionOverlayRow> = {}): DispositionOverlayRow {
@@ -222,6 +225,76 @@ describe('fetchReviewQueue (REV-01)', () => {
     const rows = await fetchReviewQueue();
 
     expect(rows).toEqual([]);
+  });
+});
+
+describe('terminateTask', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('issues DELETE to the encoded task endpoint', async () => {
+    mockFetchWithStatus(202, { deleted: true });
+
+    await terminateTask('kagent-draft', 'draft/run 1');
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('/api/tasks/kagent-draft/draft%2Frun%201', {
+      method: 'DELETE',
+    });
+  });
+
+  it('throws the API error body on non-2xx', async () => {
+    mockFetchWithStatus(403, { error: 'RBAC denied' });
+
+    await expect(terminateTask('kagent-draft', 'running')).rejects.toThrow(/RBAC denied/);
+  });
+});
+
+describe('gateway provider dispatch controls', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetchGatewayProviderDispatch calls the runtime kill-switch endpoint', async () => {
+    mockFetchWithStatus(200, { providerDispatchDisabled: true });
+
+    await expect(fetchGatewayProviderDispatch()).resolves.toEqual({
+      providerDispatchDisabled: true,
+    });
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledWith('/api/gateway/provider-dispatch', {});
+  });
+
+  it('setGatewayProviderDispatchDisabled PATCHes the desired disabled state', async () => {
+    mockFetchWithStatus(200, { providerDispatchDisabled: true });
+
+    await expect(setGatewayProviderDispatchDisabled(true)).resolves.toEqual({
+      providerDispatchDisabled: true,
+    });
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledWith('/api/gateway/provider-dispatch', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ disabled: true }),
+    });
+  });
+
+  it('setGatewayProviderDispatchDisabled throws GatewayApiError on non-2xx', async () => {
+    mockFetchWithStatus(503, { message: 'write surface disabled' });
+
+    await expect(setGatewayProviderDispatchDisabled(true)).rejects.toThrow(
+      /write surface disabled/,
+    );
   });
 });
 

@@ -303,6 +303,10 @@ export interface GatewayUsageResponse {
   readonly fetchedAt: string;
 }
 
+export interface GatewayProviderDispatchState {
+  readonly providerDispatchDisabled: boolean;
+}
+
 export interface PatchInFlightRequest {
   readonly seed?: number;
   readonly max?: number;

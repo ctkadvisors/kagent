@@ -67,7 +67,7 @@ export interface RouterDeps {
    * and records a zero-token 503, but does not call any upstream
    * provider.
    */
-  readonly providerDispatchDisabled?: boolean;
+  readonly providerDispatchDisabled?: boolean | (() => boolean);
   /**
    * Per-model/backend failure circuit. Repeated provider failures open
    * a local backoff window so a bad model route cannot hammer the
@@ -189,7 +189,7 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
     minSafe: lookup.minSafe,
   });
 
-  if (deps.providerDispatchDisabled === true) {
+  if (isProviderDispatchDisabled(deps)) {
     recordZeroTokenFailure(
       deps,
       ctx,
@@ -399,6 +399,12 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
   } finally {
     deps.inFlight.release(endpoint.model, backendUrl);
   }
+}
+
+function isProviderDispatchDisabled(deps: RouterDeps): boolean {
+  const flag = deps.providerDispatchDisabled;
+  if (typeof flag === 'function') return flag();
+  return flag === true;
 }
 
 function recordZeroTokenFailure(

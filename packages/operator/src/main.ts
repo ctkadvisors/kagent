@@ -77,7 +77,7 @@ import {
 } from './crds/index.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
-import type { BuildJobSpecOptions, EnvVarSpec } from './job-spec.js';
+import { jobNameForTask, type BuildJobSpecOptions, type EnvVarSpec } from './job-spec.js';
 import type { ModelClassEntry, ModelClassMap } from './model-class-resolver.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
 import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
@@ -2198,6 +2198,26 @@ async function main(): Promise<void> {
     getAgentByName: (namespace, name) => agentCacheHolder.get?.(namespace, name),
     // M22 — capability-targeted infra-fault audits no longer stamp ''.
     resolveAgentName: resolveAgentNameForTask,
+    terminateJobForTask: async (
+      task: import('./crds/index.js').AgentTask,
+      reason: string,
+    ): Promise<void> => {
+      const namespace = task.metadata.namespace ?? 'default';
+      const jobName = jobNameForTask(task);
+      try {
+        await batchApi.deleteNamespacedJob({
+          namespace,
+          name: jobName,
+          propagationPolicy: 'Foreground',
+        });
+        console.log(
+          `[kagent-operator] supervision: deleted Job ${namespace}/${jobName} for AgentTask ${task.metadata.name ?? '(no-name)'} (${reason})`,
+        );
+      } catch (err) {
+        if (isK8sNotFound(err)) return;
+        throw err;
+      }
+    },
     get audit(): SupervisionAuditHooks | undefined {
       return supervisionAuditHolder.hooks;
     },
@@ -4413,6 +4433,17 @@ export function buildLangfusePromptFetcherForOperator(
     }
     return body.prompt;
   };
+}
+
+function isK8sNotFound(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false;
+  const e = err as Record<string, unknown>;
+  if (e.code === 404 || e.statusCode === 404) return true;
+  if (typeof e.body === 'object' && e.body !== null) {
+    const body = e.body as Record<string, unknown>;
+    return body.code === 404;
+  }
+  return false;
 }
 
 // Only run main() when this module is the entrypoint — unit tests

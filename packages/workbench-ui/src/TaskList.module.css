@@ -213,3 +213,23 @@
 .traceLink:hover {
   text-decoration: underline;
 }
+
+.terminateButton {
+  border: 1px solid var(--danger);
+  background: var(--danger-dim);
+  color: var(--danger);
+  border-radius: var(--r-1);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.terminateButton:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--bg);
+}
+.terminateButton:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}

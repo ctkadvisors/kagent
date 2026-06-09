@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
 
 import { AimdController } from './aimd.js';
+import { createProviderDispatchControl } from './admin-routes.js';
 import { createApiKeyRepo } from './db/api-keys.js';
 import { applyMigrations, loadMigrationsFromDir } from './db/migrations.js';
 import { createPool, pingPool } from './db/pool.js';
@@ -87,6 +88,7 @@ async function main(): Promise<void> {
     failureThreshold: cfg.providerFailureBackoffThreshold,
     backoffSeconds: cfg.providerFailureBackoffSeconds,
   });
+  const providerDispatchControl = createProviderDispatchControl(cfg.providerDispatchDisabled);
 
   const kc = new KubeConfig();
   try {
@@ -114,6 +116,7 @@ async function main(): Promise<void> {
       apiKeyRepo.getByHash(h),
     apiKeyRepo,
     adminToken: cfg.adminApiToken,
+    providerDispatchControl,
     // M23 — pass through optional read-only admin token. When set,
     // `/admin/capacity` + `/admin/usage` accept it as a second
     // bearer alongside `adminApiToken`. Workbench-api can use this
@@ -127,7 +130,7 @@ async function main(): Promise<void> {
       aimd,
       usage: usageRecorder,
       backendApiKeys: cfg.backendApiKeys,
-      providerDispatchDisabled: cfg.providerDispatchDisabled,
+      providerDispatchDisabled: () => providerDispatchControl.isDisabled(),
       failureBackoff,
     },
   });

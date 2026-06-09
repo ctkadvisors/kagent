@@ -24,7 +24,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { fetchTasks, subscribeCacheEvents } from './api.js';
+import { fetchTasks, subscribeCacheEvents, terminateTask } from './api.js';
 import { NewTaskModal } from './NewTaskModal.js';
 import type { TaskSummary } from './types.js';
 import styles from './TaskList.module.css';
@@ -37,6 +37,7 @@ export function TaskList(): React.JSX.Element {
   const [lastEventAt, setLastEventAt] = useState<number>(Date.now());
   const [now, setNow] = useState<number>(Date.now());
   const [showNewTask, setShowNewTask] = useState<boolean>(false);
+  const [terminatingKey, setTerminatingKey] = useState<string | null>(null);
   const refetchAbortRef = useRef<AbortController | null>(null);
 
   const refetch = (): void => {
@@ -80,6 +81,24 @@ export function TaskList(): React.JSX.Element {
   }, []);
 
   const isStale = now - lastEventAt > STALE_THRESHOLD_MS;
+
+  const onTerminate = (task: TaskSummary): void => {
+    const key = `${task.namespace}/${task.name}`;
+    const confirmed = window.confirm(`Terminate ${key}? This deletes the AgentTask and its Job.`);
+    if (!confirmed) return;
+    setTerminatingKey(key);
+    terminateTask(task.namespace, task.name)
+      .then(() => {
+        setError(null);
+        refetch();
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        setTerminatingKey((current) => (current === key ? null : current));
+      });
+  };
 
   return (
     <div className={styles.wrapper}>
@@ -135,6 +154,7 @@ export function TaskList(): React.JSX.Element {
               <th>Created</th>
               <th>Pod</th>
               <th>Failure</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -185,12 +205,35 @@ export function TaskList(): React.JSX.Element {
                 <td>{t.createdAt ?? '—'}</td>
                 <td>{t.podName ?? '—'}</td>
                 <td>{t.error ?? '—'}</td>
+                <td>{renderActions(t, terminatingKey, onTerminate)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
     </div>
+  );
+}
+
+function renderActions(
+  task: TaskSummary,
+  terminatingKey: string | null,
+  onTerminate: (task: TaskSummary) => void,
+): React.JSX.Element {
+  if (task.phase !== 'Pending' && task.phase !== 'Dispatched') {
+    return <span className={styles.countChipMuted}>—</span>;
+  }
+  const key = `${task.namespace}/${task.name}`;
+  const busy = terminatingKey === key;
+  return (
+    <button
+      type="button"
+      className={styles.terminateButton}
+      disabled={busy}
+      onClick={() => onTerminate(task)}
+    >
+      {busy ? `terminating ${task.name}` : `terminate ${task.name}`}
+    </button>
   );
 }
 

@@ -75,6 +75,14 @@ export interface GatewayUsageRow {
 export interface GatewayClient {
   readonly capacity: () => Promise<readonly GatewayCapacityRow[]>;
   readonly usage: (params: GatewayUsageQuery) => Promise<readonly GatewayUsageRow[]>;
+  readonly providerDispatch: () => Promise<GatewayProviderDispatchState>;
+  readonly setProviderDispatchDisabled: (
+    disabled: boolean,
+  ) => Promise<GatewayProviderDispatchState>;
+}
+
+export interface GatewayProviderDispatchState {
+  readonly providerDispatchDisabled: boolean;
 }
 
 export interface GatewayUsageQuery {
@@ -122,11 +130,14 @@ export function createGatewayClient(cfg: GatewayClientConfig): GatewayClient {
     authorization: `Bearer ${cfg.adminToken}`,
   };
 
-  async function get(pathAndQuery: string): Promise<unknown> {
+  async function request(pathAndQuery: string, init: RequestInit): Promise<unknown> {
     const url = `${baseUrl}${pathAndQuery}`;
     const response = await fetchImpl(url, {
-      method: 'GET',
-      headers,
+      ...init,
+      headers: {
+        ...headers,
+        ...((init.headers as Record<string, string> | undefined) ?? {}),
+      },
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
@@ -136,6 +147,10 @@ export function createGatewayClient(cfg: GatewayClientConfig): GatewayClient {
       );
     }
     return await response.json();
+  }
+
+  async function get(pathAndQuery: string): Promise<unknown> {
+    return await request(pathAndQuery, { method: 'GET' });
   }
 
   return {
@@ -162,6 +177,26 @@ export function createGatewayClient(cfg: GatewayClientConfig): GatewayClient {
       // path; this catches legacy rows persisted before H15 landed and
       // any future bypasses of the gateway recorder.
       return (body.rows as readonly GatewayUsageRow[]).map(scrubUsageRow);
+    },
+
+    async providerDispatch(): Promise<GatewayProviderDispatchState> {
+      const body = (await get('/admin/provider-dispatch')) as {
+        providerDispatchDisabled?: unknown;
+      };
+      return {
+        providerDispatchDisabled: body.providerDispatchDisabled === true,
+      };
+    },
+
+    async setProviderDispatchDisabled(disabled: boolean): Promise<GatewayProviderDispatchState> {
+      const body = (await request('/admin/provider-dispatch', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ disabled }),
+      })) as { providerDispatchDisabled?: unknown };
+      return {
+        providerDispatchDisabled: body.providerDispatchDisabled === true,
+      };
     },
   };
 }

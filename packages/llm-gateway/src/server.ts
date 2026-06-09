@@ -29,9 +29,12 @@ import {
   handleCreateApiKey,
   handleListApiKeys,
   handleRevokeApiKey,
+  parseProviderDispatchControlBody,
   parseCreateApiKeyBody,
   parseRevokeIdFromUrl,
+  providerDispatchControlResponse,
   validateRevokeId,
+  type ProviderDispatchControl,
 } from './admin-routes.js';
 import { authenticate, type ApiKeyLookup } from './auth.js';
 import { parseKagentHeaders } from './headers.js';
@@ -104,6 +107,14 @@ export interface ServerDeps {
    * cannot mint/revoke arbitrary keys.
    */
   readonly adminReadToken?: string;
+  /**
+   * Runtime provider dispatch kill switch. Env controls the boot
+   * default; /admin/provider-dispatch mutates this in memory so an
+   * operator can stop LLM egress immediately without waiting for a
+   * chart redeploy. Omitted in tests/dev means the admin control route
+   * returns 503 and routerDeps remains the sole source of truth.
+   */
+  readonly providerDispatchControl?: ProviderDispatchControl;
   /**
    * Audit-rev2 M7 follow-up — optional mTLS identity resolver. When
    * present AND mTLS verified an SVID for the request, the handler
@@ -194,6 +205,52 @@ export function buildHandler(
           error: { message: err instanceof Error ? err.message : String(err) },
         });
       }
+      return;
+    }
+
+    if (method === 'GET' && url === '/admin/provider-dispatch') {
+      const auth = adminAuth(req, adminExpectations, 'read');
+      if (!auth.ok) {
+        writeJson(res, auth.statusCode ?? 401, {
+          error: { message: auth.message ?? 'unauthorized' },
+        });
+        return;
+      }
+      if (deps.providerDispatchControl === undefined) {
+        writeJson(res, 503, {
+          error: { message: 'provider dispatch control not configured' },
+        });
+        return;
+      }
+      writeJson(res, 200, providerDispatchControlResponse(deps.providerDispatchControl));
+      return;
+    }
+
+    if (method === 'PATCH' && url === '/admin/provider-dispatch') {
+      const auth = adminAuth(req, deps.adminToken);
+      if (!auth.ok) {
+        writeJson(res, auth.statusCode ?? 401, {
+          error: { message: auth.message ?? 'unauthorized' },
+        });
+        return;
+      }
+      if (deps.providerDispatchControl === undefined) {
+        writeJson(res, 503, {
+          error: { message: 'provider dispatch control not configured' },
+        });
+        return;
+      }
+      let parsed: { readonly disabled: boolean };
+      try {
+        parsed = parseProviderDispatchControlBody(await readJsonBody(req));
+      } catch (err) {
+        writeJson(res, 400, {
+          error: { message: err instanceof Error ? err.message : String(err) },
+        });
+        return;
+      }
+      deps.providerDispatchControl.setDisabled(parsed.disabled);
+      writeJson(res, 200, providerDispatchControlResponse(deps.providerDispatchControl));
       return;
     }
 

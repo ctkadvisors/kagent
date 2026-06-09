@@ -37,6 +37,59 @@
   font-family: var(--font-mono);
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: auto;
+}
+
+.dispatchError {
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.pauseButton,
+.resumeButton {
+  border: none;
+  border-radius: var(--r-1);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pauseButton {
+  background: var(--danger);
+  color: var(--bg-deep);
+}
+
+.pauseButton:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.resumeButton {
+  background: var(--ok);
+  color: var(--bg-deep);
+}
+
+.resumeButton:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.pauseButton:disabled,
+.resumeButton:disabled {
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  cursor: not-allowed;
+}
+
 .backButton {
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
