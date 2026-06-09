@@ -7,6 +7,7 @@ export { buildSandboxEnv, findForbiddenEnvKeys } from './env-policy.js';
 export { InMemoryToolSessionManager } from './session-manager.js';
 export { LocalCodeRunner } from './code-runner.js';
 export { SteelBrowserAdapter } from './browser-steel.js';
+export { ToolGatewayHttpHandler } from './http-server.js';
 export type {
   BrowserAutomationDriver,
   BrowserExtractTextOptions,
@@ -20,6 +21,13 @@ export type {
   SteelBrowserAdapterOptions,
   SteelBrowserSession,
 } from './browser-steel.js';
+export type {
+  ToolGatewayExternalHandler,
+  ToolGatewayHandlerInput,
+  ToolGatewayHttpHandlerOptions,
+  ToolGatewayInvocation,
+  ToolGatewayTaskIdentity,
+} from './http-server.js';
 export type {
   CodeRunnerFile,
   CodeRunnerListEntry,
