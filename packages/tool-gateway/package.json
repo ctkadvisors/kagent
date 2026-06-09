@@ -23,7 +23,8 @@
   ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
-    "@kagent/dto": "workspace:*"
+    "@kagent/dto": "workspace:*",
+    "playwright-core": "^1.60.0"
   },
   "devDependencies": {
     "tsx": "4.21.0"

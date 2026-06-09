@@ -109,6 +109,7 @@ export interface BrowserAutomationDriver {
     cdpUrl: string,
     options: BrowserWaitForOptions,
   ) => Promise<BrowserInteractionResult>;
+  readonly closeSession?: (cdpUrl: string) => Promise<void>;
 }
 
 export interface SteelBrowserAdapterOptions {
