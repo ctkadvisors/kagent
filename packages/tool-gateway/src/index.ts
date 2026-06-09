@@ -28,6 +28,8 @@ export type {
   SteelBrowserSession,
 } from './browser-steel.js';
 export type {
+  ToolGatewayCodeRunner,
+  ToolGatewayCodeRunnerFactory,
   ToolGatewayExternalHandler,
   ToolGatewayHandlerInput,
   ToolGatewayHttpHandlerOptions,

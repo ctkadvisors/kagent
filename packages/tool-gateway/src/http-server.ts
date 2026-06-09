@@ -13,7 +13,14 @@ import {
   type BrowserWaitForOptions,
   type SteelBrowserSession,
 } from './browser-steel.js';
-import { LocalCodeRunner, type ExecuteCodeInput, type ExecuteCommandInput } from './code-runner.js';
+import {
+  type CodeRunnerFile,
+  type CodeRunnerListEntry,
+  type CodeRunnerReadResult,
+  type CommandResult,
+  type ExecuteCodeInput,
+  type ExecuteCommandInput,
+} from './code-runner.js';
 
 export interface ToolGatewayTaskIdentity {
   readonly tenant: string;
@@ -35,15 +42,29 @@ export type ToolGatewayExternalHandler = (
   input: ToolGatewayHandlerInput,
 ) => Promise<ToolResult> | ToolResult;
 
+export interface ToolGatewayCodeRunner {
+  readonly executeCode: (input: ExecuteCodeInput) => Promise<CommandResult>;
+  readonly executeCommand: (input: ExecuteCommandInput) => Promise<CommandResult>;
+  readonly readFiles: (paths: readonly string[]) => Promise<readonly CodeRunnerReadResult[]>;
+  readonly writeFiles: (files: readonly CodeRunnerFile[]) => Promise<void>;
+  readonly listFiles: (root?: string) => Promise<readonly CodeRunnerListEntry[]>;
+}
+
+export type ToolGatewayCodeRunnerFactory = (input: {
+  readonly task: ToolGatewayTaskIdentity;
+}) => ToolGatewayCodeRunner;
+
 export interface ToolGatewayHttpHandlerOptions {
-  readonly codeRunner?: LocalCodeRunner;
+  readonly codeRunner?: ToolGatewayCodeRunner;
+  readonly codeRunnerFactory?: ToolGatewayCodeRunnerFactory;
   readonly browser?: SteelBrowserAdapter;
   readonly externalHandlers?: Readonly<Record<string, ToolGatewayExternalHandler>>;
   readonly paused?: boolean;
 }
 
 export class ToolGatewayHttpHandler {
-  private readonly codeRunner: LocalCodeRunner | undefined;
+  private readonly codeRunner: ToolGatewayCodeRunner | undefined;
+  private readonly codeRunnerFactory: ToolGatewayCodeRunnerFactory | undefined;
   private readonly browser: SteelBrowserAdapter | undefined;
   private readonly externalHandlers: Readonly<Record<string, ToolGatewayExternalHandler>>;
   private readonly browserSessions = new Map<string, SteelBrowserSession>();
@@ -51,6 +72,7 @@ export class ToolGatewayHttpHandler {
 
   constructor(options: ToolGatewayHttpHandlerOptions = {}) {
     this.codeRunner = options.codeRunner;
+    this.codeRunnerFactory = options.codeRunnerFactory;
     this.browser = options.browser;
     this.externalHandlers = options.externalHandlers ?? {};
     this.paused = options.paused ?? false;
@@ -81,29 +103,33 @@ export class ToolGatewayHttpHandler {
       );
     }
 
-    const external = this.externalHandlers[invocation.call.name];
-    if (external !== undefined) {
-      return jsonResponse(await external({ ...invocation, request }));
-    }
+    try {
+      const external = this.externalHandlers[invocation.call.name];
+      if (external !== undefined) {
+        return jsonResponse(await external({ ...invocation, request }));
+      }
 
-    return jsonResponse(await this.invokeRuntimeTool(invocation));
+      return jsonResponse(await this.invokeRuntimeTool(invocation));
+    } catch (err) {
+      return jsonResponse(runtimeError(err));
+    }
   }
 
   private async invokeRuntimeTool(invocation: ToolGatewayInvocation): Promise<ToolResult> {
     switch (invocation.call.name) {
       case 'code_interpreter.start_session':
-        this.requireCodeRunner();
+        this.codeRunnerFor(invocation.task);
         return { content: 'code_interpreter session ready', isError: false };
       case 'code_interpreter.execute_code':
-        return this.executeCode(invocation.call.args);
+        return this.executeCode(invocation.task, invocation.call.args);
       case 'code_interpreter.execute_command':
-        return this.executeCommand(invocation.call.args);
+        return this.executeCommand(invocation.task, invocation.call.args);
       case 'code_interpreter.read_files':
-        return this.readFiles(invocation.call.args);
+        return this.readFiles(invocation.task, invocation.call.args);
       case 'code_interpreter.write_files':
-        return this.writeFiles(invocation.call.args);
+        return this.writeFiles(invocation.task, invocation.call.args);
       case 'code_interpreter.list_files':
-        return this.listFiles(invocation.call.args);
+        return this.listFiles(invocation.task, invocation.call.args);
       case 'code_interpreter.start_command':
       case 'code_interpreter.stop_task':
         return {
@@ -144,8 +170,8 @@ export class ToolGatewayHttpHandler {
     }
   }
 
-  private async executeCode(args: unknown): Promise<ToolResult> {
-    const runner = this.requireCodeRunner();
+  private async executeCode(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const runner = this.codeRunnerFor(task);
     const input = parseExecuteCodeInput(args);
     if (input === null) return invalidArgs('code_interpreter.execute_code');
 
@@ -153,8 +179,8 @@ export class ToolGatewayHttpHandler {
     return commandResultToToolResult(result);
   }
 
-  private async executeCommand(args: unknown): Promise<ToolResult> {
-    const runner = this.requireCodeRunner();
+  private async executeCommand(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const runner = this.codeRunnerFor(task);
     const input = parseExecuteCommandInput(args);
     if (input === null) return invalidArgs('code_interpreter.execute_command');
 
@@ -162,19 +188,19 @@ export class ToolGatewayHttpHandler {
     return commandResultToToolResult(result);
   }
 
-  private async readFiles(args: unknown): Promise<ToolResult> {
+  private async readFiles(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
     const paths = isRecord(args) && Array.isArray(args.paths) ? args.paths : null;
     if (paths === null || !paths.every((path): path is string => typeof path === 'string')) {
       return invalidArgs('code_interpreter.read_files');
     }
 
     return {
-      content: JSON.stringify(await this.requireCodeRunner().readFiles(paths)),
+      content: JSON.stringify(await this.codeRunnerFor(task).readFiles(paths)),
       isError: false,
     };
   }
 
-  private async writeFiles(args: unknown): Promise<ToolResult> {
+  private async writeFiles(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
     const files = isRecord(args) && Array.isArray(args.files) ? args.files : null;
     if (
       files === null ||
@@ -186,14 +212,14 @@ export class ToolGatewayHttpHandler {
       return invalidArgs('code_interpreter.write_files');
     }
 
-    await this.requireCodeRunner().writeFiles(files);
+    await this.codeRunnerFor(task).writeFiles(files);
     return { content: `wrote ${files.length} file(s)`, isError: false };
   }
 
-  private async listFiles(args: unknown): Promise<ToolResult> {
+  private async listFiles(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
     const root = isRecord(args) && typeof args.root === 'string' ? args.root : '.';
     return {
-      content: JSON.stringify(await this.requireCodeRunner().listFiles(root)),
+      content: JSON.stringify(await this.codeRunnerFor(task).listFiles(root)),
       isError: false,
     };
   }
@@ -342,7 +368,10 @@ export class ToolGatewayHttpHandler {
     return session;
   }
 
-  private requireCodeRunner(): LocalCodeRunner {
+  private codeRunnerFor(task: ToolGatewayTaskIdentity): ToolGatewayCodeRunner {
+    if (this.codeRunnerFactory !== undefined) {
+      return this.codeRunnerFactory({ task });
+    }
     if (this.codeRunner === undefined) {
       throw new Error('tool_gateway_misconfigured: code runner is not configured');
     }
@@ -527,6 +556,14 @@ function invalidArgs(toolName: string): ToolResult {
     content: `invalid_args: ${toolName}`,
     isError: true,
     metadata: { policy: 'invalid-args' },
+  };
+}
+
+function runtimeError(err: unknown): ToolResult {
+  return {
+    content: err instanceof Error ? err.message : String(err),
+    isError: true,
+    metadata: { policy: 'runtime-error' },
   };
 }
 

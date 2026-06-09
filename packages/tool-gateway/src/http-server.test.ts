@@ -35,9 +35,27 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
   });
 }
 
+function requestFor(task: typeof TASK, body: unknown): Request {
+  return new Request('http://tool-gateway.test/v1/tool-runtime/invoke', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-kagent-tenant': task.tenant,
+      'x-kagent-namespace': task.namespace,
+      'x-kagent-task-uid': task.taskUid,
+      'x-kagent-agent': task.agentName,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 function invokeBody(name: string, args: unknown): Record<string, unknown> {
+  return invokeBodyFor(TASK, name, args);
+}
+
+function invokeBodyFor(task: typeof TASK, name: string, args: unknown): Record<string, unknown> {
   return {
-    task: TASK,
+    task,
     call: {
       id: 'call-1',
       name,
@@ -143,6 +161,65 @@ describe('ToolGatewayHttpHandler', () => {
     expect(result.isError).toBe(false);
     expect(typeof result.content).toBe('string');
     expect(result.content as string).toContain('from-http');
+  });
+
+  it('can resolve code runners per task so workspaces do not bleed across AgentTasks', async () => {
+    const makeRunnerForTask = (task: typeof TASK) =>
+      new LocalCodeRunner({
+        workspaceDir: join(workspaceDir, task.taskUid),
+        env: {
+          HOME: '/workspace',
+          TMPDIR: '/tmp',
+          PATH: process.env.PATH ?? '/usr/bin:/bin',
+          LANG: 'C.UTF-8',
+          KAGENT_TASK_UID: task.taskUid,
+          KAGENT_AGENT_NAME: task.agentName,
+          KAGENT_NAMESPACE: task.namespace,
+          KAGENT_TOOL_SESSION_ID: `code-${task.taskUid}`,
+          KAGENT_TOOL_KIND: 'code_interpreter',
+        },
+      });
+    const handler = new ToolGatewayHttpHandler({
+      browser: makeBrowser(),
+      codeRunnerFactory: ({ task }) => makeRunnerForTask(task),
+    });
+    const taskA = TASK;
+    const taskB = { ...TASK, taskUid: 'task-2' };
+
+    const writeResponse = await handler.handle(
+      requestFor(
+        taskA,
+        invokeBodyFor(taskA, 'code_interpreter.write_files', {
+          files: [{ path: 'result.txt', content: 'task-a-only' }],
+        }),
+      ),
+    );
+    expect(writeResponse.status).toBe(200);
+
+    const readA = asRecord(
+      await json(
+        await handler.handle(
+          requestFor(
+            taskA,
+            invokeBodyFor(taskA, 'code_interpreter.read_files', { paths: ['result.txt'] }),
+          ),
+        ),
+      ),
+    );
+    expect(readA.isError).toBe(false);
+    expect(readA.content).toBe(JSON.stringify([{ path: 'result.txt', content: 'task-a-only' }]));
+
+    const readB = asRecord(
+      await json(
+        await handler.handle(
+          requestFor(
+            taskB,
+            invokeBodyFor(taskB, 'code_interpreter.read_files', { paths: ['result.txt'] }),
+          ),
+        ),
+      ),
+    );
+    expect(readB.isError).toBe(true);
   });
 
   it('keeps browser sessions task-scoped across start, action, and live-view calls', async () => {
