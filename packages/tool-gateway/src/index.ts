@@ -10,13 +10,18 @@ export { SteelBrowserAdapter } from './browser-steel.js';
 export { ToolGatewayHttpHandler } from './http-server.js';
 export type {
   BrowserAutomationDriver,
+  BrowserClickOptions,
   BrowserExtractTextOptions,
   BrowserExtractTextResult,
   BrowserGotoOptions,
   BrowserGotoResult,
+  BrowserInteractionResult,
+  BrowserSelectOptions,
   BrowserScreenshotOptions,
   BrowserScreenshotResult,
+  BrowserTypeTextOptions,
   BrowserViewport,
+  BrowserWaitForOptions,
   StartSteelBrowserSessionInput,
   SteelBrowserAdapterOptions,
   SteelBrowserSession,

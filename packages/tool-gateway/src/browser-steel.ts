@@ -29,6 +29,11 @@ export interface BrowserGotoResult {
   readonly title?: string;
 }
 
+export interface BrowserInteractionResult {
+  readonly ok: true;
+  readonly matched?: 'selector' | 'text';
+}
+
 export interface BrowserScreenshotResult {
   readonly mimeType: string;
   readonly base64: string;
@@ -39,6 +44,30 @@ export interface BrowserExtractTextResult {
 }
 
 export interface BrowserGotoOptions {
+  readonly timeoutMs: number | undefined;
+}
+
+export interface BrowserClickOptions {
+  readonly selector?: string | undefined;
+  readonly text?: string | undefined;
+  readonly timeoutMs: number | undefined;
+}
+
+export interface BrowserTypeTextOptions {
+  readonly selector: string;
+  readonly text: string;
+  readonly timeoutMs: number | undefined;
+}
+
+export interface BrowserSelectOptions {
+  readonly selector: string;
+  readonly value: string;
+  readonly timeoutMs: number | undefined;
+}
+
+export interface BrowserWaitForOptions {
+  readonly selector?: string | undefined;
+  readonly text?: string | undefined;
   readonly timeoutMs: number | undefined;
 }
 
@@ -56,14 +85,30 @@ export interface BrowserAutomationDriver {
     url: string,
     options: BrowserGotoOptions,
   ) => Promise<BrowserGotoResult>;
+  readonly click: (
+    cdpUrl: string,
+    options: BrowserClickOptions,
+  ) => Promise<BrowserInteractionResult>;
   readonly screenshot: (
     cdpUrl: string,
     options: BrowserScreenshotOptions,
   ) => Promise<BrowserScreenshotResult>;
+  readonly select: (
+    cdpUrl: string,
+    options: BrowserSelectOptions,
+  ) => Promise<BrowserInteractionResult>;
   readonly extractText: (
     cdpUrl: string,
     options: BrowserExtractTextOptions,
   ) => Promise<BrowserExtractTextResult>;
+  readonly typeText: (
+    cdpUrl: string,
+    options: BrowserTypeTextOptions,
+  ) => Promise<BrowserInteractionResult>;
+  readonly waitFor: (
+    cdpUrl: string,
+    options: BrowserWaitForOptions,
+  ) => Promise<BrowserInteractionResult>;
 }
 
 export interface SteelBrowserAdapterOptions {
@@ -117,6 +162,17 @@ export class SteelBrowserAdapter {
     return this.requireDriver().goto(session.cdpUrl, url, { timeoutMs: input.timeoutMs });
   }
 
+  async click(
+    session: SteelBrowserSession,
+    input: BrowserClickOptions,
+  ): Promise<BrowserInteractionResult> {
+    return this.requireDriver().click(session.cdpUrl, {
+      selector: input.selector,
+      text: input.text,
+      timeoutMs: input.timeoutMs,
+    });
+  }
+
   async screenshot(
     session: SteelBrowserSession,
     input: BrowserScreenshotOptions = {},
@@ -124,11 +180,44 @@ export class SteelBrowserAdapter {
     return this.requireDriver().screenshot(session.cdpUrl, input);
   }
 
+  async select(
+    session: SteelBrowserSession,
+    input: BrowserSelectOptions,
+  ): Promise<BrowserInteractionResult> {
+    return this.requireDriver().select(session.cdpUrl, {
+      selector: input.selector,
+      value: input.value,
+      timeoutMs: input.timeoutMs,
+    });
+  }
+
   async extractText(
     session: SteelBrowserSession,
     input: BrowserExtractTextOptions = { maxChars: undefined },
   ): Promise<BrowserExtractTextResult> {
     return this.requireDriver().extractText(session.cdpUrl, { maxChars: input.maxChars });
+  }
+
+  async typeText(
+    session: SteelBrowserSession,
+    input: BrowserTypeTextOptions,
+  ): Promise<BrowserInteractionResult> {
+    return this.requireDriver().typeText(session.cdpUrl, {
+      selector: input.selector,
+      text: input.text,
+      timeoutMs: input.timeoutMs,
+    });
+  }
+
+  async waitFor(
+    session: SteelBrowserSession,
+    input: BrowserWaitForOptions,
+  ): Promise<BrowserInteractionResult> {
+    return this.requireDriver().waitFor(session.cdpUrl, {
+      selector: input.selector,
+      text: input.text,
+      timeoutMs: input.timeoutMs,
+    });
   }
 
   async releaseSession(id: string): Promise<JsonObject> {

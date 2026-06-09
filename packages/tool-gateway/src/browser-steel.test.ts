@@ -46,13 +46,17 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function makeDriver(): BrowserAutomationDriver {
   return {
     goto: vi.fn(() => Promise.resolve({ url: 'https://example.com/report', title: 'Report' })),
+    click: vi.fn(() => Promise.resolve({ ok: true })),
     screenshot: vi.fn(() =>
       Promise.resolve({
         mimeType: 'image/png',
         base64: Buffer.from('png').toString('base64'),
       }),
     ),
+    select: vi.fn(() => Promise.resolve({ ok: true })),
     extractText: vi.fn(() => Promise.resolve({ text: 'Visible report text' })),
+    typeText: vi.fn(() => Promise.resolve({ ok: true })),
+    waitFor: vi.fn(() => Promise.resolve({ ok: true, matched: 'text' })),
   };
 }
 
@@ -144,6 +148,54 @@ describe('SteelBrowserAdapter', () => {
     });
     expect(driver.screenshot).toHaveBeenCalledWith(session.cdpUrl, { fullPage: true });
     expect(driver.extractText).toHaveBeenCalledWith(session.cdpUrl, { maxChars: undefined });
+  });
+
+  it('drives click, type, select, and wait actions through the injected browser driver', async () => {
+    const driver = makeDriver();
+    const adapter = new SteelBrowserAdapter({
+      baseUrl: 'http://steel.local:3000',
+      driver,
+      fetch: makeFetch([]).fetch,
+    });
+    const session = {
+      id: 'steel-1',
+      cdpUrl: 'ws://steel.local:3000/devtools/browser/steel-1',
+      liveViewUrl: 'http://steel.local:3000/ui/sessions/steel-1',
+      recordingUrl: 'http://steel.local:3000/v1/sessions/steel-1/hls',
+    };
+
+    await expect(
+      adapter.click(session, { selector: 'button[name=search]', timeoutMs: 5000 }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      adapter.typeText(session, { selector: 'input[name=q]', text: 'agent sandbox' }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      adapter.select(session, { selector: 'select[name=mode]', value: 'deep' }),
+    ).resolves.toEqual({ ok: true });
+    await expect(adapter.waitFor(session, { text: 'Results', timeoutMs: 1000 })).resolves.toEqual({
+      ok: true,
+      matched: 'text',
+    });
+
+    expect(driver.click).toHaveBeenCalledWith(session.cdpUrl, {
+      selector: 'button[name=search]',
+      timeoutMs: 5000,
+    });
+    expect(driver.typeText).toHaveBeenCalledWith(session.cdpUrl, {
+      selector: 'input[name=q]',
+      text: 'agent sandbox',
+      timeoutMs: undefined,
+    });
+    expect(driver.select).toHaveBeenCalledWith(session.cdpUrl, {
+      selector: 'select[name=mode]',
+      value: 'deep',
+      timeoutMs: undefined,
+    });
+    expect(driver.waitFor).toHaveBeenCalledWith(session.cdpUrl, {
+      text: 'Results',
+      timeoutMs: 1000,
+    });
   });
 
   it('releases one session explicitly and can release all live sessions for kill-switch cleanup', async () => {

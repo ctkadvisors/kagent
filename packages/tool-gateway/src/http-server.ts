@@ -5,7 +5,14 @@
 
 import type { ToolCall, ToolResult } from '@kagent/agent-loop';
 
-import { SteelBrowserAdapter, type SteelBrowserSession } from './browser-steel.js';
+import {
+  SteelBrowserAdapter,
+  type BrowserClickOptions,
+  type BrowserSelectOptions,
+  type BrowserTypeTextOptions,
+  type BrowserWaitForOptions,
+  type SteelBrowserSession,
+} from './browser-steel.js';
 import { LocalCodeRunner, type ExecuteCodeInput, type ExecuteCommandInput } from './code-runner.js';
 
 export interface ToolGatewayTaskIdentity {
@@ -110,6 +117,14 @@ export class ToolGatewayHttpHandler {
         return this.startBrowserSession(invocation.task, invocation.call.args);
       case 'browser.goto':
         return this.browserGoto(invocation.task, invocation.call.args);
+      case 'browser.click':
+        return this.browserClick(invocation.task, invocation.call.args);
+      case 'browser.type':
+        return this.browserType(invocation.task, invocation.call.args);
+      case 'browser.select':
+        return this.browserSelect(invocation.task, invocation.call.args);
+      case 'browser.wait_for':
+        return this.browserWaitFor(invocation.task, invocation.call.args);
       case 'browser.screenshot':
         return this.browserScreenshot(invocation.task, invocation.call.args);
       case 'browser.extract_text':
@@ -120,15 +135,6 @@ export class ToolGatewayHttpHandler {
         return this.browserSessionUrl(invocation.task, invocation.call.name);
       case 'browser.terminate_session':
         return this.terminateBrowserSession(invocation.task);
-      case 'browser.click':
-      case 'browser.type':
-      case 'browser.select':
-      case 'browser.wait_for':
-        return {
-          content: `${invocation.call.name} is routed through the browser driver but not implemented in this adapter slice`,
-          isError: true,
-          metadata: { policy: 'unsupported-runtime-tool' },
-        };
       default:
         return {
           content: `unknown runtime tool "${invocation.call.name}"`,
@@ -210,6 +216,54 @@ export class ToolGatewayHttpHandler {
     const session = await this.requireBrowserSession(task);
     const timeoutMs = typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined;
     const result = await this.requireBrowser().goto(session, args.url, { timeoutMs });
+    return {
+      content: JSON.stringify(result),
+      isError: false,
+      metadata: { sessionId: session.id },
+    };
+  }
+
+  private async browserClick(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const input = parseBrowserClickInput(args);
+    if (input === null) return invalidArgs('browser.click');
+    const session = await this.requireBrowserSession(task);
+    const result = await this.requireBrowser().click(session, input);
+    return {
+      content: JSON.stringify(result),
+      isError: false,
+      metadata: { sessionId: session.id },
+    };
+  }
+
+  private async browserType(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const input = parseBrowserTypeInput(args);
+    if (input === null) return invalidArgs('browser.type');
+    const session = await this.requireBrowserSession(task);
+    const result = await this.requireBrowser().typeText(session, input);
+    return {
+      content: JSON.stringify(result),
+      isError: false,
+      metadata: { sessionId: session.id },
+    };
+  }
+
+  private async browserSelect(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const input = parseBrowserSelectInput(args);
+    if (input === null) return invalidArgs('browser.select');
+    const session = await this.requireBrowserSession(task);
+    const result = await this.requireBrowser().select(session, input);
+    return {
+      content: JSON.stringify(result),
+      isError: false,
+      metadata: { sessionId: session.id },
+    };
+  }
+
+  private async browserWaitFor(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+    const input = parseBrowserWaitForInput(args);
+    if (input === null) return invalidArgs('browser.wait_for');
+    const session = await this.requireBrowserSession(task);
+    const result = await this.requireBrowser().waitFor(session, input);
     return {
       content: JSON.stringify(result),
       isError: false,
@@ -395,6 +449,60 @@ function parseBrowserStartArgs(args: unknown): Parameters<SteelBrowserAdapter['s
     if (typeof width === 'number' && typeof height === 'number') out.viewport = { width, height };
   }
   return out;
+}
+
+function parseBrowserClickInput(args: unknown): BrowserClickOptions | null {
+  if (!isRecord(args)) return null;
+  const selector =
+    typeof args.selector === 'string' && args.selector.length > 0 ? args.selector : undefined;
+  const text = typeof args.text === 'string' && args.text.length > 0 ? args.text : undefined;
+  if (selector === undefined && text === undefined) return null;
+
+  return {
+    selector,
+    text,
+    timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+  };
+}
+
+function parseBrowserTypeInput(args: unknown): BrowserTypeTextOptions | null {
+  if (!isRecord(args) || typeof args.selector !== 'string' || typeof args.text !== 'string') {
+    return null;
+  }
+  if (args.selector.length === 0) return null;
+
+  return {
+    selector: args.selector,
+    text: args.text,
+    timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+  };
+}
+
+function parseBrowserSelectInput(args: unknown): BrowserSelectOptions | null {
+  if (!isRecord(args) || typeof args.selector !== 'string' || typeof args.value !== 'string') {
+    return null;
+  }
+  if (args.selector.length === 0 || args.value.length === 0) return null;
+
+  return {
+    selector: args.selector,
+    value: args.value,
+    timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+  };
+}
+
+function parseBrowserWaitForInput(args: unknown): BrowserWaitForOptions | null {
+  if (!isRecord(args)) return null;
+  const selector =
+    typeof args.selector === 'string' && args.selector.length > 0 ? args.selector : undefined;
+  const text = typeof args.text === 'string' && args.text.length > 0 ? args.text : undefined;
+  if (selector === undefined && text === undefined) return null;
+
+  return {
+    selector,
+    text,
+    timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : undefined,
+  };
 }
 
 function commandResultToToolResult(result: {

@@ -67,10 +67,14 @@ function makeJsonResponse(body: unknown): Response {
 function makeBrowser(): SteelBrowserAdapter {
   const driver: BrowserAutomationDriver = {
     goto: vi.fn(() => Promise.resolve({ url: 'https://example.com/report', title: 'Report' })),
+    click: vi.fn(() => Promise.resolve({ ok: true })),
     screenshot: vi.fn(() =>
       Promise.resolve({ mimeType: 'image/png', base64: Buffer.from('png').toString('base64') }),
     ),
+    select: vi.fn(() => Promise.resolve({ ok: true })),
     extractText: vi.fn(() => Promise.resolve({ text: 'Visible report text' })),
+    typeText: vi.fn(() => Promise.resolve({ ok: true })),
+    waitFor: vi.fn(() => Promise.resolve({ ok: true, matched: 'text' })),
   };
   const fetchImpl: typeof fetch = () =>
     Promise.resolve(
@@ -166,6 +170,51 @@ describe('ToolGatewayHttpHandler', () => {
       json(await handler.handle(request(invokeBody('browser.live_view_url', {})))),
     ).resolves.toEqual({
       content: 'http://steel.local/ui/sessions/browser-1',
+      isError: false,
+      metadata: { sessionId: 'browser-1' },
+    });
+  });
+
+  it('executes browser click, type, select, and wait tools through the session driver', async () => {
+    const handler = makeHandler();
+
+    await expect(
+      json(
+        await handler.handle(
+          request(invokeBody('browser.click', { selector: 'button[name=search]' })),
+        ),
+      ),
+    ).resolves.toEqual({
+      content: JSON.stringify({ ok: true }),
+      isError: false,
+      metadata: { sessionId: 'browser-1' },
+    });
+    await expect(
+      json(
+        await handler.handle(
+          request(invokeBody('browser.type', { selector: 'input[name=q]', text: 'agent sandbox' })),
+        ),
+      ),
+    ).resolves.toEqual({
+      content: JSON.stringify({ ok: true }),
+      isError: false,
+      metadata: { sessionId: 'browser-1' },
+    });
+    await expect(
+      json(
+        await handler.handle(
+          request(invokeBody('browser.select', { selector: 'select[name=mode]', value: 'deep' })),
+        ),
+      ),
+    ).resolves.toEqual({
+      content: JSON.stringify({ ok: true }),
+      isError: false,
+      metadata: { sessionId: 'browser-1' },
+    });
+    await expect(
+      json(await handler.handle(request(invokeBody('browser.wait_for', { text: 'Results' })))),
+    ).resolves.toEqual({
+      content: JSON.stringify({ ok: true, matched: 'text' }),
       isError: false,
       metadata: { sessionId: 'browser-1' },
     });
