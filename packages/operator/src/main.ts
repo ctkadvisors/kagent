@@ -391,6 +391,20 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
     effectiveLlmKeySecretName,
     effectiveLlmKeySecretKey,
   );
+  // Local AgentCore-compatible tool runtime gateway. Helm projects the
+  // in-cluster gateway URL onto the operator as
+  // KAGENT_AGENT_POD_TOOL_GATEWAY_URL; spawned agent-pods read the
+  // shorter KAGENT_TOOL_GATEWAY_URL when resolving browser.* and
+  // code_interpreter.* tools.
+  if (
+    typeof env.KAGENT_AGENT_POD_TOOL_GATEWAY_URL === 'string' &&
+    env.KAGENT_AGENT_POD_TOOL_GATEWAY_URL.length > 0
+  ) {
+    extraEnv.push({
+      name: 'KAGENT_TOOL_GATEWAY_URL',
+      value: env.KAGENT_AGENT_POD_TOOL_GATEWAY_URL,
+    });
+  }
   if (
     typeof env.KAGENT_AGENT_POD_OTLP_ENDPOINT === 'string' &&
     env.KAGENT_AGENT_POD_OTLP_ENDPOINT.length > 0

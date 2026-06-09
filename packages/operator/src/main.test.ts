@@ -23,6 +23,7 @@ const TOUCHED_VARS = [
   'KAGENT_AGENT_POD_LITELLM_API_KEY',
   'KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_NAME',
   'KAGENT_AGENT_POD_LITELLM_API_KEY_SECRET_KEY',
+  'KAGENT_AGENT_POD_TOOL_GATEWAY_URL',
   'KAGENT_LLM_GATEWAY_BASE_URL',
   'KAGENT_LLM_GATEWAY_API_KEY',
   'KAGENT_LLM_GATEWAY_API_KEY_SECRET_NAME',
@@ -167,6 +168,25 @@ describe('buildJobSpecOptionsFromEnv — audit forwarding', () => {
     expect(findEnv(env, 'KAGENT_AUDIT_NATS_URL')).toBe(
       'nats://nats.kagent-system.svc.cluster.local:4222',
     );
+  });
+});
+
+describe('buildJobSpecOptionsFromEnv — tool runtime gateway forwarding', () => {
+  it('forwards KAGENT_AGENT_POD_TOOL_GATEWAY_URL into spawned Jobs as KAGENT_TOOL_GATEWAY_URL', () => {
+    process.env.KAGENT_AGENT_POD_TOOL_GATEWAY_URL =
+      'http://kagent-tool-gateway.kagent-system.svc.cluster.local:8080';
+
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_TOOL_GATEWAY_URL')).toBe(
+      'http://kagent-tool-gateway.kagent-system.svc.cluster.local:8080',
+    );
+  });
+
+  it('omits KAGENT_TOOL_GATEWAY_URL when the operator env is unset', () => {
+    const opts = buildJobSpecOptionsFromEnv();
+    const env = opts.extraEnv ?? [];
+    expect(findEnv(env, 'KAGENT_TOOL_GATEWAY_URL')).toBeUndefined();
   });
 });
 
