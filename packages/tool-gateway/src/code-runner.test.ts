@@ -104,7 +104,7 @@ describe('LocalCodeRunner', () => {
 
     const started = await runner.startCommand({
       command: 'node',
-      args: ['-e', 'setInterval(() => console.log("tick"), 20)'],
+      args: ['-e', 'console.log("tick"); setInterval(() => {}, 20)'],
       timeoutMs: 10_000,
     });
     await sleep(80);
