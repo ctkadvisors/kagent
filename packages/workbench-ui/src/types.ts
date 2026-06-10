@@ -249,6 +249,57 @@ export interface CreateTaskError {
 }
 
 /* =====================================================================
+ * Channel sessions — `/api/sessions`.
+ * ===================================================================== */
+
+export interface ChannelSessionSummary {
+  readonly id: string;
+  readonly namespace?: string;
+  readonly targetAgent?: string;
+  readonly turnCount: number;
+  readonly lastPhase?: AgentTaskPhase;
+  readonly lastActivityAt?: string;
+  readonly lastMessagePreview?: string;
+}
+
+export interface ChannelTaskLink {
+  readonly namespace: string;
+  readonly name: string;
+  readonly uid: string;
+  readonly phase?: AgentTaskPhase;
+  readonly ui: string;
+}
+
+export interface ChannelMessage {
+  readonly id: string;
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+  readonly createdAt?: string;
+  readonly task?: ChannelTaskLink;
+}
+
+export interface ChannelSessionDetail extends ChannelSessionSummary {
+  readonly messages: readonly ChannelMessage[];
+}
+
+export interface SendSessionMessageRequest {
+  readonly targetAgent: string;
+  readonly message: string;
+  readonly namespace?: string;
+  readonly runConfig?: {
+    readonly timeoutSeconds?: number;
+    readonly maxIterations?: number;
+  };
+}
+
+export interface SendSessionMessageResponse {
+  readonly sessionId: string;
+  readonly task: ChannelTaskLink & {
+    readonly createdAt?: string;
+  };
+}
+
+/* =====================================================================
  * Gateway page — `/api/gateway/*` and ModelEndpoint mutation surface.
  * Mirrors `packages/workbench-api/src/gateway-client.ts` shapes; declared
  * here so the UI stays leaf-deps-only.

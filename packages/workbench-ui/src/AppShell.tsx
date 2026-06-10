@@ -27,7 +27,7 @@ import styles from './AppShell.module.css';
 
 const STALE_MS = 60_000;
 
-type IconKey = 'architect' | 'command' | 'tasks' | 'cluster' | 'gateway' | 'review';
+type IconKey = 'architect' | 'command' | 'sessions' | 'tasks' | 'cluster' | 'gateway' | 'review';
 
 interface NavItem {
   readonly hash: string;
@@ -47,6 +47,7 @@ const NAV: readonly NavGroup[] = [
     label: 'Operate',
     items: [
       { hash: '#/command', label: 'Command Center', shortLabel: 'Command', icon: 'command' },
+      { hash: '#/sessions', label: 'Sessions', icon: 'sessions' },
       { hash: '#/', label: 'Tasks', icon: 'tasks' },
     ],
   },
@@ -65,6 +66,7 @@ const NAV: readonly NavGroup[] = [
 
 const TITLES: Record<string, string> = {
   '#/architect': 'Architect — chat to create',
+  '#/sessions': 'Sessions',
   '#/': 'Tasks',
   '#/cluster': 'Cluster',
   '#/gateway': 'Gateway',
@@ -98,6 +100,12 @@ function Icon({ name }: { name: IconKey }): React.JSX.Element {
       <>
         <path {...p} d="M8 6h13M8 12h13M8 18h13" />
         <path {...p} d="M3 6h.01M3 12h.01M3 18h.01" />
+      </>
+    ),
+    sessions: (
+      <>
+        <path {...p} d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v7A3.5 3.5 0 0 1 16.5 16H10l-5 4v-4.5A3.5 3.5 0 0 1 4 12.5v-7z" />
+        <path {...p} d="M8 7h8M8 11h5" />
       </>
     ),
     cluster: (
@@ -226,7 +234,8 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
           <div className={styles.group} key={group.label}>
             <div className={styles.groupLabel}>{group.label}</div>
             {group.items.map((item) => {
-              const active = hash === normalizeHash(item.hash);
+              const itemHash = normalizeHash(item.hash);
+              const active = hash === itemHash || (itemHash !== '#/' && hash.startsWith(`${itemHash}/`));
               const showBadge = item.badge === 'review' && reviewCount !== null && reviewCount > 0;
               return (
                 <a
@@ -281,7 +290,8 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
 
       <nav className={styles.mobileNav} aria-label="Primary">
         {navItems.map((item) => {
-          const active = hash === normalizeHash(item.hash);
+          const itemHash = normalizeHash(item.hash);
+          const active = hash === itemHash || (itemHash !== '#/' && hash.startsWith(`${itemHash}/`));
           const showBadge = item.badge === 'review' && reviewCount !== null && reviewCount > 0;
           return (
             <a

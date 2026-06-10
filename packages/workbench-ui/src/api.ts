@@ -21,12 +21,16 @@ import type {
   CreateTaskError,
   CreateTaskRequest,
   CreateTaskResponse,
+  ChannelSessionDetail,
+  ChannelSessionSummary,
   DispositionOverlayRow,
   GatewayCapacityResponse,
   GatewayProviderDispatchState,
   GatewayUsageResponse,
   PatchInFlightRequest,
   ReviewQueueRow,
+  SendSessionMessageRequest,
+  SendSessionMessageResponse,
   TaskDetail,
   TaskSummary,
 } from './types.js';
@@ -192,6 +196,55 @@ export class CreateTaskApiError extends Error {
   get error(): string {
     return this.message;
   }
+}
+
+/* =====================================================================
+ * Channel sessions surface — `/api/sessions`.
+ * ===================================================================== */
+
+export async function fetchSessions(signal?: AbortSignal): Promise<ChannelSessionSummary[]> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/sessions', init);
+  if (!res.ok) {
+    throw new Error(`fetchSessions: ${String(res.status)} ${res.statusText}`);
+  }
+  const body = (await res.json()) as { items?: ChannelSessionSummary[] };
+  return body.items ?? [];
+}
+
+export async function fetchSessionDetail(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<ChannelSessionDetail> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, init);
+  if (!res.ok) {
+    throw new Error(`fetchSessionDetail: ${String(res.status)} ${res.statusText}`);
+  }
+  return (await res.json()) as ChannelSessionDetail;
+}
+
+export async function sendSessionMessage(
+  sessionId: string,
+  req: SendSessionMessageRequest,
+): Promise<SendSessionMessageResponse> {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (res.status === 201) return (await res.json()) as SendSessionMessageResponse;
+  let body: { error?: string; fields?: CreateTaskError['fields'] } = {};
+  try {
+    body = (await res.json()) as typeof body;
+  } catch {
+    /* non-JSON error — fall through */
+  }
+  throw new CreateTaskApiError(
+    res.status,
+    body.error ?? `send session message: ${String(res.status)} ${res.statusText}`,
+    body.fields,
+  );
 }
 
 /* =====================================================================

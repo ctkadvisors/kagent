@@ -33,6 +33,7 @@ import { dispositionsRoute } from './routes/dispositions.js';
 import { gatewayRoute } from './routes/gateway.js';
 import { healthzRoute } from './routes/healthz.js';
 import { reviewQueueRoute } from './routes/review-queue.js';
+import { sessionsRoute } from './routes/sessions.js';
 import { streamRoute } from './routes/stream.js';
 import { tasksRoute } from './routes/tasks.js';
 import { uiProxyRoute } from './routes/ui-proxy.js';
@@ -171,6 +172,14 @@ export function buildRouter(deps: RouterDeps): Hono {
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));
+  app.route(
+    '/',
+    sessionsRoute({
+      cache: deps.cache,
+      ...(deps.customApi !== undefined && { customApi: deps.customApi }),
+      ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
+    }),
+  );
   app.route('/', streamRoute({ broker: deps.broker }));
   app.route(
     '/',

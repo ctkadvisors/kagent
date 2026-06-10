@@ -29,6 +29,7 @@ import { ClusterPage } from './ClusterPage.js';
 import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
 import { ReviewPage } from './ReviewPage.js';
+import { SessionsPage } from './SessionsPage.js';
 import { TaskDetail } from './TaskDetail.js';
 import { TaskList } from './TaskList.js';
 
@@ -62,6 +63,11 @@ interface ArchitectRoute {
   readonly kind: 'architect';
 }
 
+interface SessionsRoute {
+  readonly kind: 'sessions';
+  readonly sessionId?: string;
+}
+
 type Route =
   | DetailRoute
   | ListRoute
@@ -69,7 +75,8 @@ type Route =
   | ClusterRoute
   | CommandRoute
   | ReviewRoute
-  | ArchitectRoute;
+  | ArchitectRoute
+  | SessionsRoute;
 
 function parseHash(hash: string): Route {
   // Strip leading `#` and any leading `/`. Tolerate trailing slashes.
@@ -80,7 +87,11 @@ function parseHash(hash: string): Route {
   if (clean === 'command') return { kind: 'command' };
   if (clean === 'review') return { kind: 'review' };
   if (clean === 'architect') return { kind: 'architect' };
+  if (clean === 'sessions') return { kind: 'sessions' };
   const parts = clean.split('/');
+  if (parts[0] === 'sessions' && parts.length === 2 && parts[1] !== undefined) {
+    return { kind: 'sessions', sessionId: decodeURIComponent(parts[1]) };
+  }
   if (parts.length === 3 && parts[0] === 'tasks') {
     const ns = parts[1];
     const name = parts[2];
@@ -136,6 +147,13 @@ export function App(): React.JSX.Element {
     content = <ReviewPage onBack={goHome} />;
   } else if (route.kind === 'architect') {
     content = <ArchitectPage onBack={goHome} />;
+  } else if (route.kind === 'sessions') {
+    content =
+      route.sessionId !== undefined ? (
+        <SessionsPage initialSessionId={route.sessionId} />
+      ) : (
+        <SessionsPage />
+      );
   } else {
     content = <TaskList />;
   }

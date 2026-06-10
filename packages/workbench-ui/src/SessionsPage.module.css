@@ -1,0 +1,251 @@
+.wrapper {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
+  height: calc(100vh - 112px);
+  min-height: 620px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.connection {
+  color: #8190ad;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid rgba(132, 151, 184, 0.18);
+  background: #0d1422;
+}
+
+.sessionsPane {
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid rgba(132, 151, 184, 0.18);
+  background: #09111f;
+}
+
+.sessionButton {
+  display: grid;
+  width: 100%;
+  gap: 7px;
+  padding: 15px 16px;
+  border: 0;
+  border-bottom: 1px solid rgba(132, 151, 184, 0.12);
+  background: transparent;
+  color: #d7deec;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sessionButton:hover,
+.sessionButtonActive {
+  background: rgba(251, 196, 64, 0.1);
+}
+
+.sessionTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sessionName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 14px;
+  color: #f5c542;
+}
+
+.phase {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(94, 222, 154, 0.14);
+  color: #5ede9a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sessionMeta,
+.sessionPreview {
+  color: #8f9bb3;
+  font-size: 13px;
+}
+
+.chatPane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chatHeader {
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(132, 151, 184, 0.16);
+}
+
+.chatTitle {
+  margin: 0 0 6px;
+  color: #eef3ff;
+  font-size: 18px;
+}
+
+.chatSub {
+  color: #8f9bb3;
+  font-size: 13px;
+}
+
+.timeline {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding: 20px;
+  background: #111a2d;
+}
+
+.message {
+  max-width: min(760px, 88%);
+  border: 1px solid rgba(132, 151, 184, 0.18);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #17223a;
+  color: #e8eef9;
+  white-space: pre-wrap;
+}
+
+.messageUser {
+  align-self: flex-end;
+  background: #26321f;
+  border-color: rgba(251, 196, 64, 0.24);
+}
+
+.messageAssistant {
+  align-self: flex-start;
+}
+
+.messageMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+  color: #8f9bb3;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.taskLink,
+.createdTask {
+  color: #f5c542;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-top: 1px solid rgba(132, 151, 184, 0.16);
+  background: #0d1422;
+}
+
+.composerRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  color: #9da9bf;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(132, 151, 184, 0.24);
+  border-radius: 6px;
+  background: #050b15;
+  color: #eef3ff;
+  font: inherit;
+}
+
+.input {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.textarea {
+  min-height: 42px;
+  max-height: 120px;
+  resize: vertical;
+  padding: 10px;
+}
+
+.sendButton {
+  height: 42px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 18px;
+  background: #f5c542;
+  color: #15120a;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.sendButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.error {
+  color: #ff8e8e;
+  font-size: 13px;
+}
+
+.empty {
+  padding: 24px;
+  color: #8f9bb3;
+}
+
+@media (max-width: 900px) {
+  .wrapper {
+    height: auto;
+    min-height: 0;
+  }
+
+  .layout,
+  .composerRow {
+    grid-template-columns: 1fr;
+  }
+
+  .sessionsPane {
+    max-height: 260px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(132, 151, 184, 0.18);
+  }
+
+  .timeline {
+    max-height: 58vh;
+  }
+}
