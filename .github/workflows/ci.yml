@@ -349,10 +349,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      # Fail-fast so a broken Dockerfile in one image doesn't burn cosign
-      # signatures on the others. Each matrix leg is independent
-      # (separate context, file, image-ref pair).
-      fail-fast: true
+      # Keep image legs independent: one GHCR/package issue must not
+      # cancel publishing unrelated images from the same release tag.
+      fail-fast: false
       matrix:
         include:
           - name: operator
