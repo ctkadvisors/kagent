@@ -352,7 +352,9 @@ describe('runAgentTask', () => {
   it('flags synthesis_low_yield when content is empty / too short', async () => {
     const llm = scriptedLlm(''); // empty final → triggers low-yield via empty-content path
     const result = await runAgentTask(baseConfig, { llm, sinks: [] });
-    // empty content → finalContent is empty/null; detectors operate on it
+    // empty content is a dead-end run, not a successful operator result.
+    expect(result.status).toBe('failed');
+    expect(result.error?.message).toMatch(/final assistant content/i);
     expect(result.flags).toBeDefined();
   });
 
@@ -974,6 +976,9 @@ describe('runAgentTask — runConfig precedence (WS-G)', () => {
     // would have given more. Trace count is a proxy.
     const llmCalls = result.traces.filter((t) => t.trace_type === 'llm_call');
     expect(llmCalls.length).toBeLessThanOrEqual(2);
+    expect(result.status).toBe('failed');
+    expect(result.hitIterationCap).toBe(true);
+    expect(result.error?.message).toMatch(/maxIterations/i);
   });
 
   it('forwards an externally-supplied signal alongside the timeout signal', async () => {

@@ -81,6 +81,7 @@ export interface RunResult {
   readonly runId: string;
   readonly status: TerminalStatus;
   readonly finalContent: string | null;
+  readonly hitIterationCap: boolean;
   readonly flags: readonly string[];
   readonly traces: readonly TraceEntry[];
   readonly budget: ExecutionResult['budget'];
@@ -438,15 +439,31 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     artifactRegistry.snapshot(),
     collectArtifactsFromTraces(result.traces),
   );
+  const finalContent = typeof result.finalContent === 'string' ? result.finalContent : null;
+  const hitIterationCap = result.hitIterationCap;
+  const reachedDeadEnd =
+    hitIterationCap || finalContent === null || finalContent.trim().length === 0;
+  const status = result.status === 'completed' && reachedDeadEnd ? 'failed' : result.status;
+  const error =
+    status === 'failed' && result.status === 'completed'
+      ? {
+          message: hitIterationCap
+            ? 'agent stopped after reaching maxIterations before producing final assistant content'
+            : 'agent completed without final assistant content',
+        }
+      : result.error !== undefined
+        ? { message: result.error.message }
+        : undefined;
 
   return {
     runId: result.runId,
-    status: result.status,
-    finalContent: result.finalContent,
+    status,
+    finalContent,
+    hitIterationCap,
     flags,
     traces: result.traces,
     budget: result.budget,
-    ...(result.error !== undefined && { error: { message: result.error.message } }),
+    ...(error !== undefined && { error }),
     ...(artifacts.length > 0 && { artifacts }),
   };
 }

@@ -126,7 +126,9 @@ export function buildStatusPatch(result: RunResult, now: Date): StatusPatch {
     result.artifacts && result.artifacts.length > 0
       ? { artifacts: [...result.artifacts] }
       : undefined;
-  if (result.status === 'completed') {
+  const hasFinalContent =
+    typeof result.finalContent === 'string' && result.finalContent.trim().length > 0;
+  if (result.status === 'completed' && hasFinalContent && !result.hitIterationCap) {
     return {
       phase: 'Completed',
       result: { content: result.finalContent },
@@ -136,11 +138,18 @@ export function buildStatusPatch(result: RunResult, now: Date): StatusPatch {
     };
   }
   // Treat any non-completed terminal status (failed / cancelled /
-  // budget_exceeded / timeout) as Failed at the K8s status level —
-  // the actual TerminalStatus + error message survive in the trace
-  // for offline replay. Artifacts produced before the failure still
-  // get surfaced (a partial run can have written real outputs).
-  const message = result.error?.message ?? `loop ended with status=${result.status}`;
+  // budget_exceeded / timeout), plus dead-end "completed" loops, as
+  // Failed at the K8s status level. The actual TerminalStatus + error
+  // message survive in the trace for offline replay. Artifacts produced
+  // before the failure still get surfaced (a partial run can have
+  // written real outputs).
+  const message =
+    result.error?.message ??
+    (result.hitIterationCap
+      ? 'agent stopped after reaching maxIterations before producing final assistant content'
+      : result.status === 'completed'
+        ? 'agent completed with no final assistant content'
+        : `loop ended with status=${result.status}`);
   return {
     phase: 'Failed',
     error: message,

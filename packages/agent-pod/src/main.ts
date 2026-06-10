@@ -149,6 +149,7 @@ export function buildCancelledResult(config: PodConfig, signalName: NodeJS.Signa
     runId: config.taskId,
     status: 'cancelled',
     finalContent: null,
+    hitIterationCap: false,
     flags: [],
     traces: [],
     budget: {

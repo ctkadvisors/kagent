@@ -22,6 +22,7 @@ const baseResult: RunResult = {
   runId: 'task-uid-1',
   status: 'completed',
   finalContent: 'K3s uses containerd by default.',
+  hitIterationCap: false,
   flags: [],
   traces: [],
   budget: {
@@ -41,6 +42,20 @@ describe('buildStatusPatch', () => {
     expect(patch.completedAt).toBe('2026-04-26T10:00:00.000Z');
     expect(patch.structuralVerdict?.suspicious).toEqual([]);
     expect(patch.error).toBeUndefined();
+  });
+
+  it('maps a completed run with no final content to Failed', () => {
+    const patch = buildStatusPatch({ ...baseResult, finalContent: null }, fixedNow);
+    expect(patch.phase).toBe('Failed');
+    expect(patch.error).toMatch(/no final assistant content/i);
+    expect(patch.result).toBeUndefined();
+  });
+
+  it('maps a completed run that hit maxIterations to Failed', () => {
+    const patch = buildStatusPatch({ ...baseResult, hitIterationCap: true }, fixedNow);
+    expect(patch.phase).toBe('Failed');
+    expect(patch.error).toMatch(/maxIterations/i);
+    expect(patch.result).toBeUndefined();
   });
 
   it('includes detector flags in structuralVerdict.suspicious', () => {
