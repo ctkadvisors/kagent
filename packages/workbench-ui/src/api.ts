@@ -31,6 +31,7 @@ import type {
   ReviewQueueRow,
   SendSessionMessageRequest,
   SendSessionMessageResponse,
+  SessionProfile,
   TaskDetail,
   TaskSummary,
 } from './types.js';
@@ -222,6 +223,14 @@ export async function fetchSessionDetail(
     throw new Error(`fetchSessionDetail: ${String(res.status)} ${res.statusText}`);
   }
   return (await res.json()) as ChannelSessionDetail;
+}
+
+export async function fetchSessionProfiles(signal?: AbortSignal): Promise<SessionProfile[]> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/session-profiles', init);
+  if (!res.ok) return [];
+  const body = (await res.json()) as { items?: SessionProfile[] };
+  return body.items ?? [];
 }
 
 export async function sendSessionMessage(

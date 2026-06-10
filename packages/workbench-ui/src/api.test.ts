@@ -24,6 +24,7 @@ import type { ReviewQueueRow } from '@kagent/dto/review-queue';
 
 import {
   fetchDispositions,
+  fetchSessionProfiles,
   fetchReviewQueue,
   fetchGatewayProviderDispatch,
   acceptReviewQueueRow,
@@ -252,6 +253,44 @@ describe('terminateTask', () => {
     mockFetchWithStatus(403, { error: 'RBAC denied' });
 
     await expect(terminateTask('kagent-draft', 'running')).rejects.toThrow(/RBAC denied/);
+  });
+});
+
+describe('fetchSessionProfiles', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('calls /api/session-profiles and returns the items array', async () => {
+    const profile = {
+      id: 'agent:kagent-draft/profile-agentcore-research-agent',
+      profileName: 'research-browser-code',
+      source: 'Agent',
+      targetAgent: 'profile-agentcore-research-agent',
+      namespace: 'kagent-draft',
+      modelClass: 'tool-caller-default',
+      toolProfileRef: 'browser-code-researcher',
+      tools: ['browser.goto'],
+      capabilities: ['research'],
+      defaults: { runConfig: { timeoutSeconds: 300, maxIterations: 8 } },
+      launchability: { state: 'ready', reasons: [] },
+    };
+    mockFetchOk({ items: [profile] });
+
+    const rows = await fetchSessionProfiles();
+
+    expect(rows).toEqual([profile]);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    expect(fetchMock).toHaveBeenCalledWith('/api/session-profiles', {});
+  });
+
+  it('returns an empty list on non-2xx so the composer can fall back', async () => {
+    mockFetchNotOk(503, 'Service Unavailable');
+
+    await expect(fetchSessionProfiles()).resolves.toEqual([]);
   });
 });
 

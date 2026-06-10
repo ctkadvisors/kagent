@@ -156,6 +156,28 @@
   font-size: 12px;
 }
 
+.messageActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stopTaskButton {
+  border: 1px solid rgba(255, 111, 111, 0.4);
+  border-radius: 6px;
+  background: rgba(255, 111, 111, 0.14);
+  color: #ff9c9c;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.stopTaskButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .composer {
   display: grid;
   gap: 12px;
@@ -193,6 +215,16 @@
 .input {
   height: 38px;
   padding: 0 10px;
+}
+
+.profileMeta {
+  overflow: hidden;
+  color: #8f9bb3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .textarea {

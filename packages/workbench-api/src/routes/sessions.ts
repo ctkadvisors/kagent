@@ -16,7 +16,7 @@
 import { Hono } from 'hono';
 import type { CustomObjectsApi } from '@kubernetes/client-node';
 
-import { API_GROUP_VERSION, type AgentTask } from '@kagent/dto';
+import { API_GROUP_VERSION, type Agent, type AgentTask } from '@kagent/dto';
 
 import type { SnapshotCache } from '../cache.js';
 
@@ -36,6 +36,8 @@ const CREATED_BY = 'kagent-workbench-channel';
 const MAX_MESSAGE_BYTES = 32_768;
 const MAX_HISTORY_CHARS = 8_000;
 const NAME_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+const DEFAULT_TIMEOUT_SECONDS = 300;
+const DEFAULT_MAX_ITERATIONS = 8;
 
 export interface SessionsRouteDeps {
   readonly cache: SnapshotCache;
@@ -75,6 +77,30 @@ interface SessionRunConfig {
   readonly maxIterations?: number;
 }
 
+interface SessionProfile {
+  readonly id: string;
+  readonly profileName: string;
+  readonly source: 'Agent';
+  readonly targetAgent: string;
+  readonly namespace: string;
+  readonly model?: string;
+  readonly modelClass?: string;
+  readonly toolProfileRef?: string;
+  readonly sandboxProfile: 'default' | 'strict';
+  readonly capabilities: readonly string[];
+  readonly tools: readonly string[];
+  readonly defaults: {
+    readonly runConfig: {
+      readonly timeoutSeconds: number;
+      readonly maxIterations: number;
+    };
+  };
+  readonly launchability: {
+    readonly state: 'ready';
+    readonly reasons: readonly string[];
+  };
+}
+
 interface SessionDetail extends SessionSummary {
   readonly messages: readonly SessionMessage[];
 }
@@ -101,6 +127,10 @@ export function sessionsRoute(deps: SessionsRouteDeps): Hono {
   app.get('/api/sessions', (c) => {
     const sessions = buildSessionSummaries(deps.cache.listTasks());
     return c.json({ items: sessions });
+  });
+
+  app.get('/api/session-profiles', (c) => {
+    return c.json({ items: buildSessionProfiles(deps.cache.listAgents()) });
   });
 
   app.get('/api/sessions/:sessionId', (c) => {
@@ -239,6 +269,39 @@ export function sessionsRoute(deps: SessionsRouteDeps): Hono {
   });
 
   return app;
+}
+
+function buildSessionProfiles(agents: readonly Agent[]): readonly SessionProfile[] {
+  return agents
+    .map((agent) => {
+      const namespace = agent.metadata.namespace ?? 'default';
+      const targetAgent = agent.metadata.name ?? '';
+      const profileName = agent.spec.agentType ?? agent.spec.toolProfileRef ?? targetAgent;
+      const out: SessionProfile = {
+        id: `agent:${namespace}/${targetAgent}`,
+        profileName,
+        source: 'Agent',
+        targetAgent,
+        namespace,
+        ...(agent.spec.model !== undefined && { model: agent.spec.model }),
+        ...(agent.spec.modelClass !== undefined && { modelClass: agent.spec.modelClass }),
+        ...(agent.spec.toolProfileRef !== undefined && {
+          toolProfileRef: agent.spec.toolProfileRef,
+        }),
+        sandboxProfile: agent.spec.sandboxProfile ?? 'default',
+        capabilities: agent.spec.capabilities ?? [],
+        tools: agent.spec.tools ?? [],
+        defaults: {
+          runConfig: {
+            timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
+            maxIterations: DEFAULT_MAX_ITERATIONS,
+          },
+        },
+        launchability: { state: 'ready', reasons: [] },
+      };
+      return out;
+    })
+    .sort((a, b) => a.profileName.localeCompare(b.profileName) || a.id.localeCompare(b.id));
 }
 
 function buildSessionSummaries(tasks: readonly AgentTask[]): readonly SessionSummary[] {

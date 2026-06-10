@@ -8,15 +8,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchAgents,
   fetchSessionDetail,
+  fetchSessionProfiles,
   fetchSessions,
   sendSessionMessage,
   subscribeCacheEvents,
+  terminateTask,
 } from './api.js';
 import type {
   AgentSummaryRow,
   ChannelSessionDetail,
   ChannelSessionSummary,
   SendSessionMessageResponse,
+  SessionProfile,
 } from './types.js';
 import styles from './SessionsPage.module.css';
 
@@ -32,19 +35,26 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
   const [sessions, setSessions] = useState<readonly ChannelSessionSummary[]>([]);
   const [detail, setDetail] = useState<ChannelSessionDetail | null>(null);
   const [agents, setAgents] = useState<readonly AgentSummaryRow[]>([]);
+  const [profiles, setProfiles] = useState<readonly SessionProfile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialSessionId ?? null);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
   const [targetAgent, setTargetAgent] = useState<string>('');
   const [message, setMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [createdTask, setCreatedTask] = useState<SendSessionMessageResponse['task'] | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [stoppingTask, setStoppingTask] = useState<string | null>(null);
   const [lastEventAt, setLastEventAt] = useState(Date.now());
   const [now, setNow] = useState(Date.now());
   const listAbortRef = useRef<AbortController | null>(null);
   const detailAbortRef = useRef<AbortController | null>(null);
   const agentsAbortRef = useRef<AbortController | null>(null);
+  const profilesAbortRef = useRef<AbortController | null>(null);
+  const sessionsRef = useRef<readonly ChannelSessionSummary[]>([]);
+  const detailRef = useRef<ChannelSessionDetail | null>(null);
   const selectedIdRef = useRef<string | null>(initialSessionId ?? null);
   const targetSeedSessionRef = useRef<string | null>(null);
+  const profilesRef = useRef<readonly SessionProfile[]>([]);
 
   const selectedSession = useMemo(
     () => sessions.find((s) => s.id === selectedId) ?? null,
@@ -54,7 +64,15 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
     () => agents.find((agent) => agent.name === targetAgent) ?? null,
     [agents, targetAgent],
   );
-  const displayTarget = detail?.targetAgent ?? selectedSession?.targetAgent ?? targetAgent;
+  const selectedProfile = useMemo(
+    () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
+    [profiles, selectedProfileId],
+  );
+  const displayTarget =
+    selectedProfile?.profileName ??
+    detail?.targetAgent ??
+    selectedSession?.targetAgent ??
+    targetAgent;
 
   const refreshSessions = (): void => {
     listAbortRef.current?.abort();
@@ -62,6 +80,7 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
     listAbortRef.current = ctrl;
     fetchSessions(ctrl.signal)
       .then((items) => {
+        sessionsRef.current = items;
         setSessions(items);
         setError(null);
         setSelectedId((current) => current ?? initialSessionId ?? items[0]?.id ?? null);
@@ -78,7 +97,15 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
     detailAbortRef.current = ctrl;
     fetchSessionDetail(sessionId, ctrl.signal)
       .then((next) => {
+        detailRef.current = next;
         setDetail(next);
+        setSelectedProfileId((current) => {
+          const match = profileIdForTarget(profilesRef.current, next.namespace, next.targetAgent);
+          if (targetSeedSessionRef.current !== next.id) {
+            return match ?? current;
+          }
+          return current || match || chooseDefaultProfile(profilesRef.current);
+        });
         setTargetAgent((current) => {
           if (targetSeedSessionRef.current !== next.id) {
             targetSeedSessionRef.current = next.id;
@@ -90,6 +117,7 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
       })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
+        detailRef.current = null;
         setDetail(null);
         setError(err instanceof Error ? err.message : String(err));
       });
@@ -117,6 +145,35 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
         if (err instanceof DOMException && err.name === 'AbortError') return;
         /* agent picker degrades to free text */
       });
+    profilesAbortRef.current?.abort();
+    const profilesCtrl = new AbortController();
+    profilesAbortRef.current = profilesCtrl;
+    fetchSessionProfiles(profilesCtrl.signal)
+      .then((items) => {
+        profilesRef.current = items;
+        setProfiles(items);
+        setSelectedProfileId((current) => {
+          if (current.length > 0 && items.some((profile) => profile.id === current)) return current;
+          const sessionId = selectedIdRef.current;
+          const currentDetail = detailRef.current;
+          const currentSession =
+            sessionId === null
+              ? null
+              : (sessionsRef.current.find((session) => session.id === sessionId) ?? null);
+          return (
+            profileIdForTarget(
+              items,
+              currentDetail?.namespace ?? currentSession?.namespace,
+              currentDetail?.targetAgent ?? currentSession?.targetAgent,
+            ) ?? chooseDefaultProfile(items)
+          );
+        });
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        profilesRef.current = [];
+        setProfiles([]);
+      });
     const unsubscribe = subscribeCacheEvents(
       (ev) => {
         setLastEventAt(Date.now());
@@ -137,6 +194,7 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
       listAbortRef.current?.abort();
       detailAbortRef.current?.abort();
       agentsAbortRef.current?.abort();
+      profilesAbortRef.current?.abort();
     };
     // One mount-time subscription. Refresh helpers intentionally close
     // over current state setters only.
@@ -159,15 +217,21 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
       return;
     }
     const trimmed = message.trim();
-    if (trimmed.length === 0 || targetAgent.trim().length === 0) return;
+    const launch = selectedProfile ?? null;
+    const target = launch?.targetAgent ?? targetAgent.trim();
+    if (trimmed.length === 0 || target.length === 0) return;
     setSubmitting(true);
     setError(null);
     sendSessionMessage(sessionId, {
-      targetAgent: targetAgent.trim(),
+      targetAgent: target,
       message: trimmed,
       namespace:
-        selectedAgent?.namespace ?? selectedSession?.namespace ?? detail?.namespace ?? 'kagent-system',
-      runConfig: {
+        launch?.namespace ??
+        selectedAgent?.namespace ??
+        selectedSession?.namespace ??
+        detail?.namespace ??
+        'kagent-system',
+      runConfig: launch?.defaults.runConfig ?? {
         timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
         maxIterations: DEFAULT_MAX_ITERATIONS,
       },
@@ -187,6 +251,23 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
       });
   };
 
+  const stopTask = (namespace: string, name: string): void => {
+    const key = `${namespace}/${name}`;
+    setStoppingTask(key);
+    setError(null);
+    terminateTask(namespace, name)
+      .then(() => {
+        refreshSessions();
+        if (selectedIdRef.current !== null) refreshDetail(selectedIdRef.current);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        setStoppingTask(null);
+      });
+  };
+
   const stale = now - lastEventAt > STALE_MS;
 
   return (
@@ -194,7 +275,9 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
       <div className={styles.header}>
         <h1 className={styles.title}>Sessions</h1>
         <span className={styles.connection}>
-          {stale ? `stream stale ${Math.floor((now - lastEventAt) / 1000).toString()}s` : 'stream live'}
+          {stale
+            ? `stream stale ${Math.floor((now - lastEventAt) / 1000).toString()}s`
+            : 'stream live'}
         </span>
       </div>
 
@@ -251,13 +334,25 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
                 >
                   <div className={styles.messageMeta}>
                     <span>{item.role === 'user' ? 'You' : 'Controller'}</span>
-                    {item.task !== undefined && item.role === 'assistant' ? (
-                      <a
-                        className={styles.taskLink}
-                        href={item.task.ui.replace(/^\/#/, '#')}
-                      >
-                        open task {item.task.name}
-                      </a>
+                    {item.task !== undefined ? (
+                      <span className={styles.messageActions}>
+                        {item.role === 'assistant' ? (
+                          <a className={styles.taskLink} href={item.task.ui.replace(/^\/#/, '#')}>
+                            open task {item.task.name}
+                          </a>
+                        ) : null}
+                        {isActivePhase(item.task.phase) ? (
+                          <button
+                            type="button"
+                            className={styles.stopTaskButton}
+                            aria-label={`stop task ${item.task.name}`}
+                            disabled={stoppingTask === `${item.task.namespace}/${item.task.name}`}
+                            onClick={() => stopTask(item.task!.namespace, item.task!.name)}
+                          >
+                            stop
+                          </button>
+                        ) : null}
+                      </span>
                     ) : null}
                   </div>
                   {item.content}
@@ -269,10 +364,25 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
           <form className={styles.composer} onSubmit={onSubmit}>
             <div className={styles.composerRow}>
               <label className={styles.field}>
-                Target
-                {agents.length > 0 ? (
+                {profiles.length > 0 ? 'Profile' : 'Target'}
+                {profiles.length > 0 ? (
                   <select
                     className={styles.input}
+                    aria-label="Profile"
+                    value={selectedProfileId}
+                    onChange={(e) => setSelectedProfileId(e.target.value)}
+                    disabled={submitting}
+                  >
+                    {profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.profileName}
+                      </option>
+                    ))}
+                  </select>
+                ) : agents.length > 0 ? (
+                  <select
+                    className={styles.input}
+                    aria-label="Target"
                     value={targetAgent}
                     onChange={(e) => setTargetAgent(e.target.value)}
                     disabled={submitting}
@@ -287,12 +397,16 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
                 ) : (
                   <input
                     className={styles.input}
+                    aria-label="Target"
                     value={targetAgent}
                     onChange={(e) => setTargetAgent(e.target.value)}
                     placeholder="controller"
                     disabled={submitting}
                   />
                 )}
+                {profiles.length > 0 && selectedProfile !== null ? (
+                  <span className={styles.profileMeta}>{profileMeta(selectedProfile)}</span>
+                ) : null}
               </label>
               <label className={styles.field}>
                 Message
@@ -307,7 +421,11 @@ export function SessionsPage({ initialSessionId }: SessionsPageProps): React.JSX
               <button
                 type="submit"
                 className={styles.sendButton}
-                disabled={submitting || message.trim().length === 0 || targetAgent.trim().length === 0}
+                disabled={
+                  submitting ||
+                  message.trim().length === 0 ||
+                  (selectedProfile === null && targetAgent.trim().length === 0)
+                }
               >
                 Send
               </button>
@@ -339,4 +457,37 @@ function chooseDefaultAgent(agents: readonly AgentSummaryRow[]): string {
     agents.find((agent) => agent.name === 'orchestrator') ??
     agents[0];
   return preferred?.name ?? '';
+}
+
+function chooseDefaultProfile(profiles: readonly SessionProfile[]): string {
+  const preferred =
+    profiles.find(
+      (profile) => profile.targetAgent === 'orchestrator' && profile.namespace === 'kagent-system',
+    ) ??
+    profiles.find((profile) => profile.targetAgent === 'controller') ??
+    profiles.find((profile) => profile.targetAgent === 'orchestrator') ??
+    profiles[0];
+  return preferred?.id ?? '';
+}
+
+function profileIdForTarget(
+  profiles: readonly SessionProfile[],
+  namespace: string | undefined,
+  targetAgent: string | undefined,
+): string | undefined {
+  if (targetAgent === undefined) return undefined;
+  return profiles.find((profile) => {
+    if (profile.targetAgent !== targetAgent) return false;
+    return namespace === undefined || profile.namespace === namespace;
+  })?.id;
+}
+
+function profileMeta(profile: SessionProfile): string {
+  const model = profile.modelClass ?? profile.model ?? 'model unset';
+  const toolProfile = profile.toolProfileRef ?? `${profile.tools.length.toString()} tools`;
+  return `${model} · ${toolProfile}`;
+}
+
+function isActivePhase(phase: string | undefined): boolean {
+  return phase === 'Pending' || phase === 'Dispatched';
 }

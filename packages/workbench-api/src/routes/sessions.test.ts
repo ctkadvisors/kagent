@@ -10,7 +10,11 @@ import { API_GROUP_VERSION, type Agent, type AgentTask } from '@kagent/dto';
 import { SnapshotCache } from '../cache.js';
 import { sessionsRoute } from './sessions.js';
 
-function makeAgent(name: string, namespace = 'kagent-system'): Agent {
+function makeAgent(
+  name: string,
+  namespace = 'kagent-system',
+  spec: Partial<Agent['spec']> = {},
+): Agent {
   return {
     apiVersion: API_GROUP_VERSION,
     kind: 'Agent',
@@ -18,6 +22,7 @@ function makeAgent(name: string, namespace = 'kagent-system'): Agent {
     spec: {
       modelClass: 'tool-caller-default',
       toolProfileRef: 'browser-code-researcher',
+      ...spec,
     },
   };
 }
@@ -93,6 +98,75 @@ function makeFakeCustomApi(opts?: { readonly returnedUid?: string }) {
 }
 
 describe('sessionsRoute', () => {
+  it('projects launchable session profiles from cached Agents', async () => {
+    const cache = new SnapshotCache();
+    cache.upsertAgent(
+      makeAgent('profile-agentcore-research-agent', 'kagent-draft', {
+        agentType: 'research-browser-code',
+        capabilities: ['research'],
+        tools: ['browser.goto'],
+        sandboxProfile: 'strict',
+      }),
+    );
+    cache.upsertAgent(
+      makeAgent('orchestrator', 'kagent-system', {
+        model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        modelClass: undefined,
+        toolProfileRef: undefined,
+      }),
+    );
+
+    const res = await sessionsRoute({ cache }).request('/api/session-profiles');
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      readonly items: readonly {
+        readonly id: string;
+        readonly profileName: string;
+        readonly source: string;
+        readonly targetAgent: string;
+        readonly namespace: string;
+        readonly model?: string;
+        readonly modelClass?: string;
+        readonly toolProfileRef?: string;
+        readonly sandboxProfile?: string;
+        readonly tools: readonly string[];
+        readonly capabilities: readonly string[];
+        readonly defaults: { readonly runConfig: Record<string, number> };
+        readonly launchability: { readonly state: string; readonly reasons: readonly string[] };
+      }[];
+    };
+    expect(body.items).toEqual([
+      {
+        id: 'agent:kagent-system/orchestrator',
+        profileName: 'orchestrator',
+        source: 'Agent',
+        targetAgent: 'orchestrator',
+        namespace: 'kagent-system',
+        model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
+        sandboxProfile: 'default',
+        tools: [],
+        capabilities: [],
+        defaults: { runConfig: { timeoutSeconds: 300, maxIterations: 8 } },
+        launchability: { state: 'ready', reasons: [] },
+      },
+      {
+        id: 'agent:kagent-draft/profile-agentcore-research-agent',
+        profileName: 'research-browser-code',
+        source: 'Agent',
+        targetAgent: 'profile-agentcore-research-agent',
+        namespace: 'kagent-draft',
+        modelClass: 'tool-caller-default',
+        toolProfileRef: 'browser-code-researcher',
+        sandboxProfile: 'strict',
+        tools: ['browser.goto'],
+        capabilities: ['research'],
+        defaults: { runConfig: { timeoutSeconds: 300, maxIterations: 8 } },
+        launchability: { state: 'ready', reasons: [] },
+      },
+    ]);
+  });
+
   it('lists channel sessions newest first from channel-labelled tasks', async () => {
     const cache = new SnapshotCache();
     cache.upsertTask(

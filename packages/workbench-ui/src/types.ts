@@ -208,8 +208,17 @@ export interface AgentSummaryRow {
    * label the tier even when no physical model is set at the Agent layer.
    */
   readonly modelClass?: string;
+  readonly sandboxProfile?: 'default' | 'strict';
   readonly tools?: readonly string[];
   readonly capabilities?: readonly string[];
+  readonly toolProfileRef?: string;
+  readonly agentType?: string;
+  readonly recentTaskCounts?: {
+    readonly pending: number;
+    readonly dispatched: number;
+    readonly completed: number;
+    readonly failed: number;
+  };
 }
 
 export interface CreateTaskRequest {
@@ -280,6 +289,35 @@ export interface ChannelMessage {
 
 export interface ChannelSessionDetail extends ChannelSessionSummary {
   readonly messages: readonly ChannelMessage[];
+}
+
+export interface SessionProfile {
+  readonly id: string;
+  readonly profileName: string;
+  readonly source: 'Agent';
+  readonly targetAgent: string;
+  readonly namespace: string;
+  readonly model?: string;
+  readonly modelClass?: string;
+  readonly toolProfileRef?: string;
+  readonly sandboxProfile?: 'default' | 'strict';
+  readonly capabilities: readonly string[];
+  readonly tools: readonly string[];
+  readonly defaults: {
+    readonly runConfig: {
+      readonly timeoutSeconds: number;
+      readonly maxIterations: number;
+    };
+  };
+  readonly launchability: {
+    readonly state:
+      | 'ready'
+      | 'blocked_by_backoff'
+      | 'blocked_by_model_tool_compatibility'
+      | 'blocked_by_missing_runtime'
+      | 'disabled_by_killswitch';
+    readonly reasons: readonly string[];
+  };
 }
 
 export interface SendSessionMessageRequest {
