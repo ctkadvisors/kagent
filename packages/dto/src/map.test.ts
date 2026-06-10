@@ -58,6 +58,8 @@ function makeAgent(overrides: Partial<Agent['spec']> & { name?: string } = {}): 
     spec: {
       model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct',
       tools: ['fetch_url'],
+      toolProfileRef: 'browser-code-researcher',
+      agentType: 'browser-code-researcher',
       capabilities: ['research'],
       sandboxProfile: 'default',
       ...spec,
@@ -380,6 +382,8 @@ describe('agentSummary', () => {
       sandboxProfile: 'default',
       capabilities: ['research'],
       tools: ['fetch_url'],
+      toolProfileRef: 'browser-code-researcher',
+      agentType: 'browser-code-researcher',
       recentTaskCounts: { pending: 0, dispatched: 0, completed: 0, failed: 0 },
     });
   });

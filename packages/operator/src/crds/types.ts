@@ -137,6 +137,16 @@ export interface AgentSpec {
   /** Optional tool names this agent is allowed to invoke. Empty/undefined = none. */
   readonly tools?: readonly string[];
 
+  /**
+   * Optional gateway-owned tool profile grant. The agent-pod passes this
+   * to the tool gateway, and the gateway resolves the concrete browser.*,
+   * code_interpreter.*, mcp.*, and http.* tools centrally.
+   */
+  readonly toolProfileRef?: string;
+
+  /** Alias for `toolProfileRef` using the user-facing agent-type term. */
+  readonly agentType?: string;
+
   /** Optional capability tags this agent can satisfy when AgentTasks address by capability. */
   readonly capabilities?: readonly string[];
 
@@ -1235,7 +1245,12 @@ export function isAgent(obj: unknown): obj is Agent {
   const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
   if (o.apiVersion !== API_GROUP_VERSION) return false;
   if (o.kind !== 'Agent') return false;
-  const spec = o.spec as { model?: unknown; modelClass?: unknown } | null;
+  const spec = o.spec as {
+    model?: unknown;
+    modelClass?: unknown;
+    toolProfileRef?: unknown;
+    agentType?: unknown;
+  } | null;
   if (typeof spec !== 'object' || spec === null) return false;
 
   /* At-least-one rule: a non-empty `model` OR a non-empty `modelClass`
@@ -1252,6 +1267,18 @@ export function isAgent(obj: unknown): obj is Agent {
   // Defensive type-check: when a field is present-but-malformed, refuse.
   if (spec.model !== undefined && typeof spec.model !== 'string') return false;
   if (spec.modelClass !== undefined && typeof spec.modelClass !== 'string') return false;
+  if (
+    spec.toolProfileRef !== undefined &&
+    (typeof spec.toolProfileRef !== 'string' || spec.toolProfileRef.length === 0)
+  ) {
+    return false;
+  }
+  if (
+    spec.agentType !== undefined &&
+    (typeof spec.agentType !== 'string' || spec.agentType.length === 0)
+  ) {
+    return false;
+  }
 
   if (!hasValidModel && !hasValidModelClass) return false;
   return true;

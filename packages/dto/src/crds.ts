@@ -74,6 +74,10 @@ export interface AgentSpec {
     readonly version?: number;
   };
   readonly tools?: readonly string[];
+  /** Gateway-owned tool profile grant resolved centrally by the tool gateway. */
+  readonly toolProfileRef?: string;
+  /** Alias for `toolProfileRef` using the user-facing agent-type term. */
+  readonly agentType?: string;
   readonly capabilities?: readonly string[];
   readonly sandboxProfile?: 'default' | 'strict';
   /**

@@ -30,6 +30,7 @@ export interface ToolGatewayProviderOptions {
   readonly baseUrl: string;
   readonly task: ToolGatewayTaskIdentity;
   readonly tools: readonly string[];
+  readonly toolProfileRefs?: readonly string[];
   readonly fetch?: typeof fetch;
 }
 
@@ -40,10 +41,13 @@ export class ToolGatewayProvider implements ToolProvider {
   private readonly baseUrl: string;
   private readonly task: ToolGatewayTaskIdentity;
   private readonly fetchImpl: typeof fetch;
-  private readonly grantedToolNames: ReadonlySet<string>;
+  private readonly explicitGrantedToolNames: ReadonlySet<string>;
+  private readonly profileGrantedToolNames = new Set<string>();
+  private readonly toolProfileRefs: readonly string[];
   private readonly runtimeToolNames: readonly ToolRuntimeToolName[];
   private readonly externalToolNames: readonly string[];
   private readonly descriptors: ToolDescriptor[];
+  private profileResolvedDescriptors: ToolDescriptor[] | undefined;
 
   constructor(options: ToolGatewayProviderOptions) {
     this.id = options.id ?? DEFAULT_PROVIDER_ID;
@@ -51,7 +55,8 @@ export class ToolGatewayProvider implements ToolProvider {
     this.task = options.task;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     const gatewayToolNames = requestedGatewayToolNames(options.tools);
-    this.grantedToolNames = new Set(gatewayToolNames);
+    this.explicitGrantedToolNames = new Set(gatewayToolNames);
+    this.toolProfileRefs = normalizeToolProfileRefs(options.toolProfileRefs);
     this.runtimeToolNames = gatewayToolNames.filter((tool): tool is ToolRuntimeToolName =>
       isToolRuntimeTool(tool),
     );
@@ -60,12 +65,19 @@ export class ToolGatewayProvider implements ToolProvider {
   }
 
   describeTools(ctx?: ToolInvocationContext): ToolDescriptor[] | Promise<ToolDescriptor[]> {
-    if (this.externalToolNames.length === 0) return this.descriptors;
-    return this.describeExternalTools(ctx);
+    if (this.externalToolNames.length === 0 && this.toolProfileRefs.length === 0) {
+      return this.descriptors;
+    }
+    return this.describeGatewayTools(ctx);
   }
 
   async executeTool(call: ToolCall, ctx: ToolInvocationContext): Promise<ToolResult> {
-    if (!this.grantedToolNames.has(call.name)) {
+    if (!this.isGranted(call.name)) {
+      if (this.toolProfileRefs.length > 0) {
+        await this.describeGatewayTools(ctx);
+      }
+    }
+    if (!this.isGranted(call.name)) {
       return {
         content: `policy_denied: tool "${call.name}" was not granted to this Agent`,
         isError: true,
@@ -104,7 +116,9 @@ export class ToolGatewayProvider implements ToolProvider {
     return parseToolResult(await response.json());
   }
 
-  private async describeExternalTools(ctx?: ToolInvocationContext): Promise<ToolDescriptor[]> {
+  private async describeGatewayTools(ctx?: ToolInvocationContext): Promise<ToolDescriptor[]> {
+    if (this.profileResolvedDescriptors !== undefined) return this.profileResolvedDescriptors;
+
     const init: RequestInit = {
       method: 'POST',
       headers: {
@@ -116,7 +130,11 @@ export class ToolGatewayProvider implements ToolProvider {
       },
       body: JSON.stringify({
         task: this.task,
-        toolNames: this.externalToolNames,
+        toolNames:
+          this.toolProfileRefs.length > 0
+            ? [...this.runtimeToolNames, ...this.externalToolNames]
+            : this.externalToolNames,
+        ...(this.toolProfileRefs.length > 0 && { toolProfileRefs: this.toolProfileRefs }),
       }),
     };
     if (ctx?.abortSignal !== undefined) init.signal = ctx.abortSignal;
@@ -127,7 +145,20 @@ export class ToolGatewayProvider implements ToolProvider {
       throw new Error(`Gateway ${response.status}: ${await responseMessage(response)}`);
     }
 
-    return [...this.descriptors, ...parseToolDescriptors(await response.json())];
+    const gatewayDescriptors = parseToolDescriptors(await response.json());
+    if (this.toolProfileRefs.length === 0) {
+      return [...this.descriptors, ...gatewayDescriptors];
+    }
+
+    for (const descriptor of gatewayDescriptors) {
+      this.profileGrantedToolNames.add(descriptor.name);
+    }
+    this.profileResolvedDescriptors = gatewayDescriptors;
+    return gatewayDescriptors;
+  }
+
+  private isGranted(name: string): boolean {
+    return this.explicitGrantedToolNames.has(name) || this.profileGrantedToolNames.has(name);
   }
 }
 
@@ -158,6 +189,18 @@ export function requestedGatewayToolNames(tools: readonly string[] | undefined):
     out.push(tool);
   }
 
+  return out;
+}
+
+function normalizeToolProfileRefs(values: readonly string[] | undefined): readonly string[] {
+  if (values === undefined) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (value.length === 0 || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
   return out;
 }
 

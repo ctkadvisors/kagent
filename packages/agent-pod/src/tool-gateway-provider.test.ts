@@ -146,6 +146,69 @@ describe('ToolGatewayProvider', () => {
     });
   });
 
+  it('fetches profile-resolved descriptors from the gateway and grants only returned tools', async () => {
+    const { calls, fetch } = makeFetch([
+      makeJsonResponse({
+        tools: [
+          {
+            name: 'browser.goto',
+            description: 'Navigate the task-scoped browser session to a URL.',
+            inputSchema: { type: 'object' },
+          },
+          {
+            name: 'code_interpreter.execute_code',
+            description: 'Execute inline code in the code workspace.',
+            inputSchema: { type: 'object' },
+          },
+        ],
+      }),
+      makeJsonResponse({ content: 'navigated', isError: false }),
+    ]);
+    const provider = new ToolGatewayProvider({
+      baseUrl: 'http://tool-gateway.kagent-system.svc',
+      fetch,
+      task: {
+        tenant: 'homelab',
+        namespace: 'kagent-draft',
+        taskUid: 'task-1',
+        agentName: 'agent',
+      },
+      tools: [],
+      toolProfileRefs: ['browser-code-researcher'],
+    });
+
+    const descriptors = await provider.describeTools(ctx());
+
+    expect(descriptors.map((tool) => tool.name)).toEqual([
+      'browser.goto',
+      'code_interpreter.execute_code',
+    ]);
+    expect(parsedRequestBody(calls[0])).toEqual({
+      task: {
+        tenant: 'homelab',
+        namespace: 'kagent-draft',
+        taskUid: 'task-1',
+        agentName: 'agent',
+      },
+      toolNames: [],
+      toolProfileRefs: ['browser-code-researcher'],
+    });
+
+    await expect(
+      provider.executeTool(
+        { id: 'call-1', name: 'browser.goto', args: { url: 'https://example.com' } },
+        ctx(),
+      ),
+    ).resolves.toEqual({ content: 'navigated', isError: false });
+    await expect(
+      provider.executeTool({ id: 'call-2', name: 'browser.screenshot', args: {} }, ctx()),
+    ).resolves.toEqual({
+      content: 'policy_denied: tool "browser.screenshot" was not granted to this Agent',
+      isError: true,
+      metadata: { policy: 'tool-not-granted' },
+    });
+  });
+
   it('forwards tool calls to the gateway with task ownership metadata and abort signal', async () => {
     const controller = new AbortController();
     const { calls, fetch } = makeFetch([

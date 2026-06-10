@@ -188,6 +188,8 @@ export function agentSummary(agent: Agent, opts: AgentSummaryOptions = {}): Agen
     sandboxProfile: agent.spec.sandboxProfile ?? 'default',
     capabilities: agent.spec.capabilities ?? [],
     tools: agent.spec.tools ?? [],
+    ...(agent.spec.toolProfileRef !== undefined && { toolProfileRef: agent.spec.toolProfileRef }),
+    ...(agent.spec.agentType !== undefined && { agentType: agent.spec.agentType }),
     recentTaskCounts: counts,
   };
 }

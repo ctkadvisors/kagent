@@ -96,6 +96,14 @@ describe('tool-gateway server', () => {
             },
           ],
         }),
+        KAGENT_TOOL_GATEWAY_TOOL_PROFILES_JSON: JSON.stringify({
+          profiles: [
+            {
+              name: 'browser-code-researcher',
+              tools: ['browser.goto', 'code_interpreter.execute_code'],
+            },
+          ],
+        }),
       }),
     ).toEqual({
       port: 9090,
@@ -111,6 +119,14 @@ describe('tool-gateway server', () => {
             id: 'project-api',
             baseUrl: 'http://project-api.kagent-system.svc',
           }),
+        ],
+      },
+      toolProfiles: {
+        profiles: [
+          {
+            name: 'browser-code-researcher',
+            tools: ['browser.goto', 'code_interpreter.execute_code'],
+          },
         ],
       },
     });

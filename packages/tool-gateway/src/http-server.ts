@@ -29,6 +29,7 @@ import {
   type StartedCommand,
 } from './code-runner.js';
 import type { ExternalToolRegistry } from './external-providers.js';
+import { resolveToolProfileToolNames, type ToolProfileConfig } from './tool-profiles.js';
 
 export interface ToolGatewayTaskIdentity {
   readonly tenant: string;
@@ -68,6 +69,7 @@ export interface ToolGatewayHttpHandlerOptions {
   readonly browser?: SteelBrowserAdapter;
   readonly externalHandlers?: Readonly<Record<string, ToolGatewayExternalHandler>>;
   readonly externalRegistry?: ExternalToolRegistry;
+  readonly toolProfiles?: ToolProfileConfig;
   readonly paused?: boolean;
 }
 
@@ -77,6 +79,7 @@ export class ToolGatewayHttpHandler {
   private readonly browser: SteelBrowserAdapter | undefined;
   private readonly externalHandlers: Readonly<Record<string, ToolGatewayExternalHandler>>;
   private readonly externalRegistry: ExternalToolRegistry | undefined;
+  private readonly toolProfiles: ToolProfileConfig;
   private readonly browserSessions = new Map<string, SteelBrowserSession>();
   private paused: boolean;
 
@@ -86,6 +89,7 @@ export class ToolGatewayHttpHandler {
     this.browser = options.browser;
     this.externalHandlers = options.externalHandlers ?? {};
     this.externalRegistry = options.externalRegistry;
+    this.toolProfiles = options.toolProfiles ?? { profiles: [] };
     this.paused = options.paused ?? false;
   }
 
@@ -151,8 +155,19 @@ export class ToolGatewayHttpHandler {
       );
     }
 
+    const profileResolution = resolveToolProfileToolNames(
+      this.toolProfiles,
+      parsed.toolProfileRefs,
+    );
+    if (!profileResolution.ok) {
+      return jsonResponse(
+        { error: 'unknown_tool_profile', profileName: profileResolution.profileName },
+        400,
+      );
+    }
+
     const tools = await this.describeToolsForNames(
-      parsed.toolNames,
+      deDupe([...parsed.toolNames, ...profileResolution.toolNames]),
       toolInvocationContext(request),
     );
     return jsonResponse({ tools });
@@ -489,11 +504,10 @@ async function parseInvocation(request: Request): Promise<ToolGatewayInvocation 
   };
 }
 
-async function parseDescribeRequest(
-  request: Request,
-): Promise<{
+async function parseDescribeRequest(request: Request): Promise<{
   readonly task: ToolGatewayTaskIdentity;
   readonly toolNames: readonly string[];
+  readonly toolProfileRefs: readonly string[];
 } | null> {
   const raw = await request.json().catch(() => null);
   if (!isRecord(raw) || !isRecord(raw.task) || !Array.isArray(raw.toolNames)) return null;
@@ -501,10 +515,19 @@ async function parseDescribeRequest(
   const task = parseTask(raw.task);
   if (task === null) return null;
   if (!raw.toolNames.every((name): name is string => typeof name === 'string')) return null;
+  const toolProfileRefs = raw.toolProfileRefs;
+  if (
+    toolProfileRefs !== undefined &&
+    (!Array.isArray(toolProfileRefs) ||
+      !toolProfileRefs.every((name): name is string => typeof name === 'string'))
+  ) {
+    return null;
+  }
 
   return {
     task,
     toolNames: raw.toolNames,
+    toolProfileRefs: toolProfileRefs ?? [],
   };
 }
 
@@ -857,6 +880,17 @@ function taskKey(task: ToolGatewayTaskIdentity): string {
 
 function isExternalGatewayToolName(name: string): boolean {
   return name.startsWith('mcp.') || name.startsWith('http.');
+}
+
+function deDupe(values: readonly string[]): readonly string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }
 
 function toolInvocationContext(request: Request): ToolInvocationContext {

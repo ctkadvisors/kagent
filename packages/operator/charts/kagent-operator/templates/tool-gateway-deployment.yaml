@@ -65,6 +65,14 @@ spec:
             - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON
               value: {{ . | quote }}
             {{- end }}
+            {{- $toolProfilesJson := .Values.toolRuntime.gateway.toolProfilesJson -}}
+            {{- if and (not $toolProfilesJson) .Values.toolRuntime.gateway.toolProfiles }}
+            {{- $toolProfilesJson = dict "profiles" .Values.toolRuntime.gateway.toolProfiles | toJson -}}
+            {{- end }}
+            {{- with $toolProfilesJson }}
+            - name: KAGENT_TOOL_GATEWAY_TOOL_PROFILES_JSON
+              value: {{ . | quote }}
+            {{- end }}
             {{- $steelBaseUrl := .Values.toolRuntime.browser.steel.baseUrl -}}
             {{- if and .Values.toolRuntime.browser.steel.enabled (not $steelBaseUrl) }}
             {{- $steelBaseUrl = printf "http://%s-steel.%s.svc.cluster.local:%v" (include "kagent-operator.fullname" .) .Release.Namespace .Values.toolRuntime.browser.steel.port -}}

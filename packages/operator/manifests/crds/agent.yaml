@@ -89,6 +89,20 @@ spec:
                   type: array
                   items:
                     type: string
+                toolProfileRef:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Gateway-owned tool profile grant. The agent-pod
+                    asks the local tool gateway to resolve this profile
+                    into concrete browser.*, code_interpreter.*, mcp.*,
+                    and http.* tool descriptors.
+                agentType:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Alias for toolProfileRef using the user-facing
+                    "agent type" term.
                 capabilities:
                   type: array
                   items:

@@ -763,10 +763,11 @@ export function resolveToolProviders(
       })
     : undefined;
   const gatewayToolNames = requestedGatewayToolNames(config.agentSpec.tools);
+  const toolProfileRefs = requestedToolProfileRefs(config.agentSpec);
   const toolGatewayProvider =
-    gatewayToolNames.length === 0
+    gatewayToolNames.length === 0 && toolProfileRefs.length === 0
       ? undefined
-      : buildToolGatewayProvider(config, deps, gatewayToolNames);
+      : buildToolGatewayProvider(config, deps, gatewayToolNames, toolProfileRefs);
 
   // Collect tool names served by the substrate / blackboard / events
   // providers so resolveBuiltinTools accepts them as known when an
@@ -833,10 +834,11 @@ function buildToolGatewayProvider(
   config: PodConfig,
   deps: RunDeps,
   gatewayToolNames: readonly string[],
+  toolProfileRefs: readonly string[],
 ): ToolProvider {
   if (config.toolGatewayUrl === undefined) {
     throw new Error(
-      'KAGENT_TOOL_GATEWAY_URL is required when Agent.spec.tools includes browser.*, code_interpreter.*, mcp.*, or http.* gateway tools',
+      'KAGENT_TOOL_GATEWAY_URL is required when Agent.spec.tools includes browser.*, code_interpreter.*, mcp.*, or http.* gateway tools or Agent.spec.toolProfileRef/agentType is set',
     );
   }
 
@@ -849,7 +851,16 @@ function buildToolGatewayProvider(
       agentName: config.agentName,
     },
     tools: gatewayToolNames,
+    toolProfileRefs,
   });
+}
+
+function requestedToolProfileRefs(spec: AgentSpecEnv): readonly string[] {
+  if (spec.toolProfileRef !== undefined && spec.toolProfileRef.length > 0) {
+    return [spec.toolProfileRef];
+  }
+  if (spec.agentType !== undefined && spec.agentType.length > 0) return [spec.agentType];
+  return [];
 }
 
 /* =====================================================================

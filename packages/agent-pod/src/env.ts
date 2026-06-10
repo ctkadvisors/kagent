@@ -45,6 +45,16 @@ export interface AgentSpecEnv {
     readonly version?: number;
   };
   readonly tools?: readonly string[];
+  /**
+   * Gateway-owned tool profile grant. The agent-pod sends this value to
+   * KAGENT_TOOL_GATEWAY_URL and uses the gateway's returned descriptors
+   * as the concrete tool allowlist. This lets the cluster operator
+   * define rich agent types centrally without copying raw browser/code/
+   * MCP/http tool names into every Agent CR.
+   */
+  readonly toolProfileRef?: string;
+  /** Alias for toolProfileRef using the user-facing "agent type" term. */
+  readonly agentType?: string;
   readonly capabilities?: readonly string[];
   readonly sandboxProfile?: 'default' | 'strict';
   /**

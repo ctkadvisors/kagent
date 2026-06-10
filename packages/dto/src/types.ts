@@ -257,6 +257,12 @@ export interface AgentSummary {
   /** Tool names the agent is allowed to invoke (Agent.spec.tools). */
   readonly tools: readonly string[];
 
+  /** Gateway-owned tool profile grant (Agent.spec.toolProfileRef). */
+  readonly toolProfileRef?: string;
+
+  /** User-facing alias for toolProfileRef (Agent.spec.agentType). */
+  readonly agentType?: string;
+
   /**
    * Recent task-phase counts. Filled when the caller supplies a
    * `tasks` snapshot to the mapper; defaults to all-zero otherwise.

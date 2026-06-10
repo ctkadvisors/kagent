@@ -171,6 +171,34 @@ describe('isAgent', () => {
     ).toBe(true);
   });
 
+  it('accepts gateway-owned tool profile fields when they are non-empty strings', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: {
+          modelClass: 'tool-caller-default',
+          toolProfileRef: 'browser-code-researcher',
+          agentType: 'browser-code-researcher',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects malformed gateway-owned tool profile fields', () => {
+    expect(
+      isAgent({
+        ...valid,
+        spec: { modelClass: 'tool-caller-default', toolProfileRef: '' },
+      }),
+    ).toBe(false);
+    expect(
+      isAgent({
+        ...valid,
+        spec: { modelClass: 'tool-caller-default', agentType: 42 },
+      }),
+    ).toBe(false);
+  });
+
   it('round-trips an AgentSpec carrying modelClass at the type level', () => {
     const spec: import('./types.js').AgentSpec = {
       modelClass: 'tool-caller-default',

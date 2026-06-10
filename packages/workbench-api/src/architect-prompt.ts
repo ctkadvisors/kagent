@@ -35,6 +35,7 @@ The YAML MUST conform to the AgentTemplateSpec contract:
     # model: string           # optional escape hatch; use only for literal physical models
     systemPrompt: string      # the agent's behaviour; may use \${param.X} placeholders
     tools: [string]           # optional
+    toolProfileRef: string    # optional; gateway-owned profile/agent type for rich tools
     llmParams:                # optional
       temperature: number
       maxTokens: integer
@@ -55,6 +56,8 @@ Rules:
   "text-generator-default", "tool-caller-default", or "reasoner-default".
 - Default no-tool agents to modelClass: text-generator-default.
 - Use modelClass: tool-caller-default only when tools are requested.
+- Prefer toolProfileRef over raw browser.*, code_interpreter.*, mcp.*, or http.* tool lists when
+  the requested tool surface matches a known gateway-owned agent type.
 - Default budget to maxIterations 6, maxCostUsdPerRun 0.10, maxParallelInstances 1 unless the user is explicit.
 - Never include credentials or tools the user did not ask for.
 - Output ONLY the YAML document — no backticks, no commentary.`;

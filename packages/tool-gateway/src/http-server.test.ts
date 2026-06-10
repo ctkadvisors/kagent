@@ -38,6 +38,7 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
 function describeRequest(
   toolNames: readonly string[],
   headers: Record<string, string> = {},
+  toolProfileRefs: readonly string[] = [],
 ): Request {
   return new Request('http://tool-gateway.test/v1/tool-runtime/describe', {
     method: 'POST',
@@ -52,6 +53,7 @@ function describeRequest(
     body: JSON.stringify({
       task: TASK,
       toolNames,
+      ...(toolProfileRefs.length > 0 && { toolProfileRefs }),
     }),
   });
 }
@@ -368,6 +370,50 @@ describe('ToolGatewayHttpHandler', () => {
       name: 'mcp.project.lookup',
       description: 'Look up a project record from a configured MCP server.',
       inputSchema: { type: 'object', properties: { project: { type: 'string' } } },
+    });
+  });
+
+  it('expands gateway-owned tool profiles in describe requests', async () => {
+    const handler = makeHandler({
+      toolProfiles: {
+        profiles: [
+          {
+            name: 'browser-code-researcher',
+            tools: ['browser.goto', 'code_interpreter.execute_code'],
+          },
+        ],
+      },
+    });
+
+    const response = await handler.handle(describeRequest([], {}, ['browser-code-researcher']));
+
+    expect(response.status).toBe(200);
+    const body = asRecord(await json(response));
+    const tools = body.tools as readonly Record<string, unknown>[];
+    expect(tools.map((tool) => tool.name)).toEqual([
+      'browser.goto',
+      'code_interpreter.execute_code',
+    ]);
+  });
+
+  it('fails closed when a describe request asks for an unknown tool profile', async () => {
+    const handler = makeHandler({
+      toolProfiles: {
+        profiles: [
+          {
+            name: 'browser-code-researcher',
+            tools: ['browser.goto'],
+          },
+        ],
+      },
+    });
+
+    const response = await handler.handle(describeRequest([], {}, ['missing']));
+
+    expect(response.status).toBe(400);
+    await expect(json(response)).resolves.toEqual({
+      error: 'unknown_tool_profile',
+      profileName: 'missing',
     });
   });
 

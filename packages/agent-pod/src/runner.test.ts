@@ -482,12 +482,59 @@ describe('resolveToolProviders — Agent.spec.tools wiring', () => {
     expect(gateway).toBeDefined();
   });
 
+  it('wires the gateway provider when Agent.spec.toolProfileRef asks for a gateway profile', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      toolGatewayUrl: 'http://tool-gateway.kagent-system.svc',
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        tools: [],
+        toolProfileRef: 'browser-code-researcher',
+      },
+    };
+
+    const providers = resolveToolProviders(cfg, {});
+    const gateway = providers.find((provider) => provider.id === 'kagent-tool-gateway');
+
+    expect(gateway).toBeDefined();
+  });
+
+  it('wires the gateway provider when Agent.spec.agentType asks for a gateway profile', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      toolGatewayUrl: 'http://tool-gateway.kagent-system.svc',
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        tools: [],
+        agentType: 'browser-code-researcher',
+      },
+    };
+
+    const providers = resolveToolProviders(cfg, {});
+    const gateway = providers.find((provider) => provider.id === 'kagent-tool-gateway');
+
+    expect(gateway).toBeDefined();
+  });
+
   it('fails fast when Agent.spec.tools asks for runtime tools but no gateway URL is configured', () => {
     const cfg: PodConfig = {
       ...baseConfig,
       agentSpec: {
         ...baseConfig.agentSpec,
         tools: ['browser.goto'],
+      },
+    };
+
+    expect(() => resolveToolProviders(cfg, {})).toThrow(/KAGENT_TOOL_GATEWAY_URL/);
+  });
+
+  it('fails fast when Agent.spec.toolProfileRef asks for a gateway profile but no gateway URL is configured', () => {
+    const cfg: PodConfig = {
+      ...baseConfig,
+      agentSpec: {
+        ...baseConfig.agentSpec,
+        tools: [],
+        toolProfileRef: 'browser-code-researcher',
       },
     };
 

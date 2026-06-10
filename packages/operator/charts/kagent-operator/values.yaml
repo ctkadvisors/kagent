@@ -67,6 +67,15 @@ toolRuntime:
     # consumed by KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON. When set,
     # this wins over externalProviders above.
     externalProvidersJson: ''
+    # Gateway-owned agent/tool profiles. Agents can set
+    # spec.toolProfileRef (or spec.agentType as an alias) to one of
+    # these names, then the gateway resolves the concrete browser.*,
+    # code_interpreter.*, mcp.*, and http.* tool descriptors centrally.
+    toolProfiles: []
+    # Raw override for operators that want to provide the exact JSON
+    # consumed by KAGENT_TOOL_GATEWAY_TOOL_PROFILES_JSON. When set,
+    # this wins over toolProfiles above.
+    toolProfilesJson: ''
     resources:
       requests:
         cpu: '100m'

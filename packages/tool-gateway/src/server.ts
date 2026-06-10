@@ -22,6 +22,7 @@ import {
   type ToolGatewayTaskIdentity,
 } from './http-server.js';
 import { createPlaywrightCdpDriver } from './playwright-driver.js';
+import { parseToolProfileConfig, type ToolProfileConfig } from './tool-profiles.js';
 
 export interface ToolGatewayServerConfig {
   readonly port: number;
@@ -31,6 +32,7 @@ export interface ToolGatewayServerConfig {
   readonly steelApiKey?: string;
   readonly steelConnectBaseUrl?: string;
   readonly externalProviders: ExternalToolProviderConfig;
+  readonly toolProfiles: ToolProfileConfig;
 }
 
 export interface ToolGatewayServerHandlerOptions {
@@ -49,6 +51,7 @@ export function parseToolGatewayServerConfig(
     workspaceRoot: string;
     paused: boolean;
     externalProviders: ExternalToolProviderConfig;
+    toolProfiles: ToolProfileConfig;
     steelBaseUrl?: string;
     steelApiKey?: string;
     steelConnectBaseUrl?: string;
@@ -59,6 +62,7 @@ export function parseToolGatewayServerConfig(
     externalProviders: parseExternalToolProviderConfig(
       nonEmpty(env.KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON),
     ),
+    toolProfiles: parseToolProfileConfig(nonEmpty(env.KAGENT_TOOL_GATEWAY_TOOL_PROFILES_JSON)),
   };
   const steelBaseUrl = nonEmpty(env.KAGENT_STEEL_BASE_URL);
   const steelApiKey = nonEmpty(env.KAGENT_STEEL_API_KEY);
@@ -87,6 +91,7 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     paused: config.paused,
     codeRunnerFactory: (task) => buildLocalCodeRunner(config.workspaceRoot, task),
     externalRegistry: buildExternalToolRegistry(config.externalProviders),
+    toolProfiles: config.toolProfiles,
     ...(browser !== undefined && { browser }),
   };
 
