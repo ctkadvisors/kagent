@@ -104,10 +104,17 @@ describe('LocalCodeRunner', () => {
 
     const started = await runner.startCommand({
       command: 'node',
-      args: ['-e', 'console.log("tick"); setInterval(() => {}, 20)'],
+      args: [
+        '-e',
+        [
+          'const { writeFileSync } = require("node:fs");',
+          'process.stdout.write("tick\\n", () => writeFileSync("ready.txt", "tick", "utf8"));',
+          'setInterval(() => {}, 20);',
+        ].join(' '),
+      ],
       timeoutMs: 10_000,
     });
-    await sleep(80);
+    await waitForFileContent(join(workspaceDir, 'ready.txt'), 'tick');
     const result = await runner.stopTask(started.taskId);
 
     expect(started.taskId).toMatch(/^cmd-/);
@@ -130,3 +137,24 @@ describe('LocalCodeRunner', () => {
     expect(result.stdout).toContain('from-code');
   });
 });
+
+async function waitForFileContent(
+  path: string,
+  expected: string,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const content = await readFile(path, 'utf8');
+      if (content === expected) return;
+    } catch {
+      /* file is created by the child process once stdout is ready */
+    }
+
+    await sleep(10);
+  }
+
+  throw new Error(`timed out waiting for ${path}`);
+}
