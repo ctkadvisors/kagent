@@ -9,7 +9,10 @@ import { createBaileysSocketFactory } from './baileys.js';
 import { loadConfig } from './config.js';
 import { ChannelGatewayClient } from './gateway.js';
 import { startWhatsAppAdapter } from './runtime.js';
-import { buildKubernetesChannelStatusPatcher } from './status.js';
+import {
+  buildKubernetesChannelOutboxStore,
+  buildKubernetesChannelStatusPatcher,
+} from './status.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -29,6 +32,7 @@ async function main(): Promise<void> {
       namespace: config.namespace,
       channelName: config.channelName,
     }),
+    outbox: buildKubernetesChannelOutboxStore({ customApi }),
     requestRestart: (reason) => {
       console.warn(`[channel-whatsapp] ${reason}; exiting for Kubernetes restart`);
       setTimeout(() => process.exit(1), 1000).unref();

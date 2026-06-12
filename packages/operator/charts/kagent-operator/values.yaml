@@ -224,6 +224,9 @@ channels:
     authDir: /var/lib/kagent/whatsapp-auth
     sendReadReceipts: false
     pairingTtlSeconds: 120
+    outboundPollMs: 5000
+    outboundBaseBackoffSeconds: 60
+    outboundMaxFailures: 5
     # Override only when the gateway Service is deployed outside this
     # chart. Defaults to the in-chart channel gateway Service.
     gatewayUrl: ''

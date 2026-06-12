@@ -10,6 +10,9 @@ type Env = Record<string, string | undefined>;
 const DEFAULT_AUTH_DIR = '/var/lib/kagent/whatsapp-auth';
 const DEFAULT_GATEWAY_TIMEOUT_MS = 10000;
 const DEFAULT_PAIRING_TTL_SECONDS = 120;
+const DEFAULT_OUTBOUND_POLL_MS = 5000;
+const DEFAULT_OUTBOUND_BASE_BACKOFF_SECONDS = 60;
+const DEFAULT_OUTBOUND_MAX_FAILURES = 5;
 
 export function loadConfig(env: Env = process.env): WhatsAppAdapterConfig {
   return {
@@ -29,6 +32,21 @@ export function loadConfig(env: Env = process.env): WhatsAppAdapterConfig {
       env.KAGENT_WHATSAPP_PAIRING_TTL_SECONDS,
       DEFAULT_PAIRING_TTL_SECONDS,
       'KAGENT_WHATSAPP_PAIRING_TTL_SECONDS',
+    ),
+    outboundPollMs: parsePositiveInteger(
+      env.KAGENT_CHANNEL_OUTBOUND_POLL_MS,
+      DEFAULT_OUTBOUND_POLL_MS,
+      'KAGENT_CHANNEL_OUTBOUND_POLL_MS',
+    ),
+    outboundBaseBackoffSeconds: parsePositiveInteger(
+      env.KAGENT_CHANNEL_OUTBOUND_BASE_BACKOFF_SECONDS,
+      DEFAULT_OUTBOUND_BASE_BACKOFF_SECONDS,
+      'KAGENT_CHANNEL_OUTBOUND_BASE_BACKOFF_SECONDS',
+    ),
+    outboundMaxFailures: parsePositiveInteger(
+      env.KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES,
+      DEFAULT_OUTBOUND_MAX_FAILURES,
+      'KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES',
     ),
   };
 }

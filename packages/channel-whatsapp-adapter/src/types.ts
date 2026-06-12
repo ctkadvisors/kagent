@@ -63,6 +63,102 @@ export interface WhatsAppAdapterConfig {
   readonly authDir: string;
   readonly sendReadReceipts: boolean;
   readonly pairingTtlSeconds: number;
+  readonly outboundPollMs: number;
+  readonly outboundBaseBackoffSeconds: number;
+  readonly outboundMaxFailures: number;
+}
+
+export interface ObjectMetaLike {
+  readonly name?: string;
+  readonly namespace?: string;
+  readonly uid?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+  readonly annotations?: Readonly<Record<string, string>>;
+  readonly generation?: number;
+}
+
+export interface ChannelLocalRef {
+  readonly name: string;
+}
+
+export interface ChannelTaskRef {
+  readonly namespace: string;
+  readonly name: string;
+  readonly uid?: string;
+}
+
+export type ChannelSessionPhase = 'Pending' | 'Active' | 'Paused' | 'Backoff' | 'Failed';
+
+export interface ChannelBindingTarget {
+  readonly agentRef?: ChannelLocalRef;
+  readonly capability?: string;
+  readonly profileRef?: string;
+  readonly modelClass?: string;
+  readonly toolProfileRef?: string;
+  readonly runConfig?: Record<string, unknown>;
+  readonly session?: {
+    readonly scope?: 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-channel-peer';
+    readonly mainKey?: string;
+  };
+}
+
+export interface ChannelSessionSpec {
+  readonly channelRef: ChannelLocalRef;
+  readonly provider: ChannelProvider;
+  readonly accountId: string;
+  readonly peer: ChannelPeer;
+  readonly threadId?: string;
+  readonly sessionKey: string;
+  readonly bindingRef?: ChannelLocalRef;
+  readonly target: ChannelBindingTarget;
+  readonly paused?: boolean;
+}
+
+export interface ChannelSessionStatus {
+  readonly phase?: ChannelSessionPhase;
+  readonly observedGeneration?: number;
+  readonly conditions?: readonly ChannelCondition[];
+  readonly lastInboundAt?: string;
+  readonly lastOutboundAt?: string;
+  readonly lastTaskRef?: ChannelTaskRef;
+  readonly lastOutboundTaskRef?: ChannelTaskRef;
+  readonly consecutiveFailures?: number;
+  readonly backoffUntil?: string;
+  readonly lastFailureReason?: string;
+}
+
+export interface ChannelSessionStatusPatch {
+  readonly phase?: ChannelSessionPhase;
+  readonly lastOutboundAt?: string;
+  readonly lastOutboundTaskRef?: ChannelTaskRef;
+  readonly consecutiveFailures?: number;
+  readonly backoffUntil?: string | null;
+  readonly lastFailureReason?: string | null;
+}
+
+export interface ChannelSession {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'ChannelSession';
+  readonly metadata: ObjectMetaLike;
+  readonly spec: ChannelSessionSpec;
+  readonly status?: ChannelSessionStatus;
+}
+
+export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
+
+export interface AgentTaskStatus {
+  readonly phase?: AgentTaskPhase;
+  readonly result?: unknown;
+  readonly error?: string;
+  readonly completedAt?: string;
+}
+
+export interface AgentTask {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'AgentTask';
+  readonly metadata: ObjectMetaLike;
+  readonly spec: Record<string, unknown>;
+  readonly status?: AgentTaskStatus;
 }
 
 export interface WhatsAppMessageKey {
@@ -98,6 +194,20 @@ export interface ChannelStatusPatcher {
   patch(status: ChannelStatusPatch): Promise<void>;
 }
 
+export interface ChannelOutboxStore {
+  listChannelSessions(input: {
+    readonly namespace: string;
+    readonly channelName: string;
+    readonly accountId: string;
+  }): Promise<readonly ChannelSession[]>;
+  getAgentTask(ref: ChannelTaskRef): Promise<AgentTask | undefined>;
+  patchSessionStatus(
+    namespace: string,
+    name: string,
+    status: ChannelSessionStatusPatch,
+  ): Promise<void>;
+}
+
 export interface AdapterLogger {
   info(message: string, extra?: unknown): void;
   warn(message: string, extra?: unknown): void;
@@ -113,6 +223,7 @@ export interface WhatsAppEventBus {
 export interface WhatsAppSocketLike {
   readonly ev: WhatsAppEventBus;
   readonly user?: { readonly id?: string | null };
+  sendMessage?(jid: string, content: { readonly text: string }): Promise<unknown>;
   readMessages?(keys: readonly WhatsAppMessageKey[]): Promise<void>;
   end?(error?: Error): void;
 }

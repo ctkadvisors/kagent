@@ -406,6 +406,7 @@ export interface ChannelSessionStatus {
   readonly lastInboundAt?: string;
   readonly lastOutboundAt?: string;
   readonly lastTaskRef?: ChannelTaskRef;
+  readonly lastOutboundTaskRef?: ChannelTaskRef;
   readonly consecutiveFailures?: number;
   readonly backoffUntil?: string;
   readonly lastFailureReason?: string;

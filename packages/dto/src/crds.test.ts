@@ -64,6 +64,11 @@ const session: ChannelSession = {
     phase: 'Active',
     lastInboundAt: '2026-06-12T12:00:00Z',
     lastTaskRef: { namespace: 'kagent-system', name: 'channel-turn-abc', uid: 'task-uid' },
+    lastOutboundTaskRef: {
+      namespace: 'kagent-system',
+      name: 'channel-turn-previous',
+      uid: 'task-uid-previous',
+    },
   },
 };
 

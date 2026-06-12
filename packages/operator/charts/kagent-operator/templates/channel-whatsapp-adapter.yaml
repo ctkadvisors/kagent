@@ -58,6 +58,15 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['channels/status']
     verbs: ['get', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['channelsessions']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['channelsessions/status']
+    verbs: ['get', 'patch', 'update']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['agenttasks']
+    verbs: ['get']
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -162,6 +171,12 @@ spec:
               value: {{ .Values.channels.whatsapp.sendReadReceipts | ternary "true" "false" | quote }}
             - name: KAGENT_WHATSAPP_PAIRING_TTL_SECONDS
               value: {{ .Values.channels.whatsapp.pairingTtlSeconds | quote }}
+            - name: KAGENT_CHANNEL_OUTBOUND_POLL_MS
+              value: {{ .Values.channels.whatsapp.outboundPollMs | quote }}
+            - name: KAGENT_CHANNEL_OUTBOUND_BASE_BACKOFF_SECONDS
+              value: {{ .Values.channels.whatsapp.outboundBaseBackoffSeconds | quote }}
+            - name: KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES
+              value: {{ .Values.channels.whatsapp.outboundMaxFailures | quote }}
           volumeMounts:
             - name: auth
               mountPath: {{ .Values.channels.whatsapp.authDir | quote }}

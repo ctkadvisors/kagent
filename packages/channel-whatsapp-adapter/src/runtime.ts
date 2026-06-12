@@ -4,10 +4,12 @@
  */
 
 import { normalizeWhatsAppMessage } from './normalize.js';
+import { deliverOutboundTurns } from './outbound.js';
 import { adapterCondition } from './status.js';
 import type {
   AdapterLogger,
   ChannelGateway,
+  ChannelOutboxStore,
   ChannelStatusPatcher,
   WhatsAppAdapterConfig,
   WhatsAppConnectionUpdate,
@@ -20,6 +22,7 @@ export interface StartWhatsAppAdapterDeps {
   readonly socketFactory: WhatsAppSocketFactory;
   readonly gateway: ChannelGateway;
   readonly status: ChannelStatusPatcher;
+  readonly outbox?: ChannelOutboxStore;
   readonly logger?: AdapterLogger;
   readonly clock?: () => Date;
   readonly requestRestart?: (reason: string) => void;
@@ -49,6 +52,28 @@ export async function startWhatsAppAdapter(
   const logger = deps.logger ?? consoleLogger;
   const clock = deps.clock ?? (() => new Date());
   const session = await deps.socketFactory({ authDir: config.authDir });
+  let connected = false;
+
+  const deliverOutbound = async (): Promise<void> => {
+    if (!connected || deps.outbox === undefined) return;
+    await deliverOutboundTurns({
+      config,
+      store: deps.outbox,
+      socket: session.socket,
+      logger,
+      clock,
+    });
+  };
+
+  const outboundPoller =
+    deps.outbox === undefined
+      ? undefined
+      : setInterval(() => {
+          void deliverOutbound().catch((err: unknown) => {
+            logger.error('[channel-whatsapp] failed to deliver outbound replies', err);
+          });
+        }, config.outboundPollMs);
+  outboundPoller?.unref();
 
   await deps.status.patch({
     phase: 'Pairing',
@@ -62,6 +87,8 @@ export async function startWhatsAppAdapter(
     });
   });
   session.socket.ev.on('connection.update', (update) => {
+    if (update.connection === 'open') connected = true;
+    if (update.connection === 'close') connected = false;
     void handleConnectionUpdate({
       config,
       update,
@@ -70,9 +97,17 @@ export async function startWhatsAppAdapter(
       logger,
       clock,
       ...(deps.requestRestart !== undefined && { requestRestart: deps.requestRestart }),
-    }).catch((err: unknown) => {
-      logger.error('[channel-whatsapp] failed to handle Baileys connection update', err);
-    });
+    })
+      .catch((err: unknown) => {
+        logger.error('[channel-whatsapp] failed to handle Baileys connection update', err);
+      })
+      .then(() => {
+        if (update.connection === 'open') {
+          void deliverOutbound().catch((err: unknown) => {
+            logger.error('[channel-whatsapp] failed to deliver outbound replies', err);
+          });
+        }
+      });
   });
   session.socket.ev.on('messages.upsert', (upsert) => {
     void handleMessagesUpsert({
@@ -89,6 +124,7 @@ export async function startWhatsAppAdapter(
   return {
     socket: session.socket,
     close(): void {
+      if (outboundPoller !== undefined) clearInterval(outboundPoller);
       session.socket.end?.();
     },
   };

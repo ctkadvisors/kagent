@@ -205,6 +205,20 @@ spec:
                       minLength: 1
                     uid:
                       type: string
+                lastOutboundTaskRef:
+                  type: object
+                  required:
+                    - namespace
+                    - name
+                  properties:
+                    namespace:
+                      type: string
+                      minLength: 1
+                    name:
+                      type: string
+                      minLength: 1
+                    uid:
+                      type: string
                 consecutiveFailures:
                   type: integer
                   minimum: 0

@@ -102,6 +102,7 @@ describe('Channel CRD guards', () => {
         consecutiveFailures: 3,
         backoffUntil: '2026-06-12T16:30:00.000Z',
         lastTaskRef: { namespace: 'kagent-system', name: 'kat-123', uid: 'uid-1' },
+        lastOutboundTaskRef: { namespace: 'kagent-system', name: 'kat-122', uid: 'uid-0' },
       },
     };
 
