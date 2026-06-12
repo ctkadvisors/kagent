@@ -28,6 +28,7 @@ import type { GatewayClient } from './gateway-client.js';
 import type { SseBroker } from './sse.js';
 import { agentsRoute } from './routes/agents.js';
 import { architectRoute, type ArchitectLike } from './routes/architect.js';
+import { channelsRoute } from './routes/channels.js';
 import { clusterRoute } from './routes/cluster.js';
 import { dispositionsRoute } from './routes/dispositions.js';
 import { gatewayRoute } from './routes/gateway.js';
@@ -172,6 +173,15 @@ export function buildRouter(deps: RouterDeps): Hono {
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));
+  app.route(
+    '/',
+    channelsRoute({
+      cache: deps.cache,
+      ...(deps.customApi !== undefined && { customApi: deps.customApi }),
+      writesEnabled: deps.writesEnabled === true && deps.customApi !== undefined,
+      ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
+    }),
+  );
   app.route(
     '/',
     sessionsRoute({

@@ -187,7 +187,7 @@ export interface TaskDetail extends TaskSummary {
 }
 
 export interface CacheChangeEvent {
-  readonly kind: 'task' | 'agent' | 'job' | 'pod';
+  readonly kind: 'task' | 'agent' | 'job' | 'pod' | 'channel' | 'channelBinding' | 'channelSession';
   readonly op: 'upsert' | 'delete';
   readonly key: string;
 }
@@ -335,6 +335,105 @@ export interface SendSessionMessageResponse {
   readonly task: ChannelTaskLink & {
     readonly createdAt?: string;
   };
+}
+
+/* =====================================================================
+ * External channel control — `/api/channels`.
+ * ===================================================================== */
+
+export interface ChannelPairingSummary {
+  readonly state?: string;
+  readonly qrAvailable: boolean;
+  readonly pairingCodeAvailable: boolean;
+  readonly expiresAt?: string;
+  readonly accountJid?: string;
+  readonly message?: string;
+}
+
+export interface ChannelPolicySummary {
+  readonly dmPolicy: string;
+  readonly allowFrom: readonly string[];
+  readonly groupPolicy: string;
+  readonly groupAllowFrom: readonly string[];
+  readonly groups: readonly string[];
+}
+
+export interface ExternalChannelSummary {
+  readonly id: string;
+  readonly namespace: string;
+  readonly name: string;
+  readonly displayName?: string;
+  readonly provider: string;
+  readonly accountId: string;
+  readonly paused: boolean;
+  readonly phase?: string;
+  readonly observedGeneration?: number;
+  readonly pairing?: ChannelPairingSummary;
+  readonly policy: ChannelPolicySummary;
+  readonly storage?: {
+    readonly secretRef?: string;
+    readonly pvc?: string;
+  };
+  readonly whatsapp?: {
+    readonly authDir?: string;
+    readonly sendReadReceipts?: boolean;
+    readonly mediaMaxMb?: number;
+  };
+  readonly bindingCount: number;
+  readonly sessionCount: number;
+  readonly activeSessionCount: number;
+  readonly lastHeartbeatAt?: string;
+  readonly createdAt?: string;
+}
+
+export interface ExternalChannelBindingSummary {
+  readonly namespace: string;
+  readonly name: string;
+  readonly paused: boolean;
+  readonly default: boolean;
+  readonly match?: {
+    readonly accountId?: string;
+    readonly peer?: { readonly kind: string; readonly id: string };
+    readonly threadId?: string;
+  };
+  readonly target: {
+    readonly agentRef?: string;
+    readonly capability?: string;
+    readonly profileRef?: string;
+    readonly modelClass?: string;
+    readonly toolProfileRef?: string;
+    readonly runConfig?: Readonly<Record<string, number | string | boolean>>;
+    readonly sessionScope?: string;
+  };
+  readonly approval?: {
+    readonly required: boolean;
+    readonly mode?: string;
+  };
+  readonly lastMatchedAt?: string;
+}
+
+export interface ExternalChannelSessionSummary {
+  readonly namespace: string;
+  readonly name: string;
+  readonly phase?: string;
+  readonly provider: string;
+  readonly accountId: string;
+  readonly peer: { readonly kind: string; readonly id: string };
+  readonly threadId?: string;
+  readonly bindingRef?: string;
+  readonly target: ExternalChannelBindingSummary['target'];
+  readonly paused: boolean;
+  readonly lastInboundAt?: string;
+  readonly lastOutboundAt?: string;
+  readonly consecutiveFailures?: number;
+  readonly backoffUntil?: string;
+  readonly lastFailureReason?: string;
+  readonly lastTask?: ChannelTaskLink;
+}
+
+export interface ExternalChannelDetail extends ExternalChannelSummary {
+  readonly bindings: readonly ExternalChannelBindingSummary[];
+  readonly sessions: readonly ExternalChannelSessionSummary[];
 }
 
 /* =====================================================================

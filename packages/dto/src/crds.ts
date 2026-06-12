@@ -190,6 +190,15 @@ export type AggregatePhase =
   | 'AllComplete'
   | 'AnyFailed';
 
+export interface AgentTaskCondition {
+  readonly type: string;
+  readonly status: 'True' | 'False' | 'Unknown';
+  readonly reason?: string;
+  readonly message?: string;
+  readonly lastTransitionTime: string;
+  readonly observedGeneration?: number;
+}
+
 export interface AgentTaskStatus {
   readonly phase?: AgentTaskPhase;
   readonly result?: unknown;
@@ -235,6 +244,257 @@ export interface AgentTask {
   readonly metadata: V1ObjectMeta;
   readonly spec: AgentTaskSpec;
   readonly status?: AgentTaskStatus;
+}
+
+/* =====================================================================
+ * Channels
+ *
+ * Mirror of `packages/operator/src/crds/channel.ts`. Kept here so
+ * Workbench can watch the channel control-plane CRDs without depending
+ * on @kagent/operator internals.
+ * ===================================================================== */
+
+export type ChannelProvider = 'whatsapp' | 'workbench' | 'webhook' | (string & {});
+export type ChannelPeerKind = 'dm' | 'group' | 'channel' | 'room';
+export type ChannelDmPolicy = 'pairing' | 'allowlist' | 'open' | 'disabled';
+export type ChannelGroupPolicy = 'allowlist' | 'open' | 'disabled';
+
+export interface ChannelLocalRef {
+  readonly name: string;
+}
+
+export interface ChannelSecretKeyRef extends ChannelLocalRef {
+  readonly key?: string;
+}
+
+export interface ChannelPvcRef {
+  readonly claimName: string;
+}
+
+export interface ChannelPeer {
+  readonly kind: ChannelPeerKind;
+  readonly id: string;
+}
+
+export interface ChannelPolicy {
+  readonly dmPolicy?: ChannelDmPolicy;
+  readonly allowFrom?: readonly string[];
+  readonly groupPolicy?: ChannelGroupPolicy;
+  readonly groupAllowFrom?: readonly string[];
+  readonly groups?: readonly string[];
+}
+
+export interface ChannelSessionStorage {
+  readonly secretRef?: ChannelLocalRef;
+  readonly pvc?: ChannelPvcRef;
+}
+
+export interface ChannelWhatsAppSpec {
+  readonly authDir?: string;
+  readonly sendReadReceipts?: boolean;
+  readonly mediaMaxMb?: number;
+}
+
+export interface ChannelSpec {
+  readonly provider: ChannelProvider;
+  readonly accountId: string;
+  readonly displayName?: string;
+  readonly paused?: boolean;
+  readonly authSecretRef?: ChannelSecretKeyRef;
+  readonly sessionStorage?: ChannelSessionStorage;
+  readonly policy?: ChannelPolicy;
+  readonly whatsapp?: ChannelWhatsAppSpec;
+}
+
+export type ChannelPhase = 'Pending' | 'Pairing' | 'Ready' | 'Paused' | 'Failed';
+
+export interface ChannelPairingStatus {
+  readonly state: 'unpaired' | 'qr' | 'paired' | 'failed';
+  readonly qrCode?: string;
+  readonly pairingCode?: string;
+  readonly expiresAt?: string;
+  readonly accountJid?: string;
+  readonly message?: string;
+}
+
+export interface ChannelStatus {
+  readonly phase?: ChannelPhase;
+  readonly observedGeneration?: number;
+  readonly conditions?: readonly AgentTaskCondition[];
+  readonly pairing?: ChannelPairingStatus;
+  readonly lastHeartbeatAt?: string;
+  readonly activeSessionCount?: number;
+}
+
+export interface Channel {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'Channel';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: ChannelSpec;
+  readonly status?: ChannelStatus;
+}
+
+export interface ChannelBindingMatch {
+  readonly accountId?: string;
+  readonly peer?: ChannelPeer;
+  readonly threadId?: string;
+}
+
+export interface ChannelBindingTarget {
+  readonly agentRef?: ChannelLocalRef;
+  readonly capability?: string;
+  readonly profileRef?: string;
+  readonly modelClass?: string;
+  readonly toolProfileRef?: string;
+  readonly runConfig?: AgentTaskRunConfig;
+  readonly session?: {
+    readonly scope?: 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-channel-peer';
+    readonly mainKey?: string;
+  };
+}
+
+export interface ChannelBindingSpec {
+  readonly channelRef: ChannelLocalRef;
+  readonly match?: ChannelBindingMatch;
+  readonly default?: boolean;
+  readonly paused?: boolean;
+  readonly target: ChannelBindingTarget;
+  readonly approval?: {
+    readonly required?: boolean;
+    readonly mode?: 'operator' | 'per-turn' | 'tool';
+  };
+}
+
+export interface ChannelBindingStatus {
+  readonly observedGeneration?: number;
+  readonly conditions?: readonly AgentTaskCondition[];
+  readonly lastMatchedAt?: string;
+}
+
+export interface ChannelBinding {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'ChannelBinding';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: ChannelBindingSpec;
+  readonly status?: ChannelBindingStatus;
+}
+
+export type ChannelSessionPhase = 'Pending' | 'Active' | 'Paused' | 'Backoff' | 'Failed';
+
+export interface ChannelTaskRef {
+  readonly namespace: string;
+  readonly name: string;
+  readonly uid?: string;
+}
+
+export interface ChannelSessionSpec {
+  readonly channelRef: ChannelLocalRef;
+  readonly provider: ChannelProvider;
+  readonly accountId: string;
+  readonly peer: ChannelPeer;
+  readonly threadId?: string;
+  readonly sessionKey: string;
+  readonly bindingRef?: ChannelLocalRef;
+  readonly target: ChannelBindingTarget;
+  readonly paused?: boolean;
+}
+
+export interface ChannelSessionStatus {
+  readonly phase?: ChannelSessionPhase;
+  readonly observedGeneration?: number;
+  readonly conditions?: readonly AgentTaskCondition[];
+  readonly lastInboundAt?: string;
+  readonly lastOutboundAt?: string;
+  readonly lastTaskRef?: ChannelTaskRef;
+  readonly consecutiveFailures?: number;
+  readonly backoffUntil?: string;
+  readonly lastFailureReason?: string;
+}
+
+export interface ChannelSession {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'ChannelSession';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: ChannelSessionSpec;
+  readonly status?: ChannelSessionStatus;
+}
+
+export function isChannel(obj: unknown): obj is Channel {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
+  if (o.apiVersion !== API_GROUP_VERSION) return false;
+  if (o.kind !== 'Channel') return false;
+  const spec = o.spec as { provider?: unknown; accountId?: unknown } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  return isNonEmptyString(spec.provider) && isNonEmptyString(spec.accountId);
+}
+
+export function isChannelBinding(obj: unknown): obj is ChannelBinding {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
+  if (o.apiVersion !== API_GROUP_VERSION) return false;
+  if (o.kind !== 'ChannelBinding') return false;
+  const spec = o.spec as { channelRef?: { name?: unknown }; target?: unknown } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  if (!isNonEmptyString(spec.channelRef?.name)) return false;
+  return isValidChannelTarget(spec.target);
+}
+
+export function isChannelSession(obj: unknown): obj is ChannelSession {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
+  if (o.apiVersion !== API_GROUP_VERSION) return false;
+  if (o.kind !== 'ChannelSession') return false;
+  const spec = o.spec as {
+    channelRef?: { name?: unknown };
+    provider?: unknown;
+    accountId?: unknown;
+    peer?: unknown;
+    sessionKey?: unknown;
+    target?: unknown;
+  } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  if (!isNonEmptyString(spec.channelRef?.name)) return false;
+  if (!isNonEmptyString(spec.provider)) return false;
+  if (!isNonEmptyString(spec.accountId)) return false;
+  if (!isChannelPeer(spec.peer)) return false;
+  if (!isNonEmptyString(spec.sessionKey)) return false;
+  return isValidChannelTarget(spec.target);
+}
+
+function isValidChannelTarget(target: unknown): target is ChannelBindingTarget {
+  if (typeof target !== 'object' || target === null) return false;
+  const t = target as {
+    agentRef?: { name?: unknown };
+    capability?: unknown;
+    profileRef?: unknown;
+    modelClass?: unknown;
+    toolProfileRef?: unknown;
+  };
+  if (t.agentRef !== undefined && !isNonEmptyString(t.agentRef.name)) return false;
+  if (t.capability !== undefined && !isNonEmptyString(t.capability)) return false;
+  if (t.profileRef !== undefined && !isNonEmptyString(t.profileRef)) return false;
+  if (t.modelClass !== undefined && !isNonEmptyString(t.modelClass)) return false;
+  if (t.toolProfileRef !== undefined && !isNonEmptyString(t.toolProfileRef)) return false;
+  return (
+    isNonEmptyString(t.agentRef?.name) ||
+    isNonEmptyString(t.capability) ||
+    isNonEmptyString(t.profileRef)
+  );
+}
+
+function isChannelPeer(value: unknown): value is ChannelPeer {
+  if (typeof value !== 'object' || value === null) return false;
+  const p = value as { kind?: unknown; id?: unknown };
+  return isChannelPeerKind(p.kind) && isNonEmptyString(p.id);
+}
+
+function isChannelPeerKind(value: unknown): value is ChannelPeerKind {
+  return value === 'dm' || value === 'group' || value === 'channel' || value === 'room';
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
 }
 
 /* =====================================================================

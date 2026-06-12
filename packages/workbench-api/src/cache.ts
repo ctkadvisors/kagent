@@ -29,7 +29,7 @@
 
 import type { V1Job, V1Pod } from '@kubernetes/client-node';
 
-import type { Agent, AgentTask } from '@kagent/dto';
+import type { Agent, AgentTask, Channel, ChannelBinding, ChannelSession } from '@kagent/dto';
 
 /** Stable composite key — `<namespace>/<name>`. Used for all kinds. */
 export type CacheKey = string;
@@ -46,7 +46,7 @@ export function cacheKey(namespace: string | undefined, name: string | undefined
  * `key` lets the UI cheaply patch a single row.
  */
 export interface CacheChangeEvent {
-  readonly kind: 'task' | 'agent' | 'job' | 'pod';
+  readonly kind: 'task' | 'agent' | 'job' | 'pod' | 'channel' | 'channelBinding' | 'channelSession';
   readonly op: 'upsert' | 'delete';
   readonly key: CacheKey;
 }
@@ -62,6 +62,9 @@ export type CacheListener = (event: CacheChangeEvent) => void;
 export class SnapshotCache {
   private readonly tasks = new Map<CacheKey, AgentTask>();
   private readonly agents = new Map<CacheKey, Agent>();
+  private readonly channels = new Map<CacheKey, Channel>();
+  private readonly channelBindings = new Map<CacheKey, ChannelBinding>();
+  private readonly channelSessions = new Map<CacheKey, ChannelSession>();
   private readonly jobs = new Map<CacheKey, V1Job>();
   private readonly pods = new Map<CacheKey, V1Pod>();
   private readonly listeners = new Set<CacheListener>();
@@ -110,6 +113,67 @@ export class SnapshotCache {
 
   listAgents(): readonly Agent[] {
     return Array.from(this.agents.values());
+  }
+
+  /* ----- Channels ----- */
+
+  upsertChannel(channel: Channel): void {
+    const key = cacheKey(channel.metadata.namespace, channel.metadata.name);
+    this.channels.set(key, channel);
+    this.emit({ kind: 'channel', op: 'upsert', key });
+  }
+
+  deleteChannel(channel: Channel): void {
+    const key = cacheKey(channel.metadata.namespace, channel.metadata.name);
+    if (this.channels.delete(key)) {
+      this.emit({ kind: 'channel', op: 'delete', key });
+    }
+  }
+
+  getChannel(namespace: string, name: string): Channel | undefined {
+    return this.channels.get(cacheKey(namespace, name));
+  }
+
+  listChannels(): readonly Channel[] {
+    return Array.from(this.channels.values());
+  }
+
+  /* ----- ChannelBindings ----- */
+
+  upsertChannelBinding(binding: ChannelBinding): void {
+    const key = cacheKey(binding.metadata.namespace, binding.metadata.name);
+    this.channelBindings.set(key, binding);
+    this.emit({ kind: 'channelBinding', op: 'upsert', key });
+  }
+
+  deleteChannelBinding(binding: ChannelBinding): void {
+    const key = cacheKey(binding.metadata.namespace, binding.metadata.name);
+    if (this.channelBindings.delete(key)) {
+      this.emit({ kind: 'channelBinding', op: 'delete', key });
+    }
+  }
+
+  listChannelBindings(): readonly ChannelBinding[] {
+    return Array.from(this.channelBindings.values());
+  }
+
+  /* ----- ChannelSessions ----- */
+
+  upsertChannelSession(session: ChannelSession): void {
+    const key = cacheKey(session.metadata.namespace, session.metadata.name);
+    this.channelSessions.set(key, session);
+    this.emit({ kind: 'channelSession', op: 'upsert', key });
+  }
+
+  deleteChannelSession(session: ChannelSession): void {
+    const key = cacheKey(session.metadata.namespace, session.metadata.name);
+    if (this.channelSessions.delete(key)) {
+      this.emit({ kind: 'channelSession', op: 'delete', key });
+    }
+  }
+
+  listChannelSessions(): readonly ChannelSession[] {
+    return Array.from(this.channelSessions.values());
   }
 
   /* ----- Jobs ----- */

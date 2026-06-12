@@ -5,7 +5,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Agent, AgentTask } from '@kagent/dto';
+import type { Agent, AgentTask, Channel, ChannelBinding, ChannelSession } from '@kagent/dto';
 import { API_GROUP_VERSION } from '@kagent/dto';
 import type { V1Job, V1Pod } from '@kubernetes/client-node';
 
@@ -26,6 +26,43 @@ function makeAgent(name: string, namespace = 'default'): Agent {
     kind: 'Agent',
     metadata: { name, namespace, uid: `agent-uid-${name}` },
     spec: { model: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct' },
+  };
+}
+
+function makeChannel(name: string, namespace = 'default'): Channel {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'Channel',
+    metadata: { name, namespace, uid: `channel-uid-${name}` },
+    spec: { provider: 'whatsapp', accountId: 'work' },
+  };
+}
+
+function makeChannelBinding(name: string, channelName = 'whatsapp-work'): ChannelBinding {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'ChannelBinding',
+    metadata: { name, namespace: 'default', uid: `binding-uid-${name}` },
+    spec: {
+      channelRef: { name: channelName },
+      target: { agentRef: { name: 'operator-investigator' } },
+    },
+  };
+}
+
+function makeChannelSession(name: string, channelName = 'whatsapp-work'): ChannelSession {
+  return {
+    apiVersion: API_GROUP_VERSION,
+    kind: 'ChannelSession',
+    metadata: { name, namespace: 'default', uid: `session-uid-${name}` },
+    spec: {
+      channelRef: { name: channelName },
+      provider: 'whatsapp',
+      accountId: 'work',
+      peer: { kind: 'dm', id: '+15551234567' },
+      sessionKey: `session:${name}`,
+      target: { agentRef: { name: 'operator-investigator' } },
+    },
   };
 }
 
@@ -110,6 +147,36 @@ describe('SnapshotCache agents', () => {
   });
 });
 
+describe('SnapshotCache channels', () => {
+  it('upserts, reads, lists, and deletes Channel resources', () => {
+    const c = new SnapshotCache();
+    const channel = makeChannel('whatsapp-work');
+    c.upsertChannel(channel);
+    expect(c.getChannel('default', 'whatsapp-work')).toBe(channel);
+    expect(c.listChannels()).toEqual([channel]);
+    c.deleteChannel(channel);
+    expect(c.getChannel('default', 'whatsapp-work')).toBeUndefined();
+  });
+
+  it('upserts, lists, and deletes ChannelBinding resources', () => {
+    const c = new SnapshotCache();
+    const binding = makeChannelBinding('whatsapp-default');
+    c.upsertChannelBinding(binding);
+    expect(c.listChannelBindings()).toEqual([binding]);
+    c.deleteChannelBinding(binding);
+    expect(c.listChannelBindings()).toEqual([]);
+  });
+
+  it('upserts, lists, and deletes ChannelSession resources', () => {
+    const c = new SnapshotCache();
+    const session = makeChannelSession('kcs-whatsapp-work-a1b2c3d4');
+    c.upsertChannelSession(session);
+    expect(c.listChannelSessions()).toEqual([session]);
+    c.deleteChannelSession(session);
+    expect(c.listChannelSessions()).toEqual([]);
+  });
+});
+
 describe('SnapshotCache job/pod join by task label', () => {
   it('finds job by kagent.knuteson.io/task label', () => {
     const c = new SnapshotCache();
@@ -148,18 +215,24 @@ describe('SnapshotCache listeners', () => {
     });
   });
 
-  it('fires on agent / job / pod upserts', () => {
+  it('fires on agent / job / pod / channel upserts', () => {
     const c = new SnapshotCache();
     const listener = vi.fn();
     c.subscribe(listener);
     c.upsertAgent(makeAgent('a'));
     c.upsertJob(makeJob('j', 'alpha'));
     c.upsertPod(makePod('p', 'alpha'));
-    expect(listener).toHaveBeenCalledTimes(3);
+    c.upsertChannel(makeChannel('whatsapp-work'));
+    c.upsertChannelBinding(makeChannelBinding('whatsapp-default'));
+    c.upsertChannelSession(makeChannelSession('kcs-whatsapp-work-a1b2c3d4'));
+    expect(listener).toHaveBeenCalledTimes(6);
     expect(listener.mock.calls.map((call) => (call[0] as { kind: string }).kind)).toEqual([
       'agent',
       'job',
       'pod',
+      'channel',
+      'channelBinding',
+      'channelSession',
     ]);
   });
 

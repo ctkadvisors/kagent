@@ -150,8 +150,8 @@ Cluster-scoped read-only. The exact verbs are documented inline in [`templates/c
 
 | Resource group                                       | Verbs                |
 | ---------------------------------------------------- | -------------------- |
-| `kagent.knuteson.io/{agents,agenttasks,agentcapabilities}` | `get,list,watch`     |
-| `kagent.knuteson.io/{agents,agenttasks,agentcapabilities}/status` | `get`                |
+| `kagent.knuteson.io/{agents,agenttasks,agentcapabilities,channels,channelbindings,channelsessions}` | `get,list,watch`     |
+| `kagent.knuteson.io/{agents,agenttasks,agentcapabilities,channels,channelbindings,channelsessions}/status` | `get`                |
 | `batch/jobs`                                         | `get,list,watch`     |
 | `pods`                                               | `get,list,watch`     |
 | `pods/log`                                           | `get`                |
@@ -167,6 +167,7 @@ The reader ClusterRole has no write verbs. The optional actions Role is release-
 | `kagent.knuteson.io/agenttemplates`                         | `create`           | review promotion + Architect `/try` |
 | `kagent.knuteson.io/agents`                                 | `create`           | Architect `/try` when drafts use the release namespace |
 | `kagent.knuteson.io/modelendpoints`                         | `patch,update`     | Gateway bounds edits |
+| `kagent.knuteson.io/channels`                               | `patch,update`     | Channel pause/resume |
 
 When `api.architect.draftNamespace` is set to a namespace other than the release namespace, `api.architect.draftRbac.create=true` renders a draft-namespace Role/RoleBinding for `agenttemplates`, `agents`, and `agenttasks`. The agent-pod runtime ServiceAccount/RBAC for that workload namespace is still provisioned by the operator chart or GitOps overlay.
 

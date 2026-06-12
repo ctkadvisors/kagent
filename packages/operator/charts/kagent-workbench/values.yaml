@@ -199,12 +199,12 @@ serviceAccount:
 # wires the K8s client; without it, POST /api/tasks returns 503.
 #
 # Today actions covers AgentTask creation, same-namespace termination
-# deletes, review annotation patches, Architect draft writes, and
-# ModelEndpoint bound patches. Set `terminateAllNamespaces=true` for
-# the emergency-only ClusterRole that grants ONLY `agenttasks:delete`
-# across namespaces; create/patch/modelendpoint writes remain
-# namespace-scoped. /retry (WORKBENCH.md §5) extends the same role when
-# it lands.
+# deletes, review annotation patches, Architect draft writes,
+# ModelEndpoint bound patches, and Channel pause/resume patches. Set
+# `terminateAllNamespaces=true` for the emergency-only ClusterRole that
+# grants ONLY `agenttasks:delete` across namespaces; create/patch/
+# modelendpoint/channel writes remain namespace-scoped. /retry
+# (WORKBENCH.md §5) extends the same role when it lands.
 # See new_localai/docs/kagent-workbench-rbac.md §2.2.
 # ---------------------------------------------------------------------
 rbac:

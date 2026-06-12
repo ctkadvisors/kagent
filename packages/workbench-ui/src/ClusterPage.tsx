@@ -113,6 +113,9 @@ function ActivityRow({ ev }: { ev: ActivityEvent }): React.JSX.Element {
   const kindClass: Record<CacheChangeEvent['kind'], string | undefined> = {
     task: styles.evTask,
     agent: styles.evAgent,
+    channel: styles.evAgent,
+    channelBinding: styles.evAgent,
+    channelSession: styles.evAgent,
     job: styles.evJob,
     pod: styles.evPod,
   };

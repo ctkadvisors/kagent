@@ -43,6 +43,12 @@ rules:
       # and verify candidate template name availability before creation.
       # Write verbs (create) live in clusterrole-actions.yaml per H17.
       - agenttemplates
+      # Channel control-plane visibility: Workbench renders channel
+      # pairing state, routing bindings, and per-peer session status.
+      # Writes remain in the separate actions Role.
+      - channels
+      - channelbindings
+      - channelsessions
     verbs: ['get', 'list', 'watch']
   # Status subresources (operator updates these; UI shows them)
   - apiGroups: ['kagent.knuteson.io']
@@ -53,6 +59,9 @@ rules:
       # Phase 4 (REV-02): agenttemplates/status read — lets the workbench
       # surface the liveInstanceCount + lastInstantiatedAt for promoted CRs.
       - agenttemplates/status
+      - channels/status
+      - channelbindings/status
+      - channelsessions/status
     verbs: ['get']
   # Operator-managed Jobs/Pods. Cluster-wide read; the workbench
   # filters by `kagent.knuteson.io/managed-by=kagent-operator` label

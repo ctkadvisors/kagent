@@ -86,6 +86,13 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['modelendpoints']
     verbs: ['patch', 'update']
+  # Channel emergency pause/resume — patches ONLY `spec.paused` in the
+  # workbench release namespace via /api/channels/:ns/:name. Bindings,
+  # sessions, allowlists, and routing policy remain GitOps-authored in
+  # this slice.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['channels']
+    verbs: ['patch', 'update']
 {{- end }}
 {{- if and .Values.rbac.create .Values.rbac.actions.create .Values.rbac.actions.terminateAllNamespaces }}
 ---

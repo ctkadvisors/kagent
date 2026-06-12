@@ -27,7 +27,15 @@ import styles from './AppShell.module.css';
 
 const STALE_MS = 60_000;
 
-type IconKey = 'architect' | 'command' | 'sessions' | 'tasks' | 'cluster' | 'gateway' | 'review';
+type IconKey =
+  | 'architect'
+  | 'command'
+  | 'sessions'
+  | 'channels'
+  | 'tasks'
+  | 'cluster'
+  | 'gateway'
+  | 'review';
 
 interface NavItem {
   readonly hash: string;
@@ -48,6 +56,7 @@ const NAV: readonly NavGroup[] = [
     items: [
       { hash: '#/command', label: 'Command Center', shortLabel: 'Command', icon: 'command' },
       { hash: '#/sessions', label: 'Sessions', icon: 'sessions' },
+      { hash: '#/channels', label: 'Channels', icon: 'channels' },
       { hash: '#/', label: 'Tasks', icon: 'tasks' },
     ],
   },
@@ -67,6 +76,7 @@ const NAV: readonly NavGroup[] = [
 const TITLES: Record<string, string> = {
   '#/architect': 'Architect — chat to create',
   '#/sessions': 'Sessions',
+  '#/channels': 'Channels',
   '#/': 'Tasks',
   '#/cluster': 'Cluster',
   '#/gateway': 'Gateway',
@@ -106,6 +116,15 @@ function Icon({ name }: { name: IconKey }): React.JSX.Element {
       <>
         <path {...p} d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v7A3.5 3.5 0 0 1 16.5 16H10l-5 4v-4.5A3.5 3.5 0 0 1 4 12.5v-7z" />
         <path {...p} d="M8 7h8M8 11h5" />
+      </>
+    ),
+    channels: (
+      <>
+        <path {...p} d="M4 7h6l2 5h8" />
+        <path {...p} d="M4 17h6l2-5" />
+        <circle {...p} cx="4" cy="7" r="2" />
+        <circle {...p} cx="4" cy="17" r="2" />
+        <circle {...p} cx="20" cy="12" r="2" />
       </>
     ),
     cluster: (

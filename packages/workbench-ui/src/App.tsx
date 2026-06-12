@@ -17,6 +17,7 @@
  *   - `#/tasks/<namespace>/<name>`    → TaskDetail
  *   - `#/gateway`                     → GatewayPage (substrate visibility)
  *   - `#/cluster`                     → ClusterPage
+ *   - `#/channels`                    → ChannelsPage
  *   - `#/command`                     → CommandView (RTS command center)
  *   - `#/review`                      → ReviewPage (Phase 4 / REV-02 reviewer entry point)
  */
@@ -25,6 +26,7 @@ import { useEffect, useState } from 'react';
 
 import { AppShell } from './AppShell.js';
 import { ArchitectPage } from './ArchitectPage.js';
+import { ChannelsPage } from './ChannelsPage.js';
 import { ClusterPage } from './ClusterPage.js';
 import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
@@ -51,6 +53,10 @@ interface ClusterRoute {
   readonly kind: 'cluster';
 }
 
+interface ChannelsRoute {
+  readonly kind: 'channels';
+}
+
 interface CommandRoute {
   readonly kind: 'command';
 }
@@ -73,6 +79,7 @@ type Route =
   | ListRoute
   | GatewayRoute
   | ClusterRoute
+  | ChannelsRoute
   | CommandRoute
   | ReviewRoute
   | ArchitectRoute
@@ -84,6 +91,7 @@ function parseHash(hash: string): Route {
   if (clean === '') return { kind: 'list' };
   if (clean === 'gateway') return { kind: 'gateway' };
   if (clean === 'cluster') return { kind: 'cluster' };
+  if (clean === 'channels') return { kind: 'channels' };
   if (clean === 'command') return { kind: 'command' };
   if (clean === 'review') return { kind: 'review' };
   if (clean === 'architect') return { kind: 'architect' };
@@ -143,6 +151,8 @@ export function App(): React.JSX.Element {
     content = <GatewayPage onBack={goHome} />;
   } else if (route.kind === 'cluster') {
     content = <ClusterPage onBack={goHome} />;
+  } else if (route.kind === 'channels') {
+    content = <ChannelsPage />;
   } else if (route.kind === 'review') {
     content = <ReviewPage onBack={goHome} />;
   } else if (route.kind === 'architect') {

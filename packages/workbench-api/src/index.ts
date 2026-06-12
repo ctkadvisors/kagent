@@ -26,5 +26,6 @@ export type { InformerDeps, InformerSet } from './informer.js';
 
 export { tasksRoute } from './routes/tasks.js';
 export { agentsRoute } from './routes/agents.js';
+export { channelsRoute } from './routes/channels.js';
 export { streamRoute } from './routes/stream.js';
 export { healthzRoute } from './routes/healthz.js';

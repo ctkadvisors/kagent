@@ -24,6 +24,8 @@ import type {
   ChannelSessionDetail,
   ChannelSessionSummary,
   DispositionOverlayRow,
+  ExternalChannelDetail,
+  ExternalChannelSummary,
   GatewayCapacityResponse,
   GatewayProviderDispatchState,
   GatewayUsageResponse,
@@ -254,6 +256,58 @@ export async function sendSessionMessage(
     body.error ?? `send session message: ${String(res.status)} ${res.statusText}`,
     body.fields,
   );
+}
+
+/* =====================================================================
+ * External channel control surface — `/api/channels`.
+ * ===================================================================== */
+
+export async function fetchChannels(signal?: AbortSignal): Promise<ExternalChannelSummary[]> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/channels', init);
+  if (!res.ok) {
+    throw new Error(`fetchChannels: ${String(res.status)} ${res.statusText}`);
+  }
+  const body = (await res.json()) as { items?: ExternalChannelSummary[] };
+  return body.items ?? [];
+}
+
+export async function fetchChannelDetail(
+  namespace: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<ExternalChannelDetail> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch(
+    `/api/channels/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+    init,
+  );
+  if (!res.ok) {
+    throw new Error(`fetchChannelDetail: ${String(res.status)} ${res.statusText}`);
+  }
+  return (await res.json()) as ExternalChannelDetail;
+}
+
+export async function setChannelPaused(
+  namespace: string,
+  name: string,
+  paused: boolean,
+): Promise<void> {
+  const res = await fetch(
+    `/api/channels/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paused }),
+    },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new CreateTaskApiError(
+      res.status,
+      body.message ?? body.error ?? `set channel paused: ${String(res.status)} ${res.statusText}`,
+    );
+  }
 }
 
 /* =====================================================================

@@ -272,13 +272,20 @@
     right: 0;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(58px, 1fr);
     height: 64px;
+    overflow-x: auto;
+    overflow-y: hidden;
     padding: 4px max(6px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-bottom))
       max(6px, env(safe-area-inset-right));
     background: var(--bg-deep);
     border-top: 1px solid var(--border);
     box-shadow: 0 -12px 28px rgba(2, 6, 23, 0.35);
+    scrollbar-width: none;
+  }
+  .mobileNav::-webkit-scrollbar {
+    display: none;
   }
   .mobileNavItem {
     position: relative;
