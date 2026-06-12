@@ -26,6 +26,7 @@ export interface StartWhatsAppAdapterDeps {
   readonly logger?: AdapterLogger;
   readonly clock?: () => Date;
   readonly requestRestart?: (reason: string) => void;
+  readonly reconnectDelayMs?: number;
 }
 
 export interface RunningWhatsAppAdapter {
@@ -51,19 +52,89 @@ export async function startWhatsAppAdapter(
 ): Promise<RunningWhatsAppAdapter> {
   const logger = deps.logger ?? consoleLogger;
   const clock = deps.clock ?? (() => new Date());
-  const session = await deps.socketFactory({ authDir: config.authDir });
+  const reconnectDelayMs = deps.reconnectDelayMs ?? 1000;
+  let activeSocket: WhatsAppSocketLike | undefined;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
   let connected = false;
 
   const deliverOutbound = async (): Promise<void> => {
-    if (!connected || deps.outbox === undefined) return;
+    if (!connected || deps.outbox === undefined || activeSocket === undefined) return;
     await deliverOutboundTurns({
       config,
       store: deps.outbox,
-      socket: session.socket,
+      socket: activeSocket,
       logger,
       clock,
     });
   };
+
+  const scheduleReconnect = (reason: string): void => {
+    if (stopped || reconnectTimer !== undefined) return;
+    logger.warn(`[channel-whatsapp] ${reason}; reconnecting Baileys socket`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void connect().catch((err: unknown) => {
+        logger.error('[channel-whatsapp] failed to reconnect Baileys socket', err);
+        scheduleReconnect('reconnect_failed');
+      });
+    }, reconnectDelayMs);
+    reconnectTimer.unref();
+  };
+
+  const attachSession = (session: Awaited<ReturnType<WhatsAppSocketFactory>>): void => {
+    activeSocket = session.socket;
+    session.socket.ev.on('creds.update', () => {
+      void Promise.resolve(session.saveCreds()).catch((err: unknown) => {
+        logger.error('[channel-whatsapp] failed to save Baileys credentials', err);
+      });
+    });
+    session.socket.ev.on('connection.update', (update) => {
+      if (activeSocket !== session.socket) return;
+      if (update.connection === 'open') connected = true;
+      if (update.connection === 'close') connected = false;
+      void handleConnectionUpdate({
+        config,
+        update,
+        socket: session.socket,
+        status: deps.status,
+        logger,
+        clock,
+      })
+        .then((result) => {
+          if (result.shouldReconnect) scheduleReconnect('connection_closed');
+          if (update.connection === 'open') {
+            void deliverOutbound().catch((err: unknown) => {
+              logger.error('[channel-whatsapp] failed to deliver outbound replies', err);
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          logger.error('[channel-whatsapp] failed to handle Baileys connection update', err);
+        });
+    });
+    session.socket.ev.on('messages.upsert', (upsert) => {
+      if (activeSocket !== session.socket) return;
+      void handleMessagesUpsert({
+        config,
+        upsert,
+        socket: session.socket,
+        gateway: deps.gateway,
+        logger,
+      }).catch((err: unknown) => {
+        logger.error('[channel-whatsapp] failed to handle Baileys message update', err);
+      });
+    });
+  };
+
+  async function connect(): Promise<void> {
+    const session = await deps.socketFactory({ authDir: config.authDir });
+    if (stopped) {
+      session.socket.end?.();
+      return;
+    }
+    attachSession(session);
+  }
 
   const outboundPoller =
     deps.outbox === undefined
@@ -81,51 +152,18 @@ export async function startWhatsAppAdapter(
     lastHeartbeatAt: clock().toISOString(),
   });
 
-  session.socket.ev.on('creds.update', () => {
-    void Promise.resolve(session.saveCreds()).catch((err: unknown) => {
-      logger.error('[channel-whatsapp] failed to save Baileys credentials', err);
-    });
-  });
-  session.socket.ev.on('connection.update', (update) => {
-    if (update.connection === 'open') connected = true;
-    if (update.connection === 'close') connected = false;
-    void handleConnectionUpdate({
-      config,
-      update,
-      socket: session.socket,
-      status: deps.status,
-      logger,
-      clock,
-      ...(deps.requestRestart !== undefined && { requestRestart: deps.requestRestart }),
-    })
-      .catch((err: unknown) => {
-        logger.error('[channel-whatsapp] failed to handle Baileys connection update', err);
-      })
-      .then(() => {
-        if (update.connection === 'open') {
-          void deliverOutbound().catch((err: unknown) => {
-            logger.error('[channel-whatsapp] failed to deliver outbound replies', err);
-          });
-        }
-      });
-  });
-  session.socket.ev.on('messages.upsert', (upsert) => {
-    void handleMessagesUpsert({
-      config,
-      upsert,
-      socket: session.socket,
-      gateway: deps.gateway,
-      logger,
-    }).catch((err: unknown) => {
-      logger.error('[channel-whatsapp] failed to handle Baileys message update', err);
-    });
-  });
+  await connect();
 
   return {
-    socket: session.socket,
+    get socket(): WhatsAppSocketLike {
+      if (activeSocket === undefined) throw new Error('WhatsApp socket is not connected');
+      return activeSocket;
+    },
     close(): void {
+      stopped = true;
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       if (outboundPoller !== undefined) clearInterval(outboundPoller);
-      session.socket.end?.();
+      activeSocket?.end?.();
     },
   };
 }
@@ -137,8 +175,7 @@ async function handleConnectionUpdate(input: {
   readonly status: ChannelStatusPatcher;
   readonly logger: AdapterLogger;
   readonly clock: () => Date;
-  readonly requestRestart?: (reason: string) => void;
-}): Promise<void> {
+}): Promise<{ readonly shouldReconnect: boolean }> {
   const now = input.clock();
   if (input.update.qr !== undefined && input.update.qr.length > 0) {
     const expiresAt = new Date(now.getTime() + input.config.pairingTtlSeconds * 1000).toISOString();
@@ -148,7 +185,7 @@ async function handleConnectionUpdate(input: {
       lastHeartbeatAt: now.toISOString(),
     });
     input.logger.info('[channel-whatsapp] pairing QR received');
-    return;
+    return { shouldReconnect: false };
   }
 
   if (input.update.connection === 'open') {
@@ -162,7 +199,7 @@ async function handleConnectionUpdate(input: {
       lastHeartbeatAt: now.toISOString(),
     });
     input.logger.info('[channel-whatsapp] connected');
-    return;
+    return { shouldReconnect: false };
   }
 
   if (input.update.connection === 'close') {
@@ -188,8 +225,10 @@ async function handleConnectionUpdate(input: {
       lastHeartbeatAt: now.toISOString(),
     });
     input.logger.warn('[channel-whatsapp] connection closed', input.update.lastDisconnect);
-    if (!loggedOut) input.requestRestart?.('connection_closed');
+    return { shouldReconnect: !loggedOut };
   }
+
+  return { shouldReconnect: false };
 }
 
 async function handleMessagesUpsert(input: {

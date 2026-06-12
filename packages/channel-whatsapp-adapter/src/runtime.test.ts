@@ -89,16 +89,18 @@ describe('startWhatsAppAdapter', () => {
     expect(harness.saveCreds).toHaveBeenCalledTimes(1);
   });
 
-  it('requests a pod restart on transient connection close', async () => {
-    const harness = await startHarness();
+  it('reconnects in-process on transient connection close', async () => {
+    const harness = await startHarness({ socketCount: 2, reconnectDelayMs: 1 });
 
     harness.emitConnection({
       connection: 'close',
       lastDisconnect: { error: { output: { statusCode: 428 } } },
     });
     await harness.flush();
+    await harness.advanceReconnect();
 
-    expect(harness.requestRestart).toHaveBeenCalledWith('connection_closed');
+    expect(harness.socketFactory).toHaveBeenCalledTimes(2);
+    expect(harness.requestRestart).not.toHaveBeenCalled();
     expect(harness.statusPatches.at(-1)).toMatchObject({
       phase: 'Pairing',
       pairing: { state: 'unpaired' },
@@ -122,24 +124,39 @@ describe('startWhatsAppAdapter', () => {
   });
 });
 
-async function startHarness(): Promise<{
+async function startHarness(
+  options: {
+    readonly socketCount?: number;
+    readonly reconnectDelayMs?: number;
+  } = {},
+): Promise<{
   readonly socket: FakeSocket;
+  readonly sockets: readonly FakeSocket[];
   readonly saveCreds: ReturnType<typeof vi.fn>;
+  readonly socketFactory: ReturnType<typeof vi.fn>;
   readonly gateway: { readonly postInbound: ReturnType<typeof vi.fn> };
   readonly requestRestart: ReturnType<typeof vi.fn>;
   readonly statusPatches: ChannelStatusPatch[];
   emitConnection(update: WhatsAppConnectionUpdate): void;
   emitMessages(upsert: WhatsAppMessagesUpsert): void;
   emitCreds(): void;
+  advanceReconnect(): Promise<void>;
   flush(): Promise<void>;
 }> {
-  const socket = new FakeSocket();
+  vi.useRealTimers();
+  const sockets = Array.from({ length: options.socketCount ?? 1 }, () => new FakeSocket());
+  const socket = sockets[0] ?? new FakeSocket();
   const saveCreds = vi.fn().mockResolvedValue(undefined);
+  const socketFactory = vi.fn();
+  for (const s of sockets) {
+    socketFactory.mockResolvedValueOnce({ socket: s, saveCreds });
+  }
+  socketFactory.mockResolvedValue({ socket: sockets.at(-1) ?? socket, saveCreds });
   const gateway = { postInbound: vi.fn().mockResolvedValue({ action: 'created' }) };
   const requestRestart = vi.fn();
   const statusPatches: ChannelStatusPatch[] = [];
   await startWhatsAppAdapter(config, {
-    socketFactory: vi.fn().mockResolvedValue({ socket, saveCreds }),
+    socketFactory,
     gateway,
     status: {
       patch: (patch) => {
@@ -150,10 +167,13 @@ async function startHarness(): Promise<{
     logger: quietLogger,
     clock: () => new Date('2026-06-12T12:00:00.000Z'),
     requestRestart,
+    reconnectDelayMs: options.reconnectDelayMs,
   });
   return {
     socket,
+    sockets,
     saveCreds,
+    socketFactory,
     gateway,
     requestRestart,
     statusPatches,
@@ -165,6 +185,10 @@ async function startHarness(): Promise<{
     },
     emitCreds(): void {
       socket.emitCreds();
+    },
+    async advanceReconnect(): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, options.reconnectDelayMs ?? 0));
+      await new Promise((resolve) => setImmediate(resolve));
     },
     async flush(): Promise<void> {
       await new Promise((resolve) => setImmediate(resolve));
