@@ -1,0 +1,210 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# Channel — external account/adapter control-plane resource.
+# Adapters authenticate and normalize messages; bounded AgentTask
+# creation stays behind ChannelBinding and ChannelSession.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: channels.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: Channel
+    listKind: ChannelList
+    plural: channels
+    singular: channel
+    shortNames:
+      - kch
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - provider
+                - accountId
+              properties:
+                provider:
+                  type: string
+                  minLength: 1
+                  description: Channel adapter provider, e.g. whatsapp, workbench, webhook.
+                accountId:
+                  type: string
+                  minLength: 1
+                  description: Provider account instance controlled by this Channel.
+                displayName:
+                  type: string
+                paused:
+                  type: boolean
+                  description: Killswitch. When true, inbound messages must not launch work.
+                authSecretRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    key:
+                      type: string
+                      minLength: 1
+                sessionStorage:
+                  type: object
+                  description: Secret/PVC-backed adapter auth and session storage.
+                  properties:
+                    secretRef:
+                      type: object
+                      required:
+                        - name
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                    pvc:
+                      type: object
+                      required:
+                        - claimName
+                      properties:
+                        claimName:
+                          type: string
+                          minLength: 1
+                policy:
+                  type: object
+                  description: Inbound DM/group authorization policy.
+                  properties:
+                    dmPolicy:
+                      type: string
+                      enum:
+                        - pairing
+                        - allowlist
+                        - open
+                        - disabled
+                    allowFrom:
+                      type: array
+                      items:
+                        type: string
+                    groupPolicy:
+                      type: string
+                      enum:
+                        - allowlist
+                        - open
+                        - disabled
+                    groupAllowFrom:
+                      type: array
+                      items:
+                        type: string
+                    groups:
+                      type: array
+                      description: Group/room allowlist. Omitted means all groups are eligible.
+                      items:
+                        type: string
+                whatsapp:
+                  type: object
+                  description: WhatsApp Web/Baileys adapter settings.
+                  properties:
+                    authDir:
+                      type: string
+                    sendReadReceipts:
+                      type: boolean
+                    mediaMaxMb:
+                      type: number
+                      minimum: 0
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Pairing
+                    - Ready
+                    - Paused
+                    - Failed
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
+                pairing:
+                  type: object
+                  properties:
+                    state:
+                      type: string
+                      enum:
+                        - unpaired
+                        - qr
+                        - paired
+                        - failed
+                    qrCode:
+                      type: string
+                    pairingCode:
+                      type: string
+                    expiresAt:
+                      type: string
+                      format: date-time
+                    accountJid:
+                      type: string
+                    message:
+                      type: string
+                lastHeartbeatAt:
+                  type: string
+                  format: date-time
+                activeSessionCount:
+                  type: integer
+                  minimum: 0
+      additionalPrinterColumns:
+        - name: Provider
+          type: string
+          jsonPath: .spec.provider
+        - name: Account
+          type: string
+          jsonPath: .spec.accountId
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Paused
+          type: boolean
+          jsonPath: .spec.paused
+        - name: Pairing
+          type: string
+          jsonPath: .status.pairing.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

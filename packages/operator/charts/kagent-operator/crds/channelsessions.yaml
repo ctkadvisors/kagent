@@ -1,0 +1,234 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# ChannelSession — durable projection of one routed external
+# conversation/session. Status carries task linkage and backoff state.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: channelsessions.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: ChannelSession
+    listKind: ChannelSessionList
+    plural: channelsessions
+    singular: channelsession
+    shortNames:
+      - kcs
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - channelRef
+                - provider
+                - accountId
+                - peer
+                - sessionKey
+                - target
+              properties:
+                channelRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                provider:
+                  type: string
+                  minLength: 1
+                accountId:
+                  type: string
+                  minLength: 1
+                peer:
+                  type: object
+                  required:
+                    - kind
+                    - id
+                  properties:
+                    kind:
+                      type: string
+                      enum:
+                        - dm
+                        - group
+                        - channel
+                        - room
+                    id:
+                      type: string
+                      minLength: 1
+                threadId:
+                  type: string
+                sessionKey:
+                  type: string
+                  minLength: 1
+                bindingRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                target:
+                  type: object
+                  anyOf:
+                    - required: [agentRef]
+                    - required: [capability]
+                    - required: [profileRef]
+                  properties:
+                    agentRef:
+                      type: object
+                      required:
+                        - name
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                    capability:
+                      type: string
+                      minLength: 1
+                    profileRef:
+                      type: string
+                      minLength: 1
+                    modelClass:
+                      type: string
+                      minLength: 1
+                    toolProfileRef:
+                      type: string
+                      minLength: 1
+                    runConfig:
+                      type: object
+                      properties:
+                        tokenLimit:
+                          type: integer
+                          minimum: 1
+                        costLimitUsd:
+                          type: number
+                          minimum: 0
+                        maxIterations:
+                          type: integer
+                          minimum: 1
+                          maximum: 100
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                        traceparent:
+                          type: string
+                          maxLength: 128
+                          pattern: '^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+                    session:
+                      type: object
+                      properties:
+                        scope:
+                          type: string
+                          enum:
+                            - main
+                            - per-peer
+                            - per-channel-peer
+                            - per-account-channel-peer
+                        mainKey:
+                          type: string
+                paused:
+                  type: boolean
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Active
+                    - Paused
+                    - Backoff
+                    - Failed
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
+                lastInboundAt:
+                  type: string
+                  format: date-time
+                lastOutboundAt:
+                  type: string
+                  format: date-time
+                lastTaskRef:
+                  type: object
+                  required:
+                    - namespace
+                    - name
+                  properties:
+                    namespace:
+                      type: string
+                      minLength: 1
+                    name:
+                      type: string
+                      minLength: 1
+                    uid:
+                      type: string
+                consecutiveFailures:
+                  type: integer
+                  minimum: 0
+                backoffUntil:
+                  type: string
+                  format: date-time
+                lastFailureReason:
+                  type: string
+      additionalPrinterColumns:
+        - name: Channel
+          type: string
+          jsonPath: .spec.channelRef.name
+        - name: Peer
+          type: string
+          jsonPath: .spec.peer.id
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Backoff
+          type: string
+          jsonPath: .status.backoffUntil
+        - name: LastTask
+          type: string
+          jsonPath: .status.lastTaskRef.name
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

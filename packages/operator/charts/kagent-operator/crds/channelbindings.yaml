@@ -1,0 +1,199 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Chris Knuteson
+#
+# ChannelBinding — deterministic channel/account/peer/thread routing
+# to a bounded agent/profile target.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: channelbindings.kagent.knuteson.io
+spec:
+  group: kagent.knuteson.io
+  scope: Namespaced
+  names:
+    kind: ChannelBinding
+    listKind: ChannelBindingList
+    plural: channelbindings
+    singular: channelbinding
+    shortNames:
+      - kcb
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - channelRef
+                - target
+              properties:
+                channelRef:
+                  type: object
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                match:
+                  type: object
+                  description: All provided fields must match for this binding to apply.
+                  properties:
+                    accountId:
+                      type: string
+                      description: Concrete account id or '*' for any account.
+                    peer:
+                      type: object
+                      required:
+                        - kind
+                        - id
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - dm
+                            - group
+                            - channel
+                            - room
+                        id:
+                          type: string
+                          minLength: 1
+                    threadId:
+                      type: string
+                default:
+                  type: boolean
+                  description: Final fallback for this channel.
+                paused:
+                  type: boolean
+                  description: Binding-local killswitch.
+                target:
+                  type: object
+                  anyOf:
+                    - required: [agentRef]
+                    - required: [capability]
+                    - required: [profileRef]
+                  properties:
+                    agentRef:
+                      type: object
+                      required:
+                        - name
+                      properties:
+                        name:
+                          type: string
+                          minLength: 1
+                    capability:
+                      type: string
+                      minLength: 1
+                    profileRef:
+                      type: string
+                      minLength: 1
+                    modelClass:
+                      type: string
+                      minLength: 1
+                    toolProfileRef:
+                      type: string
+                      minLength: 1
+                    runConfig:
+                      type: object
+                      properties:
+                        tokenLimit:
+                          type: integer
+                          minimum: 1
+                        costLimitUsd:
+                          type: number
+                          minimum: 0
+                        maxIterations:
+                          type: integer
+                          minimum: 1
+                          maximum: 100
+                        timeoutSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                        traceparent:
+                          type: string
+                          maxLength: 128
+                          pattern: '^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+                    session:
+                      type: object
+                      properties:
+                        scope:
+                          type: string
+                          enum:
+                            - main
+                            - per-peer
+                            - per-channel-peer
+                            - per-account-channel-peer
+                        mainKey:
+                          type: string
+                approval:
+                  type: object
+                  properties:
+                    required:
+                      type: boolean
+                    mode:
+                      type: string
+                      enum:
+                        - operator
+                        - per-turn
+                        - tool
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  minimum: 0
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      observedGeneration:
+                        type: integer
+                        minimum: 0
+                lastMatchedAt:
+                  type: string
+                  format: date-time
+      additionalPrinterColumns:
+        - name: Channel
+          type: string
+          jsonPath: .spec.channelRef.name
+        - name: Agent
+          type: string
+          jsonPath: .spec.target.agentRef.name
+        - name: Profile
+          type: string
+          jsonPath: .spec.target.profileRef
+        - name: Paused
+          type: boolean
+          jsonPath: .spec.paused
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

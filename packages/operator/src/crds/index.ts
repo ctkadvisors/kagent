@@ -92,6 +92,46 @@ export {
 } from './agent-task.js';
 export type { InputValidationResult } from './agent-task.js';
 
+export {
+  buildChannelTurnAgentTask,
+  channelSessionName,
+  evaluateChannelInboundPolicy,
+  isChannel,
+  isChannelBinding,
+  isChannelSession,
+  routeChannelInbound,
+  sessionKeyForChannelRoute,
+} from './channel.js';
+export type {
+  Channel,
+  ChannelBinding,
+  ChannelBindingMatch,
+  ChannelBindingSpec,
+  ChannelBindingStatus,
+  ChannelBindingTarget,
+  ChannelDmPolicy,
+  ChannelGroupPolicy,
+  ChannelInboundEnvelope,
+  ChannelPairingStatus,
+  ChannelPeer,
+  ChannelPeerKind,
+  ChannelPhase,
+  ChannelPolicy,
+  ChannelPolicyDecision,
+  ChannelPolicyDenyReason,
+  ChannelProvider,
+  ChannelRoute,
+  ChannelSession,
+  ChannelSessionIdentity,
+  ChannelSessionPhase,
+  ChannelSessionSpec,
+  ChannelSessionStatus,
+  ChannelSpec,
+  ChannelStatus,
+  ChannelTaskRef,
+  ChannelWhatsAppSpec,
+} from './channel.js';
+
 export { isKagentSchedule } from './kagent-schedule.js';
 export type {
   KagentSchedule,
