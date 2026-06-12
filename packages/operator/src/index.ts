@@ -62,6 +62,19 @@ export { buildJobSpec, jobNameForTask } from './job-spec.js';
 export type { BuildJobSpecOptions } from './job-spec.js';
 export { buildHandler } from './main.js';
 
+export {
+  buildKubernetesChannelControllerStore,
+  reconcileChannelInbound,
+} from './channel-controller.js';
+export type {
+  ChannelControllerDenyReason,
+  ChannelControllerResult,
+  ChannelControllerStore,
+  ReconcileChannelInboundInput,
+} from './channel-controller.js';
+export { buildChannelGatewayHandler, startChannelGatewayServer } from './channel-gateway.js';
+export type { ChannelGatewayDeps, ChannelGatewayHandler } from './channel-gateway.js';
+
 export { StaticCapabilityRegistry, StubCapabilityRegistry } from './capability-registry.js';
 export type { CapabilityRegistry } from './capability-registry.js';
 export { NatsDispatcher, publishSubject } from './nats-dispatcher.js';

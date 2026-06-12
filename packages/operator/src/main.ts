@@ -75,6 +75,8 @@ import {
   type AgentTask,
   type ModelEndpoint,
 } from './crds/index.js';
+import { buildKubernetesChannelControllerStore } from './channel-controller.js';
+import { startChannelGatewayServer } from './channel-gateway.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import { jobNameForTask, type BuildJobSpecOptions, type EnvVarSpec } from './job-spec.js';
@@ -2952,6 +2954,51 @@ async function main(): Promise<void> {
     };
   } else {
     console.log('[kagent-operator] triggers disabled (set KAGENT_TRIGGERS_ENABLED=true to enable)');
+  }
+
+  // Channel gateway — provider adapters POST normalized inbound turns
+  // here; the gateway routes them through Channel/ChannelBinding policy
+  // and materializes bounded AgentTasks with ChannelSession state.
+  // Default-OFF and token-required because this is a write surface.
+  if (process.env.KAGENT_CHANNEL_GATEWAY_ENABLED === 'true') {
+    const token = process.env.KAGENT_CHANNEL_GATEWAY_TOKEN;
+    if (typeof token !== 'string' || token.length === 0) {
+      console.error(
+        '[kagent-operator] channel gateway enabled but KAGENT_CHANNEL_GATEWAY_TOKEN is empty; gateway not started',
+      );
+    } else {
+      const port = Number.parseInt(process.env.KAGENT_CHANNEL_GATEWAY_PORT ?? '8089', 10);
+      const releaseNamespace = watchNamespace ?? process.env.KAGENT_RELEASE_NAMESPACE ?? 'default';
+      const channelGateway = await startChannelGatewayServer(port, {
+        namespace: releaseNamespace,
+        store: buildKubernetesChannelControllerStore(customApi),
+        authenticate: (req): boolean => {
+          const header = req.headers['x-kagent-channel-token'];
+          const bearer = req.headers.authorization;
+          if (bearer === `Bearer ${token}`) return true;
+          if (Array.isArray(header)) return header.includes(token);
+          return header === token;
+        },
+      });
+      if (channelGateway !== undefined) {
+        console.log(
+          `[kagent-operator] channel-gateway listening on :${String(port)} (namespace=${releaseNamespace})`,
+        );
+        const previous = onShutdownExtra;
+        onShutdownExtra = async (): Promise<void> => {
+          try {
+            await channelGateway.close();
+          } catch (err) {
+            console.error('[kagent-operator] channel-gateway close failed:', err);
+          }
+          if (previous !== undefined) await previous();
+        };
+      }
+    }
+  } else {
+    console.log(
+      '[kagent-operator] channel gateway disabled (set KAGENT_CHANNEL_GATEWAY_ENABLED=true to enable)',
+    );
   }
 
   // WS-M / Wave 2 Caps — boot the template-server when templates are

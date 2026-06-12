@@ -14,9 +14,8 @@ values, but the default-deny posture is on regardless):
   - NATS (when `nats.enabled` is true; defaults to in-namespace)
   - Any extra rules configured via `networkPolicy.extraEgress`.
 
-Ingress: the operator runs no listening port today (probes are
-restartPolicy-driven), so default-deny ingress is applied with no
-explicit allow rules.
+Ingress: default-deny by default. Optional write surfaces render their
+own token/HMAC-protected ports when explicitly enabled.
 
 NOTE: K3s with the default flannel CNI does NOT enforce
 NetworkPolicies. Either deploy K3s with `--flannel-backend=none` and
@@ -39,9 +38,15 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-  # Ingress: default-deny. The operator pod doesn't listen on any port
-  # in v0.1 (no /healthz endpoint), so no allow rules are emitted.
+  {{- if .Values.channels.gateway.enabled }}
+  ingress:
+    # Channel gateway — token-protected adapter ingress.
+    - ports:
+        - port: {{ .Values.channels.gateway.port }}
+          protocol: TCP
+  {{- else }}
   ingress: []
+  {{- end }}
   egress:
     # DNS — kube-system kube-dns / coredns. UDP for normal queries,
     # TCP for large responses + EDNS truncation fallback.

@@ -1,0 +1,30 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Channel gateway Service.
+
+ClusterIP-only. Provider adapters call this Service with a shared token
+and a normalized inbound envelope; the operator performs Channel policy,
+ChannelBinding routing, ChannelSession tracking, and bounded AgentTask
+creation.
+*/}}
+{{- if .Values.channels.gateway.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-channel-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: channel-gateway
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: channel
+      port: {{ .Values.channels.gateway.port }}
+      targetPort: channel
+      protocol: TCP
+{{- end }}

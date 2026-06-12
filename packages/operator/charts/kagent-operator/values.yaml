@@ -193,6 +193,19 @@ substrateHealth:
   port: 8081
   freshnessMaxMs: 300000 # 5 minutes; informer silence past this flips /healthz to 503
 
+channels:
+  gateway:
+    # Default OFF. When enabled, adapters POST normalized inbound channel
+    # envelopes to the operator's token-protected gateway; the operator
+    # routes through Channel/ChannelBinding and creates bounded AgentTasks.
+    enabled: false
+    port: 8089
+    # Required when enabled. The Deployment mounts this key as
+    # KAGENT_CHANNEL_GATEWAY_TOKEN; callers must send either
+    # Authorization: Bearer <token> or X-Kagent-Channel-Token: <token>.
+    authTokenSecretName: ''
+    authTokenSecretKey: token
+
 # Container that runs INSIDE the Pods the operator creates.
 agentPod:
   image:

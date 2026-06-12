@@ -29,6 +29,9 @@ turns that into a clear, actionable error rather than a silent race. */}}
 {{- if and .Values.capabilities.enabled (not .Values.capabilities.signingSecretName) }}
 {{- fail "kagent-operator: capabilities.enabled=true requires capabilities.signingSecretName" }}
 {{- end }}
+{{- if and .Values.channels.gateway.enabled (not .Values.channels.gateway.authTokenSecretName) }}
+{{- fail "kagent-operator: channels.gateway.enabled=true requires channels.gateway.authTokenSecretName" }}
+{{- end }}
 {{- include "kagent-operator.validateValues" . -}}
 
 apiVersion: apps/v1
@@ -159,6 +162,14 @@ spec:
             - name: healthz
               containerPort: {{ .Values.substrateHealth.port }}
               protocol: TCP
+            {{- if .Values.channels.gateway.enabled }}
+            # Channel gateway. Token-protected write surface for
+            # provider adapters to create ChannelSession + AgentTask
+            # records from normalized inbound channel envelopes.
+            - name: channel
+              containerPort: {{ .Values.channels.gateway.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
@@ -570,6 +581,20 @@ spec:
               value: "true"
             - name: KAGENT_TRIGGERS_WEBHOOK_PORT
               value: {{ .Values.triggers.webhook.port | quote }}
+            {{- end }}
+            # ---------------------------------------------------------------
+            # Channels — gateway/control plane
+            # ---------------------------------------------------------------
+            - name: KAGENT_CHANNEL_GATEWAY_ENABLED
+              value: {{ .Values.channels.gateway.enabled | ternary "true" "false" | quote }}
+            {{- if .Values.channels.gateway.enabled }}
+            - name: KAGENT_CHANNEL_GATEWAY_PORT
+              value: {{ .Values.channels.gateway.port | quote }}
+            - name: KAGENT_CHANNEL_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.channels.gateway.authTokenSecretName | quote }}
+                  key: {{ .Values.channels.gateway.authTokenSecretKey | quote }}
             {{- end }}
             # ---------------------------------------------------------------
             # Wave 1 — Workspace

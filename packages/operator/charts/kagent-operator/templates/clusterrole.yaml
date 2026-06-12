@@ -35,12 +35,23 @@ rules:
         'agenttemplates',
         'modelendpoints',
         'kagentschedules',
+        'channels',
+        'channelbindings',
+        'channelsessions',
       ]
     verbs: ['get', 'list', 'watch']
   # Patch AgentTask.status + AgentTemplate.status + KagentSchedule.status
-  # (operator-owned subresources).
+  # + Channel control-plane status (operator-owned subresources).
   - apiGroups: ['kagent.knuteson.io']
-    resources: ['agenttasks/status', 'agenttemplates/status', 'kagentschedules/status']
+    resources:
+      [
+        'agenttasks/status',
+        'agenttemplates/status',
+        'kagentschedules/status',
+        'channels/status',
+        'channelbindings/status',
+        'channelsessions/status',
+      ]
     verbs: ['get', 'patch', 'update']
   # Wave 0 sub-team Entry — operator creates AgentTasks from each
   # KagentSchedule tick and from each valid HMAC-signed webhook POST.
@@ -49,6 +60,11 @@ rules:
   # for the trigger paths.
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks']
+    verbs: ['create']
+  # Channel gateway creates ChannelSession records for inbound external
+  # channel turns. AgentTask creation stays in the existing rule above.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['channelsessions']
     verbs: ['create']
   # WS-M — operator mints Agent CRs from templates via the
   # template-server. Needed for `agents:create` (POST), `update/patch`
