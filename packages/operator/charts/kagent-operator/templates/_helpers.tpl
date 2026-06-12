@@ -63,6 +63,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.toolRuntime.gateway.image.repository $tag -}}
 {{- end -}}
 
+{{- define "kagent-operator.channelWhatsappAdapter.image" -}}
+{{- $tag := .Values.channels.whatsapp.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.channels.whatsapp.image.repository $tag -}}
+{{- end -}}
+
+{{- define "kagent-operator.channelWhatsappAdapter.serviceAccountName" -}}
+{{- if .Values.channels.whatsapp.serviceAccount.create -}}
+{{- default (printf "%s-channel-whatsapp" (include "kagent-operator.fullname" .)) .Values.channels.whatsapp.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- default "default" .Values.channels.whatsapp.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "kagent-operator.channelWhatsappAdapter.pvcName" -}}
+{{- default (printf "%s-channel-whatsapp-auth" (include "kagent-operator.fullname" .)) .Values.channels.whatsapp.persistence.existingClaim | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "kagent-operator.steelBrowser.image" -}}
 {{- printf "%s:%s" .Values.toolRuntime.browser.steel.image.repository .Values.toolRuntime.browser.steel.image.tag -}}
 {{- end -}}

@@ -1,0 +1,36 @@
+{
+  "name": "@kagent/channel-whatsapp-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "description": "WhatsApp/Baileys channel adapter that normalizes inbound messages into kagent Channel gateway envelopes.",
+  "license": "MIT",
+  "author": "Chris Knuteson <chris@ctkadvisors.net>",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc -p . --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "build": "tsc -p .",
+    "clean": "rm -rf dist .tsbuildinfo"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@kubernetes/client-node": "1.4.0",
+    "@whiskeysockets/baileys": "6.7.23",
+    "sharp": "0.35.1"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

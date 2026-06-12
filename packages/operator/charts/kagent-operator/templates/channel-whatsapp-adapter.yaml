@@ -1,0 +1,184 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+WhatsApp/Baileys channel adapter.
+
+Default-off. When enabled, this pod owns one WhatsApp-Web account
+session, stores auth state on a PVC, publishes QR/pairing status to the
+Channel CR, and forwards normalized inbound messages to the operator's
+token-protected channel gateway. Channel/ChannelBinding remain the
+policy source of truth.
+*/}}
+{{- if .Values.channels.whatsapp.enabled -}}
+{{- if not .Values.channels.gateway.enabled }}
+{{- fail "kagent-operator: channels.whatsapp.enabled=true requires channels.gateway.enabled=true" }}
+{{- end }}
+{{- if not .Values.channels.whatsapp.channelName }}
+{{- fail "kagent-operator: channels.whatsapp.enabled=true requires channels.whatsapp.channelName" }}
+{{- end }}
+{{- if not .Values.channels.whatsapp.accountId }}
+{{- fail "kagent-operator: channels.whatsapp.enabled=true requires channels.whatsapp.accountId" }}
+{{- end }}
+{{- if ne (int .Values.channels.whatsapp.replicas) 1 }}
+{{- fail "kagent-operator: channels.whatsapp.replicas must be 1 because Baileys auth state is single-writer" }}
+{{- end }}
+{{- $tokenSecretName := default .Values.channels.gateway.authTokenSecretName .Values.channels.whatsapp.gatewayTokenSecretName -}}
+{{- $tokenSecretKey := default .Values.channels.gateway.authTokenSecretKey .Values.channels.whatsapp.gatewayTokenSecretKey -}}
+{{- if not $tokenSecretName }}
+{{- fail "kagent-operator: channels.whatsapp.enabled=true requires channels.whatsapp.gatewayTokenSecretName or channels.gateway.authTokenSecretName" }}
+{{- end }}
+{{- $gatewayUrl := .Values.channels.whatsapp.gatewayUrl -}}
+{{- if not $gatewayUrl }}
+{{- $gatewayUrl = printf "http://%s-channel-gateway.%s.svc.cluster.local:%v" (include "kagent-operator.fullname" .) .Release.Namespace .Values.channels.gateway.port -}}
+{{- end }}
+{{- if .Values.channels.whatsapp.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kagent-operator.channelWhatsappAdapter.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: channel-whatsapp-adapter
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kagent-operator.channelWhatsappAdapter.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: channel-whatsapp-adapter
+rules:
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['channels']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['channels/status']
+    verbs: ['get', 'patch', 'update']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kagent-operator.channelWhatsappAdapter.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: channel-whatsapp-adapter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kagent-operator.channelWhatsappAdapter.serviceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kagent-operator.channelWhatsappAdapter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if and .Values.channels.whatsapp.persistence.enabled (not .Values.channels.whatsapp.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kagent-operator.channelWhatsappAdapter.pvcName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: channel-whatsapp-adapter
+spec:
+  accessModes:
+    {{- toYaml .Values.channels.whatsapp.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.channels.whatsapp.persistence.size | quote }}
+  {{- with .Values.channels.whatsapp.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-channel-whatsapp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: channel-whatsapp-adapter
+spec:
+  replicas: {{ .Values.channels.whatsapp.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "kagent-operator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: channel-whatsapp-adapter
+  template:
+    metadata:
+      labels:
+        {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: channel-whatsapp-adapter
+    spec:
+      serviceAccountName: {{ include "kagent-operator.channelWhatsappAdapter.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: auth
+          {{- if .Values.channels.whatsapp.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kagent-operator.channelWhatsappAdapter.pvcName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: channel-whatsapp-adapter
+          image: {{ include "kagent-operator.channelWhatsappAdapter.image" . | quote }}
+          imagePullPolicy: {{ .Values.channels.whatsapp.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: KAGENT_CHANNEL_NAME
+              value: {{ .Values.channels.whatsapp.channelName | quote }}
+            - name: KAGENT_CHANNEL_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: KAGENT_CHANNEL_ACCOUNT_ID
+              value: {{ .Values.channels.whatsapp.accountId | quote }}
+            - name: KAGENT_CHANNEL_GATEWAY_URL
+              value: {{ $gatewayUrl | quote }}
+            - name: KAGENT_CHANNEL_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $tokenSecretName | quote }}
+                  key: {{ $tokenSecretKey | quote }}
+            - name: KAGENT_WHATSAPP_AUTH_DIR
+              value: {{ .Values.channels.whatsapp.authDir | quote }}
+            - name: KAGENT_WHATSAPP_SEND_READ_RECEIPTS
+              value: {{ .Values.channels.whatsapp.sendReadReceipts | ternary "true" "false" | quote }}
+            - name: KAGENT_WHATSAPP_PAIRING_TTL_SECONDS
+              value: {{ .Values.channels.whatsapp.pairingTtlSeconds | quote }}
+          volumeMounts:
+            - name: auth
+              mountPath: {{ .Values.channels.whatsapp.authDir | quote }}
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.channels.whatsapp.resources | nindent 12 }}
+      {{- with .Values.channels.whatsapp.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.channels.whatsapp.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.channels.whatsapp.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

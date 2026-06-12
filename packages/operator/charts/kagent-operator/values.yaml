@@ -205,6 +205,53 @@ channels:
     # Authorization: Bearer <token> or X-Kagent-Channel-Token: <token>.
     authTokenSecretName: ''
     authTokenSecretKey: token
+  whatsapp:
+    # Default OFF. Enables a single Baileys WhatsApp-Web adapter pod
+    # that stores pairing/auth state on a PVC, publishes QR/pairing
+    # state to Channel.status, and POSTs normalized inbound messages to
+    # the token-protected channel gateway. The Channel and
+    # ChannelBinding CRs remain GitOps-authored policy.
+    enabled: false
+    image:
+      repository: ghcr.io/ctkadvisors/kagent-channel-whatsapp-adapter
+      tag: ''
+      pullPolicy: IfNotPresent
+    # Required when enabled. Must match the Channel metadata.name and
+    # Channel.spec.accountId the adapter is serving.
+    channelName: ''
+    accountId: ''
+    replicas: 1
+    authDir: /var/lib/kagent/whatsapp-auth
+    sendReadReceipts: false
+    pairingTtlSeconds: 120
+    # Override only when the gateway Service is deployed outside this
+    # chart. Defaults to the in-chart channel gateway Service.
+    gatewayUrl: ''
+    # Defaults to channels.gateway.authTokenSecretName/key when unset.
+    gatewayTokenSecretName: ''
+    gatewayTokenSecretKey: ''
+    serviceAccount:
+      create: true
+      name: ''
+    persistence:
+      # Default persistent so pairing survives pod restarts. Disable
+      # only for disposable dev/test QR sessions.
+      enabled: true
+      existingClaim: ''
+      storageClassName: ''
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+    resources:
+      requests:
+        cpu: '100m'
+        memory: '256Mi'
+      limits:
+        cpu: '1'
+        memory: '1Gi'
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
 
 # Container that runs INSIDE the Pods the operator creates.
 agentPod:
