@@ -20,6 +20,29 @@ interface BaileysModule {
   readonly fetchLatestBaileysVersion?: () => Promise<BaileysVersionResult>;
 }
 
+type BaileysLogger = {
+  readonly level: 'silent';
+  child(): BaileysLogger;
+  trace(...args: unknown[]): void;
+  debug(...args: unknown[]): void;
+  info(...args: unknown[]): void;
+  warn(...args: unknown[]): void;
+  error(...args: unknown[]): void;
+  fatal(...args: unknown[]): void;
+};
+
+const noop = (): void => undefined;
+const silentBaileysLogger: BaileysLogger = {
+  level: 'silent',
+  child: () => silentBaileysLogger,
+  trace: noop,
+  debug: noop,
+  info: noop,
+  warn: noop,
+  error: noop,
+  fatal: noop,
+};
+
 export function createBaileysSocketFactory(): WhatsAppSocketFactory {
   return async ({ authDir }) => {
     const baileys = (await import('@whiskeysockets/baileys')) as unknown as BaileysModule;
@@ -27,6 +50,7 @@ export function createBaileysSocketFactory(): WhatsAppSocketFactory {
     const version = await fetchBaileysVersion(baileys);
     const options: Record<string, unknown> = {
       auth: auth.state,
+      logger: silentBaileysLogger,
       printQRInTerminal: false,
       markOnlineOnConnect: false,
       syncFullHistory: false,
