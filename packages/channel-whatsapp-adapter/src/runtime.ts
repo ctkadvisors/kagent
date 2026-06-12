@@ -79,7 +79,6 @@ export async function startWhatsAppAdapter(
         scheduleReconnect('reconnect_failed');
       });
     }, reconnectDelayMs);
-    reconnectTimer.unref();
   };
 
   const attachSession = (session: Awaited<ReturnType<WhatsAppSocketFactory>>): void => {

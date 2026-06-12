@@ -107,6 +107,27 @@ describe('startWhatsAppAdapter', () => {
     });
   });
 
+  it('keeps the reconnect timer referenced so the process waits for reconnect', async () => {
+    const unref = vi.fn();
+    const fakeTimer = { unref } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(() => fakeTimer);
+    try {
+      const harness = await startHarness({ socketCount: 2, reconnectDelayMs: 1000 });
+
+      harness.emitConnection({
+        connection: 'close',
+        lastDisconnect: { error: { message: 'QR refs attempts ended' } },
+      });
+      await harness.flush();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1000);
+      expect(unref).not.toHaveBeenCalled();
+      expect(harness.requestRestart).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it('does not restart on logged-out sessions that require human re-pairing', async () => {
     const harness = await startHarness();
 
