@@ -264,6 +264,15 @@ export function ChannelsPage(): React.JSX.Element {
                     />
                     <PolicyRow label="Heartbeat" value={formatTime(activeDetail.lastHeartbeatAt)} />
                   </div>
+                  {activeDetail.pairing?.qrAvailable === true ? (
+                    <div className={styles.qrFrame}>
+                      <img
+                        className={styles.qrImage}
+                        src={pairingQrSrc(activeDetail)}
+                        alt={pairingQrAlt(activeDetail)}
+                      />
+                    </div>
+                  ) : null}
                 </section>
               </div>
 
@@ -451,6 +460,18 @@ function listValue(values: readonly string[]): string {
 function formatTime(value: string | undefined): string {
   if (value === undefined || value.length === 0) return 'none';
   return value.replace('T', ' ').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function pairingQrSrc(channel: ExternalChannelSummary): string {
+  return `/api/channels/${encodeURIComponent(channel.namespace)}/${encodeURIComponent(
+    channel.name,
+  )}/pairing-qr.svg`;
+}
+
+function pairingQrAlt(channel: ExternalChannelSummary): string {
+  const label = channel.displayName ?? channel.name;
+  const provider = channel.provider === 'whatsapp' ? 'WhatsApp' : channel.provider;
+  return `${provider} pairing QR for ${label}`;
 }
 
 function phaseClass(

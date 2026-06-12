@@ -127,6 +127,11 @@ describe('ChannelsPage', () => {
     expect(await screen.findByRole('heading', { name: 'Channels' })).toBeTruthy();
     expect(await screen.findByRole('button', { name: /whatsapp-work/i })).toBeTruthy();
     expect((await screen.findAllByText('QR ready')).length).toBeGreaterThan(0);
+    expect(
+      screen
+        .getByRole('img', { name: 'WhatsApp pairing QR for Work WhatsApp' })
+        .getAttribute('src'),
+    ).toBe('/api/channels/kagent-system/whatsapp-work/pairing-qr.svg');
     expect(screen.getAllByText('operator-investigator').length).toBeGreaterThan(0);
     expect(screen.getAllByText('DM pairing').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Groups disabled').length).toBeGreaterThan(0);

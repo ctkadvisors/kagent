@@ -252,6 +252,20 @@
   color: #e8eef9;
 }
 
+.qrFrame {
+  width: min(220px, 100%);
+  border: 1px solid rgba(132, 151, 184, 0.2);
+  border-radius: 6px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.qrImage {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+}
+
 .tableWrap {
   overflow: auto;
   border: 1px solid rgba(132, 151, 184, 0.16);

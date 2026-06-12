@@ -16,6 +16,7 @@
 
 import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
 import { Hono } from 'hono';
+import QRCode from 'qrcode';
 
 import type {
   AgentTask,
@@ -161,6 +162,32 @@ export function channelsRoute(deps: ChannelsRouteDeps): Hono {
     const channel = deps.cache.getChannel(namespace, name);
     if (channel === undefined) return c.json({ error: 'not-found', namespace, name }, 404);
     return c.json(channelDetail(channel, deps.cache));
+  });
+
+  app.get('/api/channels/:namespace/:name/pairing-qr.svg', async (c) => {
+    const namespace = c.req.param('namespace');
+    const name = c.req.param('name');
+    const channel = deps.cache.getChannel(namespace, name);
+    if (channel === undefined) return c.json({ error: 'not-found', namespace, name }, 404);
+
+    const qrCode = channel.status?.pairing?.qrCode;
+    if (typeof qrCode !== 'string' || qrCode.length === 0) {
+      return c.json({ error: 'qr-not-available', namespace, name }, 404);
+    }
+
+    try {
+      const svg = await renderPairingQrSvg(qrCode);
+      c.header('cache-control', 'no-store, private, max-age=0');
+      c.header('content-type', 'image/svg+xml; charset=utf-8');
+      c.header('x-content-type-options', 'nosniff');
+      return c.body(svg);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[workbench-api] GET /api/channels/${namespace}/${name}/pairing-qr.svg failed: ${detail}`,
+      );
+      return c.json({ error: 'qr-render-failed', message: detail }, 500);
+    }
   });
 
   app.patch('/api/channels/:namespace/:name', async (c) => {
@@ -427,6 +454,18 @@ function sanitizePairing(pairing: ChannelPairingStatus): SanitizedPairingStatus 
     ...(pairing.accountJid !== undefined && { accountJid: pairing.accountJid }),
     ...(pairing.message !== undefined && { message: pairing.message }),
   };
+}
+
+async function renderPairingQrSvg(qrCode: string): Promise<string> {
+  return QRCode.toString(qrCode, {
+    type: 'svg',
+    errorCorrectionLevel: 'M',
+    margin: 2,
+    color: {
+      dark: '#0f172a',
+      light: '#ffffff',
+    },
+  });
 }
 
 function summarizeTarget(target: ChannelBindingTarget): ChannelTargetSummary {

@@ -245,6 +245,23 @@ describe('channelsRoute', () => {
     });
   });
 
+  it('renders pairing QR as uncached SVG without returning raw pairing material', async () => {
+    const cache = new SnapshotCache();
+    cache.upsertChannel(makeChannel());
+
+    const res = await channelsRoute({ cache }).request(
+      '/api/channels/kagent-system/whatsapp-work/pairing-qr.svg',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^image\/svg\+xml/);
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    const body = await res.text();
+    expect(body).toContain('<svg');
+    expect(body).not.toContain('sensitive-qr-data');
+    expect(body).not.toContain('sensitive-pairing-code');
+  });
+
   it('patches channel paused state through the gated write surface', async () => {
     const cache = new SnapshotCache();
     cache.upsertChannel(makeChannel());
