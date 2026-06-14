@@ -22,6 +22,7 @@ spec:
   type: ClusterIP
   selector:
     {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
   ports:
     - name: channel
       port: {{ .Values.channels.gateway.port }}

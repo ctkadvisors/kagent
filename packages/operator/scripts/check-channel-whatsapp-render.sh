@@ -54,6 +54,37 @@ if ! grep -q 'name: KAGENT_CHANNEL_GATEWAY_TOKEN' <<<"$RENDERED" ||
   exit 2
 fi
 
+if ! grep -q 'name: KAGENT_RELEASE_NAMESPACE' <<<"$RENDERED" ||
+  ! grep -A1 'name: KAGENT_RELEASE_NAMESPACE' <<<"$RENDERED" | grep -q 'value: "kagent-system"'; then
+  echo "[check-channel-whatsapp-render] FAIL — release namespace env missing" >&2
+  exit 2
+fi
+
+GATEWAY_SERVICE="$(awk '
+  /^kind: Service$/ { in_service = 1; block = $0 "\n"; next }
+  in_service {
+    block = block $0 "\n"
+    if ($0 ~ /^---$/) {
+      if (block ~ /name: kagent-kagent-operator-channel-gateway/) {
+        print block
+        exit
+      }
+      in_service = 0
+      block = ""
+    }
+  }
+  END {
+    if (in_service && block ~ /name: kagent-kagent-operator-channel-gateway/) {
+      print block
+    }
+  }
+' <<<"$RENDERED")"
+
+if ! grep -q 'app.kubernetes.io/component: operator' <<<"$GATEWAY_SERVICE"; then
+  echo "[check-channel-whatsapp-render] FAIL — channel gateway Service selector must target only the operator component" >&2
+  exit 2
+fi
+
 if ! grep -q "resources: \\['channels/status'\\]" <<<"$RENDERED" ||
   ! grep -q "verbs: \\['get', 'patch', 'update'\\]" <<<"$RENDERED"; then
   echo "[check-channel-whatsapp-render] FAIL — Channel.status RBAC missing" >&2

@@ -175,6 +175,8 @@ spec:
               value: {{ .Values.logLevel | quote }}
             - name: KAGENT_WATCH_NAMESPACE
               value: {{ ternary "" (.Values.watchNamespace | default .Release.Namespace) .Values.watchAllNamespaces | quote }}
+            - name: KAGENT_RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
             # Plumb agent-pod image + runtime config through to the
             # reconcile loop, which forwards them as env into every
             # spawned pod via BuildJobSpecOptions.
