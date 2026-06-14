@@ -305,6 +305,44 @@ describe('reconcileAgentTask — idempotency-key dedupe', () => {
     });
   });
 
+  it('self-replay: same task uid is treated as the original in-flight dispatch', async () => {
+    const fakeCache = {
+      checkAndStore: vi.fn().mockReturnValue({
+        kind: 'replay',
+        originalTaskUid: 'task-uid-1',
+        outputs: [],
+      }),
+      recordOutputs: vi.fn(),
+      size: () => 1,
+      reset: () => undefined,
+    } as unknown as IdempotencyCache;
+
+    const deps = makeDeps({ idempotencyCache: fakeCache });
+    const task = makeTask({
+      metadata: { name: 't1', namespace: 'default', uid: 'task-uid-1' },
+      spec: {
+        targetAgent: 'researcher',
+        payload: {},
+        idempotencyKey: 'idem-self',
+        inputs: [{ name: 'corpus', from: { workspace: 'w' } }],
+      },
+    });
+
+    const result = await reconcileAgentTask(task, deps);
+
+    expect(result.action).toBe('dispatched');
+    expect(deps.mocks.batchApi.createNamespacedJob).toHaveBeenCalledTimes(1);
+    const statusCalls = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls as Array<
+      [{ body: { status: { phase?: string; conditions?: { reason?: string }[] } } }]
+    >;
+    expect(statusCalls.some((c) => c[0].body.status.phase === 'Completed')).toBe(false);
+    expect(
+      statusCalls.some((c) =>
+        c[0].body.status.conditions?.some((condition) => condition.reason === 'IdempotencyReplay'),
+      ),
+    ).toBe(false);
+  });
+
   it('no idempotencyKey: cache is bypassed entirely', async () => {
     const cache = new IdempotencyCache();
     const deps = makeDeps({ idempotencyCache: cache });

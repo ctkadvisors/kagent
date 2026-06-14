@@ -1656,6 +1656,7 @@ async function applyIdempotencyDedupe(
   const decision = deps.idempotencyCache.checkAndStore(key, inputHash, taskUid);
 
   if (decision.kind === 'miss') return null;
+  if (decision.originalTaskUid === taskUid) return null;
 
   if (decision.kind === 'replay') {
     // Stripe-pattern replay: surface the cached outputs verbatim, mark
