@@ -124,6 +124,7 @@ export type {
   ChannelBindingTarget,
   ChannelDmPolicy,
   ChannelGroupPolicy,
+  ChannelDeniedInboundStatus,
   ChannelInboundEnvelope,
   ChannelPairingStatus,
   ChannelPeer,

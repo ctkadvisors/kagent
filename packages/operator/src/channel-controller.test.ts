@@ -78,6 +78,7 @@ function makeStore(overrides: Partial<ChannelControllerStore> = {}): ChannelCont
     createChannelSession: vi.fn((session: ChannelSession) =>
       Promise.resolve({ session, created: true }),
     ),
+    patchChannelStatus: vi.fn().mockResolvedValue(undefined),
     patchChannelSessionStatus: vi.fn().mockResolvedValue(undefined),
     createAgentTask: vi.fn((task: AgentTask) => Promise.resolve({ task, created: true })),
     ...overrides,
@@ -146,6 +147,59 @@ describe('reconcileChannelInbound', () => {
 
   it('denies before route lookup when channel policy rejects the sender', async () => {
     const store = makeStore();
+
+    const result = await reconcileChannelInbound({
+      namespace,
+      inbound: makeInbound({ peer: { kind: 'dm', id: 'intruder' }, sender: { id: 'intruder' } }),
+      store,
+      clock: () => new Date(now),
+    });
+
+    expect(result).toEqual({ action: 'denied', reason: 'dm_sender_not_allowed' });
+    expect(store.listChannelBindings).not.toHaveBeenCalled();
+    expect(store.createAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('records denied inbound metadata on the Channel without storing message text', async () => {
+    const patchChannelStatus = vi.fn().mockResolvedValue(undefined);
+    const store = makeStore({
+      patchChannelStatus,
+    });
+    const inbound = makeInbound({
+      peer: { kind: 'dm', id: '15551234567@s.whatsapp.net' },
+      sender: { id: '15551234567@s.whatsapp.net', displayName: 'Operator Phone' },
+      messageId: 'wamid.denied',
+      text: 'This text must not be written to Channel status.',
+    });
+
+    const result = await reconcileChannelInbound({
+      namespace,
+      inbound,
+      store,
+      clock: () => new Date(now),
+    });
+
+    expect(result).toEqual({ action: 'denied', reason: 'dm_sender_not_allowed' });
+    expect(patchChannelStatus).toHaveBeenCalledWith(
+      namespace,
+      'wa-main',
+      expect.objectContaining({
+        lastDeniedInbound: {
+          at: now,
+          reason: 'dm_sender_not_allowed',
+          peer: { kind: 'dm', id: '15551234567@s.whatsapp.net' },
+          sender: { id: '15551234567@s.whatsapp.net', displayName: 'Operator Phone' },
+          messageId: 'wamid.denied',
+        },
+      }),
+    );
+    expect(JSON.stringify(patchChannelStatus.mock.calls)).not.toContain('This text must not');
+  });
+
+  it('keeps denial semantics when last-denied status observation fails', async () => {
+    const store = makeStore({
+      patchChannelStatus: vi.fn().mockRejectedValue(new Error('status unavailable')),
+    });
 
     const result = await reconcileChannelInbound({
       namespace,
@@ -355,6 +409,43 @@ describe('buildKubernetesChannelControllerStore', () => {
         plural: 'channelsessions',
         name: 'kcs-wa-main-abc',
         body: { status: { phase: 'Active' } },
+      },
+      expect.any(Object),
+    );
+  });
+
+  it('patches Channel status with merge-patch content type', async () => {
+    const customApi = {
+      patchNamespacedCustomObjectStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as CustomObjectsApi;
+    const store = buildKubernetesChannelControllerStore(customApi);
+
+    await store.patchChannelStatus(namespace, 'wa-main', {
+      lastDeniedInbound: {
+        at: now,
+        reason: 'dm_sender_not_allowed',
+        peer: { kind: 'dm', id: '15551234567@s.whatsapp.net' },
+        messageId: 'wamid.denied',
+      },
+    });
+
+    expect(customApi.patchNamespacedCustomObjectStatus).toHaveBeenCalledWith(
+      {
+        group: 'kagent.knuteson.io',
+        version: 'v1alpha1',
+        namespace,
+        plural: 'channels',
+        name: 'wa-main',
+        body: {
+          status: {
+            lastDeniedInbound: {
+              at: now,
+              reason: 'dm_sender_not_allowed',
+              peer: { kind: 'dm', id: '15551234567@s.whatsapp.net' },
+              messageId: 'wamid.denied',
+            },
+          },
+        },
       },
       expect.any(Object),
     );

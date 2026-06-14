@@ -317,11 +317,20 @@ export interface ChannelPairingStatus {
   readonly message?: string;
 }
 
+export interface ChannelDeniedInboundStatus {
+  readonly at: string;
+  readonly reason: string;
+  readonly peer: ChannelPeer;
+  readonly sender?: { readonly id: string; readonly displayName?: string };
+  readonly messageId: string;
+}
+
 export interface ChannelStatus {
   readonly phase?: ChannelPhase;
   readonly observedGeneration?: number;
   readonly conditions?: readonly AgentTaskCondition[];
   readonly pairing?: ChannelPairingStatus;
+  readonly lastDeniedInbound?: ChannelDeniedInboundStatus;
   readonly lastHeartbeatAt?: string;
   readonly activeSessionCount?: number;
 }

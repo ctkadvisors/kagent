@@ -44,6 +44,7 @@ function makeStore(): ChannelControllerStore {
     createChannelSession: vi.fn((session: ChannelSession) =>
       Promise.resolve({ session, created: true }),
     ),
+    patchChannelStatus: vi.fn().mockResolvedValue(undefined),
     patchChannelSessionStatus: vi.fn().mockResolvedValue(undefined),
     createAgentTask: vi.fn((task: AgentTask) =>
       Promise.resolve({

@@ -23,6 +23,7 @@ import type {
   Channel,
   ChannelBinding,
   ChannelBindingTarget,
+  ChannelDeniedInboundStatus,
   ChannelPairingStatus,
   ChannelPolicy,
   ChannelSession,
@@ -59,6 +60,14 @@ interface ChannelPolicySummary {
   readonly groups: readonly string[];
 }
 
+interface LastDeniedInboundSummary {
+  readonly at: string;
+  readonly reason: string;
+  readonly peer: { readonly kind: string; readonly id: string };
+  readonly sender?: { readonly id: string; readonly displayName?: string };
+  readonly messageId: string;
+}
+
 interface ChannelSummary {
   readonly id: string;
   readonly namespace: string;
@@ -70,6 +79,7 @@ interface ChannelSummary {
   readonly phase?: string;
   readonly observedGeneration?: number;
   readonly pairing?: SanitizedPairingStatus;
+  readonly lastDeniedInbound?: LastDeniedInboundSummary;
   readonly policy: ChannelPolicySummary;
   readonly storage?: {
     readonly secretRef?: string;
@@ -292,6 +302,9 @@ function summarizeChannel(channel: Channel, cache: SnapshotCache): ChannelSummar
     ...(channel.status?.pairing !== undefined && {
       pairing: sanitizePairing(channel.status.pairing),
     }),
+    ...(channel.status?.lastDeniedInbound !== undefined && {
+      lastDeniedInbound: summarizeLastDeniedInbound(channel.status.lastDeniedInbound),
+    }),
     policy: summarizePolicy(channel.spec.policy),
     ...(channel.spec.sessionStorage !== undefined && {
       storage: {
@@ -453,6 +466,21 @@ function sanitizePairing(pairing: ChannelPairingStatus): SanitizedPairingStatus 
     ...(pairing.expiresAt !== undefined && { expiresAt: pairing.expiresAt }),
     ...(pairing.accountJid !== undefined && { accountJid: pairing.accountJid }),
     ...(pairing.message !== undefined && { message: pairing.message }),
+  };
+}
+
+function summarizeLastDeniedInbound(denied: ChannelDeniedInboundStatus): LastDeniedInboundSummary {
+  return {
+    at: denied.at,
+    reason: denied.reason,
+    peer: { kind: denied.peer.kind, id: denied.peer.id },
+    ...(denied.sender !== undefined && {
+      sender: {
+        id: denied.sender.id,
+        ...(denied.sender.displayName !== undefined && { displayName: denied.sender.displayName }),
+      },
+    }),
+    messageId: denied.messageId,
   };
 }
 

@@ -183,6 +183,45 @@ spec:
                       type: string
                     message:
                       type: string
+                lastDeniedInbound:
+                  type: object
+                  required:
+                    - at
+                    - reason
+                    - peer
+                    - messageId
+                  properties:
+                    at:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                    peer:
+                      type: object
+                      required:
+                        - kind
+                        - id
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - dm
+                            - group
+                            - channel
+                            - room
+                        id:
+                          type: string
+                    sender:
+                      type: object
+                      required:
+                        - id
+                      properties:
+                        id:
+                          type: string
+                        displayName:
+                          type: string
+                    messageId:
+                      type: string
                 lastHeartbeatAt:
                   type: string
                   format: date-time

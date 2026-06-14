@@ -58,6 +58,13 @@ function makeChannel(overrides: Partial<ExternalChannelSummary> = {}): ExternalC
     sessionCount: 1,
     activeSessionCount: 1,
     lastHeartbeatAt: '2026-06-12T10:01:00Z',
+    lastDeniedInbound: {
+      at: '2026-06-12T10:04:30Z',
+      reason: 'dm_sender_not_allowed',
+      peer: { kind: 'dm', id: '15557654321@s.whatsapp.net' },
+      sender: { id: '15557654321@s.whatsapp.net', displayName: 'Unlisted Sender' },
+      messageId: 'wamid.denied',
+    },
     ...overrides,
   };
 }
@@ -135,6 +142,11 @@ describe('ChannelsPage', () => {
     expect(screen.getAllByText('operator-investigator').length).toBeGreaterThan(0);
     expect(screen.getAllByText('DM pairing').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Groups disabled').length).toBeGreaterThan(0);
+    expect(screen.getByText('Last denied inbound')).toBeTruthy();
+    expect(screen.getByText('dm_sender_not_allowed')).toBeTruthy();
+    expect(screen.getAllByText('dm:15557654321@s.whatsapp.net').length).toBeGreaterThan(0);
+    expect(screen.getByText('Unlisted Sender')).toBeTruthy();
+    expect(screen.queryByText('This text must not be written')).toBeNull();
     expect(screen.getByText('kcs-whatsapp-work-a1b2c3d4')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'open task channel-turn-abc' }).getAttribute('href')).toBe(
       '#/tasks/kagent-system/channel-turn-abc',

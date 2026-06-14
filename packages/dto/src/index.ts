@@ -76,6 +76,7 @@ export type {
   ChannelBindingTarget,
   ChannelDmPolicy,
   ChannelGroupPolicy,
+  ChannelDeniedInboundStatus,
   ChannelLocalRef,
   ChannelPairingStatus,
   ChannelPeer,

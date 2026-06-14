@@ -358,6 +358,14 @@ export interface ChannelPolicySummary {
   readonly groups: readonly string[];
 }
 
+export interface ChannelLastDeniedInboundSummary {
+  readonly at: string;
+  readonly reason: string;
+  readonly peer: { readonly kind: string; readonly id: string };
+  readonly sender?: { readonly id: string; readonly displayName?: string };
+  readonly messageId: string;
+}
+
 export interface ExternalChannelSummary {
   readonly id: string;
   readonly namespace: string;
@@ -369,6 +377,7 @@ export interface ExternalChannelSummary {
   readonly phase?: string;
   readonly observedGeneration?: number;
   readonly pairing?: ChannelPairingSummary;
+  readonly lastDeniedInbound?: ChannelLastDeniedInboundSummary;
   readonly policy: ChannelPolicySummary;
   readonly storage?: {
     readonly secretRef?: string;

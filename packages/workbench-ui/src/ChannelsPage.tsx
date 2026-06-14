@@ -247,6 +247,26 @@ export function ChannelsPage(): React.JSX.Element {
                         activeDetail.policy.groups,
                       )}`}
                     />
+                    {activeDetail.lastDeniedInbound !== undefined ? (
+                      <>
+                        <PolicyRow
+                          label="Last denied inbound"
+                          value={activeDetail.lastDeniedInbound.reason}
+                        />
+                        <PolicyRow
+                          label="Denied peer"
+                          value={peerLabel(activeDetail.lastDeniedInbound.peer)}
+                        />
+                        <PolicyRow
+                          label="Denied sender"
+                          value={senderLabel(activeDetail.lastDeniedInbound.sender)}
+                        />
+                        <PolicyRow
+                          label="Denied at"
+                          value={formatTime(activeDetail.lastDeniedInbound.at)}
+                        />
+                      </>
+                    ) : null}
                   </div>
                 </section>
 
@@ -441,6 +461,17 @@ function bindingMatch(binding: ExternalChannelBindingSummary): string {
     match.threadId !== undefined ? `thread:${match.threadId}` : undefined,
   ].filter((part): part is string => part !== undefined);
   return parts.length > 0 ? parts.join(' · ') : 'any';
+}
+
+function peerLabel(peer: { readonly kind: string; readonly id: string }): string {
+  return `${peer.kind}:${peer.id}`;
+}
+
+function senderLabel(
+  sender: { readonly id: string; readonly displayName?: string } | undefined,
+): string {
+  if (sender === undefined) return 'none';
+  return sender.displayName ?? sender.id;
 }
 
 function runConfigLabel(

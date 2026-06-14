@@ -54,6 +54,13 @@ function makeChannel(overrides: Partial<Channel> = {}): Channel {
         expiresAt: '2026-06-12T10:05:00Z',
         message: 'scan pending',
       },
+      lastDeniedInbound: {
+        at: '2026-06-12T10:04:30Z',
+        reason: 'dm_sender_not_allowed',
+        peer: { kind: 'dm', id: '15557654321@s.whatsapp.net' },
+        sender: { id: '15557654321@s.whatsapp.net', displayName: 'Unlisted Sender' },
+        messageId: 'wamid.denied',
+      },
       lastHeartbeatAt: '2026-06-12T10:01:00Z',
       activeSessionCount: 1,
       ...overrides.status,
@@ -167,6 +174,14 @@ describe('channelsRoute', () => {
           readonly groupPolicy: string;
           readonly groups: readonly string[];
         };
+        readonly lastDeniedInbound?: {
+          readonly at: string;
+          readonly reason: string;
+          readonly peer: { readonly kind: string; readonly id: string };
+          readonly sender?: { readonly id: string; readonly displayName?: string };
+          readonly messageId: string;
+          readonly text?: string;
+        };
         readonly bindingCount: number;
         readonly sessionCount: number;
       }[];
@@ -192,6 +207,14 @@ describe('channelsRoute', () => {
       qrAvailable: true,
       pairingCodeAvailable: true,
     });
+    expect(body.items[0]?.lastDeniedInbound).toEqual({
+      at: '2026-06-12T10:04:30Z',
+      reason: 'dm_sender_not_allowed',
+      peer: { kind: 'dm', id: '15557654321@s.whatsapp.net' },
+      sender: { id: '15557654321@s.whatsapp.net', displayName: 'Unlisted Sender' },
+      messageId: 'wamid.denied',
+    });
+    expect(body.items[0]?.lastDeniedInbound?.text).toBeUndefined();
     expect(body.items[0]?.pairing?.qrCode).toBeUndefined();
     expect(body.items[0]?.pairing?.pairingCode).toBeUndefined();
   });

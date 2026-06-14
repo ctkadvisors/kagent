@@ -41,11 +41,13 @@ import {
   type AgentTask,
   type Channel,
   type ChannelBinding,
+  type ChannelDeniedInboundStatus,
   type ChannelInboundEnvelope,
   type ChannelPolicyDenyReason,
   type ChannelRoute,
   type ChannelSession,
   type ChannelSessionStatus,
+  type ChannelStatus,
 } from './crds/index.js';
 import { mergePatchOptions } from './k8s.js';
 
@@ -89,6 +91,7 @@ export type ChannelControllerResult =
 
 export interface ChannelControllerStore {
   getChannel(namespace: string, name: string): Promise<Channel | undefined>;
+  patchChannelStatus(namespace: string, name: string, status: ChannelStatus): Promise<void>;
   listChannelBindings(namespace: string, channelName: string): Promise<readonly ChannelBinding[]>;
   getChannelSession(namespace: string, name: string): Promise<ChannelSession | undefined>;
   createChannelSession(
@@ -123,18 +126,18 @@ export async function reconcileChannelInbound(
     return { action: 'denied', reason: 'channel_not_found' };
   }
   if (channel.spec.provider !== inbound.provider || channel.spec.accountId !== inbound.accountId) {
-    return { action: 'denied', reason: 'channel_mismatch' };
+    return denyWithObservation({ namespace, channel, inbound, store, nowIso }, 'channel_mismatch');
   }
 
   const policy = evaluateChannelInboundPolicy(channel, inbound);
   if (!policy.allowed) {
-    return { action: 'denied', reason: policy.reason };
+    return denyWithObservation({ namespace, channel, inbound, store, nowIso }, policy.reason);
   }
 
   const bindings = await store.listChannelBindings(namespace, inbound.channelName);
   const route = routeChannelInbound(bindings, inbound);
   if (route === undefined) {
-    return { action: 'denied', reason: 'no_route' };
+    return denyWithObservation({ namespace, channel, inbound, store, nowIso }, 'no_route');
   }
 
   const approval = route.binding.spec.approval;
@@ -156,7 +159,17 @@ export async function reconcileChannelInbound(
   const sessionName = desiredSession.metadata.name ?? '';
   const existingSession = await store.getChannelSession(namespace, sessionName);
   const guarded = guardExistingSession(existingSession, sessionName, now);
-  if (guarded !== undefined) return guarded;
+  if (guarded !== undefined) {
+    await recordDeniedInbound({
+      namespace,
+      channel,
+      inbound,
+      store,
+      nowIso,
+      reason: guarded.reason,
+    });
+    return guarded;
+  }
 
   const sessionResult =
     existingSession === undefined
@@ -192,6 +205,47 @@ export async function reconcileChannelInbound(
   };
 }
 
+async function denyWithObservation(
+  input: {
+    readonly namespace: string;
+    readonly channel: Channel;
+    readonly inbound: ChannelInboundEnvelope;
+    readonly store: ChannelControllerStore;
+    readonly nowIso: string;
+  },
+  reason: ChannelControllerDenyReason,
+): Promise<Extract<ChannelControllerResult, { readonly action: 'denied' }>> {
+  await recordDeniedInbound({ ...input, reason });
+  return { action: 'denied', reason };
+}
+
+async function recordDeniedInbound(input: {
+  readonly namespace: string;
+  readonly channel: Channel;
+  readonly inbound: ChannelInboundEnvelope;
+  readonly store: ChannelControllerStore;
+  readonly nowIso: string;
+  readonly reason: ChannelControllerDenyReason;
+}): Promise<void> {
+  const channelName = input.channel.metadata.name;
+  if (channelName === undefined || channelName.length === 0) return;
+
+  const lastDeniedInbound: ChannelDeniedInboundStatus = {
+    at: input.nowIso,
+    reason: input.reason,
+    peer: input.inbound.peer,
+    ...(input.inbound.sender !== undefined && { sender: input.inbound.sender }),
+    messageId: input.inbound.messageId,
+  };
+
+  try {
+    await input.store.patchChannelStatus(input.namespace, channelName, { lastDeniedInbound });
+  } catch {
+    // Best-effort observation only. A failed status patch must not change
+    // policy denial semantics or make the adapter retry a safe rejection.
+  }
+}
+
 export function buildKubernetesChannelControllerStore(
   customApi: CustomObjectsApi,
 ): ChannelControllerStore {
@@ -210,6 +264,20 @@ export function buildKubernetesChannelControllerStore(
         if (isK8sStatus(err, 404)) return undefined;
         throw err;
       }
+    },
+
+    async patchChannelStatus(namespace, name, status): Promise<void> {
+      await customApi.patchNamespacedCustomObjectStatus(
+        {
+          group: API_GROUP,
+          version: API_VERSION,
+          namespace,
+          plural: CHANNEL_PLURAL,
+          name,
+          body: { status } as object,
+        },
+        mergePatchOptions,
+      );
     },
 
     async listChannelBindings(namespace, channelName): Promise<readonly ChannelBinding[]> {
@@ -376,7 +444,7 @@ function guardExistingSession(
   session: ChannelSession | undefined,
   sessionName: string,
   now: Date,
-): ChannelControllerResult | undefined {
+): Extract<ChannelControllerResult, { readonly action: 'denied' }> | undefined {
   if (session === undefined) return undefined;
   if (session.spec.paused === true || session.status?.phase === 'Paused') {
     return { action: 'denied', reason: 'session_paused', sessionName };
