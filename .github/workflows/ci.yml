@@ -375,6 +375,9 @@ jobs:
           - name: channel-whatsapp-adapter
             image: ghcr.io/ctkadvisors/kagent-channel-whatsapp-adapter
             file: packages/channel-whatsapp-adapter/Dockerfile
+          - name: channel-telegram-adapter
+            image: ghcr.io/ctkadvisors/kagent-channel-telegram-adapter
+            file: packages/channel-telegram-adapter/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

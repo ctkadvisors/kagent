@@ -255,6 +255,49 @@ channels:
     nodeSelector: {}
     tolerations: []
     affinity: {}
+  telegram:
+    # Default OFF. Enables a single Telegram Bot API adapter pod that
+    # long-polls getUpdates, publishes Ready health to Channel.status,
+    # and POSTs normalized inbound messages to the token-protected
+    # channel gateway. Store the bot token in a Kubernetes Secret; do
+    # not put it in values.yaml or GitOps.
+    enabled: false
+    image:
+      repository: ghcr.io/ctkadvisors/kagent-channel-telegram-adapter
+      tag: ''
+      pullPolicy: IfNotPresent
+    # Required when enabled. Must match the Channel metadata.name and
+    # Channel.spec.accountId the adapter is serving.
+    channelName: ''
+    accountId: ''
+    replicas: 1
+    botTokenSecretName: ''
+    botTokenSecretKey: token
+    telegramApiBaseUrl: https://api.telegram.org
+    pollTimeoutSeconds: 25
+    pollIntervalMs: 1000
+    outboundPollMs: 5000
+    outboundBaseBackoffSeconds: 60
+    outboundMaxFailures: 5
+    # Override only when the gateway Service is deployed outside this
+    # chart. Defaults to the in-chart channel gateway Service.
+    gatewayUrl: ''
+    # Defaults to channels.gateway.authTokenSecretName/key when unset.
+    gatewayTokenSecretName: ''
+    gatewayTokenSecretKey: ''
+    serviceAccount:
+      create: true
+      name: ''
+    resources:
+      requests:
+        cpu: '50m'
+        memory: '128Mi'
+      limits:
+        cpu: '250m'
+        memory: '256Mi'
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
 
 # Container that runs INSIDE the Pods the operator creates.
 agentPod:

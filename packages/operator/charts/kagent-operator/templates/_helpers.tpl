@@ -80,6 +80,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default (printf "%s-channel-whatsapp-auth" (include "kagent-operator.fullname" .)) .Values.channels.whatsapp.persistence.existingClaim | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "kagent-operator.channelTelegramAdapter.image" -}}
+{{- $tag := .Values.channels.telegram.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" .Values.channels.telegram.image.repository $tag -}}
+{{- end -}}
+
+{{- define "kagent-operator.channelTelegramAdapter.serviceAccountName" -}}
+{{- if .Values.channels.telegram.serviceAccount.create -}}
+{{- default (printf "%s-channel-telegram" (include "kagent-operator.fullname" .)) .Values.channels.telegram.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- default "default" .Values.channels.telegram.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "kagent-operator.steelBrowser.image" -}}
 {{- printf "%s:%s" .Values.toolRuntime.browser.steel.image.repository .Values.toolRuntime.browser.steel.image.tag -}}
 {{- end -}}
