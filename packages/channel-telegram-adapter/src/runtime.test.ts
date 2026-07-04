@@ -158,6 +158,45 @@ describe('startTelegramAdapter', () => {
 
     running.close();
   });
+
+  it('keeps the poll and outbound timers referenced so the process stays alive', async () => {
+    const timeoutUnref = vi.fn();
+    const intervalUnref = vi.fn();
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(
+        () => ({ unref: timeoutUnref }) as unknown as ReturnType<typeof setTimeout>,
+      );
+    const setIntervalSpy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation(
+        () => ({ unref: intervalUnref }) as unknown as ReturnType<typeof setInterval>,
+      );
+    try {
+      const client = makeClient({ updates: [] });
+      const running = await startTelegramAdapter(config, {
+        client,
+        gateway: { postInbound: vi.fn() },
+        status: { patch: () => Promise.resolve() },
+        outbox: {
+          listChannelSessions: vi.fn().mockResolvedValue([]),
+          getAgentTask: vi.fn(),
+          patchSessionStatus: vi.fn(),
+        },
+        logger: quietLogger,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), config.outboundPollMs);
+      expect(intervalUnref).not.toHaveBeenCalled();
+      expect(timeoutUnref).not.toHaveBeenCalled();
+
+      running.close();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      setIntervalSpy.mockRestore();
+    }
+  });
 });
 
 function makeClient(input: {

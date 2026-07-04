@@ -88,7 +88,6 @@ export async function startTelegramAdapter(
             logger.error('[channel-telegram] failed to deliver outbound replies', err);
           });
         }, config.outboundPollMs);
-  outboundPoller?.unref();
 
   async function pollLoop(): Promise<void> {
     while (!stopped) {
@@ -192,7 +191,6 @@ function validUpdateId(update: TelegramUpdate): number | undefined {
 
 function timeoutSleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
+    setTimeout(resolve, ms);
   });
 }
