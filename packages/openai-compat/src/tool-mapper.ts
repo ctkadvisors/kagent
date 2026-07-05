@@ -97,6 +97,23 @@ export function toOpenAIToolCalls(
 }
 
 /**
+ * Strip a Qwen/Hermes-style `<tool_call>...</tool_call>` chat-template
+ * closing tag that some vLLM tool-call parsers leak into
+ * `function.name` when the model's in-tag JSON doesn't come out clean
+ * (observed against Qwen3-Coder-Next on vLLM as e.g.
+ * `"browser.goto\n</tool_call>"` or `"browser.start_session=\n</tool_call>"`).
+ * Truncates at the first `</tool_call` marker, then trims a dangling `=`
+ * and whitespace some malformed emissions leave behind. A no-op for
+ * well-formed names from every other backend (Ollama, LocalAI,
+ * Cloudflare) since none of them contain this substring.
+ */
+function sanitizeToolCallName(name: string): string {
+  const tagIndex = name.indexOf('</tool_call');
+  const truncated = tagIndex === -1 ? name : name.slice(0, tagIndex);
+  return truncated.replace(/=\s*$/, '').trim();
+}
+
+/**
  * Translate the OpenAI `choices[0].message.tool_calls[]` array back into the
  * kernel's `ToolCall[]` shape.
  *
@@ -122,7 +139,7 @@ export function fromOpenAIToolCalls(
     }
     return {
       id: tc.id,
-      name: tc.function.name,
+      name: sanitizeToolCallName(tc.function.name),
       args,
     };
   });

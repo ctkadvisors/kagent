@@ -117,6 +117,42 @@ describe('fromOpenAIToolCalls (VALIDATION row 7)', () => {
     expect(fromOpenAIToolCalls([])).toBeUndefined();
   });
 
+  it('strips a leaked </tool_call> closing tag from function.name (Qwen3/vLLM)', () => {
+    const raw = [
+      {
+        id: 'call_1',
+        type: 'function' as const,
+        function: { name: 'browser.goto\n</tool_call>', arguments: '{}' },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('browser.goto');
+  });
+
+  it('strips a dangling "=" left before the leaked closing tag', () => {
+    const raw = [
+      {
+        id: 'call_2',
+        type: 'function' as const,
+        function: { name: 'browser.start_session=\n</tool_call>', arguments: '{}' },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('browser.start_session');
+  });
+
+  it('leaves well-formed names from other backends untouched', () => {
+    const raw = [
+      {
+        id: 'call_3',
+        type: 'function' as const,
+        function: { name: 'code_interpreter.execute_code', arguments: '{}' },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('code_interpreter.execute_code');
+  });
+
   it('args round-trips arrays + nested objects (not just primitives)', () => {
     const raw = [
       {
