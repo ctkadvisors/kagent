@@ -14,6 +14,7 @@ import type {
 import {
   BROWSER_TOOL_NAMES,
   CODE_INTERPRETER_TOOL_NAMES,
+  SHELL_TOOL_NAMES,
   isToolRuntimeTool,
   type ToolRuntimeToolName,
 } from '@kagent/dto';
@@ -211,7 +212,7 @@ export function buildRuntimeToolDescriptors(
 }
 
 const RUNTIME_TOOL_DESCRIPTORS: Record<ToolRuntimeToolName, ToolDescriptor> = Object.fromEntries(
-  [...BROWSER_TOOL_NAMES, ...CODE_INTERPRETER_TOOL_NAMES].map((name) => [
+  [...BROWSER_TOOL_NAMES, ...CODE_INTERPRETER_TOOL_NAMES, ...SHELL_TOOL_NAMES].map((name) => [
     name,
     descriptorForRuntimeTool(name),
   ]),
@@ -270,6 +271,8 @@ function runtimeToolDescription(name: ToolRuntimeToolName): string {
       return 'Stop a long-running code interpreter command.';
     case 'code_interpreter.terminate_session':
       return 'Release the task-scoped code interpreter session.';
+    case 'shell.exec':
+      return 'Run a shell command over SSH on a specific homelab node (elitemini2 or jetson2 only).';
   }
 }
 
@@ -288,6 +291,7 @@ function runtimeToolTags(name: ToolRuntimeToolName): readonly string[] {
   ) {
     return ['read-only'];
   }
+  if (name === 'shell.exec') return ['destructive'];
   return [];
 }
 
@@ -390,6 +394,15 @@ function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unkno
           taskId: { type: 'string', minLength: 1 },
         },
         ['taskId'],
+      );
+    case 'shell.exec':
+      return objectSchema(
+        {
+          host: { type: 'string', enum: ['elitemini2', 'jetson2'] },
+          command: { type: 'string', minLength: 1 },
+          timeoutSeconds: { type: 'number', minimum: 1, maximum: 600 },
+        },
+        ['host', 'command'],
       );
     default:
       return objectSchema({});
