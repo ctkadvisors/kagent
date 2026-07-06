@@ -291,16 +291,8 @@ export class ToolGatewayHttpHandler {
     const input = parseShellExecInput(args);
     if (input === null) return invalidArgs('shell.exec');
 
-    try {
-      const result = await this.shellRunner.exec(input);
-      return {
-        content: result.stdout.length > 0 ? result.stdout : result.stderr,
-        isError: result.exitCode !== 0,
-        metadata: { stderr: result.stderr, exitCode: result.exitCode, timedOut: result.timedOut },
-      };
-    } catch (err) {
-      return { content: err instanceof Error ? err.message : String(err), isError: true };
-    }
+    const result = await this.shellRunner.exec(input);
+    return commandResultToToolResult(result);
   }
 
   private async startCommand(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {

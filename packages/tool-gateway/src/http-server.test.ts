@@ -484,6 +484,23 @@ describe('ToolGatewayHttpHandler', () => {
     expect(body.content as string).toContain('hi');
   });
 
+  it('propagates shell runner errors through the standard runtime-error path', async () => {
+    const shellRunner = {
+      exec: vi.fn().mockRejectedValue(new Error('policy_denied: host jetson1 is not allowed')),
+    };
+    const handler = new ToolGatewayHttpHandler({ shellRunner });
+
+    const response = await handler.handle(
+      request(invokeBody('shell.exec', { host: 'jetson2', command: 'rm -rf /' })),
+    );
+    const body = asRecord(await json(response));
+    const metadata = asRecord(body.metadata);
+
+    expect(body.isError).toBe(true);
+    expect(body.content).toBe('policy_denied: host jetson1 is not allowed');
+    expect(metadata.policy).toBe('runtime-error');
+  });
+
   it('describes shell.exec with a closed host enum in its input schema', async () => {
     const handler = new ToolGatewayHttpHandler({});
     const response = await handler.handle(describeRequest(['shell.exec']));
