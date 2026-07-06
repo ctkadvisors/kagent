@@ -63,10 +63,24 @@ export interface ToolGatewayCodeRunner {
 
 export type ToolGatewayCodeRunnerFactory = (task: ToolGatewayTaskIdentity) => ToolGatewayCodeRunner;
 
+export interface ToolGatewayShellRunner {
+  readonly exec: (input: {
+    readonly host: 'elitemini2' | 'jetson2';
+    readonly command: string;
+    readonly timeoutSeconds?: number;
+  }) => Promise<{
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly exitCode: number | null;
+    readonly timedOut: boolean;
+  }>;
+}
+
 export interface ToolGatewayHttpHandlerOptions {
   readonly codeRunner?: ToolGatewayCodeRunner;
   readonly codeRunnerFactory?: ToolGatewayCodeRunnerFactory;
   readonly browser?: SteelBrowserAdapter;
+  readonly shellRunner?: ToolGatewayShellRunner;
   readonly externalHandlers?: Readonly<Record<string, ToolGatewayExternalHandler>>;
   readonly externalRegistry?: ExternalToolRegistry;
   readonly toolProfiles?: ToolProfileConfig;
@@ -77,6 +91,7 @@ export class ToolGatewayHttpHandler {
   private readonly codeRunner: ToolGatewayCodeRunner | undefined;
   private readonly codeRunnerFactory: ToolGatewayCodeRunnerFactory | undefined;
   private readonly browser: SteelBrowserAdapter | undefined;
+  private readonly shellRunner: ToolGatewayShellRunner | undefined;
   private readonly externalHandlers: Readonly<Record<string, ToolGatewayExternalHandler>>;
   private readonly externalRegistry: ExternalToolRegistry | undefined;
   private readonly toolProfiles: ToolProfileConfig;
@@ -87,6 +102,7 @@ export class ToolGatewayHttpHandler {
     this.codeRunner = options.codeRunner;
     this.codeRunnerFactory = options.codeRunnerFactory;
     this.browser = options.browser;
+    this.shellRunner = options.shellRunner;
     this.externalHandlers = options.externalHandlers ?? {};
     this.externalRegistry = options.externalRegistry;
     this.toolProfiles = options.toolProfiles ?? { profiles: [] };
@@ -239,6 +255,8 @@ export class ToolGatewayHttpHandler {
         return this.browserSessionUrl(invocation.task, invocation.call.name);
       case 'browser.terminate_session':
         return this.terminateBrowserSession(invocation.task);
+      case 'shell.exec':
+        return this.execShell(invocation.call.args);
       default:
         return {
           content: `unknown runtime tool "${invocation.call.name}"`,
@@ -264,6 +282,25 @@ export class ToolGatewayHttpHandler {
 
     const result = await runner.executeCommand(input);
     return commandResultToToolResult(result);
+  }
+
+  private async execShell(args: unknown): Promise<ToolResult> {
+    if (this.shellRunner === undefined) {
+      return { content: 'shell.exec is not configured on this gateway', isError: true };
+    }
+    const input = parseShellExecInput(args);
+    if (input === null) return invalidArgs('shell.exec');
+
+    try {
+      const result = await this.shellRunner.exec(input);
+      return {
+        content: result.stdout.length > 0 ? result.stdout : result.stderr,
+        isError: result.exitCode !== 0,
+        metadata: { stderr: result.stderr, exitCode: result.exitCode, timedOut: result.timedOut },
+      };
+    } catch (err) {
+      return { content: err instanceof Error ? err.message : String(err), isError: true };
+    }
   }
 
   private async startCommand(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
@@ -589,6 +626,21 @@ function parseExecuteCommandInput(args: unknown): ExecuteCommandInput | null {
   return withArgs;
 }
 
+function parseShellExecInput(
+  args: unknown,
+): { host: 'elitemini2' | 'jetson2'; command: string; timeoutSeconds?: number } | null {
+  if (!isRecord(args) || typeof args.command !== 'string' || args.command.length === 0) {
+    return null;
+  }
+  if (args.host !== 'elitemini2' && args.host !== 'jetson2') return null;
+  const out: { host: 'elitemini2' | 'jetson2'; command: string; timeoutSeconds?: number } = {
+    host: args.host,
+    command: args.command,
+  };
+  if (typeof args.timeoutSeconds === 'number') out.timeoutSeconds = args.timeoutSeconds;
+  return out;
+}
+
 function parseBrowserStartArgs(args: unknown): Parameters<SteelBrowserAdapter['startSession']>[0] {
   if (!isRecord(args)) return {};
   const out: {
@@ -731,6 +783,8 @@ function runtimeToolDescription(name: ToolRuntimeToolName): string {
       return 'Stop a long-running code interpreter command.';
     case 'code_interpreter.terminate_session':
       return 'Release the task-scoped code interpreter session.';
+    case 'shell.exec':
+      return 'Run a shell command over SSH on a specific homelab node (elitemini2 or jetson2 only).';
   }
 }
 
@@ -749,6 +803,7 @@ function runtimeToolTags(name: ToolRuntimeToolName): readonly string[] {
   ) {
     return ['read-only'];
   }
+  if (name === 'shell.exec') return ['destructive'];
   return [];
 }
 
@@ -841,6 +896,15 @@ function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unkno
       return objectSchema({ root: { type: 'string' } });
     case 'code_interpreter.stop_task':
       return objectSchema({ taskId: { type: 'string', minLength: 1 } }, ['taskId']);
+    case 'shell.exec':
+      return objectSchema(
+        {
+          host: { type: 'string', enum: ['elitemini2', 'jetson2'] },
+          command: { type: 'string', minLength: 1 },
+          timeoutSeconds: { type: 'number', minimum: 1, maximum: 600 },
+        },
+        ['host', 'command'],
+      );
     default:
       return objectSchema({});
   }

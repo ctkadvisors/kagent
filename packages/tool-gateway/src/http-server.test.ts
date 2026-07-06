@@ -463,6 +463,39 @@ describe('ToolGatewayHttpHandler', () => {
     });
   });
 
+  it('dispatches shell.exec to the injected shell runner and returns stdout as content', async () => {
+    const shellRunner = {
+      exec: vi.fn().mockResolvedValue({
+        stdout: 'hi\n',
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+      }),
+    };
+    const handler = new ToolGatewayHttpHandler({ shellRunner });
+
+    const response = await handler.handle(
+      request(invokeBody('shell.exec', { host: 'jetson2', command: 'echo hi' })),
+    );
+    const body = asRecord(await json(response));
+
+    expect(shellRunner.exec).toHaveBeenCalledWith({ host: 'jetson2', command: 'echo hi' });
+    expect(body.isError).toBe(false);
+    expect(body.content as string).toContain('hi');
+  });
+
+  it('describes shell.exec with a closed host enum in its input schema', async () => {
+    const handler = new ToolGatewayHttpHandler({});
+    const response = await handler.handle(describeRequest(['shell.exec']));
+    const body = asRecord(await json(response));
+    const tools = body.tools as readonly Record<string, unknown>[];
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.name).toBe('shell.exec');
+    expect(JSON.stringify(tools[0]?.inputSchema)).toContain('elitemini2');
+    expect(JSON.stringify(tools[0]?.inputSchema)).toContain('jetson2');
+  });
+
   it('returns a terminal paused error without invoking handlers when the kill switch is set', async () => {
     const handler = makeHandler({
       paused: true,

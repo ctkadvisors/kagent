@@ -22,6 +22,7 @@ import {
   type ToolGatewayTaskIdentity,
 } from './http-server.js';
 import { createPlaywrightCdpDriver } from './playwright-driver.js';
+import { SshShellRunner } from './shell-runner.js';
 import { parseToolProfileConfig, type ToolProfileConfig } from './tool-profiles.js';
 
 export interface ToolGatewayServerConfig {
@@ -31,6 +32,8 @@ export interface ToolGatewayServerConfig {
   readonly steelBaseUrl?: string;
   readonly steelApiKey?: string;
   readonly steelConnectBaseUrl?: string;
+  readonly shellSshKeyPath?: string;
+  readonly shellSshUser?: string;
   readonly externalProviders: ExternalToolProviderConfig;
   readonly toolProfiles: ToolProfileConfig;
 }
@@ -55,6 +58,8 @@ export function parseToolGatewayServerConfig(
     steelBaseUrl?: string;
     steelApiKey?: string;
     steelConnectBaseUrl?: string;
+    shellSshKeyPath?: string;
+    shellSshUser?: string;
   } = {
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
     workspaceRoot: nonEmpty(env.KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT) ?? DEFAULT_WORKSPACE_ROOT,
@@ -70,6 +75,10 @@ export function parseToolGatewayServerConfig(
   if (steelBaseUrl !== undefined) config.steelBaseUrl = steelBaseUrl;
   if (steelApiKey !== undefined) config.steelApiKey = steelApiKey;
   if (steelConnectBaseUrl !== undefined) config.steelConnectBaseUrl = steelConnectBaseUrl;
+  const shellSshKeyPath = nonEmpty(env.KAGENT_SHELL_SSH_KEY_PATH);
+  const shellSshUser = nonEmpty(env.KAGENT_SHELL_SSH_USER);
+  if (shellSshKeyPath !== undefined) config.shellSshKeyPath = shellSshKeyPath;
+  if (shellSshUser !== undefined) config.shellSshUser = shellSshUser;
   return config;
 }
 
@@ -87,12 +96,21 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     browser = new SteelBrowserAdapter(browserOptions);
   }
 
+  let shellRunner: SshShellRunner | undefined;
+  if (config.shellSshKeyPath !== undefined && config.shellSshUser !== undefined) {
+    shellRunner = new SshShellRunner({
+      sshKeyPath: config.shellSshKeyPath,
+      sshUser: config.shellSshUser,
+    });
+  }
+
   const options: ToolGatewayHttpHandlerOptions = {
     paused: config.paused,
     codeRunnerFactory: (task) => buildLocalCodeRunner(config.workspaceRoot, task),
     externalRegistry: buildExternalToolRegistry(config.externalProviders),
     toolProfiles: config.toolProfiles,
     ...(browser !== undefined && { browser }),
+    ...(shellRunner !== undefined && { shellRunner }),
   };
 
   return new ToolGatewayHttpHandler(options);

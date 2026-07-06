@@ -132,6 +132,21 @@ describe('tool-gateway server', () => {
     });
   });
 
+  it('parses shell SSH config from env when both vars are present', () => {
+    const config = parseToolGatewayServerConfig({
+      KAGENT_SHELL_SSH_KEY_PATH: '/secrets/kagent-builder-ssh-key/id_ed25519',
+      KAGENT_SHELL_SSH_USER: 'kagent-builder',
+    });
+    expect(config.shellSshKeyPath).toBe('/secrets/kagent-builder-ssh-key/id_ed25519');
+    expect(config.shellSshUser).toBe('kagent-builder');
+  });
+
+  it('leaves shell SSH config undefined when env vars are absent', () => {
+    const config = parseToolGatewayServerConfig({});
+    expect(config.shellSshKeyPath).toBeUndefined();
+    expect(config.shellSshUser).toBeUndefined();
+  });
+
   it('routes health/readiness locally and invokes the runtime handler for tool calls', async () => {
     const config = parseToolGatewayServerConfig({
       KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT: workspaceRoot,
