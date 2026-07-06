@@ -9,20 +9,35 @@ import {
   CODE_INTERPRETER_TOOL_NAMES,
   DEFAULT_TOOL_SESSION_ENV,
   FORBIDDEN_TOOL_SESSION_ENV_KEYS,
+  SHELL_TOOL_NAMES,
   TOOL_KINDS,
   buildToolSessionKey,
   filterToolSessionEnv,
   isCodeInterpreterTool,
   isForbiddenToolSessionEnvKey,
+  isShellTool,
   isToolKind,
+  isToolRuntimeTool,
 } from './tool-session.js';
 
 describe('tool-session DTO contracts', () => {
-  it('recognizes only browser and code_interpreter as tool kinds', () => {
-    expect(TOOL_KINDS).toEqual(['browser', 'code_interpreter']);
+  it('recognizes browser, code_interpreter, and shell as tool kinds', () => {
+    expect(TOOL_KINDS).toEqual(['browser', 'code_interpreter', 'shell']);
     expect(isToolKind('browser')).toBe(true);
     expect(isToolKind('code_interpreter')).toBe(true);
-    expect(isToolKind('shell')).toBe(false);
+    expect(isToolKind('shell')).toBe(true);
+    expect(isToolKind('kubectl')).toBe(false);
+  });
+
+  it('declares exactly one shell tool: shell.exec', () => {
+    expect(SHELL_TOOL_NAMES).toEqual(['shell.exec']);
+    expect(isShellTool('shell.exec')).toBe(true);
+    expect(isShellTool('shell.ssh')).toBe(false);
+    expect(isShellTool('code_interpreter.execute_command')).toBe(false);
+  });
+
+  it('treats shell.exec as a runtime tool', () => {
+    expect(isToolRuntimeTool('shell.exec')).toBe(true);
   });
 
   it('builds a task-scoped session key that includes tenant, namespace, task uid, tool kind, and session id', () => {

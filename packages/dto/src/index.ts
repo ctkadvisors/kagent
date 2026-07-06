@@ -161,6 +161,7 @@ export { parseAgentTemplateSpec } from './template-candidate.js';
 export type {
   BrowserToolName,
   CodeInterpreterToolName,
+  ShellToolName,
   ToolKind,
   ToolRuntimeToolName,
   ToolSessionEnvContext,
@@ -172,12 +173,14 @@ export {
   CODE_INTERPRETER_TOOL_NAMES,
   DEFAULT_TOOL_SESSION_ENV,
   FORBIDDEN_TOOL_SESSION_ENV_KEYS,
+  SHELL_TOOL_NAMES,
   TOOL_KINDS,
   buildToolSessionKey,
   filterToolSessionEnv,
   isBrowserTool,
   isCodeInterpreterTool,
   isForbiddenToolSessionEnvKey,
+  isShellTool,
   isToolKind,
   isToolRuntimeTool,
 } from './tool-session.js';

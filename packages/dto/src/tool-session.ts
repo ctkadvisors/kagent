@@ -12,7 +12,7 @@
  * browser cookies, code workspace, CDP URL, or process state.
  */
 
-export const TOOL_KINDS = ['browser', 'code_interpreter'] as const;
+export const TOOL_KINDS = ['browser', 'code_interpreter', 'shell'] as const;
 export type ToolKind = (typeof TOOL_KINDS)[number];
 
 export const CODE_INTERPRETER_TOOL_NAMES = [
@@ -44,7 +44,10 @@ export const BROWSER_TOOL_NAMES = [
 ] as const;
 export type BrowserToolName = (typeof BROWSER_TOOL_NAMES)[number];
 
-export type ToolRuntimeToolName = CodeInterpreterToolName | BrowserToolName;
+export const SHELL_TOOL_NAMES = ['shell.exec'] as const;
+export type ShellToolName = (typeof SHELL_TOOL_NAMES)[number];
+
+export type ToolRuntimeToolName = CodeInterpreterToolName | BrowserToolName | ShellToolName;
 
 export const DEFAULT_TOOL_SESSION_ENV = {
   HOME: '/workspace',
@@ -107,8 +110,12 @@ export function isBrowserTool(value: unknown): value is BrowserToolName {
   return typeof value === 'string' && (BROWSER_TOOL_NAMES as readonly string[]).includes(value);
 }
 
+export function isShellTool(value: unknown): value is ShellToolName {
+  return typeof value === 'string' && (SHELL_TOOL_NAMES as readonly string[]).includes(value);
+}
+
 export function isToolRuntimeTool(value: unknown): value is ToolRuntimeToolName {
-  return isCodeInterpreterTool(value) || isBrowserTool(value);
+  return isCodeInterpreterTool(value) || isBrowserTool(value) || isShellTool(value);
 }
 
 export function isForbiddenToolSessionEnvKey(key: string): boolean {
