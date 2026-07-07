@@ -152,6 +152,16 @@ toolRuntime:
       nodeSelector: {}
       tolerations: []
       affinity: {}
+  shell:
+    # SSH-based shell.exec tool. Off by default (empty sshUser / no
+    # sshKeySecret -- the gateway only constructs an SshShellRunner when
+    # both are set). The target-host allowlist (elitemini2/jetson2) is
+    # hardcoded in shell-runner.ts by design, not configurable here --
+    # same posture as code-runner.ts's ALLOWED_COMMANDS.
+    sshUser: ''
+    sshKeySecret:
+      name: ''
+      key: id_ed25519
 
 # Image pull secret(s) for private registries. Empty = no secret.
 # Example: imagePullSecrets: [{ name: ghcr-pull }]

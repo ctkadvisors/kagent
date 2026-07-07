@@ -40,6 +40,12 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- with .Values.toolRuntime.shell.sshKeySecret.name }}
+        - name: shell-ssh-key
+          secret:
+            secretName: {{ . | quote }}
+            defaultMode: 0400
+        {{- end }}
       containers:
         - name: tool-gateway
           image: {{ include "kagent-operator.toolGateway.image" . | quote }}
@@ -92,9 +98,22 @@ spec:
                   name: {{ . | quote }}
                   key: {{ $.Values.toolRuntime.browser.steel.apiKeySecret.key | quote }}
             {{- end }}
+            {{- with .Values.toolRuntime.shell.sshUser }}
+            - name: KAGENT_SHELL_SSH_USER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.toolRuntime.shell.sshKeySecret.name }}
+            - name: KAGENT_SHELL_SSH_KEY_PATH
+              value: {{ printf "/secrets/shell-ssh-key/%s" $.Values.toolRuntime.shell.sshKeySecret.key | quote }}
+            {{- end }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- with .Values.toolRuntime.shell.sshKeySecret.name }}
+            - name: shell-ssh-key
+              mountPath: /secrets/shell-ssh-key
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.toolRuntime.gateway.resources | nindent 12 }}
           readinessProbe:
