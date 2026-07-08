@@ -161,6 +161,38 @@ describe('fromOpenAIToolCalls (VALIDATION row 7)', () => {
     });
   });
 
+  it('strips leaked inline JSON arguments from function.name', () => {
+    const raw = [
+      {
+        id: 'call_wait',
+        type: 'function' as const,
+        function: {
+          name: 'wait_for_child_task\n{"uid":"child-uid","timeoutSeconds":180}',
+          arguments: '{"uid":"child-uid","timeoutSeconds":180}',
+        },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('wait_for_child_task');
+    expect(result?.[0]?.args).toEqual({ uid: 'child-uid', timeoutSeconds: 180 });
+  });
+
+  it('strips leaked parenthesized inline arguments from function.name', () => {
+    const raw = [
+      {
+        id: 'call_shell',
+        type: 'function' as const,
+        function: {
+          name: 'shell.exec(host="jetson2", command="df -h")',
+          arguments: '{"host":"jetson2","command":"df -h"}',
+        },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('shell.exec');
+    expect(result?.[0]?.args).toEqual({ host: 'jetson2', command: 'df -h' });
+  });
+
   it('leaves well-formed names from other backends untouched', () => {
     const raw = [
       {

@@ -108,9 +108,13 @@ export function toOpenAIToolCalls(
  * Cloudflare) since none of them contain this substring.
  */
 function sanitizeToolCallName(name: string): string {
-  const tagIndexes = [name.indexOf('</tool_call'), name.indexOf('<parameter=')].filter(
-    (index) => index >= 0,
-  );
+  const tagIndexes = [
+    name.indexOf('</tool_call'),
+    name.indexOf('<parameter='),
+    name.indexOf('\n'),
+    name.indexOf('\r'),
+    name.indexOf('('),
+  ].filter((index) => index >= 0);
   const tagIndex = tagIndexes.length === 0 ? -1 : Math.min(...tagIndexes);
   const truncated = tagIndex === -1 ? name : name.slice(0, tagIndex);
   return truncated.replace(/=\s*$/, '').trim();
