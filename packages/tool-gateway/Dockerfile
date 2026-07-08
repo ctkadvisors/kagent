@@ -3,8 +3,8 @@
 #
 # Multi-stage build for @kagent/tool-gateway. Stage 1 installs the
 # pnpm workspace and compiles the gateway plus transitive workspace
-# deps. Stage 2 ships a node:22-alpine runtime that runs
-# `node dist/main.js`.
+# deps. Stage 2 ships a node:22-alpine runtime with the SSH client needed
+# by shell.exec, then runs `node dist/main.js`.
 #
 # Build context = REPO ROOT:
 #   docker buildx build \
@@ -41,6 +41,8 @@ RUN node -e "require('fs').accessSync('packages/tool-gateway/dist/main.js')"
 RUN pnpm install --frozen-lockfile --prod
 
 FROM node:22-alpine AS runtime
+
+RUN apk add --no-cache openssh-client
 
 USER node
 WORKDIR /app
