@@ -141,6 +141,26 @@ describe('fromOpenAIToolCalls (VALIDATION row 7)', () => {
     expect(result?.[0]?.name).toBe('browser.start_session');
   });
 
+  it('strips a leaked Qwen parameter tag from function.name', () => {
+    const raw = [
+      {
+        id: 'call_4',
+        type: 'function' as const,
+        function: {
+          name: 'spawn_child_task\n<parameter=agentName',
+          arguments:
+            '{"agentName":"homelab-builder","originalUserMessage":"SSH into jetson2 and tell me the disk usage"}',
+        },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('spawn_child_task');
+    expect(result?.[0]?.args).toEqual({
+      agentName: 'homelab-builder',
+      originalUserMessage: 'SSH into jetson2 and tell me the disk usage',
+    });
+  });
+
   it('leaves well-formed names from other backends untouched', () => {
     const raw = [
       {
