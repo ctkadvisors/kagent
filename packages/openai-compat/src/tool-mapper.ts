@@ -107,17 +107,77 @@ export function toOpenAIToolCalls(
  * well-formed names from every other backend (Ollama, LocalAI,
  * Cloudflare) since none of them contain this substring.
  */
-function sanitizeToolCallName(name: string): string {
+type InlineJsonArgs = Record<string, unknown> | unknown[];
+
+function parseInlineJsonSuffix(suffix: string): InlineJsonArgs | undefined {
+  const trimmed = suffix.trim();
+  const opener = trimmed[0];
+  const closer = opener === '{' ? '}' : opener === '[' ? ']' : undefined;
+  if (closer === undefined) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const char = trimmed[i];
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === '\\') {
+        escaping = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === opener) {
+      depth += 1;
+    } else if (char === closer) {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(trimmed.slice(0, i + 1)) as InlineJsonArgs;
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function isEmptyPlainObject(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
+}
+
+function sanitizeToolCallName(name: string): {
+  name: string;
+  inlineArgs: InlineJsonArgs | undefined;
+} {
   const tagIndexes = [
     name.indexOf('</tool_call'),
     name.indexOf('<parameter='),
     name.indexOf('\n'),
     name.indexOf('\r'),
     name.indexOf('('),
+    name.indexOf('{'),
+    name.indexOf('['),
   ].filter((index) => index >= 0);
   const tagIndex = tagIndexes.length === 0 ? -1 : Math.min(...tagIndexes);
   const truncated = tagIndex === -1 ? name : name.slice(0, tagIndex);
-  return truncated.replace(/=\s*$/, '').trim();
+  return {
+    name: truncated.replace(/=\s*$/, '').trim(),
+    inlineArgs: tagIndex === -1 ? undefined : parseInlineJsonSuffix(name.slice(tagIndex)),
+  };
 }
 
 /**
@@ -144,10 +204,14 @@ export function fromOpenAIToolCalls(
         tc.function.arguments,
       );
     }
+    const sanitized = sanitizeToolCallName(tc.function.name);
     return {
       id: tc.id,
-      name: sanitizeToolCallName(tc.function.name),
-      args,
+      name: sanitized.name,
+      args:
+        isEmptyPlainObject(args) && sanitized.inlineArgs !== undefined
+          ? sanitized.inlineArgs
+          : args,
     };
   });
 }

@@ -168,7 +168,23 @@ describe('fromOpenAIToolCalls (VALIDATION row 7)', () => {
         type: 'function' as const,
         function: {
           name: 'wait_for_child_task\n{"uid":"child-uid","timeoutSeconds":180}',
-          arguments: '{"uid":"child-uid","timeoutSeconds":180}',
+          arguments: '{}',
+        },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result?.[0]?.name).toBe('wait_for_child_task');
+    expect(result?.[0]?.args).toEqual({ uid: 'child-uid', timeoutSeconds: 180 });
+  });
+
+  it('recovers leaked inline JSON arguments glued directly to function.name', () => {
+    const raw = [
+      {
+        id: 'call_wait_glued',
+        type: 'function' as const,
+        function: {
+          name: 'wait_for_child_task{"uid":"child-uid","timeoutSeconds":180}',
+          arguments: '{}',
         },
       },
     ];
