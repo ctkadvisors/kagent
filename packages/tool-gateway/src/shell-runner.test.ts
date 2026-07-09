@@ -97,6 +97,8 @@ describe('SshShellRunner', () => {
       '-o',
       'StrictHostKeyChecking=accept-new',
       '-o',
+      'UserKnownHostsFile=/tmp/kagent-shell-known-hosts',
+      '-o',
       'BatchMode=yes',
       'kagent-builder@192.168.68.74',
       'timeout 30s echo hi',

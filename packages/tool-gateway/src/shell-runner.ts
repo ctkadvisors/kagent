@@ -106,6 +106,8 @@ export class SshShellRunner {
       '-o',
       'StrictHostKeyChecking=accept-new',
       '-o',
+      'UserKnownHostsFile=/tmp/kagent-shell-known-hosts',
+      '-o',
       'BatchMode=yes',
       `${this.sshUser}@${ip}`,
       `timeout ${timeoutSeconds}s ${command}`,
