@@ -216,12 +216,49 @@ resources:
 # informer freshness) and `/metrics` (Prometheus text format,
 # `kagent_operator_informer_errors_total` counter). The chart wires the
 # port via `KAGENT_HEALTHZ_PORT`; the freshness window via
-# `KAGENT_INFORMER_FRESHNESS_MAX_MS`. A liveness probe on `/healthz`
-# follows in a v0.1.x patch — for now the surface exists so external
-# scrapers + ad-hoc curls can observe operator health.
+# `KAGENT_INFORMER_FRESHNESS_MAX_MS`.
+#
+# The probes below consume that surface. They exist because the failure
+# they catch is real and observed: on 2026-08-05 the operator's watches
+# died (429/503 from the apiserver, informer restart never recovered) and
+# the process went silent for 111 minutes while the pod still reported
+# `Running 1/1, ready: true`. `/healthz` correctly returned
+# `{"status":503,"reason":"stale","stalenessMs":6672867}` the whole time —
+# nothing was configured to act on it, so no AgentTask reconciled and the
+# only symptom was work quietly not happening.
 substrateHealth:
   port: 8081
   freshnessMaxMs: 300000 # 5 minutes; informer silence past this flips /healthz to 503
+
+  # Liveness restarts the operator when /healthz has been 503 continuously.
+  #
+  # SIZING: /healthz reports 503 for BOTH "informers are dead" and "no
+  # informer event in freshnessMaxMs". On a cluster-wide watch set (Pods,
+  # Jobs, AgentTasks, ...) events flow continuously, so sustained silence
+  # means dead — but the thresholds are deliberately generous so a genuinely
+  # quiet cluster cannot cause a restart loop. failureThreshold x
+  # periodSeconds = 5 minutes of continuous 503 ON TOP OF the 5-minute
+  # freshness window, so ~10 minutes of true silence before a restart.
+  #
+  # If your cluster is small and quiet enough to trip this while healthy,
+  # raise freshnessMaxMs rather than disabling the probe — a silent hang
+  # with no detection is the worse failure.
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 60 # informer initial sync replays existing objects
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 10
+
+  # Readiness never restarts anything; it makes the degraded state visible
+  # in `kubectl get pod` instead of hiding behind a Ready operator that is
+  # not reconciling. Tighter thresholds than liveness on purpose.
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 15
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
 
 channels:
   gateway:

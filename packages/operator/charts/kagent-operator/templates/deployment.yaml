@@ -157,8 +157,8 @@ spec:
               protocol: TCP
             {{- end }}
             # M21 — substrate health (`/healthz`, `/metrics`). Always
-            # exposed; the v0.1.x livenessProbe wiring lives in a
-            # follow-up commit (the surface itself is non-breaking).
+            # exposed, and now consumed by the liveness/readiness probes
+            # further down (see substrateHealth.* in values.yaml).
             - name: healthz
               containerPort: {{ .Values.substrateHealth.port }}
               protocol: TCP
@@ -849,9 +849,34 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-          # Operator's livenessProbe wired in Phase 3 once a /healthz
-          # endpoint exists. For v0.1, restartPolicy + watch retry is
-          # sufficient.
+          # M21 health surface consumed. "restartPolicy + watch retry is
+          # sufficient" turned out to be false: watch retry can fail
+          # permanently and leave the process alive-but-idle, which
+          # restartPolicy never sees.
+          {{- with .Values.substrateHealth.livenessProbe }}
+          {{- if .enabled }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.substrateHealth.readinessProbe }}
+          {{- if .enabled }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: {{ .initialDelaySeconds }}
+            periodSeconds: {{ .periodSeconds }}
+            timeoutSeconds: {{ .timeoutSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
+          {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
