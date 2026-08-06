@@ -100,7 +100,7 @@ describe('SshShellRunner', () => {
       'UserKnownHostsFile=/tmp/kagent-shell-known-hosts',
       '-o',
       'BatchMode=yes',
-      'kagent-builder@192.168.68.74',
+      'kagent-builder@192.168.68.64',
       'timeout 30s echo hi',
     ]);
   });

@@ -12,7 +12,12 @@ import { spawn as nodeSpawn } from 'node:child_process';
  * ALLOWED_COMMANDS/DENIED_COMMANDS.
  */
 const HOST_IPS: Record<ShellHost, string> = {
-  elitemini2: '192.168.68.74',
+  // Source of truth for these is the K3s node list (`kubectl get nodes
+  // -o wide`) cross-checked against new_localai's ansible inventory
+  // (`ansible/inventory/hosts.yml`). elitemini2 was previously pinned to
+  // .74 -- a different machine entirely (distinct MAC, sshd not even
+  // listening), so `shell.exec host=elitemini2` could never connect.
+  elitemini2: '192.168.68.64',
   jetson2: '192.168.68.75',
 };
 
