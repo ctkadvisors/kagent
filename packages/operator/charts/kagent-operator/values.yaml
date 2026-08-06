@@ -244,21 +244,51 @@ substrateHealth:
   # raise freshnessMaxMs rather than disabling the probe — a silent hang
   # with no detection is the worse failure.
   livenessProbe:
-    enabled: true
+    # DEFAULT OFF — see the block below. Do not flip this on until
+    # /healthz can distinguish a dead watch from a quiet cluster.
+    enabled: false
     initialDelaySeconds: 60 # informer initial sync replays existing objects
     periodSeconds: 30
     timeoutSeconds: 5
     failureThreshold: 10
 
-  # Readiness never restarts anything; it makes the degraded state visible
-  # in `kubectl get pod` instead of hiding behind a Ready operator that is
-  # not reconciling. Tighter thresholds than liveness on purpose.
+  # Readiness never restarts anything, but it still gates Service
+  # endpoints and `helm install --wait`. Also DEFAULT OFF, same reason.
   readinessProbe:
-    enabled: true
+    enabled: false
     initialDelaySeconds: 15
     periodSeconds: 15
     timeoutSeconds: 5
     failureThreshold: 3
+
+# ---------------------------------------------------------------------
+# Why both probes above default to FALSE (2026-08-06)
+#
+# They were shipped enabled in v0.2.40 to catch a real incident: the
+# operator's watches died, the process went silent for 111 minutes, and
+# the pod reported Running 1/1 ready:true the whole time. /healthz was
+# correctly 503 and nothing consumed it.
+#
+# Enabling them was wrong, because /healthz answers the wrong question.
+# It returns 503 for "informers are dead" AND for "no informer event in
+# freshnessMaxMs" — and the second is indistinguishable from an idle
+# cluster. Observed consequences within one afternoon:
+#
+#   - homelab: operator restarted 51 times, every time with lastState
+#     Completed / exit 0 — healthy processes killed for being idle.
+#     stalenessMs tracked pod age exactly, so even the initial informer
+#     sync does not refresh the timestamp.
+#   - CI: `helm install --wait` on a fresh kind cluster timed out with
+#     "context deadline exceeded". A brand-new cluster produces no
+#     informer events at all, so readiness never passed.
+#
+# Re-enabling requires a code change in substrate-health.ts, not a
+# threshold tweak: /healthz needs to report on watch-connection state
+# (are the ListWatch streams established? has onError fired without a
+# successful restart?) rather than on time-since-last-event. Event
+# recency is a fine metric to scrape and alert on; it is not a
+# liveness signal.
+# ---------------------------------------------------------------------
 
 channels:
   gateway:
