@@ -11,7 +11,12 @@
  *
  * SSE was chosen over WebSockets because:
  *
- *   - The Workbench is read-only — we only need server → client push.
+ *   - The live-update channel is one-way — we only need server →
+ *     client push. The Workbench does have a write surface (task
+ *     create/delete, ModelEndpoint + Channel patches, session
+ *     messages, review-queue actions), but those are plain request/
+ *     response POST/PATCH/DELETE calls, not stream traffic, so a
+ *     bidirectional transport buys nothing here.
  *   - SSE survives Ingress/L7 LBs without WebSocket-aware config.
  *   - Browser EventSource has built-in reconnect; saves us a client
  *     library.

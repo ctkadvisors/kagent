@@ -4,18 +4,19 @@ Guidance for Claude Code (and any AI assistant) working in this repository.
 
 ## What this repo is
 
-`kagent` — the K3s-native, OSS, MIT-licensed agent farm operator. Composes Kata Containers + NATS JetStream + Bun + LiteLLM + Langfuse into the per-agent-microVM substrate that AWS AgentCore, Cloudflare Agents + Sandbox, and Anthropic Managed Agents all ship proprietarily.
+`kagent` — the K3s-native, OSS, MIT-licensed agent farm operator. Composes Kata Containers + NATS JetStream + Node 22 + LiteLLM + Langfuse into the per-agent-microVM substrate that AWS AgentCore, Cloudflare Agents + Sandbox, and Anthropic Managed Agents all ship proprietarily.
 
-This is the project that supersedes the "governance kernel" framing of `@ctkadvisors/agent-runtime`. That work was a learning experiment; the AgentExecutor implementation is being lifted into this repo as `@kagent/agent-loop`, a thin in-pod library. The Sempf / paperclip / authority-graph framing is retired.
+This is the project that supersedes the "governance kernel" framing of `@ctkadvisors/agent-runtime`. That work was a learning experiment; the AgentExecutor implementation was lifted into this repo as `@kagent/agent-loop`, a thin in-pod library. The Sempf / paperclip / authority-graph framing is retired.
 
-**Status when this CLAUDE.md was written (2026-04-26):** spec committed; no code yet; v0.1 scope is the focus of the next implementation session.
+**Status (verified 2026-08-05):** shipped and running. 30 packages under `packages/`, ~168k tracked lines of `.ts`/`.tsx`, 4,045 vitest cases across 247 test files, all passing on Node 22. Deployed on the homelab K3s cluster via ArgoCD — image tags are pinned in `../new_localai/k8s-kustomized/overlays/production/kagent/`; as of this writing the operator runs `v0.2.33-shell-ssh-runtime-rc.1` and the tool-gateway `v0.2.37-shell-known-hosts-rc.1`. Last commit is 2026-07-08 (`916576f`); the repo has been idle since. See `.planning/STATE.md` for what shipped and what is still open.
 
 ## Sibling repos
 
 ```
 ../agent-runtime/         — learning experiment; AgentExecutor will be lifted into @kagent/agent-loop
 ../homelab-orchestrator/  — first consumer of the new substrate; its CronJob+runner will be retired
-../new_localai/           — homelab K3s manifests; will reference kagent's k8s/ via an ArgoCD app manifest
+../new_localai/           — homelab K3s manifests; pins kagent image tags in
+                            k8s-kustomized/overlays/production/kagent/ (ArgoCD Applications)
 ../ai-interviewer/        — SeekArc; another consumer pattern, separate workload
 ```
 
@@ -32,14 +33,16 @@ A fresh session must read these in order — the *why* and *what* are all here:
 7. [`docs/PLATFORM-PRIORITIES.md`](./docs/PLATFORM-PRIORITIES.md)
 8. [`docs/WORKBENCH.md`](./docs/WORKBENCH.md)
 
+All eight exist (verified 2026-08-05). They describe the *why* and the v0.1 shape; they predate most of what has shipped since. For current state, read [`.planning/STATE.md`](./.planning/STATE.md) next, then the two documents that are binding rather than descriptive: [`docs/NORTH-STAR-SYSTEM-DESIGN.md`](./docs/NORTH-STAR-SYSTEM-DESIGN.md) (source of the §11 / §15 gates) and [`docs/COMMAND-CENTER-CONTRACT.md`](./docs/COMMAND-CENTER-CONTRACT.md) (binding for any Workbench/Command Center work). Designs for post-v0.1 subsystems live in [`docs/superpowers/specs/`](./docs/superpowers/specs/).
+
 ## Conventions
 
 - **TypeScript primary**, strict mode, ESM, Node 22 target
-- **Runtime is currently Node 22 + tsx for both operator and agent-pod images.** Bun was the original target (Anthropic owns Bun as of Dec 2025; alignment intentional), but Bun 1.1's TLS handling rejects K3s's self-signed CA when `@kubernetes/client-node` opens its watch / status-patch paths — same kubeconfig works in Node, breaks in Bun. Reverting to Bun is on the v0.2 list once Bun fixes undici/TLS parity. See Dockerfile comments at `packages/operator/Dockerfile` and `packages/agent-pod/Dockerfile`.
+- **Runtime is Node 22.** `tsx` is dev-only: both the operator and agent-pod images build on `node:22-alpine`, compile TS to JS in a build stage, and the runtime stage runs `node dist/main.js` with no loader and no devDeps. Bun was the original target (Anthropic owns Bun as of Dec 2025; alignment intentional), but Bun 1.1's TLS handling rejects K3s's self-signed CA when `@kubernetes/client-node` opens its watch / status-patch paths — same kubeconfig works in Node, breaks in Bun. Re-evaluating Bun is deferred to v0.3+ once Bun fixes undici/TLS parity. See Dockerfile comments at `packages/operator/Dockerfile` and `packages/agent-pod/Dockerfile`.
 - **MIT license header** on every `.ts` source file
 - **Conventional commits** with co-author attribution per Chris's ctkadvisors style
 - **No squash-on-merge** — keep history legible
-- **Tests:** vitest or bun:test, co-located `*.test.ts`, ≥85% coverage on the operator reconciler, ≥75% on glue code
+- **Tests:** vitest, co-located `*.test.ts`. CI runs `pnpm -r test` and does **not** run coverage at all. The "≥85% on the operator reconciler, ≥75% on glue code" targets carried in `.planning/PROJECT.md` are aspirational, not enforced: of 29 `vitest.config.ts` files, 27 declare a `thresholds` block, but only `operator`, `agent-pod`, and `agent-loop-vercel-ai` set real numbers (lines/functions/statements 80, branches 70) — the other 24 are set to `0`, and `cli` / `workbench-ui` declare none. Treat the targets as intent; if you want them enforced, wire `test:coverage` into `.github/workflows/ci.yml` first.
 
 ## Phase discipline
 
@@ -47,10 +50,12 @@ This repo uses **GSD** (the `.planning/` tree) for forward-looking planning. The
 
 The current planning artifacts:
 
-- [`.planning/PROJECT.md`](./.planning/PROJECT.md) — project bones, conventions, key decisions (D1–D5 are PROPOSED, not locked)
+- [`.planning/PROJECT.md`](./.planning/PROJECT.md) — project bones, conventions, key decisions (D1–D7 are PROPOSED, not locked)
 - [`.planning/REQUIREMENTS.md`](./.planning/REQUIREMENTS.md) — REQ-IDs with falsifiable acceptance criteria
-- [`.planning/ROADMAP.md`](./.planning/ROADMAP.md) — phases + dependency graph (8 forward-looking v0.2 phases)
+- [`.planning/ROADMAP.md`](./.planning/ROADMAP.md) — phases + dependency graph (5 forward-looking v0.2 phases, plus a 999.x future-research backlog)
 - [`.planning/STATE.md`](./.planning/STATE.md) — current phase pointer + blockers/concerns
+
+**Phase discipline lapsed after 2026-05-10.** Phases 1–4 completed under GSD; Phase 5 was planned and never executed. Everything from 2026-06-04 onward (Studio Architect, Mission Control redesign, the local AgentCore tool-runtime plane, the channel control plane, the shell/SSH tool runtime) shipped outside the phase machinery, tagged `v0.2.x-<name>-rc.N` instead of `vX.Y.Z-phaseN`. `.planning/STATE.md` records what landed. Before opening a new phase, decide whether to back-fill that work as phases or close v0.2 and open a v0.3 roadmap around it.
 - [`.planning/intel/`](./.planning/intel/) — synthesized planning context from ingested design docs (`NORTH-STAR-SYSTEM-DESIGN.md` + `PROTO-SOCIETY-DESIGN.md`)
 
 Drive phase work with `/gsd-*` slash commands:
