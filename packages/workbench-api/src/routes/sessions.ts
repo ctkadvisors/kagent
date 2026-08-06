@@ -36,7 +36,28 @@ const CREATED_BY = 'kagent-workbench-channel';
 const MAX_MESSAGE_BYTES = 32_768;
 const MAX_HISTORY_CHARS = 8_000;
 const NAME_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
-const DEFAULT_TIMEOUT_SECONDS = 300;
+/**
+ * Default AgentTask deadline for a session turn, overridable per
+ * deployment via `WORKBENCH_SESSION_TIMEOUT_SECONDS`.
+ *
+ * Was a hardcoded 300. That is a bad default when the backing model has
+ * to be loaded on demand: a swapping backend (llama-swap, vLLM behind a
+ * lease script, anything with cold starts) can take minutes before the
+ * first token, so the Job hit `DeadlineExceeded` at exactly 300s and the
+ * gateway logged `502 fetch failed` at ~300,660ms every time — observed
+ * on 2026-07-26, 07-27 and 08-06, always within a second of the same
+ * ceiling.
+ *
+ * 900s gives a cold start room to finish AND leaves budget for the run
+ * itself. Deployments on always-resident models can set this back down;
+ * the env var is the knob.
+ */
+const DEFAULT_TIMEOUT_SECONDS = ((): number => {
+  const raw = process.env.WORKBENCH_SESSION_TIMEOUT_SECONDS;
+  if (typeof raw !== 'string' || raw.length === 0) return 900;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : 900;
+})();
 const DEFAULT_MAX_ITERATIONS = 8;
 
 export interface SessionsRouteDeps {

@@ -147,7 +147,7 @@ describe('sessionsRoute', () => {
         sandboxProfile: 'default',
         tools: [],
         capabilities: [],
-        defaults: { runConfig: { timeoutSeconds: 300, maxIterations: 8 } },
+        defaults: { runConfig: { timeoutSeconds: 900, maxIterations: 8 } },
         launchability: { state: 'ready', reasons: [] },
       },
       {
@@ -161,7 +161,7 @@ describe('sessionsRoute', () => {
         sandboxProfile: 'strict',
         tools: ['browser.goto'],
         capabilities: ['research'],
-        defaults: { runConfig: { timeoutSeconds: 300, maxIterations: 8 } },
+        defaults: { runConfig: { timeoutSeconds: 900, maxIterations: 8 } },
         launchability: { state: 'ready', reasons: [] },
       },
     ]);
