@@ -155,13 +155,33 @@ toolRuntime:
   shell:
     # SSH-based shell.exec tool. Off by default (empty sshUser / no
     # sshKeySecret -- the gateway only constructs an SshShellRunner when
-    # both are set). The target-host allowlist (elitemini2/jetson2) is
-    # hardcoded in shell-runner.ts by design, not configurable here --
-    # same posture as code-runner.ts's ALLOWED_COMMANDS.
+    # both are set).
     sshUser: ''
     sshKeySecret:
       name: ''
       key: id_ed25519
+    # Closed allowlist of SSH targets, as `name` / `address` pairs. The
+    # name is what an agent passes as `shell.exec host=<name>`; the
+    # address is the IP or resolvable hostname the gateway dials. Only
+    # these names are accepted, and the gateway publishes them as the
+    # `host` enum in the tool descriptor so a model sees exactly the
+    # hosts this deployment has.
+    #
+    # Empty (the default) means every shell.exec call is refused, so the
+    # tool stays inert until an operator names hosts here -- even if an
+    # SSH user and key are configured.
+    #
+    # This lives in values, not in code, because a host allowlist is
+    # deployment-specific. (It was hardcoded through v0.2.38, which made
+    # shell.exec unusable outside one homelab.) The command allowlist in
+    # code-runner.ts stays hardcoded -- that one IS universal.
+    #
+    # hosts:
+    #   - name: build-box
+    #     address: 10.0.0.5
+    #   - name: gpu-node
+    #     address: gpu-node.internal
+    hosts: []
 
 # Image pull secret(s) for private registries. Empty = no secret.
 # Example: imagePullSecrets: [{ name: ghcr-pull }]

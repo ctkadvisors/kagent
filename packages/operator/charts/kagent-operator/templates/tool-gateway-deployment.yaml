@@ -106,6 +106,10 @@ spec:
             - name: KAGENT_SHELL_SSH_KEY_PATH
               value: {{ printf "/secrets/shell-ssh-key/%s" $.Values.toolRuntime.shell.sshKeySecret.key | quote }}
             {{- end }}
+            {{- with .Values.toolRuntime.shell.hosts }}
+            - name: KAGENT_SHELL_HOSTS
+              value: {{ toJson . | quote }}
+            {{- end }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp

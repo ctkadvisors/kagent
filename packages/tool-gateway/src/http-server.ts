@@ -64,8 +64,14 @@ export interface ToolGatewayCodeRunner {
 export type ToolGatewayCodeRunnerFactory = (task: ToolGatewayTaskIdentity) => ToolGatewayCodeRunner;
 
 export interface ToolGatewayShellRunner {
+  /**
+   * Allowlisted host names for this deployment. Drives the `host` enum in
+   * the published descriptor; the runner still re-checks on exec, so this
+   * is advertisement, not enforcement.
+   */
+  readonly hostNames?: () => readonly string[];
   readonly exec: (input: {
-    readonly host: 'elitemini2' | 'jetson2';
+    readonly host: string;
     readonly command: string;
     readonly timeoutSeconds?: number;
   }) => Promise<{
@@ -197,7 +203,7 @@ export class ToolGatewayHttpHandler {
 
     for (const name of toolNames) {
       if (isToolRuntimeTool(name)) {
-        descriptors.set(name, runtimeToolDescriptor(name));
+        descriptors.set(name, runtimeToolDescriptor(name, this.shellRunner?.hostNames?.() ?? []));
       }
     }
 
@@ -620,12 +626,16 @@ function parseExecuteCommandInput(args: unknown): ExecuteCommandInput | null {
 
 function parseShellExecInput(
   args: unknown,
-): { host: 'elitemini2' | 'jetson2'; command: string; timeoutSeconds?: number } | null {
+): { host: string; command: string; timeoutSeconds?: number } | null {
   if (!isRecord(args) || typeof args.command !== 'string' || args.command.length === 0) {
     return null;
   }
-  if (args.host !== 'elitemini2' && args.host !== 'jetson2') return null;
-  const out: { host: 'elitemini2' | 'jetson2'; command: string; timeoutSeconds?: number } = {
+  // Shape check only. Which hosts are permitted is deployment config, so
+  // the runner's allowlist is the authority and returns a
+  // `policy_denied: unknown shell.exec host` naming what IS allowed --
+  // more useful than the flat `invalid_request` this would produce.
+  if (typeof args.host !== 'string' || args.host.length === 0) return null;
+  const out: { host: string; command: string; timeoutSeconds?: number } = {
     host: args.host,
     command: args.command,
   };
@@ -722,16 +732,22 @@ function commandResultToToolResult(result: {
   };
 }
 
-function runtimeToolDescriptor(name: ToolRuntimeToolName): ToolDescriptor {
+function runtimeToolDescriptor(
+  name: ToolRuntimeToolName,
+  shellHostNames: readonly string[] = [],
+): ToolDescriptor {
   return {
     name,
-    description: runtimeToolDescription(name),
-    inputSchema: runtimeToolInputSchema(name),
+    description: runtimeToolDescription(name, shellHostNames),
+    inputSchema: runtimeToolInputSchema(name, shellHostNames),
     tags: runtimeToolTags(name),
   };
 }
 
-function runtimeToolDescription(name: ToolRuntimeToolName): string {
+function runtimeToolDescription(
+  name: ToolRuntimeToolName,
+  shellHostNames: readonly string[] = [],
+): string {
   switch (name) {
     case 'browser.start_session':
       return 'Start or fetch the task-scoped isolated browser session.';
@@ -776,7 +792,9 @@ function runtimeToolDescription(name: ToolRuntimeToolName): string {
     case 'code_interpreter.terminate_session':
       return 'Release the task-scoped code interpreter session.';
     case 'shell.exec':
-      return 'Run a shell command over SSH on a specific homelab node (elitemini2 or jetson2 only).';
+      return shellHostNames.length === 0
+        ? 'Run a shell command over SSH on an allowlisted host. No hosts are configured on this deployment, so every call will be refused.'
+        : `Run a shell command over SSH on an allowlisted host (${shellHostNames.join(', ')} only).`;
   }
 }
 
@@ -799,7 +817,10 @@ function runtimeToolTags(name: ToolRuntimeToolName): readonly string[] {
   return [];
 }
 
-function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unknown> {
+function runtimeToolInputSchema(
+  name: ToolRuntimeToolName,
+  shellHostNames: readonly string[] = [],
+): Record<string, unknown> {
   switch (name) {
     case 'browser.goto':
       return objectSchema(
@@ -891,7 +912,13 @@ function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unkno
     case 'shell.exec':
       return objectSchema(
         {
-          host: { type: 'string', enum: ['elitemini2', 'jetson2'] },
+          // Enum only when hosts are configured -- an empty `enum: []`
+          // is a schema that nothing can satisfy, which some providers
+          // reject outright rather than treating as "no valid choice".
+          host:
+            shellHostNames.length === 0
+              ? { type: 'string' }
+              : { type: 'string', enum: [...shellHostNames] },
           command: { type: 'string', minLength: 1 },
           timeoutSeconds: { type: 'number', minimum: 1, maximum: 600 },
         },

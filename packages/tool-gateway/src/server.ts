@@ -22,7 +22,7 @@ import {
   type ToolGatewayTaskIdentity,
 } from './http-server.js';
 import { createPlaywrightCdpDriver } from './playwright-driver.js';
-import { SshShellRunner } from './shell-runner.js';
+import { SshShellRunner, parseShellHostsEnv } from './shell-runner.js';
 import { parseToolProfileConfig, type ToolProfileConfig } from './tool-profiles.js';
 
 export interface ToolGatewayServerConfig {
@@ -34,6 +34,8 @@ export interface ToolGatewayServerConfig {
   readonly steelConnectBaseUrl?: string;
   readonly shellSshKeyPath?: string;
   readonly shellSshUser?: string;
+  /** Allowlisted shell.exec targets, `name -> address`. Empty = tool inert. */
+  readonly shellHosts: Readonly<Record<string, string>>;
   readonly externalProviders: ExternalToolProviderConfig;
   readonly toolProfiles: ToolProfileConfig;
 }
@@ -60,7 +62,9 @@ export function parseToolGatewayServerConfig(
     steelConnectBaseUrl?: string;
     shellSshKeyPath?: string;
     shellSshUser?: string;
+    shellHosts: Readonly<Record<string, string>>;
   } = {
+    shellHosts: parseShellHostsEnv(env.KAGENT_SHELL_HOSTS),
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
     workspaceRoot: nonEmpty(env.KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT) ?? DEFAULT_WORKSPACE_ROOT,
     paused: env.KAGENT_TOOL_RUNTIME_PAUSED === 'true',
@@ -101,7 +105,15 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     shellRunner = new SshShellRunner({
       sshKeyPath: config.shellSshKeyPath,
       sshUser: config.shellSshUser,
+      hosts: config.shellHosts,
     });
+    // Loud, because the symptom otherwise is a tool that advertises
+    // itself and then refuses every call with "unknown host".
+    if (Object.keys(config.shellHosts).length === 0) {
+      console.warn(
+        '[tool-gateway] shell.exec has an SSH user + key but no hosts — every call will be refused. Set toolRuntime.shell.hosts (env KAGENT_SHELL_HOSTS).',
+      );
+    }
   }
 
   const options: ToolGatewayHttpHandlerOptions = {

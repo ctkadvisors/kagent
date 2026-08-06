@@ -501,16 +501,38 @@ describe('ToolGatewayHttpHandler', () => {
     expect(metadata.policy).toBe('runtime-error');
   });
 
-  it('describes shell.exec with a closed host enum in its input schema', async () => {
-    const handler = new ToolGatewayHttpHandler({});
+  it('describes shell.exec with a host enum drawn from the configured allowlist', async () => {
+    const handler = new ToolGatewayHttpHandler({
+      shellRunner: {
+        hostNames: () => ['build-box', 'gpu-node'],
+        exec: () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0, timedOut: false }),
+      },
+    });
     const response = await handler.handle(describeRequest(['shell.exec']));
     const body = asRecord(await json(response));
     const tools = body.tools as readonly Record<string, unknown>[];
 
     expect(tools).toHaveLength(1);
     expect(tools[0]?.name).toBe('shell.exec');
-    expect(JSON.stringify(tools[0]?.inputSchema)).toContain('elitemini2');
-    expect(JSON.stringify(tools[0]?.inputSchema)).toContain('jetson2');
+    const schema = JSON.stringify(tools[0]?.inputSchema);
+    expect(schema).toContain('build-box');
+    expect(schema).toContain('gpu-node');
+    // The model should be told which hosts exist here, and nothing else.
+    expect(schema).not.toContain('elitemini2');
+    expect(tools[0]?.description).toContain('build-box, gpu-node');
+  });
+
+  it('omits the host enum entirely when no shell hosts are configured', async () => {
+    // An empty `enum: []` is unsatisfiable and some providers reject the
+    // whole schema; degrade to a plain string and let the runner refuse.
+    const handler = new ToolGatewayHttpHandler({});
+    const response = await handler.handle(describeRequest(['shell.exec']));
+    const body = asRecord(await json(response));
+    const tools = body.tools as readonly Record<string, unknown>[];
+
+    const schema = JSON.stringify(tools[0]?.inputSchema);
+    expect(schema).not.toContain('enum');
+    expect(tools[0]?.description).toContain('No hosts are configured');
   });
 
   it('returns a terminal paused error without invoking handlers when the kill switch is set', async () => {

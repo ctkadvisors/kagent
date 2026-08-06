@@ -272,7 +272,11 @@ function runtimeToolDescription(name: ToolRuntimeToolName): string {
     case 'code_interpreter.terminate_session':
       return 'Release the task-scoped code interpreter session.';
     case 'shell.exec':
-      return 'Run a shell command over SSH on a specific homelab node (elitemini2 or jetson2 only).';
+      // Offline fallback only -- the gateway's /describe response is the
+      // real descriptor and names this deployment's actual hosts. We
+      // cannot know them from in-pod, so stay generic rather than
+      // advertising hosts that may not exist here.
+      return 'Run a shell command over SSH on a host allowlisted by the tool gateway. Call the gateway describe endpoint for the permitted host names.';
   }
 }
 
@@ -398,7 +402,10 @@ function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unkno
     case 'shell.exec':
       return objectSchema(
         {
-          host: { type: 'string', enum: ['elitemini2', 'jetson2'] },
+          // No enum: the allowlist is gateway-side deployment config.
+          // The gateway rejects unknown hosts with `policy_denied`, so
+          // omitting it here loosens advertisement, not enforcement.
+          host: { type: 'string', minLength: 1 },
           command: { type: 'string', minLength: 1 },
           timeoutSeconds: { type: 'number', minimum: 1, maximum: 600 },
         },

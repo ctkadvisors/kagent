@@ -109,6 +109,8 @@ describe('tool-gateway server', () => {
       port: 9090,
       workspaceRoot,
       paused: true,
+      // No KAGENT_SHELL_HOSTS in this env -> empty allowlist, shell.exec inert.
+      shellHosts: {},
       steelBaseUrl: 'http://steel.kagent-system.svc.cluster.local:3000',
       steelApiKey: 'steel-key',
       steelConnectBaseUrl: 'ws://steel.kagent-system.svc.cluster.local:3000',
@@ -145,6 +147,14 @@ describe('tool-gateway server', () => {
     const config = parseToolGatewayServerConfig({});
     expect(config.shellSshKeyPath).toBeUndefined();
     expect(config.shellSshUser).toBeUndefined();
+    expect(config.shellHosts).toEqual({});
+  });
+
+  it('parses the shell host allowlist from KAGENT_SHELL_HOSTS', () => {
+    const config = parseToolGatewayServerConfig({
+      KAGENT_SHELL_HOSTS: '[{"name":"build-box","address":"10.0.0.5"}]',
+    });
+    expect(config.shellHosts).toEqual({ 'build-box': '10.0.0.5' });
   });
 
   it('routes health/readiness locally and invokes the runtime handler for tool calls', async () => {

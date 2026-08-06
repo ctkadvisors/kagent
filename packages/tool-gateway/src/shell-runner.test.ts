@@ -8,7 +8,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { SshShellRunner } from './shell-runner.js';
+import { SshShellRunner, parseShellHostsEnv } from './shell-runner.js';
 
 function fakeChild(): {
   child: ChildProcessWithoutNullStreams;
@@ -33,24 +33,62 @@ function fakeChild(): {
   };
 }
 
-function makeRunner(spawnImpl: ReturnType<typeof vi.fn>): SshShellRunner {
+/**
+ * Test hosts are arbitrary -- the allowlist is deployment config now, so
+ * these names carry no meaning beyond "configured" vs "not configured".
+ */
+const TEST_HOSTS = { elitemini2: '10.10.0.64', jetson2: '10.10.0.75' } as const;
+
+function makeRunner(
+  spawnImpl: ReturnType<typeof vi.fn>,
+  hosts: Readonly<Record<string, string>> = TEST_HOSTS,
+): SshShellRunner {
   return new SshShellRunner({
     sshKeyPath: '/secrets/kagent-builder-ssh-key/id_ed25519',
     sshUser: 'kagent-builder',
+    hosts,
     spawnImpl: spawnImpl as unknown as never,
   });
 }
 
 describe('SshShellRunner', () => {
-  it('rejects a host outside the closed elitemini2/jetson2 enum before spawning anything', async () => {
+  it('rejects a host outside the configured allowlist before spawning anything', async () => {
     const spawnImpl = vi.fn();
     const runner = makeRunner(spawnImpl);
 
-    await expect(
-      // @ts-expect-error -- deliberately passing an invalid host to test the runtime guard
-      runner.exec({ host: 'elitemini', command: 'echo hi' }),
-    ).rejects.toThrow(/policy_denied.*host/i);
+    await expect(runner.exec({ host: 'elitemini', command: 'echo hi' })).rejects.toThrow(
+      /policy_denied.*host/i,
+    );
     expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
+  it('refuses every host when no allowlist is configured (fail-closed)', async () => {
+    const spawnImpl = vi.fn();
+    const runner = makeRunner(spawnImpl, {});
+
+    await expect(runner.exec({ host: 'jetson2', command: 'echo hi' })).rejects.toThrow(
+      /policy_denied.*none configured/i,
+    );
+    expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
+  it('resolves the address from config, so the same name can differ per deployment', async () => {
+    const fake = fakeChild();
+    const spawnImpl = vi.fn().mockReturnValue(fake.child);
+    const runner = makeRunner(spawnImpl, { jetson2: '203.0.113.9' });
+
+    const p = runner.exec({ host: 'jetson2', command: 'echo hi' });
+    fake.close(0, null);
+    await p;
+
+    const [, args] = spawnImpl.mock.calls[0] as [string, string[]];
+    expect(args).toContain('kagent-builder@203.0.113.9');
+  });
+
+  it('exposes configured host names sorted, for the descriptor enum', () => {
+    const runner = makeRunner(vi.fn(), { zulu: '10.0.0.3', alpha: '10.0.0.1' });
+    expect(runner.hostNames()).toEqual(['alpha', 'zulu']);
+    expect(makeRunner(vi.fn(), {}).hostNames()).toEqual([]);
   });
 
   it('rejects commands containing sudo before spawning anything', async () => {
@@ -100,7 +138,7 @@ describe('SshShellRunner', () => {
       'UserKnownHostsFile=/tmp/kagent-shell-known-hosts',
       '-o',
       'BatchMode=yes',
-      'kagent-builder@192.168.68.64',
+      'kagent-builder@10.10.0.64',
       'timeout 30s echo hi',
     ]);
   });
@@ -134,5 +172,31 @@ describe('SshShellRunner', () => {
     const result = await resultPromise;
 
     expect(result).toEqual({ stdout: '', stderr: 'boom\n', exitCode: 1, timedOut: false });
+  });
+});
+
+describe('parseShellHostsEnv', () => {
+  it('parses a well-formed host array', () => {
+    expect(
+      parseShellHostsEnv('[{"name":"a","address":"10.0.0.1"},{"name":"b","address":"h.internal"}]'),
+    ).toEqual({ a: '10.0.0.1', b: 'h.internal' });
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['blank', '   '],
+    ['not JSON', 'elitemini2=1.2.3.4'],
+    ['not an array', '{"a":"10.0.0.1"}'],
+  ])('returns an empty map for %s input rather than throwing', (_label, raw) => {
+    // Fail-closed, not fail-fast: a malformed value disables shell.exec
+    // instead of crashing the gateway and taking every other tool with it.
+    expect(parseShellHostsEnv(raw)).toEqual({});
+  });
+
+  it('drops malformed entries but keeps well-formed siblings', () => {
+    const parsed = parseShellHostsEnv(
+      '[{"name":"ok","address":"10.0.0.1"},{"name":""},{"address":"10.0.0.2"},null,"nope",{"name":"n","address":42}]',
+    );
+    expect(parsed).toEqual({ ok: '10.0.0.1' });
   });
 });
