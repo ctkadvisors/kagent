@@ -290,12 +290,14 @@ logLevel: 'info'
 
 # ---------------------------------------------------------------------
 # WS-A — default-deny NetworkPolicy. See `templates/networkpolicy.yaml`.
-# REQUIRES a CNI that enforces NetworkPolicies (Calico, Cilium,
-# Weave, ...). K3s with the default flannel backend ignores this
-# resource.
+# Enforced on stock K3s: flannel is the CNI, but K3s also runs an
+# embedded kube-router netpol controller that is on by default, so no
+# Calico/Cilium install is needed. Inert only when the k3s server was
+# started with `--disable-network-policy`, or on a non-K3s cluster whose
+# CNI has no NetworkPolicy support.
 # ---------------------------------------------------------------------
 networkPolicy:
-  # Default true — fail-closed.
+  # Default true — fail-closed, and a live control on a stock K3s.
   enabled: true
   # `from` clauses copied verbatim into the ingress allow rule. Defaults
   # to a Traefik-friendly rule if left empty (see networkpolicy.yaml).
@@ -345,15 +347,20 @@ fullnameOverride: ''
 # AND the workbench-api keeps its default `api.authRequired='true'`
 # header-trust posture, the cluster-side defense against
 # X-Forwarded-User SPOOFING is the NetworkPolicy that restricts
-# ingress to the ingress-controller pods. K3s with the default
-# flannel CNI does NOT enforce NetworkPolicies, so on a default
-# K3s cluster ANY in-cluster pod can forge X-Forwarded-User and
-# walk past the auth gate.
+# ingress to the ingress-controller pods. On a stock K3s that policy
+# really is enforced — K3s pairs flannel with an embedded kube-router
+# netpol controller enabled by default — so the defense holds. It
+# stops holding when `networkPolicy.enabled=false`, when the k3s
+# server was started with `--disable-network-policy`, or on a non-K3s
+# cluster whose CNI has no NetworkPolicy support; in those cases ANY
+# in-cluster pod can forge X-Forwarded-User and walk past the auth
+# gate.
 #
 # `_helpers.tpl` `kagent-workbench.validateValues` REJECTS this
 # combination at `helm install`/`helm template` time unless this
 # flag is set to true. Acknowledging the trapdoor is the operator
-# saying "I have a NetworkPolicy-enforcing CNI deployed" or "I am
+# saying "I have confirmed my cluster enforces NetworkPolicies (a
+# stock K3s does) and left `networkPolicy.enabled` on" or "I am
 # running on a private network where in-cluster pod spoofing is
 # not in my threat model."
 #

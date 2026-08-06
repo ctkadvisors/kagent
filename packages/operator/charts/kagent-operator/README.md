@@ -94,14 +94,16 @@ networkPolicy:
           protocol: TCP
 ```
 
-**CNI requirement.** K3s with the default `flannel` backend does NOT
-enforce NetworkPolicies — the resource installs cleanly but is a
-no-op. To get enforcement, install K3s with `--flannel-backend=none`
-and add Calico/Cilium, or run on a cloud K8s cluster whose default
-CNI enforces.
+**Enforcement.** Stock K3s enforces this policy. `flannel` is the CNI,
+but K3s also ships an embedded `kube-router` NetworkPolicy controller
+that is enabled by default — no Calico/Cilium install required. The
+policy is only inert if the k3s server was started with
+`--disable-network-policy`, or on a non-K3s cluster whose CNI has no
+NetworkPolicy support.
 
-Disable with `--set networkPolicy.enabled=false` if you've accepted
-the risk on a non-enforcing CNI.
+`--set networkPolicy.enabled=false` exists for that second case only.
+On a cluster that does enforce, turning it off removes a control that
+was working; leave the default on.
 
 ## Uninstall
 

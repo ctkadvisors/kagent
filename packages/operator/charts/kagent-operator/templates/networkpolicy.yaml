@@ -17,10 +17,12 @@ values, but the default-deny posture is on regardless):
 Ingress: default-deny by default. Optional write surfaces render their
 own token/HMAC-protected ports when explicitly enabled.
 
-NOTE: K3s with the default flannel CNI does NOT enforce
-NetworkPolicies. Either deploy K3s with `--flannel-backend=none` and
-install Calico/Cilium, or accept that this resource is documentation
-on a flannel cluster. See chart README.
+NOTE: this policy is enforced on a stock K3s install. flannel is the
+CNI, but K3s also runs an embedded kube-router NetworkPolicy
+controller by default — Calico/Cilium are not required. It degrades to
+documentation only if the k3s server was started with
+`--disable-network-policy`, or on a non-K3s cluster whose CNI has no
+NetworkPolicy support. See chart README.
 */}}
 {{- if .Values.networkPolicy.enabled -}}
 apiVersion: networking.k8s.io/v1

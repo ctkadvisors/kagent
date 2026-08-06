@@ -78,7 +78,7 @@ Three columns: services kagent itself depends on whenever it boots, services it 
 | RWX object/PVC storage | — | `workspaces.enabled`, `agentPod.artifactStorage.enabled` (default true; defaults to `ai-models-storage` SC — override for non-homelab), `cas.enabled`, `cache.enabled` | — |
 | Langfuse (or any OTLP/HTTP traces sink) | — | `langfuse.enabled` (Langfuse-managed system prompts) — also OTLP traces flow whenever `agentPod.otlpEndpoint` is set, no `enabled` flag | — |
 | SPIRE (server + agent DaemonSet) | — | `identity.enabled` (chart bundles a SPIRE sub-chart at `charts/spire/` that renders only when `identity.enabled: true`) | — |
-| CNI with NetworkPolicy enforcement | — | `networkPolicy.enabled` (default true) — chart renders the policy on every install but K3s-default flannel ignores it; `egress.enabled` for per-Agent enforcement | — |
+| NetworkPolicy enforcement | — | `networkPolicy.enabled` (default true) — chart renders the policy on every install, and stock K3s enforces it via its embedded kube-router controller; `egress.enabled` for per-Agent enforcement | — |
 | cert-manager | — | `versioning.enabled` (the validating admission webhook needs a serving cert) | — |
 | Restate | — | `workflows.enabled` (operator does not install Restate; install it separately and point `workflows.restate.address` at it) | — |
 | Postgres / ClickHouse / Redis | — | bundled with the Langfuse Helm chart — only if you stand up Langfuse | — |
@@ -140,7 +140,7 @@ What this flips off and why:
 - `audit.enabled=false` skips the NATS audit-stream provisioning Job. Default is `true` and assumes a NATS Service at `nats.kagent-system.svc.cluster.local:4222`; flipping it off means no NATS install required.
 - `blackboard.enabled=false` skips the per-task-tree NATS KV bucket plumbing. Same reason.
 - `agentPod.artifactStorage.enabled=false` skips the `kagent-artifacts` PVC. Default targets the homelab `ai-models-storage` RWX class which doesn't exist on a generic cluster.
-- `networkPolicy.enabled=false` is the safety belt for clusters whose CNI doesn't enforce policies (default K3s flannel). The chart renders an enforced policy by default; disabling avoids cargo-culted resources on non-enforcing CNIs.
+- `networkPolicy.enabled=false` is the escape hatch for clusters that genuinely do not enforce policies — a k3s server started with `--disable-network-policy`, or a non-K3s cluster whose CNI lacks NetworkPolicy support. It is **not** needed on stock K3s, which enforces via its embedded kube-router controller. Leave it at the default `true` unless you have confirmed otherwise, and understand that turning it off drops a working control.
 
 Workbench install (separate chart; same namespace):
 
@@ -171,7 +171,7 @@ Prerequisites (provision before `helm install`):
      --from-file=tls.key=cap.key --from-file=tls.crt=cap.crt
    ```
 5. **Tenant CRs** for each tenant boundary you intend to enforce — see `templates/NOTES.txt` lines 146–211 for the exact shape and the cross-tenant K8s RBAC overlay the cluster admin must compose.
-6. **A CNI that enforces NetworkPolicy** (Calico / Cilium / Weave). K3s default flannel does not.
+6. **NetworkPolicy enforcement.** Stock K3s already has it — flannel is the CNI, but K3s also runs an embedded kube-router NetworkPolicy controller by default, so no Calico / Cilium / Weave install is required. Confirm the k3s server was not started with `--disable-network-policy`; on a non-K3s cluster, confirm the CNI supports NetworkPolicy.
 
 ```bash
 helm install kagent ./packages/operator/charts/kagent-operator \
@@ -263,7 +263,7 @@ Identity (`identity.enabled: true`) is intentionally not in the example above �
 
 - **Bun runtime workaround for K3s self-signed CA.** Both `packages/operator` and `packages/agent-pod` images are built on **Node 22 + tsx**, not Bun. Bun 1.1's TLS handling rejects K3s's self-signed CA when `@kubernetes/client-node` opens its watch / status-PATCH paths; the same kubeconfig works in Node, breaks in Bun. Bun is the v0.2 target once undici/TLS parity lands. See `Dockerfile` comments at `packages/operator/Dockerfile` + `packages/agent-pod/Dockerfile` and the README §3.
 - **ConfigMap vs env JSON spec injection.** v0.2.0-typed-io replaced the `KAGENT_AGENT_SPEC` + `KAGENT_TASK_SPEC` env-JSON path with a per-Job `ConfigMap` carrying `agent.spec.json` + `task.spec.json` (closes the ARG_MAX cap and the ps-visible env-string leak). The operator owns the ConfigMap via `ownerReferences` so `AgentTask` deletion cascades. ClusterRole grants `configmaps: [get,list,watch,create,delete]` for this; the explicit `delete` verb sweeps orphans on next reconcile.
-- **K3s flannel ignores NetworkPolicies silently.** `networkPolicy.enabled: true` is the default but K3s default flannel installs the policy resource and treats it as a no-op. Either deploy K3s with `--flannel-backend=none` + Calico, or set `networkPolicy.enabled: false` and accept the risk.
+- **NetworkPolicy enforcement is real on K3s — verify it elsewhere.** `networkPolicy.enabled: true` is the default and stock K3s enforces it: flannel is the CNI, but K3s also ships an embedded kube-router NetworkPolicy controller that is on unless the server was started with `--disable-network-policy`. Keep the default on. The failure mode to watch for is the reverse of what you might expect — a policy that silently no-ops on a non-K3s cluster whose CNI lacks NetworkPolicy support. Confirm enforcement there before relying on it, and only reach for `networkPolicy.enabled: false` (accepting the risk) if it genuinely is absent.
 - **Single replica only in v0.1.** The chart hard-fails at `helm template` time on `replicaCount != 1`. Multi-replica needs leader election (v0.2). Strategy is pinned to `Recreate` so rolling updates never have two replicas live.
 - **Helm leaves CRDs in place on uninstall.** Standard Helm CRD lifecycle. Drop manually with `kubectl delete crd ...kagent.knuteson.io` if you want a full teardown — destructive, cascades to all CRs.
 - **`crds/` is a copy.** `packages/operator/charts/kagent-operator/crds/` is hand-mirrored from `packages/operator/manifests/crds/`. Update both.

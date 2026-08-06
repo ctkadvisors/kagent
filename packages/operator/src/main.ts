@@ -3832,9 +3832,11 @@ async function main(): Promise<void> {
   //      cascade is the safety net; explicit delete is faster +
   //      observable, mirrors workspace-controller pattern).
   //
-  // DEFAULT-OFF — substrate operators flip this on after verifying
-  // their CNI enforces NetworkPolicies (K3s default flannel does NOT;
-  // Calico, Cilium, Weave, ... do).
+  // DEFAULT-OFF — substrate operators flip this on after verifying the
+  // cluster enforces NetworkPolicies. Stock K3s does: flannel is the
+  // CNI, but K3s also runs an embedded kube-router netpol controller
+  // unless started with `--disable-network-policy`. Calico, Cilium,
+  // Weave, ... enforce too.
   if (process.env.KAGENT_EGRESS_ENABLED === 'true') {
     const egressMod = await import('@kagent/egress-controller');
     const { NetworkingV1Api } = await import('@kubernetes/client-node');

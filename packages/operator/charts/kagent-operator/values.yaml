@@ -1462,8 +1462,12 @@ tenancy:
 # docs/SUBSTRATE-V1.md §3.1 + docs/WAVES.md §6.2.
 #
 # DEFAULT-OFF until network-policy enforcement is verified on the
-# cluster's CNI. K3s default flannel does NOT enforce NetworkPolicies;
-# Calico, Cilium, Weave, etc. do.
+# cluster. K3s enforces NetworkPolicies out of the box — flannel is the
+# CNI, but K3s also ships an embedded kube-router netpol controller that
+# is on unless the server was started with `--disable-network-policy`.
+# Calico, Cilium, Weave, etc. enforce too. Verify before flipping on:
+# a CNI with no NetworkPolicy support at all is still a real scenario
+# off K3s.
 #
 # When `enabled: true`, the operator:
 #   1. Detects Cilium installation by reading the
@@ -1756,15 +1760,17 @@ containerSecurityContext:
 # tool subprocesses need writable HOME paths beyond /tmp.
 # ---------------------------------------------------------------------
 # WS-A — default-deny NetworkPolicy. See `templates/networkpolicy.yaml`.
-# REQUIRES a CNI that enforces NetworkPolicies (Calico, Cilium,
-# Weave, ...). K3s with the default flannel backend ignores this
-# resource — deploy K3s with `--flannel-backend=none` + install Calico
-# if you want enforcement.
+# REQUIRES a cluster that enforces NetworkPolicies. Stock K3s does:
+# flannel is the CNI, but K3s bundles a kube-router netpol controller
+# that is enabled by default, so this resource is a real control — no
+# Calico/Cilium install needed. Enforcement is absent only if the k3s
+# server was started with `--disable-network-policy`, or on a non-K3s
+# cluster whose CNI has no NetworkPolicy support.
 # ---------------------------------------------------------------------
 networkPolicy:
-  # Default true — fail-closed posture. Disable only when running on a
-  # cluster whose CNI does not enforce policies AND you've accepted
-  # that risk.
+  # Default true — fail-closed posture, and it bites on a stock K3s
+  # install. Disable only on a cluster you have confirmed does not
+  # enforce policies AND where you've accepted that risk.
   enabled: true
   # Extra egress rules merged into the rendered policy. Use to allow
   # outbound traffic to LiteLLM, Langfuse, NATS, or any other endpoint

@@ -204,10 +204,14 @@ networkPolicy:
           app.kubernetes.io/name: ingress-nginx
 ```
 
-**CNI requirement.** K3s with the default `flannel` backend does NOT
-enforce NetworkPolicies. Run K3s with `--flannel-backend=none` +
-Calico/Cilium for enforcement, or accept that this resource is
-documentation on a flannel cluster.
+**Enforcement.** Stock K3s enforces this policy: `flannel` is the CNI,
+but K3s also runs an embedded `kube-router` NetworkPolicy controller
+that is on by default, so Calico/Cilium are not required. It is only
+documentation if the k3s server was started with
+`--disable-network-policy`, or on a non-K3s cluster whose CNI has no
+NetworkPolicy support. Keep `networkPolicy.enabled: true` — on K3s it
+is the control that stops in-cluster `X-Forwarded-User` spoofing when
+no `ingress.authMiddleware` is configured.
 
 ## Upgrade
 

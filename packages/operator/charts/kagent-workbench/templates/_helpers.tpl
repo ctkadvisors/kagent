@@ -64,16 +64,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
 Validate values at template time. Currently guards one trapdoor:
 
-  Audit B6 — default fail-open auth on flannel K3s.
+  Audit B6 — default fail-open auth where NetworkPolicy is not
+  enforced.
 
   The workbench-api trusts the upstream `X-Forwarded-User` header
   (api.authRequired='true' is the fail-CLOSED default for the
   middleware itself). The cluster-side defense for the spoofing
   vector is a NetworkPolicy that restricts ingress to the
-  ingress-controller pods — but the homelab K3s ships with flannel,
-  which silently ignores NetworkPolicy. On flannel + plain Ingress,
-  ANY in-cluster pod can craft an HTTP request with a forged
-  X-Forwarded-User and walk past the auth check.
+  ingress-controller pods. On a stock K3s that policy is enforced —
+  flannel is the CNI, but K3s also runs an embedded kube-router netpol
+  controller by default — so the defense holds. Where it does NOT
+  (networkPolicy.enabled=false, a k3s server started with
+  `--disable-network-policy`, or a non-K3s cluster whose CNI has no
+  NetworkPolicy support) plus a plain Ingress, ANY in-cluster pod can
+  craft an HTTP request with a forged X-Forwarded-User and walk past
+  the auth check.
 
   When `ingress.enabled=true` AND `ingress.authMiddleware` is empty
   (i.e. the chart renders a vanilla Ingress with no middleware
@@ -93,6 +98,6 @@ Validate values at template time. Currently guards one trapdoor:
 */}}
 {{- define "kagent-workbench.validateValues" -}}
 {{- if and .Values.ingress.enabled (not .Values.ingress.authMiddleware) (eq (.Values.api.authRequired | toString) "true") (not .Values.acknowledgeUnauthenticated) -}}
-{{- fail "kagent-workbench: ingress.enabled=true with ingress.authMiddleware empty AND api.authRequired='true' is a default fail-OPEN posture on CNIs that don't enforce NetworkPolicy (e.g. K3s default flannel) — anyone in-cluster can spoof X-Forwarded-User. Either (a) set ingress.authMiddleware to a Traefik Middleware that authenticates the request (recommended; see docs/AGENT-SELF-SERVICE.md §3.5), or (b) deploy a CNI that enforces NetworkPolicy (Calico/Cilium/Weave) AND set acknowledgeUnauthenticated=true to confirm you understand the cluster-level enforcement is what stops X-Forwarded-User spoofing. See evidence/audit-rev2/C3.md (B6) for the full rationale." -}}
+{{- fail "kagent-workbench: ingress.enabled=true with ingress.authMiddleware empty AND api.authRequired='true' is a default fail-OPEN posture on any cluster that does not enforce NetworkPolicy (a k3s server started with --disable-network-policy, or a non-K3s CNI without NetworkPolicy support) — anyone in-cluster can then spoof X-Forwarded-User. Either (a) set ingress.authMiddleware to a Traefik Middleware that authenticates the request (recommended; see docs/AGENT-SELF-SERVICE.md §3.5), or (b) confirm your cluster enforces NetworkPolicy (stock K3s does, via its embedded kube-router controller; Calico/Cilium/Weave do too), keep networkPolicy.enabled=true, AND set acknowledgeUnauthenticated=true to confirm you understand the cluster-level enforcement is what stops X-Forwarded-User spoofing. See evidence/audit-rev2/C3.md (B6) for the full rationale." -}}
 {{- end -}}
 {{- end -}}
