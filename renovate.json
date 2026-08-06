@@ -1,0 +1,46 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", ":dependencyDashboard"],
+  "timezone": "America/New_York",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "labels": ["dependencies"],
+  "rangeStrategy": "pin",
+  "postUpdateOptions": ["pnpmDedupe"],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["dependencies", "security"],
+    "schedule": ["at any time"],
+    "prPriority": 10
+  },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "Group all non-major devDependency bumps into one PR -- lint/test/build tooling churns often and reviewing it one PR at a time is noise.",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "dev tooling (non-major)"
+    },
+    {
+      "description": "Node must stay on 22 -- package.json engines pins '>=22.0.0 <23.0.0' and the Dockerfiles build on 22. A major bump here is a deliberate migration, not a Renovate PR.",
+      "matchPackageNames": ["node", "@types/node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "@kubernetes/client-node is pinned to one version across 13 packages; a split-version bump breaks the shared k8s.ts helpers. Keep every package moving together.",
+      "matchPackageNames": ["@kubernetes/client-node"],
+      "groupName": "kubernetes client-node (all packages)"
+    },
+    {
+      "description": "hono + its node adapter must move together -- the adapter tracks hono's request/response internals.",
+      "matchPackageNames": ["hono", "@hono/node-server"],
+      "groupName": "hono"
+    },
+    {
+      "description": "Pin GitHub Actions by SHA -- the CI workflow documents this as the supply-chain hardening baseline.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ]
+}

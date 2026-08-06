@@ -23,11 +23,11 @@
     "src"
   ],
   "dependencies": {
-    "@hono/node-server": "1.13.7",
+    "@hono/node-server": "1.19.17",
     "@kagent/audit-events": "workspace:*",
     "@kagent/dto": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
-    "hono": "4.6.14",
+    "hono": "4.13.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
