@@ -43,6 +43,7 @@ charts/*.tgz
 
 # Claude Code subagent worktrees + per-session state
 .claude/
+.worktrees/
 
 # Playwright MCP session artifacts (snapshots, console logs, screenshots)
 .playwright-mcp/
