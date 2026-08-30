@@ -122,3 +122,33 @@ describe('external tool provider config', () => {
     );
   });
 });
+
+describe('withMcpToolPrefix', () => {
+  const inner = {
+    id: 'remote-mcp',
+    describeTools: vi.fn(() =>
+      Promise.resolve([
+        { name: 'add_memory', description: 'Add an episode.', inputSchema: {} },
+        { name: 'mcp.already_prefixed', description: '', inputSchema: {} },
+      ]),
+    ),
+    executeTool: vi.fn(() => Promise.resolve({ content: 'ok', isError: false })),
+  };
+
+  it('advertises raw MCP tool names under the gateway mcp.* namespace', async () => {
+    const { withMcpToolPrefix } = await import('./external-providers.js');
+    const wrapped = withMcpToolPrefix(inner);
+    const tools = await wrapped.describeTools(ctx());
+    expect(tools.map((t) => t.name)).toEqual(['mcp.add_memory', 'mcp.already_prefixed']);
+  });
+
+  it('strips the mcp. prefix before delegating execution', async () => {
+    const { withMcpToolPrefix } = await import('./external-providers.js');
+    const wrapped = withMcpToolPrefix(inner);
+    await wrapped.executeTool({ id: 'call-1', name: 'mcp.add_memory', args: {} }, ctx());
+    expect(inner.executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'add_memory' }),
+      expect.anything(),
+    );
+  });
+});

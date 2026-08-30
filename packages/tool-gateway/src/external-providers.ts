@@ -110,6 +110,35 @@ export function buildExternalToolRegistry(
   };
 }
 
+const MCP_TOOL_PREFIX = 'mcp.';
+
+/**
+ * MCP servers advertise raw tool names (`add_memory`), but the gateway only
+ * routes `mcp.*` / `http.*` names to the external registry (see
+ * `isExternalGatewayToolName`), so unprefixed MCP tools were unreachable.
+ * Advertise them as `mcp.<name>` and strip the prefix on execution.
+ */
+export function withMcpToolPrefix(provider: ToolProvider): ToolProvider {
+  return {
+    id: provider.id,
+    describeTools: async (ctx?: ToolInvocationContext) => {
+      const tools = await Promise.resolve(provider.describeTools(ctx));
+      return tools.map((tool) =>
+        tool.name.startsWith(MCP_TOOL_PREFIX)
+          ? tool
+          : { ...tool, name: `${MCP_TOOL_PREFIX}${tool.name}` },
+      );
+    },
+    executeTool: (call: ToolCall, ctx: ToolInvocationContext) =>
+      provider.executeTool(
+        call.name.startsWith(MCP_TOOL_PREFIX)
+          ? { ...call, name: call.name.slice(MCP_TOOL_PREFIX.length) }
+          : call,
+        ctx,
+      ),
+  };
+}
+
 function providerForSpec(
   spec: ExternalToolProviderSpec,
   options: BuildExternalToolRegistryOptions,
@@ -132,15 +161,17 @@ function providerForSpec(
         ...(spec.envAllowlist !== undefined && { envAllowlist: spec.envAllowlist }),
         ...(spec.cwd !== undefined && { cwd: spec.cwd }),
       };
-      return new McpToolProvider(opts);
+      return withMcpToolPrefix(new McpToolProvider(opts));
     }
     case 'remoteMcp':
-      return new RemoteMcpToolProvider({
-        id: spec.id ?? 'remote-mcp',
-        url: spec.url,
-        ...(spec.headers !== undefined && { headers: spec.headers }),
-        ...(options.fetch !== undefined && { fetch: options.fetch }),
-      });
+      return withMcpToolPrefix(
+        new RemoteMcpToolProvider({
+          id: spec.id ?? 'remote-mcp',
+          url: spec.url,
+          ...(spec.headers !== undefined && { headers: spec.headers }),
+          ...(options.fetch !== undefined && { fetch: options.fetch }),
+        }),
+      );
   }
 }
 
