@@ -67,6 +67,12 @@ toolRuntime:
     # consumed by KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON. When set,
     # this wins over externalProviders above.
     externalProvidersJson: ''
+    # Source the providers JSON from a Secret instead — required when a
+    # spec carries credentials (e.g. remoteMcp headers), which must not
+    # live in values/git. Wins over both fields above when name is set.
+    externalProvidersSecretRef:
+      name: ''
+      key: 'providers.json'
     # Gateway-owned agent/tool profiles. Agents can set
     # spec.toolProfileRef (or spec.agentType as an alias) to one of
     # these names, then the gateway resolves the concrete browser.*,

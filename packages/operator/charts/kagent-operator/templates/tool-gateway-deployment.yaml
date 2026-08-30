@@ -63,6 +63,16 @@ spec:
               value: {{ .Values.toolRuntime.gateway.workspaceRoot | quote }}
             - name: KAGENT_TOOL_RUNTIME_PAUSED
               value: {{ .Values.toolRuntime.paused | ternary "true" "false" | quote }}
+            {{- $extSecret := (.Values.toolRuntime.gateway.externalProvidersSecretRef | default dict) -}}
+            {{- if $extSecret.name }}
+            {{/* Providers JSON from a Secret — for specs carrying credentials
+                 (e.g. remoteMcp headers) that must not sit in values/git. */}}
+            - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $extSecret.name | quote }}
+                  key: {{ $extSecret.key | default "providers.json" | quote }}
+            {{- else }}
             {{- $externalProvidersJson := .Values.toolRuntime.gateway.externalProvidersJson -}}
             {{- if and (not $externalProvidersJson) .Values.toolRuntime.gateway.externalProviders }}
             {{- $externalProvidersJson = dict "providers" .Values.toolRuntime.gateway.externalProviders | toJson -}}
@@ -70,6 +80,7 @@ spec:
             {{- with $externalProvidersJson }}
             - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON
               value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- $toolProfilesJson := .Values.toolRuntime.gateway.toolProfilesJson -}}
             {{- if and (not $toolProfilesJson) .Values.toolRuntime.gateway.toolProfiles }}
