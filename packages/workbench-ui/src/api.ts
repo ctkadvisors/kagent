@@ -644,7 +644,7 @@ export async function requestReview(
 
 /**
  * Hook: polls GET /api/review-queue every 5s (CONTEXT.md D-01-A default).
- * AbortController per refresh for cancelation on unmount.
+ * AbortController per refresh for cancellation on unmount.
  * Returns `{ rows, loading, error, refresh }`.
  *
  * Phase 4 / REV-01. Polling cadence: 5 000 ms per CONTEXT.md
