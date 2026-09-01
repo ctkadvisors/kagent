@@ -6,7 +6,7 @@
 /**
  * `JsonlFileSink` — per-run JSON-Lines trace file writer (OBS-02).
  *
- * Implements `TraceSink` from `@kagent/agent-loop` (`packages/runtime/src/trace.ts:104-108`).
+ * Implements `TraceSink` from `@kagent/agent-loop` (`packages/agent-loop/src/trace.ts:104-108`).
  * Writes one `JSON.stringify(entry) + "\n"` per emit to
  * `<dir>/<runId>.jsonl` using `fs.createWriteStream({flags: 'a'})` opened
  * lazily on first emit (CONTEXT D-12). Append-mode survives crashes —

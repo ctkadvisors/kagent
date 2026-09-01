@@ -6,7 +6,7 @@
 /**
  * `StdoutSink` — color-coded human-readable trace pretty-printer (OBS-01).
  *
- * Implements `TraceSink` from `@kagent/agent-loop` (`packages/runtime/src/trace.ts:104-108`).
+ * Implements `TraceSink` from `@kagent/agent-loop` (`packages/agent-loop/src/trace.ts:104-108`).
  * Writes one line per `TraceEntry` to a configurable `NodeJS.WritableStream`
  * (defaults to `process.stdout`). Auto-disables ANSI colors when the stream
  * is not a TTY OR when `NO_COLOR` is set (https://no-color.org/), forced
