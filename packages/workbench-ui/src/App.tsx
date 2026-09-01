@@ -31,6 +31,7 @@ import { ClusterPage } from './ClusterPage.js';
 import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
 import { ReviewPage } from './ReviewPage.js';
+import { SchedulesPage } from './SchedulesPage.js';
 import { SessionsPage } from './SessionsPage.js';
 import { TaskDetail } from './TaskDetail.js';
 import { TaskList } from './TaskList.js';
@@ -57,6 +58,10 @@ interface ChannelsRoute {
   readonly kind: 'channels';
 }
 
+interface SchedulesRoute {
+  readonly kind: 'schedules';
+}
+
 interface CommandRoute {
   readonly kind: 'command';
 }
@@ -80,6 +85,7 @@ type Route =
   | GatewayRoute
   | ClusterRoute
   | ChannelsRoute
+  | SchedulesRoute
   | CommandRoute
   | ReviewRoute
   | ArchitectRoute
@@ -92,6 +98,7 @@ function parseHash(hash: string): Route {
   if (clean === 'gateway') return { kind: 'gateway' };
   if (clean === 'cluster') return { kind: 'cluster' };
   if (clean === 'channels') return { kind: 'channels' };
+  if (clean === 'schedules') return { kind: 'schedules' };
   if (clean === 'command') return { kind: 'command' };
   if (clean === 'review') return { kind: 'review' };
   if (clean === 'architect') return { kind: 'architect' };
@@ -153,6 +160,8 @@ export function App(): React.JSX.Element {
     content = <ClusterPage onBack={goHome} />;
   } else if (route.kind === 'channels') {
     content = <ChannelsPage />;
+  } else if (route.kind === 'schedules') {
+    content = <SchedulesPage />;
   } else if (route.kind === 'review') {
     content = <ReviewPage onBack={goHome} />;
   } else if (route.kind === 'architect') {

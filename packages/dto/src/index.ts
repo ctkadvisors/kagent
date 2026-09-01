@@ -95,6 +95,10 @@ export type {
   ChannelTaskRef,
   ChannelWhatsAppSpec,
   ChildRef,
+  KagentSchedule,
+  KagentScheduleSpec,
+  KagentScheduleStatus,
+  KagentScheduleTaskTemplate,
   ModelEndpoint,
   ModelEndpointBackendKind,
   ModelEndpointInFlight,
@@ -108,6 +112,7 @@ export {
   isChannel,
   isChannelBinding,
   isChannelSession,
+  isKagentSchedule,
   isModelEndpoint,
 } from './crds.js';
 

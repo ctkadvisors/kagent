@@ -54,7 +54,47 @@ export interface LayoutResult {
   readonly gateway: { x: number; y: number };
   readonly agents: ReadonlyMap<string, AgentPosition>;
   readonly factions: ReadonlyMap<string, { angle: number; count: number }>;
+  /** Fixed satellite structures (Brain, Bytebot) keyed by `StaticStructureDef.id`. */
+  readonly structures: ReadonlyMap<string, { x: number; y: number }>;
 }
+
+/**
+ * Non-agent world structures drawn near the gateway HQ. Unlike agents
+ * these are NOT derived from cluster state — they're always-present
+ * fixtures of the fleet (the shared memory service, the computer-use
+ * desktop), so their position is fixed relative to the gateway rather
+ * than hashed into the faction ring layout.
+ *
+ * `url`, when present, makes the structure a plain external link — a
+ * click opens it in a new tab. Omit `url` for a structure with no
+ * public endpoint (it renders as informational only).
+ */
+export interface StaticStructureDef {
+  readonly id: string;
+  readonly label: string;
+  readonly sublabel: string;
+  readonly url?: string;
+}
+
+export const STATIC_STRUCTURES: readonly StaticStructureDef[] = [
+  { id: 'brain', label: 'BRAIN', sublabel: 'neo4j + graphiti · in-cluster' },
+  {
+    id: 'bytebot',
+    label: 'BYTEBOT',
+    sublabel: 'computer-use desktop',
+    url: 'https://bytebot.knuteson.io',
+  },
+];
+
+// ponytail: two fixed compass slots (NW/NE of the HQ) — fine for two
+// static structures, but a third would need real collision avoidance
+// against the hash-placed agent rings. Add a proper packer if/when a
+// third static structure lands.
+const STRUCTURE_RADIUS = 340;
+const STRUCTURE_ANGLES: Readonly<Record<string, number>> = {
+  brain: (Math.PI * 5) / 4, // up-left of HQ
+  bytebot: -Math.PI / 4, // up-right of HQ
+};
 
 /**
  * 32-bit FNV-1a — tiny non-cryptographic hash, no deps. Good enough for
@@ -172,9 +212,19 @@ export function computeLayout(agents: readonly AgentNode[], bounds: CanvasBounds
     }
   }
 
+  const structures = new Map<string, { x: number; y: number }>();
+  for (const def of STATIC_STRUCTURES) {
+    const angle = STRUCTURE_ANGLES[def.id] ?? 0;
+    structures.set(def.id, {
+      x: snap(cx + Math.cos(angle) * STRUCTURE_RADIUS),
+      y: snap(cy + Math.sin(angle) * STRUCTURE_RADIUS),
+    });
+  }
+
   return {
     gateway: { x: snap(cx), y: snap(cy) },
     agents: positions,
     factions: factionMeta,
+    structures,
   };
 }

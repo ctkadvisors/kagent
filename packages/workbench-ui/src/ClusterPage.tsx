@@ -116,6 +116,7 @@ function ActivityRow({ ev }: { ev: ActivityEvent }): React.JSX.Element {
     channel: styles.evAgent,
     channelBinding: styles.evAgent,
     channelSession: styles.evAgent,
+    schedule: styles.evAgent,
     job: styles.evJob,
     pod: styles.evPod,
   };
