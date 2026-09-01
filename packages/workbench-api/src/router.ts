@@ -34,6 +34,7 @@ import { dispositionsRoute } from './routes/dispositions.js';
 import { gatewayRoute } from './routes/gateway.js';
 import { healthzRoute } from './routes/healthz.js';
 import { reviewQueueRoute } from './routes/review-queue.js';
+import { schedulesRoute } from './routes/schedules.js';
 import { sessionsRoute } from './routes/sessions.js';
 import { streamRoute } from './routes/stream.js';
 import { tasksRoute } from './routes/tasks.js';
@@ -173,6 +174,7 @@ export function buildRouter(deps: RouterDeps): Hono {
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));
+  app.route('/', schedulesRoute({ cache: deps.cache }));
   app.route(
     '/',
     channelsRoute({

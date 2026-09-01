@@ -4,10 +4,10 @@
  */
 
 /**
- * Informer wiring — opens cluster-wide watches on the four kinds the
+ * Informer wiring — opens cluster-wide watches on the kinds the
  * Workbench cares about (`Agent`, `AgentTask`, `Channel`,
- * `ChannelBinding`, `ChannelSession`, owned `Job`, owned `Pod`)
- * and feeds every event into the supplied `SnapshotCache`.
+ * `ChannelBinding`, `ChannelSession`, `KagentSchedule`, owned `Job`,
+ * owned `Pod`) and feeds every event into the supplied `SnapshotCache`.
  *
  * The pattern mirrors `packages/operator/src/{watch,job-watch}.ts`:
  *
@@ -42,11 +42,13 @@ import {
   isChannel,
   isChannelBinding,
   isChannelSession,
+  isKagentSchedule,
   type Agent,
   type AgentTask,
   type Channel,
   type ChannelBinding,
   type ChannelSession,
+  type KagentSchedule,
 } from '@kagent/dto';
 
 import type { SnapshotCache } from './cache.js';
@@ -56,6 +58,7 @@ const AGENT_PLURAL = 'agents' as const;
 const CHANNEL_PLURAL = 'channels' as const;
 const CHANNEL_BINDING_PLURAL = 'channelbindings' as const;
 const CHANNEL_SESSION_PLURAL = 'channelsessions' as const;
+const SCHEDULE_PLURAL = 'kagentschedules' as const;
 
 const TASK_WATCH_PATH = `/apis/${API_GROUP}/${API_VERSION}/${TASK_PLURAL}` as const;
 const AGENT_WATCH_PATH = `/apis/${API_GROUP}/${API_VERSION}/${AGENT_PLURAL}` as const;
@@ -64,6 +67,7 @@ const CHANNEL_BINDING_WATCH_PATH =
   `/apis/${API_GROUP}/${API_VERSION}/${CHANNEL_BINDING_PLURAL}` as const;
 const CHANNEL_SESSION_WATCH_PATH =
   `/apis/${API_GROUP}/${API_VERSION}/${CHANNEL_SESSION_PLURAL}` as const;
+const SCHEDULE_WATCH_PATH = `/apis/${API_GROUP}/${API_VERSION}/${SCHEDULE_PLURAL}` as const;
 
 const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 const JOB_WATCH_PATH = `/apis/batch/v1/jobs?labelSelector=${encodeURIComponent(MANAGED_BY)}`;
@@ -178,6 +182,17 @@ export function createInformerSet(deps: InformerDeps, cache: SnapshotCache): Inf
     /* eslint-enable @typescript-eslint/no-unsafe-assignment */
   };
 
+  const scheduleListFn = async (): Promise<KubernetesListObject<KagentSchedule>> => {
+    /* eslint-disable @typescript-eslint/no-unsafe-assignment */
+    const res = await customApi.listClusterCustomObject({
+      group: API_GROUP,
+      version: API_VERSION,
+      plural: SCHEDULE_PLURAL,
+    });
+    return res as KubernetesListObject<KagentSchedule>;
+    /* eslint-enable @typescript-eslint/no-unsafe-assignment */
+  };
+
   const podListFn = async (): Promise<KubernetesListObject<V1Pod>> => {
     return await coreApi.listPodForAllNamespaces({ labelSelector: MANAGED_BY });
   };
@@ -195,6 +210,7 @@ export function createInformerSet(deps: InformerDeps, cache: SnapshotCache): Inf
     CHANNEL_SESSION_WATCH_PATH,
     channelSessionListFn,
   );
+  const scheduleInformer = makeInformer<KagentSchedule>(kc, SCHEDULE_WATCH_PATH, scheduleListFn);
   const jobInformer = makeInformer<V1Job>(kc, JOB_WATCH_PATH, listJobs);
   const podInformer = makeInformer<V1Pod>(kc, POD_WATCH_PATH, podListFn);
 
@@ -262,6 +278,17 @@ export function createInformerSet(deps: InformerDeps, cache: SnapshotCache): Inf
   });
   wireRestart(channelSessionInformer, 'ChannelSession');
 
+  scheduleInformer.on('add', (obj) => {
+    if (isKagentSchedule(obj)) cache.upsertSchedule(obj);
+  });
+  scheduleInformer.on('update', (obj) => {
+    if (isKagentSchedule(obj)) cache.upsertSchedule(obj);
+  });
+  scheduleInformer.on('delete', (obj) => {
+    if (isKagentSchedule(obj)) cache.deleteSchedule(obj);
+  });
+  wireRestart(scheduleInformer, 'KagentSchedule');
+
   jobInformer.on('add', (j) => {
     cache.upsertJob(j);
   });
@@ -291,6 +318,7 @@ export function createInformerSet(deps: InformerDeps, cache: SnapshotCache): Inf
       await channelInformer.start();
       await channelBindingInformer.start();
       await channelSessionInformer.start();
+      await scheduleInformer.start();
       await jobInformer.start();
       await podInformer.start();
     },
@@ -300,6 +328,7 @@ export function createInformerSet(deps: InformerDeps, cache: SnapshotCache): Inf
       await channelInformer.stop();
       await channelBindingInformer.stop();
       await channelSessionInformer.stop();
+      await scheduleInformer.stop();
       await jobInformer.stop();
       await podInformer.stop();
     },

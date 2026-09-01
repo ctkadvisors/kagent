@@ -577,3 +577,58 @@ export function isModelEndpoint(obj: unknown): obj is ModelEndpoint {
   if (typeof inFlight.max !== 'number') return false;
   return true;
 }
+
+/* =====================================================================
+ * KagentSchedule
+ *
+ * Mirror of `packages/operator/src/crds/kagent-schedule.ts` (per the
+ * duplication contract documented at the top of this file). Source of
+ * truth = the YAML schema at
+ * `packages/operator/manifests/crds/kagent-schedule.yaml`. Namespaced
+ * cron trigger that materializes a fresh AgentTask per matching tick.
+ * ===================================================================== */
+
+/** Structurally identical to AgentTaskSpec — see the operator mirror. */
+export type KagentScheduleTaskTemplate = AgentTaskSpec;
+
+export interface KagentScheduleSpec {
+  /** 5-field cron expression evaluated in UTC. */
+  readonly schedule: string;
+  /** Pause the schedule without deleting the CR. Default `false`. */
+  readonly suspend?: boolean;
+  readonly taskTemplate: KagentScheduleTaskTemplate;
+}
+
+export interface KagentScheduleStatus {
+  /** RFC 3339 timestamp the controller last successfully ticked. */
+  readonly lastTickAt?: string;
+  /** RFC 3339 timestamp of the next minute boundary the cron matches. */
+  readonly nextTickAt?: string;
+  readonly conditions?: ReadonlyArray<{
+    readonly type: string;
+    readonly status: 'True' | 'False' | 'Unknown';
+    readonly reason?: string;
+    readonly message?: string;
+    readonly lastTransitionTime: string;
+  }>;
+}
+
+export interface KagentSchedule {
+  readonly apiVersion: typeof API_GROUP_VERSION;
+  readonly kind: 'KagentSchedule';
+  readonly metadata: V1ObjectMeta;
+  readonly spec: KagentScheduleSpec;
+  readonly status?: KagentScheduleStatus;
+}
+
+export function isKagentSchedule(obj: unknown): obj is KagentSchedule {
+  if (typeof obj !== 'object' || obj === null) return false;
+  const o = obj as { apiVersion?: unknown; kind?: unknown; spec?: unknown };
+  if (o.apiVersion !== API_GROUP_VERSION) return false;
+  if (o.kind !== 'KagentSchedule') return false;
+  const spec = o.spec as { schedule?: unknown; taskTemplate?: unknown } | null;
+  if (typeof spec !== 'object' || spec === null) return false;
+  if (typeof spec.schedule !== 'string' || spec.schedule.length === 0) return false;
+  if (typeof spec.taskTemplate !== 'object' || spec.taskTemplate === null) return false;
+  return true;
+}

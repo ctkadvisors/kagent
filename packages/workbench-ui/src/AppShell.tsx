@@ -32,6 +32,7 @@ type IconKey =
   | 'command'
   | 'sessions'
   | 'channels'
+  | 'schedules'
   | 'tasks'
   | 'cluster'
   | 'gateway'
@@ -57,6 +58,7 @@ const NAV: readonly NavGroup[] = [
       { hash: '#/command', label: 'Command Center', shortLabel: 'Command', icon: 'command' },
       { hash: '#/sessions', label: 'Sessions', icon: 'sessions' },
       { hash: '#/channels', label: 'Channels', icon: 'channels' },
+      { hash: '#/schedules', label: 'Schedules', icon: 'schedules' },
       { hash: '#/', label: 'Tasks', icon: 'tasks' },
     ],
   },
@@ -77,6 +79,7 @@ const TITLES: Record<string, string> = {
   '#/architect': 'Architect — chat to create',
   '#/sessions': 'Sessions',
   '#/channels': 'Channels',
+  '#/schedules': 'Schedules',
   '#/': 'Tasks',
   '#/cluster': 'Cluster',
   '#/gateway': 'Gateway',
@@ -125,6 +128,13 @@ function Icon({ name }: { name: IconKey }): React.JSX.Element {
         <circle {...p} cx="4" cy="7" r="2" />
         <circle {...p} cx="4" cy="17" r="2" />
         <circle {...p} cx="20" cy="12" r="2" />
+      </>
+    ),
+    schedules: (
+      <>
+        <circle {...p} cx="12" cy="13" r="8" />
+        <path {...p} d="M12 9v4l3 2" />
+        <path {...p} d="M9 2h6" />
       </>
     ),
     cluster: (
