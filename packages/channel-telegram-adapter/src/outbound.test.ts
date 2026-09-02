@@ -6,6 +6,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { deliverOutboundTurns } from './outbound.js';
+
+vi.mock('./brain.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./brain.js')>()),
+  writeBrainEpisode: vi.fn(),
+}));
 import type {
   AdapterLogger,
   AgentTask,
@@ -66,6 +71,46 @@ describe('deliverOutboundTurns', () => {
       backoffUntil: null,
       lastFailureReason: null,
     });
+  });
+
+  it('writes one brain episode per delivered exchange when the brain is configured', async () => {
+    const { writeBrainEpisode } = await import('./brain.js');
+    const spy = vi.mocked(writeBrainEpisode).mockResolvedValue(undefined);
+    const store = makeStore({
+      sessions: [makeSession()],
+      tasks: [
+        makeTask({
+          metadata: {
+            ...makeTask().metadata,
+            creationTimestamp: '2026-09-02T03:00:00Z',
+            annotations: { 'kagent.knuteson.io/channel-message': 'how much vram is free' },
+          },
+          spec: { payload: {}, targetAgent: 'concierge' },
+          status: { phase: 'Completed', result: { content: 'About 20 GB.' } },
+        }),
+      ],
+    });
+
+    const result = await deliverOutboundTurns({
+      config: {
+        ...config,
+        brain: { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
+      },
+      store,
+      client: makeClient(),
+      logger: quietLogger,
+      clock,
+    });
+
+    expect(result.delivered).toBe(1);
+    expect(spy).toHaveBeenCalledWith(
+      { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
+      {
+        name: 'telegram: how much vram is free (2026-09-02)',
+        body: 'Chris (telegram): how much vram is free\nconcierge replied: About 20 GB.',
+        referenceTime: '2026-09-02T03:00:00Z',
+      },
+    );
   });
 
   it('does not resend a task already recorded as delivered', async () => {

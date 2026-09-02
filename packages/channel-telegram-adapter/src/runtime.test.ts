@@ -65,6 +65,70 @@ describe('processTelegramUpdates', () => {
     );
   });
 
+  it('bridges the previous exchange into the next message when an outbox is wired', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 11,
+          message: {
+            message_id: 2,
+            from: { id: 3175140114, is_bot: false, first_name: 'Chris' },
+            chat: { id: 3175140114, type: 'private' },
+            text: 'and the second biggest?',
+          },
+        },
+      ],
+    });
+    const gateway = { postInbound: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const taskRef = { namespace: 'kagent-system', name: 'kat-1' };
+    const outbox = {
+      listChannelSessions: vi.fn().mockResolvedValue([
+        {
+          apiVersion: 'kagent.knuteson.io/v1alpha1',
+          kind: 'ChannelSession',
+          metadata: { name: 'kcs', namespace: 'kagent-system' },
+          spec: {
+            channelRef: { name: 'telegram-work' },
+            provider: 'telegram',
+            accountId: 'work',
+            peer: { kind: 'dm', id: '3175140114' },
+            sessionKey: 'k',
+            target: { agentRef: { name: 'concierge' } },
+          },
+          status: { phase: 'Active', lastTaskRef: taskRef },
+        },
+      ]),
+      getAgentTask: vi.fn().mockResolvedValue({
+        apiVersion: 'kagent.knuteson.io/v1alpha1',
+        kind: 'AgentTask',
+        metadata: {
+          ...taskRef,
+          annotations: { 'kagent.knuteson.io/channel-message': 'whats the biggest pod' },
+        },
+        spec: { targetAgent: 'concierge' },
+        status: { phase: 'Completed', result: { content: 'ornith-b12x-serve' } },
+      }),
+      patchSessionStatus: vi.fn(),
+    };
+
+    await processTelegramUpdates({
+      config: {
+        ...config,
+        brain: { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
+      },
+      client,
+      gateway,
+      outbox,
+      logger: quietLogger,
+    });
+
+    expect(gateway.postInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: '[previous turn]\nChris: whats the biggest pod\nYou: ornith-b12x-serve\n[current message]\nand the second biggest?',
+      }),
+    );
+  });
+
   it('advances the polling offset past ignored updates', async () => {
     const client = makeClient({
       updates: [

@@ -155,6 +155,19 @@ spec:
               value: {{ .Values.channels.telegram.outboundBaseBackoffSeconds | quote }}
             - name: KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES
               value: {{ .Values.channels.telegram.outboundMaxFailures | quote }}
+            {{- with .Values.channels.telegram.brain }}
+            {{- if .mcpUrl }}
+            - name: KAGENT_BRAIN_MCP_URL
+              value: {{ .mcpUrl | quote }}
+            - name: KAGENT_BRAIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .tokenSecretName | quote }}
+                  key: {{ .tokenSecretKey | quote }}
+            - name: KAGENT_BRAIN_OPERATOR_NAME
+              value: {{ .operatorName | quote }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.channels.telegram.resources | nindent 12 }}
       {{- with .Values.channels.telegram.nodeSelector }}
