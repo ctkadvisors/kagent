@@ -308,6 +308,38 @@ export interface AgentExecutorOptions<
    * `{ maxRetries: 0 }` to disable retry entirely. See `RetryPolicy`.
    */
   retryPolicy?: RetryPolicy;
+  /**
+   * Guards inside the loop against the two ways a run burns its budget
+   * without producing an answer: the same tool called over and over, and
+   * tool results so large that a handful of them fill the context.
+   * Defaults are deliberately loose (see `DEFAULT_TOOL_GUARDS`); a guard
+   * that fires replaces the tool result with an error the model can act
+   * on ("answer with what you have"), never throws.
+   */
+  toolGuards?: ToolGuards;
+}
+
+export interface ToolGuards {
+  /** Same tool name + identical args: calls beyond this count are refused. */
+  maxIdenticalCalls?: number;
+  /** Same tool name, any args: calls beyond this count in one run are refused. */
+  maxCallsPerTool?: number;
+  /** Tool result text longer than this is elided in the middle before it enters the context. */
+  maxToolResultChars?: number;
+}
+
+export const DEFAULT_TOOL_GUARDS: Required<ToolGuards> = {
+  maxIdenticalCalls: 2,
+  maxCallsPerTool: 8,
+  maxToolResultChars: 16_000,
+};
+
+/** Middle-elide a tool result so one oversized payload cannot own the context. */
+export function capToolResult(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = Math.floor(max * 0.75);
+  const tail = max - head;
+  return `${text.slice(0, head)}\n… [tool result truncated: ${String(text.length - max)} of ${String(text.length)} chars elided] …\n${text.slice(text.length - tail)}`;
 }
 
 /**
@@ -322,6 +354,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
   private readonly maxRetries: number;
   private readonly backoffSchedule: readonly number[];
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly toolGuards: Required<ToolGuards>;
 
   constructor(options: AgentExecutorOptions<TType, TPhase>) {
     if (!options.llm) {
@@ -368,6 +401,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         : DEFAULT_BACKOFF_SCHEDULE;
     this.sleep =
       rp?.sleep ?? ((ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)));
+    this.toolGuards = { ...DEFAULT_TOOL_GUARDS, ...(options.toolGuards ?? {}) };
 
     // Wrap providers into a federation registry; throws on tool-name conflict.
     const providers = options.toolProviders ?? [];
@@ -784,6 +818,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     let status: TerminalStatus = 'completed';
     let errorBox: { message: string; cause?: unknown } | undefined;
     let completedNaturally = false;
+    // Tool guards (per run): how often each tool, and each exact call, ran.
+    const callsPerTool = new Map<string, number>();
+    const identicalCalls = new Map<string, number>();
 
     // ─── Main loop ───────────────────────────────────────────────────
     for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -1028,6 +1065,45 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
         // Synthesis already happened above; reuse the (now non-empty) id.
         const callId = toolCall.id;
+
+        // Tool guards: refuse the call (as a tool error the model reads)
+        // instead of letting a loop spend the whole iteration budget.
+        const perTool = (callsPerTool.get(toolCall.name) ?? 0) + 1;
+        callsPerTool.set(toolCall.name, perTool);
+        const signature = `${toolCall.name}:${JSON.stringify(toolCall.args ?? {})}`;
+        const identical = (identicalCalls.get(signature) ?? 0) + 1;
+        identicalCalls.set(signature, identical);
+        const guardMsg =
+          identical > this.toolGuards.maxIdenticalCalls
+            ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments and the answer has not changed. Do not call it again; answer with what you have, or say what is missing.`
+            : perTool > this.toolGuards.maxCallsPerTool
+              ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run, which is the limit. Answer with what you have, or say what is missing.`
+              : undefined;
+        if (guardMsg !== undefined) {
+          const guardEntry: TraceEntry = {
+            schema_version: '1',
+            run_id: runId,
+            sequence: seqRef.value++,
+            trace_type: 'tool_call',
+            timestamp_ms: Date.now(),
+            latency_ms: 0,
+            tool_name: toolCall.name,
+            tool_input: truncateForStorage(JSON.stringify(toolCall.args)),
+            tool_output: guardMsg,
+            is_error: true,
+            error: guardMsg,
+          };
+          traces.push(guardEntry);
+          await this.emitToSinks(guardEntry);
+          currentMessages.push({
+            role: 'tool',
+            content: guardMsg,
+            tool_call_id: callId,
+            name: toolCall.name,
+          });
+          continue;
+        }
+
         const provider = this.toolProviders.providerFor(toolCall.name);
 
         if (!provider) {
@@ -1078,7 +1154,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(toolEntry);
           currentMessages.push({
             role: 'tool',
-            content: stringifyToolContent(toolResult.content),
+            content: capToolResult(
+              stringifyToolContent(toolResult.content),
+              this.toolGuards.maxToolResultChars,
+            ),
             tool_call_id: callId,
             name: toolCall.name,
           });

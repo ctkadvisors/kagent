@@ -85,6 +85,28 @@ describe('HttpToolProvider — happy path + path templating (D-05, D-07)', () =>
 });
 
 describe('HttpToolProvider — body union (D-06)', () => {
+  it('GET with no body declared sends no body (undici rejects GET+body outright)', async () => {
+    const recordedCalls: Array<{ url: string; method: string; body?: unknown }> = [];
+    const provider = new HttpToolProvider({
+      baseUrl: 'https://search.example',
+      fetch: makeMockFetch({ body: 'title,url', status: 200, recordedCalls }),
+      tools: [
+        {
+          name: 'web_search',
+          description: 'search',
+          inputSchema: {},
+          method: 'GET',
+          path: '/search?q={q}&format=csv',
+        },
+      ],
+    });
+    await provider.executeTool(call('web_search', { q: 'kata containers' }), ctx());
+    expect(recordedCalls[0]?.url).toBe(
+      'https://search.example/search?q=kata%20containers&format=csv',
+    );
+    expect(recordedCalls[0]?.body).toBeUndefined();
+  });
+
   it("Test 2 — POST with body 'json' default: JSON.stringify(args) + Content-Type application/json", async () => {
     const recordedCalls: Array<{
       url: string;
