@@ -56,6 +56,20 @@ export function loadConfig(env: Env = process.env): TelegramAdapterConfig {
       DEFAULT_OUTBOUND_MAX_FAILURES,
       'KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES',
     ),
+    ...brainConfig(env),
+  };
+}
+
+function brainConfig(env: Env): Pick<TelegramAdapterConfig, 'brain'> {
+  const mcpUrl = optional(env.KAGENT_BRAIN_MCP_URL);
+  const token = optional(env.KAGENT_BRAIN_TOKEN);
+  if (mcpUrl === undefined || token === undefined) return {};
+  return {
+    brain: {
+      mcpUrl,
+      token,
+      operatorName: optional(env.KAGENT_BRAIN_OPERATOR_NAME) ?? 'the operator',
+    },
   };
 }
 

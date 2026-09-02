@@ -12,6 +12,9 @@ import type {
   TelegramAdapterConfig,
   TelegramClient,
 } from './types.js';
+import { channelTurnEpisode, writeBrainEpisode } from './brain.js';
+
+const CHANNEL_MESSAGE_ANNOTATION = 'kagent.knuteson.io/channel-message';
 
 export interface OutboundDeliveryStats {
   readonly delivered: number;
@@ -101,6 +104,7 @@ export async function deliverOutboundTurns(input: {
         session: sessionName,
         task: taskRef.name,
       });
+      if (task !== undefined) await rememberTurn(input, task, reply);
     } catch (err) {
       failed += 1;
       input.logger.error('[channel-telegram] failed to record outbound delivery', {
@@ -112,6 +116,39 @@ export async function deliverOutboundTurns(input: {
   }
 
   return { delivered, failed, skipped };
+}
+
+/**
+ * One brain episode per exchange. The brain is the conversation memory;
+ * this is the write side, done here because delivery is the first moment
+ * both halves of the exchange exist. Never blocks or fails delivery.
+ */
+async function rememberTurn(
+  input: { readonly config: TelegramAdapterConfig; readonly logger: AdapterLogger },
+  task: AgentTask,
+  reply: string,
+): Promise<void> {
+  const brain = input.config.brain;
+  if (brain === undefined) return;
+  const message = task.metadata.annotations?.[CHANNEL_MESSAGE_ANNOTATION];
+  if (message === undefined) return;
+  const failed = task.status?.phase === 'Failed';
+  const episode = channelTurnEpisode({
+    operatorName: brain.operatorName,
+    agentName: typeof task.spec.targetAgent === 'string' ? task.spec.targetAgent : 'agent',
+    message,
+    reply: failed ? undefined : reply,
+    error: failed ? (task.status?.error ?? 'task failed') : undefined,
+    at: task.metadata.creationTimestamp ?? new Date().toISOString(),
+  });
+  try {
+    await writeBrainEpisode(brain, episode);
+  } catch (err) {
+    input.logger.warn('[channel-telegram] brain episode write failed', {
+      task: task.metadata.name,
+      err,
+    });
+  }
 }
 
 function sessionMatchesConfig(session: ChannelSession, config: TelegramAdapterConfig): boolean {

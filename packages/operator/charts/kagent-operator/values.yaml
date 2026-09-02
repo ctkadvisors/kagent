@@ -388,6 +388,15 @@ channels:
     # Defaults to channels.gateway.authTokenSecretName/key when unset.
     gatewayTokenSecretName: ''
     gatewayTokenSecretKey: ''
+    # Graphiti brain: one episode per exchange (message + reply) written
+    # at delivery, and the previous exchange bridged into each new
+    # message. Off when mcpUrl is empty.
+    brain:
+      mcpUrl: ''
+      tokenSecretName: ''
+      tokenSecretKey: token
+      # How the human is named in episodes.
+      operatorName: ''
     serviceAccount:
       create: true
       name: ''
