@@ -21,6 +21,10 @@
 
 export const PREVIOUS_TURN_MARKER = '[previous turn]';
 export const CURRENT_MESSAGE_MARKER = '[current message]';
+/**
+ * Telegram caps a single reply at 4000 chars. The bridged previous reply
+ * must leave room for the new message, so keep the cap below that.
+ */
 const MAX_BRIDGE_REPLY_CHARS = 1500;
 const MAX_EPISODE_CHARS = 6000;
 
