@@ -52,6 +52,9 @@ import type {
 import { ToolProviderRegistry } from './tool-provider.js';
 import type { TraceEntry, TraceSink } from './trace.js';
 import { estimateTokens, truncateForStorage, truncateMessages } from './trace.js';
+
+/** Body prefix of the substrate's terminal context-window refusal (status 0). */
+const CONTEXT_REFUSAL_PREFIX = 'context_window_substrate_refused';
 import {
   AgentNotFoundError,
   NoLLMClientError,
@@ -550,7 +553,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             bookkeeping.budget.cumulativeInputTokens + bookkeeping.budget.cumulativeOutputTokens;
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
-            const reason = `context_window_substrate_refused: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold}`;
+            const reason = `${CONTEXT_REFUSAL_PREFIX}: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold}`;
             // Use status=0 so the existing 429-retry guard
             // (executor.ts:407 — gated to `status === 429`) does NOT
             // kick in: refusal is terminal. The reason string is
@@ -569,11 +572,18 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         const result = await this.llm.chat(chatRequest, llmCtx);
         return { result, attempts: attemptIdx, lastBackoffMs, successAttemptStart: attemptStart };
       } catch (err) {
-        // Retry ONLY on LLMClientHttpError(status=429). Every other error
-        // (including aborts, protocol errors, other HTTP statuses,
-        // network failures surfacing as status=0) propagates immediately.
-        const is429 = err instanceof LLMClientHttpError && err.status === 429;
-        const canRetry = is429 && attemptIdx < this.maxRetries;
+        // Retry on LLMClientHttpError(status=429). Aborts, protocol
+        // errors and other HTTP statuses propagate immediately.
+        // Also retry transport failures (status 0 from a rejected fetch:
+        // ECONNRESET, DNS, a socket closed mid-upload). The substrate's
+        // own context-window refusal shares status 0 but is terminal —
+        // its body prefix keeps it out of the retry path.
+        const isTransient =
+          err instanceof LLMClientHttpError &&
+          (err.status === 429 ||
+            (err.status === 0 && !(err.body ?? '').startsWith(CONTEXT_REFUSAL_PREFIX)));
+        const is429 = isTransient && err.status === 429;
+        const canRetry = isTransient && attemptIdx < this.maxRetries;
         if (!canRetry) {
           // If this WAS the final 429 attempt, emit a per-attempt trace
           // so observers see the full ladder; the run loop's catch arm
