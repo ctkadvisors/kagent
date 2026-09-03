@@ -152,3 +152,47 @@ describe('withMcpToolPrefix', () => {
     );
   });
 });
+
+describe('withMcpToolPrefix — per-provider prefix', () => {
+  const inner = {
+    id: 'cloudflare',
+    describeTools: vi.fn(() =>
+      Promise.resolve([{ name: 'search', description: 'Find API endpoints.', inputSchema: {} }]),
+    ),
+    executeTool: vi.fn(() => Promise.resolve({ content: 'ok', isError: false })),
+  };
+
+  it('advertises under the given mcp.* prefix and strips it on execution', async () => {
+    const { withMcpToolPrefix } = await import('./external-providers.js');
+    const wrapped = withMcpToolPrefix(inner, 'mcp.cf.');
+    expect((await wrapped.describeTools(ctx())).map((t) => t.name)).toEqual(['mcp.cf.search']);
+    await wrapped.executeTool({ id: 'c', name: 'mcp.cf.search', args: {} }, ctx());
+    expect(inner.executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'search' }),
+      expect.anything(),
+    );
+  });
+
+  it('rejects a prefix outside the mcp.* namespace (the gateway would not route it)', async () => {
+    const { withMcpToolPrefix, parseExternalToolProviderConfig } =
+      await import('./external-providers.js');
+    expect(() => withMcpToolPrefix(inner, 'cf.')).toThrow(/must start with "mcp\."/);
+    expect(() =>
+      parseExternalToolProviderConfig(
+        JSON.stringify({
+          providers: [{ kind: 'remoteMcp', id: 'x', url: 'http://x/mcp', toolPrefix: 'cf.' }],
+        }),
+      ),
+    ).toThrow(/toolPrefix/);
+  });
+
+  it('parses toolPrefix on remoteMcp specs', async () => {
+    const { parseExternalToolProviderConfig } = await import('./external-providers.js');
+    const { providers } = parseExternalToolProviderConfig(
+      JSON.stringify({
+        providers: [{ kind: 'remoteMcp', id: 'x', url: 'http://x/mcp', toolPrefix: 'mcp.cf.' }],
+      }),
+    );
+    expect(providers[0]).toMatchObject({ kind: 'remoteMcp', toolPrefix: 'mcp.cf.' });
+  });
+});
