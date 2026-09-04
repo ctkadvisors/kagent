@@ -283,3 +283,5 @@ MIT — see [`LICENSE`](./LICENSE). Every `.ts` source file carries an SPDX head
 ## Contact
 
 `chris@ctkadvisors.net` — single author, single point of contact. Issue tracker: GitHub Issues on this repo.
+
+<!-- steering test: this line exists so the fleet can announce a merge that a human then vetoes from the console. -->
