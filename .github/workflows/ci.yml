@@ -207,7 +207,7 @@ jobs:
     # `agent-pod` is NOT built here because no AgentTasks are spawned;
     # `KAGENT_AGENT_POD_IMAGE` is set on the operator Deployment but
     # the image is never pulled.
-    runs-on: homelab
+    runs-on: ubuntu-latest  # kind cannot boot a control plane inside the Kata dind runner (kubeadm wait-control-plane times out); kagent is public, hosted minutes are free
     timeout-minutes: 15
     steps:
       - name: Checkout
