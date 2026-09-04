@@ -1077,7 +1077,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           identical > this.toolGuards.maxIdenticalCalls
             ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments and the answer has not changed. Do not call it again; answer with what you have, or say what is missing.`
             : perTool > this.toolGuards.maxCallsPerTool
-              ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run, which is the limit. Answer with what you have, or say what is missing.`
+              ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
               : undefined;
         if (guardMsg !== undefined) {
           const guardEntry: TraceEntry = {
