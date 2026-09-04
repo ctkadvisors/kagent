@@ -4,7 +4,7 @@
  */
 
 /**
- * `HttpToolProvider` — `ToolProvider` impl that calls arbitrary HTTP
+ * `HttpToolProvider` — the `ToolProvider` impl that calls arbitrary HTTP
  * endpoints with configurable auth header + parameter templating.
  *
  * Constructor (D-05):
