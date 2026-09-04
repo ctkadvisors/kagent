@@ -122,7 +122,7 @@ export function buildExternalToolRegistry(
 const MCP_TOOL_PREFIX = 'mcp.';
 
 /**
- * MCP servers advertise raw tool names (`add_memory`), but the gateway only
+ * MCP servers advertise raw tool names (`add_memory`), but the gateway only (see below).
  * routes `mcp.*` / `http.*` names to the external registry (see
  * `isExternalGatewayToolName`), so unprefixed MCP tools were unreachable.
  * Advertise them as `mcp.<name>` and strip the prefix on execution.
