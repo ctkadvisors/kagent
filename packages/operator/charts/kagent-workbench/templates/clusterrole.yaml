@@ -49,6 +49,9 @@ rules:
       - channels
       - channelbindings
       - channelsessions
+      # Schedules surface (PR #6): the KagentSchedule informer listed
+      # cluster-wide and got 403 on v0.2.50, so /api/schedules was empty.
+      - kagentschedules
     verbs: ['get', 'list', 'watch']
   # Status subresources (operator updates these; UI shows them)
   - apiGroups: ['kagent.knuteson.io']
@@ -62,6 +65,7 @@ rules:
       - channels/status
       - channelbindings/status
       - channelsessions/status
+      - kagentschedules/status
     verbs: ['get']
   # Operator-managed Jobs/Pods. Cluster-wide read; the workbench
   # filters by `kagent.knuteson.io/managed-by=kagent-operator` label
