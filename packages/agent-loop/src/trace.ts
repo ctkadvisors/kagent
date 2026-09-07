@@ -179,7 +179,8 @@ export interface TraceSink {
 /**
  * Rough token estimate — D-20 fallback.
  *
- * `~chars/4` ceiling. Used by the executor when `LLMClient.chat()` returns
+ * `~chars/4` estimate (rounded up — `Math.ceil` to the next 4-char block).
+ * Used by the executor when `LLMClient.chat()` returns
  * `ChatResult.usage = undefined` (D-16). Backend-reported counts always
  * win over this estimate.
  *

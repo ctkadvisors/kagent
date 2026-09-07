@@ -13,7 +13,7 @@ import type { TraceEntry, TraceSink } from './trace.js';
 import type { ChatMessage } from './llm-client.js';
 
 describe('trace — pure fns', () => {
-  it('SC6.1: estimateTokens chars-over-4 ceiling — empty/short/long inputs', () => {
+  it('SC6.1: estimateTokens chars-over-4 estimate (rounded up) — empty/short/long inputs', () => {
     expect(estimateTokens('')).toBe(0);
     expect(estimateTokens('abcd')).toBe(1);
     expect(estimateTokens('abcde')).toBe(2);
