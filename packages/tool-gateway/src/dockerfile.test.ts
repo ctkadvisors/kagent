@@ -14,4 +14,11 @@ describe('tool-gateway runtime image', () => {
 
     expect(runtimeStage).toContain('openssh-client');
   });
+
+  it('installs python3 so code_interpreter.execute_code can run python', () => {
+    const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+    const runtimeStage = dockerfile.split('FROM node:22-alpine AS runtime')[1] ?? '';
+
+    expect(runtimeStage).toMatch(/apk add[^\n]*\bpython3\b/);
+  });
 });

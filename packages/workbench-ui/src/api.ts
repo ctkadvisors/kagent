@@ -31,6 +31,7 @@ import type {
   GatewayUsageResponse,
   PatchInFlightRequest,
   ReviewQueueRow,
+  ScheduleSummary,
   SendSessionMessageRequest,
   SendSessionMessageResponse,
   SessionProfile,
@@ -423,6 +424,20 @@ export class GatewayApiError extends Error {
     this.name = 'GatewayApiError';
     this.status = status;
   }
+}
+
+/* =====================================================================
+ * Schedules page — `/api/schedules` read surface.
+ * ===================================================================== */
+
+export async function fetchSchedules(signal?: AbortSignal): Promise<ScheduleSummary[]> {
+  const init: RequestInit = signal !== undefined ? { signal } : {};
+  const res = await fetch('/api/schedules', init);
+  if (!res.ok) {
+    throw new Error(`fetchSchedules: ${String(res.status)} ${res.statusText}`);
+  }
+  const body = (await res.json()) as { items?: ScheduleSummary[] };
+  return body.items ?? [];
 }
 
 /* =====================================================================

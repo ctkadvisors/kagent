@@ -32,12 +32,13 @@
  */
 
 import type { CommandSnapshot } from './state.js';
-import type { LayoutResult } from './layout.js';
+import { STATIC_STRUCTURES, type LayoutResult } from './layout.js';
 import type { TaskSummary } from '../types.js';
 import type { Camera } from './camera.js';
 import { drawFx, drawFxScreen, type Fx } from './fx.js';
 import {
   agentShapeForRole,
+  defaultAgentShape,
   drawHazardRing,
   drawVoxelShape,
   factionColor,
@@ -68,6 +69,8 @@ export interface HitMap {
   readonly gateway: { x: number; y: number; r: number };
   /** Task sprites currently visible in WORLD coords. */
   readonly taskSprites: ReadonlyMap<string, { x: number; y: number }>;
+  /** Static structure (Brain, Bytebot) bounds in WORLD coords, keyed by id. */
+  readonly structureRects: ReadonlyMap<string, { x: number; y: number; w: number; h: number }>;
 }
 
 const COLOR_GRID = 'rgba(82, 200, 124, 0.07)';
@@ -204,6 +207,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
       nowMs,
       pos.faction,
       a?.tools,
+      a?.modelClass,
     );
     agentRects.set(pos.key, rect);
   }
@@ -217,6 +221,14 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     selection.keys.has('gateway'),
     gatewayProgress,
   );
+
+  // Static fleet structures (Brain, Bytebot) — fixed satellites near HQ.
+  const structureRects = new Map<string, { x: number; y: number; w: number; h: number }>();
+  for (const def of STATIC_STRUCTURES) {
+    const pos = layout.structures.get(def.id);
+    if (pos === undefined) continue;
+    structureRects.set(def.id, drawStaticStructure(ctx, pos, def, nowMs));
+  }
 
   // Task sprites.
   const taskSprites = drawTaskUnits(ctx, snapshot, layout, nowMs, taskFilter);
@@ -268,6 +280,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, inputs: SceneInputs): H
     agentRects,
     gateway: { x: layout.gateway.x, y: layout.gateway.y + 22, r: GATEWAY_HIT_R },
     taskSprites,
+    structureRects,
   };
 }
 
@@ -476,6 +489,7 @@ function drawAgentBuilding(
   nowMs: number,
   namespace: string,
   tools: readonly string[] | undefined,
+  modelClass: string | undefined,
 ): AgentRect {
   const spireColor =
     failed > 0 ? COLOR_AGENT_BORDER_FAILED : inFlight > 0 ? COLOR_AGENT_BORDER_BUSY : '#22d3ee';
@@ -528,6 +542,15 @@ function drawAgentBuilding(
   ctx.fillStyle = COLOR_AGENT_SUB;
   ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.fillText(truncate(shortenModel(modelLabel), 22), cx, bounds.y + bounds.h + 18);
+
+  // Model-tier badge — only when the agent declares a logical
+  // `modelClass` distinct from the physical model already shown above
+  // (mirror of the side panel's CC-03 D-CC-03-A "differs" rule). Reads
+  // as a small pill so the tier (tool-caller-heavy, reasoner-heavy,
+  // vision-default, …) is glanceable without opening the inspector.
+  if (modelClass !== undefined && modelClass !== modelLabel) {
+    drawModelClassBadge(ctx, cx, bounds.y + bounds.h + 32, modelClass);
+  }
 
   // Health bar — RTS-game HP. Drains red as recent failures accumulate
   // (each failure removes 20% HP; 5 failures = critical). Always
@@ -722,6 +745,40 @@ function drawBuildQueueStack(
   }
 }
 
+const COLOR_MODEL_CLASS_BADGE = 'rgba(192, 132, 252, 0.16)';
+const COLOR_MODEL_CLASS_BADGE_BORDER = 'rgba(192, 132, 252, 0.55)';
+const COLOR_MODEL_CLASS_BADGE_TEXT = '#d8b4fe';
+
+/** Small rounded pill centered on (cx, y) showing an agent's modelClass tier. */
+function drawModelClassBadge(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  y: number,
+  modelClass: string,
+): void {
+  const label = truncate(modelClass, 20);
+  ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+  const textW = ctx.measureText(label).width;
+  const padX = 6;
+  const w = textW + padX * 2;
+  const h = 14;
+  const x = cx - w / 2;
+  const r = h / 2;
+
+  ctx.fillStyle = COLOR_MODEL_CLASS_BADGE;
+  ctx.strokeStyle = COLOR_MODEL_CLASS_BADGE_BORDER;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x, y - h / 2, w, h, r);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = COLOR_MODEL_CLASS_BADGE_TEXT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, cx, y + 1);
+}
+
 function drawPlacementMarker(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -807,6 +864,56 @@ function drawGateway(
       bounds.y + bounds.h + 18,
     );
   }
+}
+
+/**
+ * Draw a fixed fleet structure (Brain, Bytebot) — always fully built,
+ * no busy pulse, no build queue. Reuses `defaultAgentShape` colored by
+ * `factionColor(def.id)` so it reads as "another building in this
+ * world" without inventing new voxel geometry. A `↗ open` hint renders
+ * for structures with a `url` (see `layout.ts`'s `StaticStructureDef`).
+ */
+function drawStaticStructure(
+  ctx: CanvasRenderingContext2D,
+  pos: { x: number; y: number },
+  def: {
+    readonly id: string;
+    readonly label: string;
+    readonly sublabel: string;
+    readonly url?: string;
+  },
+  nowMs: number,
+): AgentRect {
+  const shape = defaultAgentShape(factionColor(def.id));
+  const cx = pos.x;
+  const cy = pos.y + 6;
+
+  drawVoxelShape(ctx, shape, {
+    cx,
+    cy,
+    buildProgress: 1,
+    spireColor: '#c084fc',
+    selected: false,
+    busyPulse: 0,
+    nowMs,
+  });
+
+  const bounds = shapeScreenBounds(shape, cx, cy);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = COLOR_AGENT_TEXT;
+  ctx.font = '700 11px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillText(def.label, cx, bounds.y + bounds.h + 4);
+  ctx.fillStyle = COLOR_AGENT_SUB;
+  ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText(truncate(def.sublabel, 28), cx, bounds.y + bounds.h + 18);
+  if (def.url !== undefined) {
+    ctx.fillStyle = '#22d3ee';
+    ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText('↗ open', cx, bounds.y + bounds.h + 30);
+  }
+
+  return { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h };
 }
 
 function buildProgress(firstSeen: number | undefined, nowMs: number, durationMs: number): number {

@@ -83,7 +83,10 @@ jobs:
     name: CRD drift check
     needs: verify
     runs-on: homelab
-    timeout-minutes: 5
+    # 5 minutes was not enough for a cold pnpm install on an ephemeral Kata
+    # runner: the job got "The operation was canceled" at 5:00 on kagent#26
+    # (twice) and #28, and read as a failing check to the fleet reviewer.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
