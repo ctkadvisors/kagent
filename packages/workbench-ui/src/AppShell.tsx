@@ -35,6 +35,7 @@ type IconKey =
   | 'schedules'
   | 'tasks'
   | 'cluster'
+  | 'fleet'
   | 'gateway'
   | 'review';
 
@@ -71,7 +72,10 @@ const NAV: readonly NavGroup[] = [
   },
   {
     label: 'Govern',
-    items: [{ hash: '#/review', label: 'Review', icon: 'review', badge: 'review' }],
+    items: [
+      { hash: '#/review', label: 'Review', icon: 'review', badge: 'review' },
+      { hash: '#/fleet', label: 'Fleet', icon: 'fleet' },
+    ],
   },
 ];
 
@@ -135,6 +139,12 @@ function Icon({ name }: { name: IconKey }): React.JSX.Element {
         <circle {...p} cx="12" cy="13" r="8" />
         <path {...p} d="M12 9v4l3 2" />
         <path {...p} d="M9 2h6" />
+      </>
+    ),
+    fleet: (
+      <>
+        <path {...p} d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" />
+        <path {...p} d="M12 12l8-4.5M12 12v9M12 12L4 7.5" />
       </>
     ),
     cluster: (

@@ -183,7 +183,7 @@ export class OpenAICompatibleLLMClient implements LLMClient {
         throw new LLMClientAbortError();
       }
       // Network error / DNS failure / TLS — surface as HTTP error with status 0.
-      throw new LLMClientHttpError(0, err instanceof Error ? err.message : String(err));
+      throw new LLMClientHttpError(0, describeFetchError(err));
     }
 
     if (!response.ok) {
@@ -262,7 +262,7 @@ export class OpenAICompatibleLLMClient implements LLMClient {
         if (err instanceof Error && err.name === 'AbortError') {
           throw new LLMClientAbortError();
         }
-        throw new LLMClientHttpError(0, err instanceof Error ? err.message : String(err));
+        throw new LLMClientHttpError(0, describeFetchError(err));
       }
 
       if (!response.ok) {
@@ -315,4 +315,15 @@ export class OpenAICompatibleLLMClient implements LLMClient {
   // No embed method — D-09 + Claude's Discretion. Consumers check
   // `'embed' in client` per Phase 3 RESEARCH §Q3 idiom; falls back to a
   // separate embeddings adapter package when needed.
+}
+
+/**
+ * undici reports every network failure as `TypeError: fetch failed` and
+ * hides the real reason (ECONNRESET, ENOTFOUND, "other side closed") in
+ * `cause`. Surface it, or status-0 errors are undiagnosable downstream.
+ */
+function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  return cause instanceof Error ? `${err.message}: ${cause.message}` : err.message;
 }

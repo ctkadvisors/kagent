@@ -260,6 +260,23 @@ describe('OpenAICompatibleLLMClient.chat() — error classification (VALIDATION 
     expect((thrown as LLMClientHttpError).status).toBe(0);
   });
 
+  it("fetch network error surfaces undici's hidden cause in body and message", async () => {
+    const fetch = makeMockFetch({
+      throws: new Error('fetch failed', { cause: new Error('other side closed') }),
+    });
+    const client = new OpenAICompatibleLLMClient({ baseUrl: 'http://test/v1', model: 'm', fetch });
+    let thrown: unknown;
+    try {
+      await client.chat({ messages: [] }, ctx());
+    } catch (err) {
+      thrown = err;
+    }
+    const e = thrown as LLMClientHttpError;
+    expect(e.status).toBe(0);
+    expect(e.body).toBe('fetch failed: other side closed');
+    expect(e.message).toBe('LLM backend returned HTTP 0: fetch failed: other side closed');
+  });
+
   it('fetch throws DOMException AbortError → LLMClientAbortError', async () => {
     const fetch = makeMockFetch({ throws: new DOMException('Aborted', 'AbortError') });
     const client = new OpenAICompatibleLLMClient({ baseUrl: 'http://test/v1', model: 'm', fetch });

@@ -289,7 +289,13 @@ export class LLMClientHttpError extends LLMClientError {
   public readonly retryAfterSec?: number;
 
   constructor(status: number, body?: string, requestId?: string, retryAfterSec?: number) {
-    super(`LLM backend returned HTTP ${status}`);
+    // Status 0 has no HTTP meaning — the body IS the diagnosis (fetch
+    // cause, or the substrate's context-window refusal), so carry it.
+    super(
+      status === 0 && body !== undefined && body !== ''
+        ? `LLM backend returned HTTP 0: ${body}`
+        : `LLM backend returned HTTP ${status}`,
+    );
     this.status = status;
     // exactOptionalPropertyTypes: never assign `undefined` to optional fields.
     if (body !== undefined) this.body = body;

@@ -28,6 +28,7 @@ import { AppShell } from './AppShell.js';
 import { ArchitectPage } from './ArchitectPage.js';
 import { ChannelsPage } from './ChannelsPage.js';
 import { ClusterPage } from './ClusterPage.js';
+import { FleetPage } from './FleetPage.js';
 import { CommandView } from './CommandView.js';
 import { GatewayPage } from './GatewayPage.js';
 import { ReviewPage } from './ReviewPage.js';
@@ -52,6 +53,10 @@ interface GatewayRoute {
 
 interface ClusterRoute {
   readonly kind: 'cluster';
+}
+
+interface FleetRoute {
+  readonly kind: 'fleet';
 }
 
 interface ChannelsRoute {
@@ -84,6 +89,7 @@ type Route =
   | ListRoute
   | GatewayRoute
   | ClusterRoute
+  | FleetRoute
   | ChannelsRoute
   | SchedulesRoute
   | CommandRoute
@@ -97,6 +103,7 @@ function parseHash(hash: string): Route {
   if (clean === '') return { kind: 'list' };
   if (clean === 'gateway') return { kind: 'gateway' };
   if (clean === 'cluster') return { kind: 'cluster' };
+  if (clean === 'fleet') return { kind: 'fleet' };
   if (clean === 'channels') return { kind: 'channels' };
   if (clean === 'schedules') return { kind: 'schedules' };
   if (clean === 'command') return { kind: 'command' };
@@ -158,6 +165,8 @@ export function App(): React.JSX.Element {
     content = <GatewayPage onBack={goHome} />;
   } else if (route.kind === 'cluster') {
     content = <ClusterPage onBack={goHome} />;
+  } else if (route.kind === 'fleet') {
+    content = <FleetPage />;
   } else if (route.kind === 'channels') {
     content = <ChannelsPage />;
   } else if (route.kind === 'schedules') {

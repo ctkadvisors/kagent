@@ -140,6 +140,27 @@ describe('AgentExecutor — 429 retry policy', () => {
     expect(llmTraces[2]?.error).toContain('429');
   });
 
+  it('transport failure (status 0, fetch cause) → retry → success', async () => {
+    const llm = makeStubLLM({
+      scriptedChat: [
+        new LLMClientHttpError(0, 'fetch failed: other side closed'),
+        { content: 'ok' },
+      ],
+    });
+    const exec = new AgentExecutor({
+      registry,
+      llm,
+      retryPolicy: { maxRetries: 1, backoffSchedule: [1], sleep: () => Promise.resolve() },
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('ok');
+    expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(2);
+  });
+
   it('non-429 HTTP error (500) → no retry → propagates immediately', async () => {
     const recordedSleeps: number[] = [];
     const llm = makeStubLLM({

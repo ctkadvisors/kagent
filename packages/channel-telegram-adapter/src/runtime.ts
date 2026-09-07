@@ -4,11 +4,14 @@
  */
 
 import { normalizeTelegramUpdate } from './normalize.js';
+import { withPreviousTurn } from './brain.js';
 import { deliverOutboundTurns } from './outbound.js';
 import { adapterCondition } from './status.js';
 import type {
   AdapterLogger,
+  AgentTask,
   ChannelGateway,
+  ChannelInboundEnvelope,
   ChannelOutboxStore,
   ChannelStatusPatcher,
   TelegramAdapterConfig,
@@ -97,6 +100,7 @@ export async function startTelegramAdapter(
           client: deps.client,
           gateway: deps.gateway,
           logger,
+          ...(deps.outbox !== undefined && { outbox: deps.outbox }),
           ...(offset !== undefined && { offset }),
         });
         offset = result.nextOffset;
@@ -139,6 +143,8 @@ export async function processTelegramUpdates(input: {
   readonly client: TelegramClient;
   readonly gateway: ChannelGateway;
   readonly logger: AdapterLogger;
+  /** When set, the previous exchange of the same peer is bridged into the text. */
+  readonly outbox?: ChannelOutboxStore;
   readonly offset?: number;
 }): Promise<TelegramUpdateProcessingResult> {
   const updates = await input.client.getUpdates({
@@ -157,12 +163,13 @@ export async function processTelegramUpdates(input: {
       continue;
     }
 
-    const envelope = normalizeTelegramUpdate(input.config, update);
-    if (envelope === undefined) {
+    const normalized = normalizeTelegramUpdate(input.config, update);
+    if (normalized === undefined) {
       ignored += 1;
       nextOffset = Math.max(nextOffset ?? 0, updateId + 1);
       continue;
     }
+    const envelope = await bridgePreviousTurn(input, normalized);
 
     try {
       await input.gateway.postInbound(envelope);
@@ -181,6 +188,64 @@ export async function processTelegramUpdates(input: {
   }
 
   return { nextOffset, accepted, ignored, failed };
+}
+
+/**
+ * The bridge over graphiti's ingestion lag: prepend the peer's previous
+ * exchange (from the session's last task) so a follow-up thirty seconds
+ * later still reads as a conversation. Best effort — any failure means
+ * the message goes through as-is.
+ */
+async function bridgePreviousTurn(
+  input: {
+    readonly config: TelegramAdapterConfig;
+    readonly logger: AdapterLogger;
+    readonly outbox?: ChannelOutboxStore;
+  },
+  envelope: ChannelInboundEnvelope,
+): Promise<ChannelInboundEnvelope> {
+  if (input.outbox === undefined) return envelope;
+  try {
+    const sessions = await input.outbox.listChannelSessions({
+      namespace: input.config.namespace,
+      channelName: envelope.channelName,
+      accountId: envelope.accountId,
+    });
+    const session = sessions.find(
+      (s) =>
+        s.spec.peer.kind === envelope.peer.kind &&
+        s.spec.peer.id === envelope.peer.id &&
+        (s.spec.threadId === undefined ||
+          envelope.threadId === undefined ||
+          s.spec.threadId === envelope.threadId),
+    );
+    const ref = session?.status?.lastTaskRef;
+    if (ref === undefined) return envelope;
+    const task = await input.outbox.getAgentTask(ref);
+    const previousMessage = task?.metadata.annotations?.['kagent.knuteson.io/channel-message'];
+    const previousReply = task === undefined ? undefined : replyTextOf(task);
+    if (previousMessage === undefined || previousReply === undefined) return envelope;
+    return {
+      ...envelope,
+      text: withPreviousTurn({
+        text: envelope.text,
+        previousMessage,
+        previousReply,
+        operatorName: input.config.brain?.operatorName ?? 'the operator',
+      }),
+    };
+  } catch (err) {
+    input.logger.warn('[channel-telegram] previous-turn bridge skipped', err);
+    return envelope;
+  }
+}
+
+function replyTextOf(task: AgentTask): string | undefined {
+  if (task.status?.phase !== 'Completed') return undefined;
+  const result = task.status.result;
+  if (typeof result === 'string') return result;
+  const content = (result as { readonly content?: unknown } | null)?.content;
+  return typeof content === 'string' && content.trim().length > 0 ? content.trim() : undefined;
 }
 
 function validUpdateId(update: TelegramUpdate): number | undefined {

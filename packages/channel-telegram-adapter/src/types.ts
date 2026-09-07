@@ -67,6 +67,12 @@ export interface TelegramAdapterConfig {
   readonly outboundPollMs: number;
   readonly outboundBaseBackoffSeconds: number;
   readonly outboundMaxFailures: number;
+  /** Graphiti brain (optional). Unset = no episode writes, no turn bridge naming. */
+  readonly brain?: {
+    readonly mcpUrl: string;
+    readonly token: string;
+    readonly operatorName: string;
+  };
 }
 
 export interface ObjectMetaLike {
@@ -76,6 +82,7 @@ export interface ObjectMetaLike {
   readonly labels?: Readonly<Record<string, string>>;
   readonly annotations?: Readonly<Record<string, string>>;
   readonly generation?: number;
+  readonly creationTimestamp?: string;
 }
 
 export interface ChannelLocalRef {

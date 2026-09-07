@@ -46,7 +46,17 @@ import type { UsageRepo } from './db/usage.js';
 import { route, type RouterDeps } from './router.js';
 import { createOpenAIError, type ChatCompletionRequest, type ModelListResponse } from './types.js';
 
-const MAX_BODY_BYTES = 64 * 1024;
+// 8 MiB. Was 64 KiB, which silently capped every agent at ~16k tokens of
+// conversation against a 262k-context model: the overflow path destroyed
+// the socket mid-upload, so the client only ever saw an unlabeled
+// "fetch failed" (status 0). Oversized bodies now get a real 413.
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super(`request body exceeds ${String(MAX_BODY_BYTES)} bytes`);
+  }
+}
 
 /**
  * Audit-rev2 M7 follow-up — gateway-side mTLS identity resolver.
@@ -384,7 +394,7 @@ export function buildHandler(
       } catch (err) {
         writeJson(
           res,
-          400,
+          err instanceof BodyTooLargeError ? 413 : 400,
           createOpenAIError(
             err instanceof Error ? err.message : String(err),
             'invalid_request_error',
@@ -570,17 +580,23 @@ export function startServer(port: number, deps: ServerDeps): StartedServer {
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let total = 0;
+    let rejected = false;
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => {
+      if (rejected) return;
       total += chunk.byteLength;
       if (total > MAX_BODY_BYTES) {
-        reject(new Error(`request body exceeds ${String(MAX_BODY_BYTES)} bytes`));
-        req.destroy();
+        rejected = true;
+        chunks.length = 0;
+        reject(new BodyTooLargeError());
+        // Keep draining (no destroy) so the 413 actually reaches the client.
+        req.resume();
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (rejected) return;
       if (total === 0) {
         reject(new Error('request body is empty'));
         return;

@@ -20,6 +20,10 @@ export function normalizeWhatsAppMessage(
   const remoteJid = nonEmpty(key?.remoteJid);
   const messageId = nonEmpty(key?.id);
   if (remoteJid === undefined || messageId === undefined) return undefined;
+  // Status updates (status@broadcast) and broadcast lists are not conversations
+  // with the bot: on 2026-09-07 the concierge answered a contact's WhatsApp
+  // status ("Los cumpleañeros") and the reply was delivered.
+  if (remoteJid.endsWith('@broadcast')) return undefined;
 
   const text = extractWhatsAppText(message.message)?.trim();
   if (text === undefined || text.length === 0) return undefined;

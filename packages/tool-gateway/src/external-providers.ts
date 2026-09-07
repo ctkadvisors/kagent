@@ -45,6 +45,8 @@ export interface ExternalMcpStdioProviderSpec {
   readonly env?: Record<string, string>;
   readonly envAllowlist?: readonly string[];
   readonly cwd?: string;
+  /** Advertised name prefix; must start with `mcp.` (default `mcp.`). */
+  readonly toolPrefix?: string;
 }
 
 export interface ExternalRemoteMcpProviderSpec {
@@ -52,6 +54,13 @@ export interface ExternalRemoteMcpProviderSpec {
   readonly id?: string;
   readonly url: string;
   readonly headers?: Record<string, string>;
+  /**
+   * Advertised name prefix; must start with `mcp.` (default `mcp.`). A second
+   * MCP server whose tools are called `search` / `execute` (Cloudflare's API
+   * server) needs its own namespace, e.g. `mcp.cf.`, so profiles and prompts
+   * can tell it apart from the brain.
+   */
+  readonly toolPrefix?: string;
 }
 
 export interface ExternalToolRegistry {
@@ -118,22 +127,24 @@ const MCP_TOOL_PREFIX = 'mcp.';
  * `isExternalGatewayToolName`), so unprefixed MCP tools were unreachable.
  * Advertise them as `mcp.<name>` and strip the prefix on execution.
  */
-export function withMcpToolPrefix(provider: ToolProvider): ToolProvider {
+export function withMcpToolPrefix(
+  provider: ToolProvider,
+  prefix: string = MCP_TOOL_PREFIX,
+): ToolProvider {
+  if (!prefix.startsWith(MCP_TOOL_PREFIX)) {
+    throw new Error(`MCP tool prefix must start with "${MCP_TOOL_PREFIX}" (got "${prefix}")`);
+  }
   return {
     id: provider.id,
     describeTools: async (ctx?: ToolInvocationContext) => {
       const tools = await Promise.resolve(provider.describeTools(ctx));
       return tools.map((tool) =>
-        tool.name.startsWith(MCP_TOOL_PREFIX)
-          ? tool
-          : { ...tool, name: `${MCP_TOOL_PREFIX}${tool.name}` },
+        tool.name.startsWith(prefix) ? tool : { ...tool, name: `${prefix}${tool.name}` },
       );
     },
     executeTool: (call: ToolCall, ctx: ToolInvocationContext) =>
       provider.executeTool(
-        call.name.startsWith(MCP_TOOL_PREFIX)
-          ? { ...call, name: call.name.slice(MCP_TOOL_PREFIX.length) }
-          : call,
+        call.name.startsWith(prefix) ? { ...call, name: call.name.slice(prefix.length) } : call,
         ctx,
       ),
   };
@@ -161,7 +172,7 @@ function providerForSpec(
         ...(spec.envAllowlist !== undefined && { envAllowlist: spec.envAllowlist }),
         ...(spec.cwd !== undefined && { cwd: spec.cwd }),
       };
-      return withMcpToolPrefix(new McpToolProvider(opts));
+      return withMcpToolPrefix(new McpToolProvider(opts), spec.toolPrefix);
     }
     case 'remoteMcp':
       return withMcpToolPrefix(
@@ -171,6 +182,7 @@ function providerForSpec(
           ...(spec.headers !== undefined && { headers: spec.headers }),
           ...(options.fetch !== undefined && { fetch: options.fetch }),
         }),
+        spec.toolPrefix,
       );
   }
 }
@@ -250,6 +262,7 @@ function parseMcpStdioProvider(raw: Record<string, unknown>): ExternalMcpStdioPr
     env?: Record<string, string>;
     envAllowlist?: readonly string[];
     cwd?: string;
+    toolPrefix?: string;
   } = {
     kind: 'mcpStdio',
     command: raw.command,
@@ -266,7 +279,19 @@ function parseMcpStdioProvider(raw: Record<string, unknown>): ExternalMcpStdioPr
     spec.envAllowlist = raw.envAllowlist;
   }
   if (typeof raw.cwd === 'string') spec.cwd = raw.cwd;
+  const stdioPrefix = parseToolPrefix(raw);
+  if (stdioPrefix !== undefined) spec.toolPrefix = stdioPrefix;
   return spec;
+}
+
+function parseToolPrefix(raw: Record<string, unknown>): string | undefined {
+  if (raw.toolPrefix === undefined) return undefined;
+  if (typeof raw.toolPrefix !== 'string' || !raw.toolPrefix.startsWith(MCP_TOOL_PREFIX)) {
+    throw new Error(
+      `external provider toolPrefix must be a string starting with "${MCP_TOOL_PREFIX}"`,
+    );
+  }
+  return raw.toolPrefix;
 }
 
 function parseRemoteMcpProvider(raw: Record<string, unknown>): ExternalRemoteMcpProviderSpec {
@@ -279,12 +304,15 @@ function parseRemoteMcpProvider(raw: Record<string, unknown>): ExternalRemoteMcp
     id?: string;
     url: string;
     headers?: Record<string, string>;
+    toolPrefix?: string;
   } = {
     kind: 'remoteMcp',
     url: raw.url,
   };
   if (typeof raw.id === 'string') spec.id = raw.id;
   if (isStringRecord(raw.headers)) spec.headers = raw.headers;
+  const prefix = parseToolPrefix(raw);
+  if (prefix !== undefined) spec.toolPrefix = prefix;
   return spec;
 }
 

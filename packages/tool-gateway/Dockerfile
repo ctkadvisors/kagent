@@ -42,7 +42,10 @@ RUN pnpm install --frozen-lockfile --prod
 
 FROM node:22-alpine AS runtime
 
-RUN apk add --no-cache openssh-client
+# python3: code_interpreter.execute_code accepts language "python"; without the
+# binary every such call died "spawn python3 ENOENT" and the concierge told
+# Chris its code runner was down (2026-09-07).
+RUN apk add --no-cache openssh-client python3
 
 USER node
 WORKDIR /app

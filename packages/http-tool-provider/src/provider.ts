@@ -203,11 +203,15 @@ function buildBody(
   args: Record<string, unknown>,
   ctx: ToolInvocationContext,
 ): { body?: HttpRequestBody; contentType?: string } {
+  // GET/HEAD never carry a body: undici rejects the request outright
+  // ("Request with GET/HEAD method cannot have body"), and every arg on
+  // such a tool is a path placeholder anyway. Explicit `'json'` on a GET
+  // is honored for the odd API that wants it.
+  if (def.body === 'none' || (def.body === undefined && def.method === 'GET')) {
+    return {};
+  }
   if (def.body === undefined || def.body === 'json') {
     return { body: JSON.stringify(args), contentType: 'application/json' };
-  }
-  if (def.body === 'none') {
-    return {};
   }
   // Function form — caller takes control; no auto Content-Type.
   return { body: def.body(args, ctx) };

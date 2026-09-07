@@ -286,7 +286,18 @@ export class LocalCodeRunner {
       child.stderr.on('data', (chunk: Buffer) => {
         stderr = this.appendBounded(stderr, chunk.toString('utf8'));
       });
-      child.on('error', reject);
+      child.on('error', (err: NodeJS.ErrnoException) => {
+        if (timer !== null) clearTimeout(timer);
+        // A bare "spawn python3 ENOENT" read as "the code runner is down" to the
+        // agent; name the missing binary and the way out.
+        reject(
+          err.code === 'ENOENT'
+            ? new Error(
+                `${command} is not installed in this runtime; the code runner itself is up. Use language "javascript" (node) or another allowed command.`,
+              )
+            : err,
+        );
+      });
       child.on('close', (exitCode, signal) => {
         if (timer !== null) clearTimeout(timer);
         resolveResult({

@@ -33,6 +33,21 @@ describe('normalizeWhatsAppMessage', () => {
     });
   });
 
+  it('drops status updates and broadcast lists (nobody is talking to the bot)', () => {
+    const envelope = normalizeWhatsAppMessage(config, {
+      key: {
+        id: 'status-1',
+        remoteJid: 'status@broadcast',
+        participant: '15557654321@s.whatsapp.net',
+        fromMe: false,
+      },
+      pushName: 'Roniel',
+      message: { extendedTextMessage: { text: 'Los cumpleañeros' } },
+    });
+
+    expect(envelope).toBeUndefined();
+  });
+
   it('normalizes group messages with participant sender identity', () => {
     const envelope = normalizeWhatsAppMessage(config, {
       key: {

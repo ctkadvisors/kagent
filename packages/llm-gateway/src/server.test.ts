@@ -363,6 +363,36 @@ describe('POST /v1/chat/completions safety responses', () => {
   });
 });
 
+describe('POST /v1/chat/completions body cap', () => {
+  it('answers 413 (not a socket destroy) when the body exceeds 8 MiB', async () => {
+    const key = 'sk-test-live-key';
+    const booted = await bootServer({
+      apiKeyLookup: () =>
+        Promise.resolve({
+          keyHash: hashApiKey(key),
+          keyPrefix: 'sk-test',
+          status: 'active',
+          expiresAt: null,
+        }),
+    });
+    try {
+      const res = await fetch(`${booted.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm',
+          messages: [{ role: 'user', content: 'x'.repeat(8 * 1024 * 1024 + 1) }],
+        }),
+      });
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as { error?: { message?: string } };
+      expect(body.error?.message ?? '').toMatch(/exceeds/);
+    } finally {
+      await booted.close();
+    }
+  });
+});
+
 describe('GET /admin/keys', () => {
   let booted: BootedServer;
   beforeEach(async () => {

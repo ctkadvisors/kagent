@@ -56,6 +56,39 @@ Five coherent themes, each cut as `v0.2.x-<name>-rc.N` image tags rather than `v
 
 **Tag-series note.** The `v0.3.0-capabilities` through `v0.5.4-keyrotation` semantic tags all point at commits dated **2026-05-04** — they are v0.1-era Wave work (capabilities, supervision, workflows, events, blackboard, cache, identity, locality, tenancy, egress, quotas, versioning, keyrotation), already recorded in `PROJECT.md` "Validated" and `docs/WAVES.md`. They are not post-2026-05-11 work.
 
+### Reconciliation note (2026-09-02)
+
+Repo woke up. Between 2026-08-30 and 2026-09-02 the homelab fleet became the
+consumer this substrate was built for, and the fleet's failures drove the code:
+
+- **v0.2.43-external-mcp-prefix** — tool-gateway namespaces external MCP tools as
+  `mcp.*`; providers JSON from a Secret (`externalProvidersSecretRef`). The graphiti
+  brain is reachable by agents through it.
+- **v0.2.44-gateway-body-cap** (PR #8) — llm-gateway `MAX_BODY_BYTES` 64 KiB → 8 MiB
+  with a JSON 413. The old cap destroyed the socket at ~16k tokens of conversation and
+  accounted for 33 of the 61 AgentTask failures ever recorded. openai-compat surfaces
+  undici's `cause`; agent-loop retries status-0 transport failures.
+- **v0.2.45-telegram-brain** (PR #9) — the Telegram adapter writes one graphiti
+  episode per exchange at delivery and bridges the previous exchange into the next
+  message (`brain.ts`). Chart: `channels.telegram.brain.*`.
+- **v0.2.46-loop-guards** (PR #10) — agent-loop `toolGuards` (identical call ≤ 2,
+  per-tool ≤ 8, tool result capped at 16k chars, middle-elided); http-tool-provider
+  GET sends no body; `agent-loop-vercel-ai` deleted (1,545 lines, no dependents).
+- Two autonomous PRs merged from the dsh staged pipeline (#4, #7).
+
+Production is being brought to **one tag** (v0.2.46) across operator, agent-pod,
+tool-gateway, both adapters, llm-gateway and workbench; the charts rendered
+byte-identical against production values from the old tags, so the jump is images
+only. `contextWindowTokens: 262144` is now set on every model class in production,
+which makes the context-awareness slate live for the first time.
+
+Known, not done: `operator/main.ts` is 4,523 lines with a 2,632-line `main()`; six
+hand-rolled HTTP servers and nine k8s wrappers (`@kagent/http`, `@kagent/k8s`
+proposed); ~11k lines sit behind flags that are off in production (verifier,
+workflows, workspaces, egress, quota, versioning, events, blackboard); `console.*`
+is the logger. Fleet-side design notes live in
+`../new_localai/docs/superpowers/specs/2026-09-02-telegram-concierge-design.md`.
+
 ### Deployed on the homelab (image tags pinned in `../new_localai`)
 
 Read from `k8s-kustomized/overlays/production/kagent/*.yaml`:
