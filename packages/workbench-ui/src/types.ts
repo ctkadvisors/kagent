@@ -187,7 +187,15 @@ export interface TaskDetail extends TaskSummary {
 }
 
 export interface CacheChangeEvent {
-  readonly kind: 'task' | 'agent' | 'job' | 'pod' | 'channel' | 'channelBinding' | 'channelSession';
+  readonly kind:
+    | 'task'
+    | 'agent'
+    | 'job'
+    | 'pod'
+    | 'channel'
+    | 'channelBinding'
+    | 'channelSession'
+    | 'schedule';
   readonly op: 'upsert' | 'delete';
   readonly key: string;
 }
@@ -573,4 +581,20 @@ export interface ClusterSnapshot {
     readonly recent: number;
     readonly agents: number;
   };
+}
+
+/* =====================================================================
+ * Schedules — read-only projection of `KagentSchedule` CRs. Mirror of
+ * `ScheduleSummary` in `packages/workbench-api/src/routes/schedules.ts`.
+ * ===================================================================== */
+
+export interface ScheduleSummary {
+  readonly namespace: string;
+  readonly name: string;
+  readonly schedule: string;
+  readonly suspended: boolean;
+  readonly targetAgent?: string;
+  readonly targetCapability?: string;
+  readonly lastTickAt?: string;
+  readonly nextTickAt?: string;
 }

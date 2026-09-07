@@ -32,7 +32,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createTask, CreateTaskApiError, useReviewQueue } from './api.js';
-import { computeLayout } from './command/layout.js';
+import { computeLayout, STATIC_STRUCTURES } from './command/layout.js';
 import type { AgentNode, LayoutResult } from './command/layout.js';
 import {
   applyBookmark,
@@ -886,7 +886,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const hitTestWorld = (
     wx: number,
     wy: number,
-  ): { kind: 'agent' | 'gateway' | 'task'; key: string } | null => {
+  ): { kind: 'agent' | 'gateway' | 'task' | 'structure'; key: string } | null => {
     const hits = hitMapRef.current;
     if (hits === null) return null;
     // Gateway first.
@@ -894,6 +894,13 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     const dyg = wy - hits.gateway.y;
     if (Math.hypot(dxg, dyg) <= hits.gateway.r) {
       return { kind: 'gateway', key: 'gateway' };
+    }
+    // Static structures (Brain, Bytebot) — not agents, not dispatch
+    // targets; click resolves to opening a link, not selection.
+    for (const [key, r] of hits.structureRects) {
+      if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h) {
+        return { kind: 'structure', key };
+      }
     }
     // Tasks next (small radius — prioritize foreground sprites).
     let bestTask: { key: string; d2: number } | null = null;
@@ -1012,6 +1019,20 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     if (hit.kind === 'task') {
       // Task click stays single-select (no multi-task ops yet).
       setSelection({ keys: new Set(), focus: { kind: 'task', key: hit.key } });
+      return;
+    }
+    if (hit.kind === 'structure') {
+      // Static structures aren't selectable/dispatchable — a click
+      // either opens the linked service or, for a structure with no
+      // public endpoint, surfaces its sublabel via the existing
+      // alert-toast affordance.
+      const def = STATIC_STRUCTURES.find((d) => d.id === hit.key);
+      if (def?.url !== undefined) {
+        window.open(def.url, '_blank', 'noopener,noreferrer');
+      } else {
+        setAlertText(def?.sublabel ?? 'in-cluster only');
+        window.setTimeout(() => setAlertText(null), 1_600);
+      }
       return;
     }
     const next = new Set(e.shiftKey ? selection.keys : new Set<string>());

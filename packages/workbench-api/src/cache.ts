@@ -29,7 +29,14 @@
 
 import type { V1Job, V1Pod } from '@kubernetes/client-node';
 
-import type { Agent, AgentTask, Channel, ChannelBinding, ChannelSession } from '@kagent/dto';
+import type {
+  Agent,
+  AgentTask,
+  Channel,
+  ChannelBinding,
+  ChannelSession,
+  KagentSchedule,
+} from '@kagent/dto';
 
 /** Stable composite key — `<namespace>/<name>`. Used for all kinds. */
 export type CacheKey = string;
@@ -46,7 +53,15 @@ export function cacheKey(namespace: string | undefined, name: string | undefined
  * `key` lets the UI cheaply patch a single row.
  */
 export interface CacheChangeEvent {
-  readonly kind: 'task' | 'agent' | 'job' | 'pod' | 'channel' | 'channelBinding' | 'channelSession';
+  readonly kind:
+    | 'task'
+    | 'agent'
+    | 'job'
+    | 'pod'
+    | 'channel'
+    | 'channelBinding'
+    | 'channelSession'
+    | 'schedule';
   readonly op: 'upsert' | 'delete';
   readonly key: CacheKey;
 }
@@ -65,6 +80,7 @@ export class SnapshotCache {
   private readonly channels = new Map<CacheKey, Channel>();
   private readonly channelBindings = new Map<CacheKey, ChannelBinding>();
   private readonly channelSessions = new Map<CacheKey, ChannelSession>();
+  private readonly schedules = new Map<CacheKey, KagentSchedule>();
   private readonly jobs = new Map<CacheKey, V1Job>();
   private readonly pods = new Map<CacheKey, V1Pod>();
   private readonly listeners = new Set<CacheListener>();
@@ -174,6 +190,25 @@ export class SnapshotCache {
 
   listChannelSessions(): readonly ChannelSession[] {
     return Array.from(this.channelSessions.values());
+  }
+
+  /* ----- Schedules ----- */
+
+  upsertSchedule(schedule: KagentSchedule): void {
+    const key = cacheKey(schedule.metadata.namespace, schedule.metadata.name);
+    this.schedules.set(key, schedule);
+    this.emit({ kind: 'schedule', op: 'upsert', key });
+  }
+
+  deleteSchedule(schedule: KagentSchedule): void {
+    const key = cacheKey(schedule.metadata.namespace, schedule.metadata.name);
+    if (this.schedules.delete(key)) {
+      this.emit({ kind: 'schedule', op: 'delete', key });
+    }
+  }
+
+  listSchedules(): readonly KagentSchedule[] {
+    return Array.from(this.schedules.values());
   }
 
   /* ----- Jobs ----- */

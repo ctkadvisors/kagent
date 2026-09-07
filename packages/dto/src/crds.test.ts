@@ -10,9 +10,11 @@ import {
   isChannel,
   isChannelBinding,
   isChannelSession,
+  isKagentSchedule,
   type Channel,
   type ChannelBinding,
   type ChannelSession,
+  type KagentSchedule,
 } from './crds.js';
 
 const channel: Channel = {
@@ -105,5 +107,47 @@ describe('channel CRD guards', () => {
       isChannelSession({ ...session, spec: { ...session.spec, peer: { kind: 'sms', id: 'x' } } }),
     ).toBe(false);
     expect(isChannelSession({ ...session, spec: { ...session.spec, target: {} } })).toBe(false);
+  });
+});
+
+const schedule: KagentSchedule = {
+  apiVersion: API_GROUP_VERSION,
+  kind: 'KagentSchedule',
+  metadata: { name: 'brain-invalidation-audit', namespace: 'kagent-system' },
+  spec: {
+    schedule: '*/15 * * * *',
+    taskTemplate: { targetAgent: 'brain-auditor', payload: {} },
+  },
+};
+
+describe('isKagentSchedule', () => {
+  it('accepts a valid KagentSchedule', () => {
+    expect(isKagentSchedule(schedule)).toBe(true);
+  });
+
+  it('rejects wrong apiVersion or kind', () => {
+    expect(isKagentSchedule({ ...schedule, apiVersion: 'kagent.knuteson.io/v2alpha1' })).toBe(
+      false,
+    );
+    expect(isKagentSchedule({ ...schedule, kind: 'Agent' })).toBe(false);
+  });
+
+  it('rejects an empty or missing schedule string', () => {
+    expect(isKagentSchedule({ ...schedule, spec: { ...schedule.spec, schedule: '' } })).toBe(false);
+    expect(
+      isKagentSchedule({ ...schedule, spec: { taskTemplate: schedule.spec.taskTemplate } }),
+    ).toBe(false);
+  });
+
+  it('rejects a missing taskTemplate', () => {
+    expect(isKagentSchedule({ ...schedule, spec: { schedule: schedule.spec.schedule } })).toBe(
+      false,
+    );
+  });
+
+  it('rejects non-object input', () => {
+    expect(isKagentSchedule(null)).toBe(false);
+    expect(isKagentSchedule(undefined)).toBe(false);
+    expect(isKagentSchedule('KagentSchedule')).toBe(false);
   });
 });
