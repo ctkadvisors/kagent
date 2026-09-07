@@ -78,6 +78,17 @@ describe('LocalCodeRunner', () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it('names a missing interpreter instead of a bare spawn ENOENT', async () => {
+    const runner = new LocalCodeRunner({
+      workspaceDir,
+      env: { PATH: join(workspaceDir, 'no-binaries-here') },
+    });
+
+    await expect(runner.executeCommand({ command: 'python3', args: ['-c', '1'] })).rejects.toThrow(
+      /python3 is not installed in this runtime/,
+    );
+  });
+
   it('denies commands outside the allowlist', async () => {
     const runner = makeRunner();
 
