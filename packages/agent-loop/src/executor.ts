@@ -587,7 +587,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             bookkeeping.budget.cumulativeInputTokens + bookkeeping.budget.cumulativeOutputTokens;
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
-            const reason = `${CONTEXT_REFUSAL_PREFIX}: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold}`;
+            const reason = `${CONTEXT_REFUSAL_PREFIX}: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
             // Use status=0 so the existing 429-retry guard
             // (executor.ts:407 — gated to `status === 429`) does NOT
             // kick in: refusal is terminal. The reason string is
