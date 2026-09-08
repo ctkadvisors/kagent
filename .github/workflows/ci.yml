@@ -188,6 +188,9 @@ jobs:
 
   helm-smoke-kind:
     name: Helm install + smoke (kind)
+    # Hosted minutes are metered (the org hit 90% on 2026-09-08): the kind
+    # smoke runs on main pushes and tags, not on every PR round.
+    if: github.event_name != 'pull_request'
     needs: [verify, crd-drift, helm-smoke]
     # Catches Helm-template + operator-startup regressions BEFORE they
     # reach a live cluster:
