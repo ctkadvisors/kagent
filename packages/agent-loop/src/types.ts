@@ -89,6 +89,8 @@ export interface AgentDefinition<TType extends string = string, TPhase extends s
     readonly temperature?: number;
     readonly maxTokens?: number;
     readonly stopSequences?: readonly string[];
+    /** Provider-specific request fields merged verbatim into the chat body (e.g. `chat_template_kwargs`). */
+    readonly extraBody?: Readonly<Record<string, unknown>>;
   };
 }
 

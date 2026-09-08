@@ -13,6 +13,16 @@ import { buildOpenAIRequestBody, buildOpenAIHeaders } from './request-builder.js
 import type { ChatRequest } from '@kagent/agent-loop';
 
 describe('buildOpenAIRequestBody (VALIDATION row 8)', () => {
+  it('extraBody fields land in the wire body verbatim (chat_template_kwargs for thinking control)', () => {
+    const req: ChatRequest = {
+      messages: [{ role: 'user', content: 'Status?' }],
+      extraBody: { chat_template_kwargs: { enable_thinking: false } },
+    };
+    const body = buildOpenAIRequestBody(req, 'm', { stream: true }) as Record<string, unknown>;
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(body.stream).toBe(true);
+  });
+
   it('VALIDATION.8: messages pass through for plain user/assistant turns', () => {
     const req: ChatRequest = {
       messages: [

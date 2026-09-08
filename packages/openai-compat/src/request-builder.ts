@@ -116,6 +116,12 @@ export function buildOpenAIRequestBody(
   if (options.stream) {
     body.stream_options = { include_usage: true };
   }
+  if (request.extraBody !== undefined) {
+    // Last, verbatim: the knob exists so an Agent can say `chat_template_kwargs:
+    // {enable_thinking: false}` (2026-09-08: the concierge leaked its reasoning
+    // into Telegram and spent 6000 tokens thinking about "Status?").
+    Object.assign(body, request.extraBody);
+  }
 
   return body;
 }

@@ -70,6 +70,7 @@ export async function startTelegramAdapter(
       client: deps.client,
       logger,
       clock,
+      gateway: deps.gateway,
     });
   };
 

@@ -860,6 +860,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         ...(agentDef.llmParams?.stopSequences !== undefined && {
           stopSequences: agentDef.llmParams.stopSequences,
         }),
+        ...(agentDef.llmParams?.extraBody !== undefined && {
+          extraBody: agentDef.llmParams.extraBody,
+        }),
       };
       let llmStart = Date.now();
       let llmResult: ChatResult;

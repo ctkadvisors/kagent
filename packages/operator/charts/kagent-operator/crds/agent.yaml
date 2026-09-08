@@ -197,6 +197,14 @@ spec:
                         type: string
                         maxLength: 256
                       description: 'Stop sequences passed as the OpenAI `stop` field.'
+                    extraBody:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      description: |
+                        Provider-specific request fields merged verbatim into the
+                        chat body, e.g. `chat_template_kwargs: {enable_thinking: false}`
+                        to turn a Qwen-style model's hidden reasoning off. The
+                        substrate never invents values; the gateway forwards them.
                 maxInFlightTasks:
                   type: integer
                   minimum: 1
