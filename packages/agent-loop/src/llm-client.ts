@@ -91,6 +91,8 @@ export interface ChatRequest {
    *  or pass through the provider-specific `system` parameter. If set, callers SHOULD NOT also include
    *  a `role: 'system'` message in `messages`. */
   systemPrompt?: string;
+  /** Provider-specific body fields merged verbatim after the standard ones (llama.cpp `chat_template_kwargs`, etc.). */
+  extraBody?: Readonly<Record<string, unknown>>;
 }
 
 /**

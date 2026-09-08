@@ -157,13 +157,82 @@ describe('deliverOutboundTurns', () => {
     expect(result).toEqual({ delivered: 1, failed: 0, skipped: 0 });
     expect(client.sendMessage).toHaveBeenCalledWith({
       chatId: '3175140114',
-      text: "I couldn't complete that request. The task failed before returning an answer.",
+      text: "I couldn't complete that: stack trace with internal details.",
     });
     expect(store.patchSessionStatus).toHaveBeenCalledWith(
       'kagent-system',
       'kcs-work-dm',
       expect.objectContaining({ lastOutboundTaskRef: taskRef }),
     );
+  });
+
+  it('re-submits a failed turn once, then reports the exact error and the words that were lost', async () => {
+    // 2026-09-08 03:03Z: an order died with "LLM backend returned HTTP 429" and Chris got an apology.
+    const failed = makeTask({
+      metadata: {
+        ...taskRef,
+        annotations: {
+          'kagent.knuteson.io/channel-message-id': 'tg-77',
+          'kagent.knuteson.io/channel-message': 'Restart the tool gateway',
+        },
+      },
+      status: { phase: 'Failed', error: 'LLM backend returned HTTP 429\n  at fetch...' },
+    });
+    const store = makeStore({ sessions: [makeSession()], tasks: [failed] });
+    const client = makeClient();
+    const gateway = { postInbound: vi.fn().mockResolvedValue({}) };
+
+    const first = await deliverOutboundTurns({
+      config,
+      store,
+      client,
+      logger: quietLogger,
+      clock,
+      gateway,
+    });
+    expect(first).toEqual({ delivered: 0, failed: 0, skipped: 0, retried: 1 });
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(gateway.postInbound).toHaveBeenCalledWith({
+      channelName: 'telegram-work',
+      provider: 'telegram',
+      accountId: 'work',
+      peer: { kind: 'dm', id: '3175140114' },
+      messageId: 'tg-77-retry',
+      text: 'Restart the tool gateway',
+    });
+    expect(store.patchSessionStatus).toHaveBeenCalledWith('kagent-system', 'kcs-work-dm', {
+      lastOutboundTaskRef: taskRef,
+    });
+
+    const retryRef = { namespace: 'kagent-system', name: 'kat-turn-1-retry', uid: 'task-uid-2' };
+    const retryFailed = makeTask({
+      metadata: {
+        ...retryRef,
+        annotations: {
+          'kagent.knuteson.io/channel-message-id': 'tg-77-retry',
+          'kagent.knuteson.io/channel-message': 'Restart the tool gateway',
+        },
+      },
+      status: { phase: 'Failed', error: 'LLM backend returned HTTP 429' },
+    });
+    const store2 = makeStore({
+      sessions: [makeSession({ status: { phase: 'Active', lastTaskRef: retryRef } })],
+      tasks: [retryFailed],
+    });
+    const second = await deliverOutboundTurns({
+      config,
+      store: store2,
+      client,
+      logger: quietLogger,
+      clock,
+      gateway,
+    });
+    expect(second).toEqual({ delivered: 1, failed: 0, skipped: 0 });
+    expect(gateway.postInbound).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledWith({
+      chatId: '3175140114',
+      text: 'I couldn\'t complete that: LLM backend returned HTTP 429. I tried twice. You asked: "Restart the tool gateway" — send it again when you want me to retry.',
+    });
   });
 
   it('backs off the session when Telegram send fails', async () => {

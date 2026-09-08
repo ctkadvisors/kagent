@@ -6,6 +6,7 @@
 import type {
   AdapterLogger,
   AgentTask,
+  ChannelGateway,
   ChannelOutboxStore,
   ChannelSession,
   ChannelTaskRef,
@@ -15,16 +16,22 @@ import type {
 import { channelTurnEpisode, writeBrainEpisode } from './brain.js';
 
 const CHANNEL_MESSAGE_ANNOTATION = 'kagent.knuteson.io/channel-message';
+const CHANNEL_MESSAGE_ID_ANNOTATION = 'kagent.knuteson.io/channel-message-id';
+/** A retried turn's messageId ends with this; the controller names tasks by messageId, so it is a new task. */
+const RETRY_SUFFIX = '-retry';
 
 export interface OutboundDeliveryStats {
   readonly delivered: number;
   readonly failed: number;
   readonly skipped: number;
+  /** Failed turns re-submitted to the gateway once instead of answered. */
+  readonly retried?: number;
 }
 
 const FAILURE_REPLY =
   "I couldn't complete that request. The task failed before returning an answer.";
 const MAX_REPLY_CHARS = 4000;
+const MAX_ERROR_CHARS = 200;
 
 export async function deliverOutboundTurns(input: {
   readonly config: TelegramAdapterConfig;
@@ -32,6 +39,8 @@ export async function deliverOutboundTurns(input: {
   readonly client: TelegramClient;
   readonly logger: AdapterLogger;
   readonly clock?: () => Date;
+  /** When set, a failed turn is re-submitted once before its failure is reported. */
+  readonly gateway?: ChannelGateway;
 }): Promise<OutboundDeliveryStats> {
   const now = (input.clock ?? (() => new Date()))();
   const nowIso = now.toISOString();
@@ -44,6 +53,7 @@ export async function deliverOutboundTurns(input: {
   let delivered = 0;
   let failed = 0;
   let skipped = 0;
+  let retried = 0;
 
   for (const session of sessions) {
     if (!sessionMatchesConfig(session, input.config) || shouldSkipSession(session, now)) {
@@ -64,6 +74,28 @@ export async function deliverOutboundTurns(input: {
     }
 
     const task = await input.store.getAgentTask(taskRef);
+    if (task !== undefined && input.gateway !== undefined && retryable(task)) {
+      // 2026-09-08 03:03Z: Chris's order died with "LLM backend returned HTTP
+      // 429" and he got an apology. One retry, then the truth, never silence.
+      try {
+        await input.gateway.postInbound(retryEnvelope(input.config, session, task));
+        await input.store.patchSessionStatus(sessionNamespace, sessionName, {
+          lastOutboundTaskRef: taskRef,
+        });
+        retried += 1;
+        input.logger.warn('[channel-telegram] task failed; re-submitted the turn once', {
+          session: sessionName,
+          task: taskRef.name,
+          error: task.status?.error,
+        });
+        continue;
+      } catch (err) {
+        input.logger.error('[channel-telegram] retry submission failed; reporting the failure', {
+          task: taskRef.name,
+          err,
+        });
+      }
+    }
     const reply = task === undefined ? undefined : replyTextForTask(task);
     if (reply === undefined) {
       skipped += 1;
@@ -115,7 +147,32 @@ export async function deliverOutboundTurns(input: {
     }
   }
 
-  return { delivered, failed, skipped };
+  return { delivered, failed, skipped, ...(retried > 0 && { retried }) };
+}
+
+/** A failed turn that has not been retried yet and still carries its text. */
+function retryable(task: AgentTask): boolean {
+  if (task.status?.phase !== 'Failed') return false;
+  const ann = task.metadata.annotations ?? {};
+  const messageId = ann[CHANNEL_MESSAGE_ID_ANNOTATION];
+  return (
+    typeof messageId === 'string' &&
+    !messageId.endsWith(RETRY_SUFFIX) &&
+    typeof ann[CHANNEL_MESSAGE_ANNOTATION] === 'string'
+  );
+}
+
+function retryEnvelope(config: TelegramAdapterConfig, session: ChannelSession, task: AgentTask) {
+  const ann = task.metadata.annotations ?? {};
+  return {
+    channelName: config.channelName,
+    provider: 'telegram' as const,
+    accountId: config.accountId,
+    peer: session.spec.peer,
+    ...(session.spec.threadId !== undefined && { threadId: session.spec.threadId }),
+    messageId: `${ann[CHANNEL_MESSAGE_ID_ANNOTATION] ?? ''}${RETRY_SUFFIX}`,
+    text: ann[CHANNEL_MESSAGE_ANNOTATION] ?? '',
+  };
 }
 
 /**
@@ -171,7 +228,7 @@ function shouldSkipSession(session: ChannelSession, now: Date): boolean {
 }
 
 function replyTextForTask(task: AgentTask): string | undefined {
-  if (task.status?.phase === 'Failed') return FAILURE_REPLY;
+  if (task.status?.phase === 'Failed') return failureReply(task);
   if (task.status?.phase !== 'Completed') return undefined;
 
   const result = task.status.result;
@@ -180,6 +237,24 @@ function replyTextForTask(task: AgentTask): string | undefined {
   const trimmed = content.trim();
   if (trimmed.length === 0) return 'The task completed without a text answer.';
   return truncateReply(trimmed);
+}
+
+/** What failed, in the backend's own words (first line, bounded), and what was asked, so nothing is lost. */
+function failureReply(task: AgentTask): string {
+  const error = (task.status?.error ?? '').split('\n')[0]?.trim() ?? '';
+  const asked = task.metadata.annotations?.[CHANNEL_MESSAGE_ANNOTATION];
+  const head =
+    error.length > 0
+      ? `I couldn't complete that: ${error.length > MAX_ERROR_CHARS ? `${error.slice(0, MAX_ERROR_CHARS - 3)}...` : error}.`
+      : FAILURE_REPLY;
+  const retriedNote = task.metadata.annotations?.[CHANNEL_MESSAGE_ID_ANNOTATION]?.endsWith(
+    RETRY_SUFFIX,
+  )
+    ? ' I tried twice.'
+    : '';
+  return asked === undefined
+    ? `${head}${retriedNote}`
+    : `${head}${retriedNote} You asked: "${asked.length > 300 ? `${asked.slice(0, 297)}...` : asked}" — send it again when you want me to retry.`;
 }
 
 function readResultContent(result: unknown): string | undefined {
