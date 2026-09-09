@@ -68,6 +68,8 @@ export interface TelegramAdapterConfig {
   readonly outboundBaseBackoffSeconds: number;
   readonly outboundMaxFailures: number;
   /** Graphiti brain (optional). Unset = no episode writes, no turn bridge naming. */
+  /** The mission launcher (GET /missions): fleet state and memory bridged into every turn. */
+  readonly fleetUrl?: string;
   readonly brain?: {
     readonly mcpUrl: string;
     readonly token: string;

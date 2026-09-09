@@ -62,7 +62,8 @@ export function withPreviousTurn(input: {
 /** Inverse of withPreviousTurn: the text the human actually sent. */
 export function stripPreviousTurn(text: string): string {
   const idx = text.indexOf(`\n${CURRENT_MESSAGE_MARKER}\n`);
-  if (idx === -1 || !text.startsWith(PREVIOUS_TURN_MARKER)) return text;
+  if (idx === -1 || !(text.startsWith(PREVIOUS_TURN_MARKER) || text.startsWith('[fleet now]')))
+    return text;
   return text.slice(idx + CURRENT_MESSAGE_MARKER.length + 2);
 }
 

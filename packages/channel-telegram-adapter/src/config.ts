@@ -57,6 +57,9 @@ export function loadConfig(env: Env = process.env): TelegramAdapterConfig {
       'KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES',
     ),
     ...brainConfig(env),
+    ...(optional(env.KAGENT_FLEET_URL) !== undefined && {
+      fleetUrl: trimTrailingSlash(optional(env.KAGENT_FLEET_URL) as string),
+    }),
   };
 }
 
