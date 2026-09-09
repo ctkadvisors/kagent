@@ -35,6 +35,32 @@ describe('ToolProvider — interface shape', () => {
     expect(typeof sync.describeTools).toBe('function');
   });
 
+  it('resolveName: a namespace or leaf that denotes one registered tool resolves to it; ambiguity does not', () => {
+    const reg = new ToolProviderRegistry();
+    reg.register(
+      makeStubToolProvider({
+        id: 'gw',
+        tools: [
+          'code_interpreter.execute_code',
+          'browser.goto',
+          'mcp.cf.search',
+          'http.search',
+        ].map((name) => ({
+          name,
+          description: '',
+          inputSchema: {},
+        })),
+      }),
+    );
+    expect(reg.resolveName('code_interpreter.execute_code')).toBe('code_interpreter.execute_code');
+    expect(reg.resolveName('code_interpreter')).toBe('code_interpreter.execute_code');
+    expect(reg.resolveName('execute_code')).toBe('code_interpreter.execute_code');
+    expect(reg.resolveName('search')).toBeUndefined(); // mcp.cf.search and http.search
+    expect(reg.candidatesFor('search').sort()).toEqual(['http.search', 'mcp.cf.search']);
+    expect(reg.resolveName('nothing')).toBeUndefined();
+    expect(reg.candidatesFor('nothing')).toEqual([]);
+  });
+
   it('SC2.2: ToolProviderRegistry registers two providers; providerFor(name) resolves correctly', () => {
     const reg = new ToolProviderRegistry();
     reg.register(

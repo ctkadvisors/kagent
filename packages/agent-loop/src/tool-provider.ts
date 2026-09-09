@@ -226,6 +226,27 @@ export class ToolProviderRegistry {
     return this.toolToProvider.get(toolName);
   }
 
+  /**
+   * Registered names a model might have meant by `toolName`: the exact name,
+   * else every name of which it is the namespace (`code_interpreter` →
+   * `code_interpreter.execute_code`) or the leaf (`execute_code`). Local
+   * models drop the namespace (the concierge called `code_interpreter` on
+   * 2026-09-09 and reported the runner as refusing calls); a unique candidate
+   * is what it meant, several are offered back in the error.
+   */
+  candidatesFor(toolName: string): string[] {
+    if (this.toolToProvider.has(toolName)) return [toolName];
+    return Array.from(this.toolToProvider.keys()).filter(
+      (n) => n.startsWith(`${toolName}.`) || n.endsWith(`.${toolName}`),
+    );
+  }
+
+  /** The one registered name `toolName` unambiguously denotes, or undefined. */
+  resolveName(toolName: string): string | undefined {
+    const c = this.candidatesFor(toolName);
+    return c.length === 1 ? c[0] : undefined;
+  }
+
   /** Returns every registered provider in registration order. Array is a fresh copy. */
   getAll(): ToolProvider[] {
     return Array.from(this.providers.values());
