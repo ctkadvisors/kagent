@@ -21,10 +21,18 @@ export const FLEET_NOW_MARKER = '[fleet now]';
 const MAX_RULES = 6;
 const MAX_RULE_CHARS = 220;
 
+export interface FleetRow {
+  readonly source: string;
+  readonly at: string;
+  readonly text: string;
+}
+
 export interface FleetSnapshot {
   readonly summary?: string;
   readonly memoryBySource?: Readonly<Record<string, number>>;
   readonly rules: readonly string[];
+  /** The rows the fleet wrote itself lately: the only ones there are. */
+  readonly recent: readonly FleetRow[];
   readonly computedAt?: string;
 }
 
@@ -34,7 +42,11 @@ export function fleetSnapshot(payload: unknown): FleetSnapshot | undefined {
   const fleet = (payload as { fleet?: Record<string, unknown> }).fleet;
   if (typeof fleet !== 'object' || fleet === null) return undefined;
   const health = fleet.health as
-    | { summary?: unknown; memory?: { by_source?: unknown }; computed_at?: unknown }
+    | {
+        summary?: unknown;
+        memory?: { by_source?: unknown; recent?: unknown };
+        computed_at?: unknown;
+      }
     | undefined;
   const memoryText = typeof fleet.memory === 'string' ? fleet.memory : '';
   const rules = memoryText
@@ -47,12 +59,22 @@ export function fleetSnapshot(payload: unknown): FleetSnapshot | undefined {
       line.length > MAX_RULE_CHARS ? `${line.slice(0, MAX_RULE_CHARS - 3)}...` : line,
     );
   const bySource = health?.memory?.by_source;
+  const recentRaw = health?.memory?.recent;
+  const recent: FleetRow[] = Array.isArray(recentRaw)
+    ? recentRaw
+        .filter(
+          (r): r is FleetRow =>
+            typeof r === 'object' && r !== null && typeof (r as FleetRow).text === 'string',
+        )
+        .map((r) => ({ source: String(r.source), at: String(r.at), text: r.text }))
+    : [];
   return {
     ...(typeof health?.summary === 'string' && { summary: health.summary }),
     ...(typeof bySource === 'object' &&
       bySource !== null && { memoryBySource: bySource as Record<string, number> }),
     ...(typeof health?.computed_at === 'string' && { computedAt: health.computed_at }),
     rules,
+    recent,
   };
 }
 
@@ -68,6 +90,11 @@ export function renderFleetNow(snap: FleetSnapshot): string {
     );
   }
   if (snap.rules.length > 0) lines.push('rules:', ...snap.rules.map((r) => `- ${r}`));
+  if (snap.recent.length > 0)
+    lines.push(
+      'written by the fleet itself lately (these are all of them; list only these, with their author):',
+      ...snap.recent.map((r) => `- [${r.source} ${r.at}] ${r.text}`),
+    );
   if (snap.computedAt) lines.push(`computed_at ${snap.computedAt}`);
   return lines.join('\n');
 }
