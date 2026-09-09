@@ -6,7 +6,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { stripPreviousTurn, withPreviousTurn } from './brain.js';
-import { fetchFleetNow, fleetSnapshot, renderFleetNow, withFleetNow } from './fleet.js';
+import {
+  fetchFleetNow,
+  fleetSnapshot,
+  recordRule,
+  renderFleetNow,
+  renderRuleRecord,
+  ruleIn,
+  withFleetNow,
+} from './fleet.js';
 
 const payload = {
   fleet: {
@@ -72,5 +80,37 @@ describe('fleet now', () => {
     expect(
       await fetchFleetNow('http://launcher:8080', empty as unknown as typeof fetch),
     ).toBeUndefined();
+  });
+});
+
+describe('rule capture', () => {
+  it('ruleIn takes only a message that starts with rule: or remember:', () => {
+    expect(ruleIn('rule: never delete a fleet job\n on an unchecked clock')).toBe(
+      'never delete a fleet job on an unchecked clock',
+    );
+    expect(ruleIn('  Remember : ask before merging')).toBe('ask before merging');
+    expect(ruleIn('what is the rule: here?')).toBeUndefined();
+    expect(ruleIn('rule: ok')).toBeUndefined(); // too short to be one
+  });
+
+  it('recordRule posts to /remember and reports the outcome truthfully', async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const okFetch = ((url: string, init?: RequestInit) => {
+      calls.push({ url, body: JSON.parse(init?.body as string) });
+      return Promise.resolve(new Response(JSON.stringify({ ok: true, post: 42 }), { status: 201 }));
+    }) as unknown as typeof fetch;
+    expect(await recordRule('http://launcher/', 'ask first', okFetch)).toEqual({
+      ok: true,
+      post: 42,
+    });
+    expect(calls).toEqual([
+      { url: 'http://launcher/remember', body: { text: 'ask first', ref: 'telegram' } },
+    ]);
+    const down = (() =>
+      Promise.resolve(new Response('no', { status: 503 }))) as unknown as typeof fetch;
+    const r = await recordRule('http://launcher', 'ask first', down);
+    expect(r).toEqual({ ok: false, error: 'launcher answered HTTP 503' });
+    expect(renderRuleRecord('ask first', r)).toContain('could NOT record');
+    expect(renderRuleRecord('ask first', { ok: true, post: 42 })).toContain('forum post 42');
   });
 });
