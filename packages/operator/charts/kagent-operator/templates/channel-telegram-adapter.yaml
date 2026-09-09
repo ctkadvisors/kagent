@@ -155,6 +155,10 @@ spec:
               value: {{ .Values.channels.telegram.outboundBaseBackoffSeconds | quote }}
             - name: KAGENT_CHANNEL_OUTBOUND_MAX_FAILURES
               value: {{ .Values.channels.telegram.outboundMaxFailures | quote }}
+            {{- if .Values.channels.telegram.fleetUrl }}
+            - name: KAGENT_FLEET_URL
+              value: {{ .Values.channels.telegram.fleetUrl | quote }}
+            {{- end }}
             {{- with .Values.channels.telegram.brain }}
             {{- if .mcpUrl }}
             - name: KAGENT_BRAIN_MCP_URL

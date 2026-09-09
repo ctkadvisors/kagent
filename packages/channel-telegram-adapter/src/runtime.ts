@@ -5,6 +5,7 @@
 
 import { normalizeTelegramUpdate } from './normalize.js';
 import { withPreviousTurn } from './brain.js';
+import { fetchFleetNow, withFleetNow } from './fleet.js';
 import { deliverOutboundTurns } from './outbound.js';
 import { adapterCondition } from './status.js';
 import type {
@@ -170,7 +171,7 @@ export async function processTelegramUpdates(input: {
       nextOffset = Math.max(nextOffset ?? 0, updateId + 1);
       continue;
     }
-    const envelope = await bridgePreviousTurn(input, normalized);
+    const envelope = await bridgeFleetNow(input, await bridgePreviousTurn(input, normalized));
 
     try {
       await input.gateway.postInbound(envelope);
@@ -237,6 +238,26 @@ async function bridgePreviousTurn(
     };
   } catch (err) {
     input.logger.warn('[channel-telegram] previous-turn bridge skipped', err);
+    return envelope;
+  }
+}
+
+/**
+ * [fleet now]: the launcher's computed state, memory counts and rules, in
+ * front of every message. Best effort; a silent launcher changes nothing.
+ */
+async function bridgeFleetNow(
+  input: { readonly config: TelegramAdapterConfig; readonly logger: AdapterLogger },
+  envelope: ChannelInboundEnvelope,
+): Promise<ChannelInboundEnvelope> {
+  const url = input.config.fleetUrl;
+  if (url === undefined) return envelope;
+  try {
+    const block = await fetchFleetNow(url);
+    if (block === undefined) return envelope;
+    return { ...envelope, text: withFleetNow(envelope.text, block) };
+  } catch (err) {
+    input.logger.warn('[channel-telegram] fleet-now bridge skipped', err);
     return envelope;
   }
 }

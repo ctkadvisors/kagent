@@ -390,6 +390,12 @@ channels:
     gatewayTokenSecretKey: ''
     # Graphiti brain: one episode per exchange (message + reply) written
     # at delivery, and the previous exchange bridged into each new
+    # The fleet's mission launcher (GET /missions). When set, every inbound
+    # message carries a [fleet now] block: the fleet's computed health
+    # summary, its memory counts by author and its rules, fetched by the
+    # adapter so the model answers from the field and never has to choose
+    # to look. Empty = off.
+    fleetUrl: ''
     # message. Off when mcpUrl is empty.
     brain:
       mcpUrl: ''
