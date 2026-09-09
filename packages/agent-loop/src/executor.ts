@@ -1058,13 +1058,23 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
       // Tool dispatch loop (one iteration per tool_call).
       let cancelledMidTool = false;
-      for (const toolCall of synthesizedToolCalls) {
+      for (const rawToolCall of synthesizedToolCalls) {
         // Invariant 2.d — abort check between tool calls.
         if (signal.aborted) {
           status = 'cancelled';
           cancelledMidTool = true;
           break;
         }
+
+        // A name that unambiguously denotes one registered tool is that tool:
+        // local models drop the namespace ("code_interpreter" for
+        // code_interpreter.execute_code, 2026-09-09). The tool message keeps
+        // the name the model used so its transcript stays consistent.
+        const resolvedName = this.toolProviders.resolveName(rawToolCall.name);
+        const toolCall =
+          resolvedName !== undefined && resolvedName !== rawToolCall.name
+            ? { ...rawToolCall, name: resolvedName }
+            : rawToolCall;
 
         // Synthesis already happened above; reuse the (now non-empty) id.
         const callId = toolCall.id;
@@ -1102,7 +1112,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             role: 'tool',
             content: guardMsg,
             tool_call_id: callId,
-            name: toolCall.name,
+            name: rawToolCall.name,
           });
           continue;
         }
@@ -1111,7 +1121,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
         if (!provider) {
           // Surface as tool error message (NOT executor throw).
-          const errMsg = `Tool "${toolCall.name}" has no registered provider`;
+          const near = this.toolProviders.candidatesFor(toolCall.name);
+          const errMsg =
+            `Tool "${toolCall.name}" has no registered provider` +
+            (near.length > 0 ? `; did you mean ${near.join(' or ')}?` : '');
           const noProvEntry: TraceEntry = {
             schema_version: '1',
             run_id: runId,
@@ -1131,7 +1144,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             role: 'tool',
             content: errMsg,
             tool_call_id: callId,
-            name: toolCall.name,
+            name: rawToolCall.name,
           });
           continue;
         }
@@ -1162,7 +1175,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
               this.toolGuards.maxToolResultChars,
             ),
             tool_call_id: callId,
-            name: toolCall.name,
+            name: rawToolCall.name,
           });
         } catch (err) {
           // Invariant 2.e — abort check inside tool catch arm.
@@ -1192,7 +1205,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             role: 'tool',
             content: `Error: ${msg}`,
             tool_call_id: callId,
-            name: toolCall.name,
+            name: rawToolCall.name,
           });
         }
       }
