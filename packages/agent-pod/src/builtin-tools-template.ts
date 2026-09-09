@@ -24,6 +24,8 @@ export interface EnsureAgentToolDeps {
   readonly serverUrl: string;
   /** Caller's task UID — threaded into createdByTaskUid for the audit annotation. */
   readonly createdByTaskUid: string;
+  /** Caller's task name — the materialized Agent's ownerReference needs a name that exists. */
+  readonly createdByTaskName?: string;
   /** Test-injectable fetch. Production: global fetch. */
   readonly fetch?: typeof fetch;
 }
@@ -70,6 +72,7 @@ export function defineEnsureAgentFromTemplate(deps: EnsureAgentToolDeps): InProc
       const body = {
         parameterValues: args.parameterValues,
         createdByTaskUid: deps.createdByTaskUid,
+        ...(deps.createdByTaskName !== undefined && { createdByTaskName: deps.createdByTaskName }),
         ...(args.instanceName !== undefined && { instanceName: args.instanceName }),
       };
 

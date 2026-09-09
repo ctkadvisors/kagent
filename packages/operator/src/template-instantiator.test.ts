@@ -270,17 +270,31 @@ describe('buildAgentManifest', () => {
       templateName: 'summarizer',
       parameterValues: { topic: 'rust' },
       createdByTaskUid: 'uid-task-abc',
+      createdByTaskName: 'kct-telegram-work-abc',
     });
     expect(result.manifest.metadata.ownerReferences).toEqual([
       {
         apiVersion: API_GROUP_VERSION,
         kind: 'AgentTask',
-        name: 'uid-task-abc',
+        name: 'kct-telegram-work-abc',
         uid: 'uid-task-abc',
         controller: false,
         blockOwnerDeletion: false,
       },
     ]);
+  });
+
+  it('carries no ownerReference when only the task uid is known (an owner named by uid is reaped by GC)', () => {
+    const template = makeTemplate();
+    const result = buildAgentManifest(template, {
+      templateName: 'summarizer',
+      parameterValues: { topic: 'rust' },
+      createdByTaskUid: 'uid-task-abc',
+    });
+    expect(result.manifest.metadata.ownerReferences).toBeUndefined();
+    expect(result.manifest.metadata.annotations['kagent.knuteson.io/created-by-task']).toBe(
+      'uid-task-abc',
+    );
   });
 
   it('renders nested objects + arrays in the agentSpec template', () => {

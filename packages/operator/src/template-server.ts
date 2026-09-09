@@ -49,6 +49,8 @@ export interface InstantiatePostBody {
   readonly instanceName?: string;
   readonly parameterValues: Readonly<Record<string, string>>;
   readonly createdByTaskUid: string;
+  /** The creating AgentTask's name; the ownerReference needs it (v0.2.53). */
+  readonly createdByTaskName?: string;
 }
 
 export interface InstantiatePostResponse {
@@ -186,6 +188,8 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
         templateName,
         parameterValues: body.parameterValues,
         createdByTaskUid: body.createdByTaskUid,
+        ...(typeof body.createdByTaskName === 'string' &&
+          body.createdByTaskName.length > 0 && { createdByTaskName: body.createdByTaskName }),
         ...(body.instanceName !== undefined && { instanceName: body.instanceName }),
         ...(deps.clock !== undefined && { clock: deps.clock }),
       };
