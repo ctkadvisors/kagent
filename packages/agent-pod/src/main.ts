@@ -572,6 +572,7 @@ async function main(): Promise<void> {
         defineEnsureAgentFromTemplate({
           serverUrl: templateServerUrl,
           createdByTaskUid: config.taskId,
+          createdByTaskName: config.taskName,
         }),
       );
       console.log(

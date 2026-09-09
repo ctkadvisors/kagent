@@ -77,6 +77,7 @@ describe('ensure_agent_from_template', () => {
     const provider = buildTemplateToolProvider({
       serverUrl: 'http://operator.kagent-system.svc:8081',
       createdByTaskUid: 'uid-parent-task',
+      createdByTaskName: 'kat-parent-task',
       fetch: fetchPair.fn,
     });
     const result = await callEnsure(provider, {
@@ -94,6 +95,7 @@ describe('ensure_agent_from_template', () => {
     };
     expect(body.parameterValues.topic).toBe('rust async');
     expect(body.createdByTaskUid).toBe('uid-parent-task');
+    expect((body as { createdByTaskName?: string }).createdByTaskName).toBe('kat-parent-task');
     const parsed = JSON.parse(resultText(result)) as { agentName: string; reused: boolean };
     expect(parsed.agentName).toBe('summarizer-rust-async-abc12345');
     expect(parsed.reused).toBe(false);

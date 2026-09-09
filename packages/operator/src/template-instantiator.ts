@@ -42,6 +42,15 @@ export interface InstantiateInput {
   readonly parameterValues: Readonly<Record<string, string>>;
   readonly instanceName?: string;
   readonly createdByTaskUid: string;
+  /**
+   * Name of the creating AgentTask. Kubernetes garbage collection resolves
+   * an owner by kind + name and verifies the uid; an ownerReference whose
+   * name is the uid names nothing, so the freshly created Agent was reaped
+   * within seconds (homelab, 2026-09-09: `specialist-fleet-poet-pomty6ts`
+   * returned by instantiate, gone before spawn_child_task). Without the
+   * name the manifest carries no ownerReference at all.
+   */
+  readonly createdByTaskName?: string;
   readonly clock?: () => Date;
 }
 
@@ -58,7 +67,7 @@ export interface MaterializedAgentManifest {
     readonly namespace: string;
     readonly annotations: Readonly<Record<string, string>>;
     readonly labels: Readonly<Record<string, string>>;
-    readonly ownerReferences: ReadonlyArray<{
+    readonly ownerReferences?: ReadonlyArray<{
       readonly apiVersion: string;
       readonly kind: string;
       readonly name: string;
@@ -226,20 +235,24 @@ export function buildAgentManifest(
         namespace,
         annotations,
         labels,
-        // OwnerRef → the FIRST AgentTask that materialized this Agent.
-        // Subsequent reuse calls do NOT add ownerRefs (that would couple
-        // unrelated tasks via blockOwnerDeletion); we track concurrent
-        // users via lastUsedAt + the GC sweeper instead.
-        ownerReferences: [
-          {
-            apiVersion: API_GROUP_VERSION,
-            kind: 'AgentTask',
-            name: input.createdByTaskUid,
-            uid: input.createdByTaskUid,
-            controller: false,
-            blockOwnerDeletion: false,
-          },
-        ],
+        // OwnerRef → the FIRST AgentTask that materialized this Agent, by
+        // its real name (GC resolves owners by name). Subsequent reuse calls
+        // do NOT add ownerRefs (that would couple unrelated tasks via
+        // blockOwnerDeletion); we track concurrent users via lastUsedAt +
+        // the GC sweeper instead. No task name known: no ownerReference.
+        ...(input.createdByTaskName !== undefined &&
+          input.createdByTaskName.length > 0 && {
+            ownerReferences: [
+              {
+                apiVersion: API_GROUP_VERSION,
+                kind: 'AgentTask',
+                name: input.createdByTaskName,
+                uid: input.createdByTaskUid,
+                controller: false,
+                blockOwnerDeletion: false,
+              },
+            ],
+          }),
       },
       spec: finalSpec,
     },
