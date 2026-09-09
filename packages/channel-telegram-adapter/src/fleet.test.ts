@@ -21,7 +21,16 @@ const payload = {
     health: {
       summary: 'Fleet health: nothing is broken. Of the last 5 runs, 3 shipped.',
       computed_at: '2026-09-09T18:00:00Z',
-      memory: { by_source: { claude: 28, chris: 2, dream: 3, review: 5 } },
+      memory: {
+        by_source: { claude: 28, chris: 2, dream: 3, review: 5 },
+        recent: [
+          {
+            source: 'dream',
+            at: '2026-09-09',
+            text: 'A run that pushes to the fixture origin looks like no commit.',
+          },
+        ],
+      },
     },
     memory:
       'WHAT WE HAVE LEARNED (read before acting):\n- [feedback, all repos] Never route inference to the cloud.\n- [feedback, all repos] Say what you did and what you did not do.\n- [lesson, o/r] npm reads overrides, not resolutions.',
@@ -42,6 +51,17 @@ describe('fleet now', () => {
       "memory rows by author: chris 2, claude 28, dream 3, review 5 (chris and claude are the mentors' seed",
     );
     expect(block).toContain('- Never route inference to the cloud.');
+    expect(snap?.recent).toEqual([
+      {
+        source: 'dream',
+        at: '2026-09-09',
+        text: 'A run that pushes to the fixture origin looks like no commit.',
+      },
+    ]);
+    expect(block).toContain('written by the fleet itself lately (these are all of them');
+    expect(block).toContain(
+      '- [dream 2026-09-09] A run that pushes to the fixture origin looks like no commit.',
+    );
   });
 
   it('rides inside the previous-turn bridge and strips back to the raw message either way', () => {
