@@ -5,7 +5,7 @@
 
 import { normalizeTelegramUpdate } from './normalize.js';
 import { withPreviousTurn } from './brain.js';
-import { fetchFleetNow, withFleetNow } from './fleet.js';
+import { fetchFleetNow, recordRule, renderRuleRecord, ruleIn, withFleetNow } from './fleet.js';
 import { deliverOutboundTurns } from './outbound.js';
 import { adapterCondition } from './status.js';
 import type {
@@ -171,7 +171,11 @@ export async function processTelegramUpdates(input: {
       nextOffset = Math.max(nextOffset ?? 0, updateId + 1);
       continue;
     }
-    const envelope = await bridgeFleetNow(input, await bridgePreviousTurn(input, normalized));
+    const envelope = await bridgeFleetNow(
+      input,
+      await bridgePreviousTurn(input, normalized),
+      normalized.text,
+    );
 
     try {
       await input.gateway.postInbound(envelope);
@@ -249,12 +253,18 @@ async function bridgePreviousTurn(
 async function bridgeFleetNow(
   input: { readonly config: TelegramAdapterConfig; readonly logger: AdapterLogger },
   envelope: ChannelInboundEnvelope,
+  rawText: string,
 ): Promise<ChannelInboundEnvelope> {
   const url = input.config.fleetUrl;
   if (url === undefined) return envelope;
   try {
-    const block = await fetchFleetNow(url);
-    if (block === undefined) return envelope;
+    // A "rule:" message is recorded before the model sees it; the block says so.
+    const rule = ruleIn(rawText);
+    const ruleLine =
+      rule === undefined ? undefined : renderRuleRecord(rule, await recordRule(url, rule));
+    const fetched = await fetchFleetNow(url);
+    if (fetched === undefined && ruleLine === undefined) return envelope;
+    const block = [fetched ?? '[fleet now]', ruleLine].filter((x) => x !== undefined).join('\n');
     return { ...envelope, text: withFleetNow(envelope.text, block) };
   } catch (err) {
     input.logger.warn('[channel-telegram] fleet-now bridge skipped', err);

@@ -99,3 +99,50 @@ export async function fetchFleetNow(
     return undefined;
   return renderFleetNow(snap);
 }
+
+/**
+ * A message that starts with "rule:" (or "remember:") is an instruction for
+ * the whole fleet, and the fleet's memory is the ledger, not the model's
+ * choice of tool: asked to keep one on 2026-09-09 the concierge wrote it to
+ * the brain and said the fleet had it. The adapter records it first, and the
+ * [fleet now] block tells the model what happened so the reply is true.
+ */
+const RULE_PREFIX = /^\s*(?:rule|remember)\s*:\s*(\S[\s\S]{6,})$/iu;
+
+export function ruleIn(text: string): string | undefined {
+  const m = RULE_PREFIX.exec(text);
+  const captured = m?.[1];
+  return captured === undefined ? undefined : captured.replace(/\s+/gu, ' ').trim();
+}
+
+export type RuleRecord =
+  | { readonly ok: true; readonly post: number }
+  | { readonly ok: false; readonly error: string };
+
+export async function recordRule(
+  fleetUrl: string,
+  text: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 5000,
+): Promise<RuleRecord> {
+  try {
+    const res = await fetchImpl(`${fleetUrl.replace(/\/+$/u, '')}/remember`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, ref: 'telegram' }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return { ok: false, error: `launcher answered HTTP ${res.status}` };
+    const body = (await res.json()) as { post?: unknown };
+    return { ok: true, post: typeof body.post === 'number' ? body.post : 0 };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The line the model reads about a rule this message carried. */
+export function renderRuleRecord(rule: string, r: RuleRecord): string {
+  return r.ok
+    ? `recorded just now, from this very message, as a rule in the fleet's memory (forum post ${r.post}): "${rule}". Confirm that in one line; there is nothing else to save.`
+    : `could NOT record this message's rule in the fleet's memory (${r.error}). Say exactly that; do not claim it was saved anywhere.`;
+}
