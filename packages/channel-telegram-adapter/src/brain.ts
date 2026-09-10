@@ -26,6 +26,7 @@ export const CURRENT_MESSAGE_MARKER = '[current message]';
  * must leave room for the new message, so keep the cap below that.
  */
 const MAX_BRIDGE_REPLY_CHARS = 1500;
+const MAX_EARLIER_REPLY_CHARS = 500;
 const MAX_EPISODE_CHARS = 6000;
 
 export interface BrainConfig {
@@ -48,10 +49,17 @@ export function withPreviousTurn(input: {
   readonly previousMessage: string;
   readonly previousReply: string;
   readonly operatorName: string;
+  /** Older exchanges of the same session, oldest first; one turn was not a conversation (2026-09-10). */
+  readonly earlier?: readonly { readonly message: string; readonly reply: string }[];
 }): string {
   const reply = truncate(input.previousReply, MAX_BRIDGE_REPLY_CHARS);
+  const earlier = (input.earlier ?? []).flatMap((t) => [
+    `${input.operatorName}: ${stripPreviousTurn(t.message)}`,
+    `You: ${truncate(t.reply, MAX_EARLIER_REPLY_CHARS)}`,
+  ]);
   return [
     PREVIOUS_TURN_MARKER,
+    ...earlier,
     `${input.operatorName}: ${stripPreviousTurn(input.previousMessage)}`,
     `You: ${reply}`,
     CURRENT_MESSAGE_MARKER,
@@ -133,6 +141,11 @@ export async function writeBrainEpisode(
             source: 'message',
             source_description: 'telegram channel turn',
             reference_time: episode.referenceTime,
+            // The concierge's own words came back as facts about the fleet
+            // ("the fleet now block was a corrupted snapshot", 2026-09-10) and
+            // were recalled as truth. Only the human states facts here.
+            custom_extraction_instructions:
+              "Facts come from what the human said, asked or instructed. The concierge's reply is a claim it made in conversation: record it as 'concierge said ...' and never as a fact about the fleet, its services, its memory or its state.",
           },
         },
       },

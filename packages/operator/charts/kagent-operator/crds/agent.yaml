@@ -205,6 +205,16 @@ spec:
                         chat body, e.g. `chat_template_kwargs: {enable_thinking: false}`
                         to turn a Qwen-style model's hidden reasoning off. The
                         substrate never invents values; the gateway forwards them.
+                    selfCheck:
+                      type: string
+                      maxLength: 4000
+                      description: |
+                        When set, a turn the model wants to end without
+                        having called any tool gets this text back as one
+                        more user message, and the model answers again;
+                        the second answer is the reply. A model that
+                        narrates instead of looking gets one chance to look.
+                        Costs one extra chat() call on tool-less turns.
                 maxInFlightTasks:
                   type: integer
                   minimum: 1

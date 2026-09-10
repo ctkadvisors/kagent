@@ -239,6 +239,12 @@ export interface ChannelOutboxStore {
     readonly accountId: string;
   }): Promise<readonly ChannelSession[]>;
   getAgentTask(ref: ChannelTaskRef): Promise<AgentTask | undefined>;
+  /** The session's recent turns (AgentTasks labelled with the session), oldest first. */
+  listSessionTasks?(input: {
+    readonly namespace: string;
+    readonly sessionName: string;
+    readonly limit: number;
+  }): Promise<readonly AgentTask[]>;
   patchSessionStatus(
     namespace: string,
     name: string,
