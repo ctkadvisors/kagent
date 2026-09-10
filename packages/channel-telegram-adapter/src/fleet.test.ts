@@ -103,6 +103,40 @@ describe('fleet now', () => {
   });
 });
 
+describe('fleet now ideas', () => {
+  it("lists the archive's active lineages so the concierge knows what the fleet wants to try next", () => {
+    const withIdeas = {
+      fleet: {
+        ...payload.fleet,
+        ideas: {
+          active: [
+            {
+              id: 'ea8179ef1b6d',
+              lineage: 'ea8179ef1b6d',
+              problem: 'The implement stage halts on missing artifacts',
+              status: 'active',
+              source: 'ideator',
+            },
+          ],
+        },
+      },
+    };
+    const snap = fleetSnapshot(withIdeas);
+    expect(snap?.ideas).toEqual([
+      {
+        id: 'ea8179ef1b6d',
+        problem: 'The implement stage halts on missing artifacts',
+        status: 'active',
+        source: 'ideator',
+      },
+    ]);
+    expect(renderFleetNow(snap!)).toContain(
+      '- [idea:ea8179ef1b6d ideator active] The implement stage halts on missing artifacts',
+    );
+    expect(fleetSnapshot(payload)?.ideas).toEqual([]);
+  });
+});
+
 describe('fleet now query', () => {
   it('passes the message to the launcher as ?q so the recall matches it', async () => {
     const urls: string[] = [];
