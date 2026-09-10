@@ -21,7 +21,7 @@ describe('previous-turn bridge', () => {
       operatorName: 'Chris',
     });
     expect(bridged).toBe(
-      '[previous turn]\nChris: whats the biggest pod\nYou: ornith-b12x-serve on spark\n[current message]\nand the second one?',
+      '[earlier in this conversation]\nChris: whats the biggest pod\nYou: ornith-b12x-serve on spark\n[current message]\nand the second one?',
     );
     expect(stripPreviousTurn(bridged)).toBe('and the second one?');
     expect(stripPreviousTurn('plain')).toBe('plain');
@@ -40,7 +40,7 @@ describe('previous-turn bridge', () => {
       previousReply: 'rb',
       operatorName: 'Chris',
     });
-    expect(second).toBe('[previous turn]\nChris: b\nYou: rb\n[current message]\nc');
+    expect(second).toBe('[earlier in this conversation]\nChris: b\nYou: rb\n[current message]\nc');
   });
 });
 
@@ -49,7 +49,8 @@ describe('channelTurnEpisode', () => {
     const episode = channelTurnEpisode({
       operatorName: 'Chris',
       agentName: 'concierge',
-      message: '[previous turn]\nChris: a\nYou: b\n[current message]\nhow much vram is free',
+      message:
+        '[earlier in this conversation]\nChris: a\nYou: b\n[current message]\nhow much vram is free',
       reply: 'About 20 GB.',
       error: undefined,
       at: '2026-09-02T03:00:00Z',
@@ -131,7 +132,7 @@ describe('earlier turns', () => {
       earlier: [{ message: 'You steer the fleet, no?', reply: 'I am the front desk.' }],
     });
     expect(text).toBe(
-      '[previous turn]\nChris: You steer the fleet, no?\nYou: I am the front desk.\nChris: why not retain over time?\nYou: because authority is bounded\n[current message]\nYeah',
+      '[earlier in this conversation]\nChris: You steer the fleet, no?\nYou: I am the front desk.\nChris: why not retain over time?\nYou: because authority is bounded\n[current message]\nYeah',
     );
     expect(stripPreviousTurn(text)).toBe('Yeah');
   });

@@ -79,7 +79,7 @@ describe('fleet now', () => {
       block,
     );
     expect(bridged).toBe(
-      '[previous turn]\nChris: Status?\nYou: fine\n[fleet now]\nFleet health: nothing is broken.\n[current message]\nand now?',
+      '[earlier in this conversation]\nChris: Status?\nYou: fine\n[fleet now]\nFleet health: nothing is broken.\n[current message]\nand now?',
     );
     expect(stripPreviousTurn(bridged)).toBe('and now?');
   });
