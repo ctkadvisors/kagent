@@ -69,7 +69,7 @@ rules:
     verbs: ['get', 'patch', 'update']
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks']
-    verbs: ['get']
+    verbs: ['get', 'list']   # list: the session's earlier turns for the bridge (v0.2.58 answered 403 without it)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
