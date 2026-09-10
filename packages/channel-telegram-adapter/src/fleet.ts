@@ -27,8 +27,17 @@ export interface FleetRow {
   readonly text: string;
 }
 
+export interface FleetIdea {
+  readonly id: string;
+  readonly problem: string;
+  readonly status: string;
+  readonly source: string;
+}
+
 export interface FleetSnapshot {
   readonly summary?: string;
+  /** The idea archive's active lineages (fleet.ideas.active from the launcher). */
+  readonly ideas: readonly FleetIdea[];
   readonly memoryBySource?: Readonly<Record<string, number>>;
   readonly rules: readonly string[];
   /** The rows the fleet wrote itself lately: the only ones there are. */
@@ -59,6 +68,21 @@ export function fleetSnapshot(payload: unknown): FleetSnapshot | undefined {
       line.length > MAX_RULE_CHARS ? `${line.slice(0, MAX_RULE_CHARS - 3)}...` : line,
     );
   const bySource = health?.memory?.by_source;
+  const ideasRaw = (fleet.ideas as { active?: unknown } | undefined)?.active;
+  const ideas: FleetIdea[] = Array.isArray(ideasRaw)
+    ? ideasRaw
+        .filter(
+          (r): r is FleetIdea =>
+            typeof r === 'object' && r !== null && typeof (r as FleetIdea).problem === 'string',
+        )
+        .slice(0, 6)
+        .map((r) => ({
+          id: String(r.id),
+          problem: r.problem,
+          status: String(r.status),
+          source: String(r.source),
+        }))
+    : [];
   const recentRaw = health?.memory?.recent;
   const recent: FleetRow[] = Array.isArray(recentRaw)
     ? recentRaw
@@ -75,6 +99,7 @@ export function fleetSnapshot(payload: unknown): FleetSnapshot | undefined {
     ...(typeof health?.computed_at === 'string' && { computedAt: health.computed_at }),
     rules,
     recent,
+    ideas,
   };
 }
 
@@ -90,6 +115,13 @@ export function renderFleetNow(snap: FleetSnapshot): string {
     );
   }
   if (snap.rules.length > 0) lines.push('rules:', ...snap.rules.map((r) => `- ${r}`));
+  if (snap.ideas.length > 0)
+    lines.push(
+      "the fleet's idea archive, active lineages (what it wants to try next; each has a lineage and the experiences it grew from):",
+      ...snap.ideas.map(
+        (i) => `- [idea:${i.id} ${i.source} ${i.status}] ${i.problem.slice(0, 200)}`,
+      ),
+    );
   if (snap.recent.length > 0)
     lines.push(
       'written by the fleet itself lately (these are all of them; list only these, with their author):',
