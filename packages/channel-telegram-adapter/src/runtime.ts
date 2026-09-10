@@ -234,21 +234,28 @@ async function bridgePreviousTurn(
     const previousReply = task === undefined ? undefined : replyTextOf(task);
     if (previousMessage === undefined || previousReply === undefined) return envelope;
     // The turns before that one: a discussion is not one exchange long.
+    // Its own try: v0.2.58 lost the one-turn bridge for a whole afternoon
+    // because listing tasks answered 403 (RBAC) and the throw took the last
+    // turn down with it.
     let earlier: { message: string; reply: string }[] = [];
     if (input.outbox.listSessionTasks !== undefined && session?.metadata.name !== undefined) {
-      const recent = await input.outbox.listSessionTasks({
-        namespace: input.config.namespace,
-        sessionName: session.metadata.name,
-        limit: EARLIER_TURNS + 1,
-      });
-      earlier = recent
-        .filter((t) => t.metadata.name !== ref.name)
-        .flatMap((t) => {
-          const message = t.metadata.annotations?.['kagent.knuteson.io/channel-message'];
-          const reply = replyTextOf(t);
-          return message === undefined || reply === undefined ? [] : [{ message, reply }];
-        })
-        .slice(-EARLIER_TURNS);
+      try {
+        const recent = await input.outbox.listSessionTasks({
+          namespace: input.config.namespace,
+          sessionName: session.metadata.name,
+          limit: EARLIER_TURNS + 1,
+        });
+        earlier = recent
+          .filter((t) => t.metadata.name !== ref.name)
+          .flatMap((t) => {
+            const message = t.metadata.annotations?.['kagent.knuteson.io/channel-message'];
+            const reply = replyTextOf(t);
+            return message === undefined || reply === undefined ? [] : [{ message, reply }];
+          })
+          .slice(-EARLIER_TURNS);
+      } catch (err) {
+        input.logger.warn('[channel-telegram] earlier-turns lookup skipped', err);
+      }
     }
     return {
       ...envelope,
