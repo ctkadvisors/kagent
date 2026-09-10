@@ -234,9 +234,24 @@ function replyTextForTask(task: AgentTask): string | undefined {
   const result = task.status.result;
   const content = typeof result === 'string' ? result : readResultContent(result);
   if (content === undefined) return 'The task completed without a text answer.';
-  const trimmed = content.trim();
+  const trimmed = withoutClosingOffer(content.trim());
   if (trimmed.length === 0) return 'The task completed without a text answer.';
   return truncateReply(trimmed);
+}
+
+const CLOSING_OFFER =
+  /\n*(?:(?:want|would you like) me to|shall i|should i|do you want me to|let me know if you(?:'d| would) like)\b[^\n]*\?\s*$/iu;
+
+/**
+ * A reply that ends by offering to do something the concierge could have
+ * done in the turn ("Want me to dig into why?") loses that last sentence.
+ * The self-check catches it on tool-less turns; on turns that used a tool the
+ * offer still came through (2026-09-10). Only a trailing question of that
+ * shape is removed; a reply that is nothing but the offer stays.
+ */
+export function withoutClosingOffer(text: string): string {
+  const cut = text.replace(CLOSING_OFFER, '').trimEnd();
+  return cut.length > 0 ? cut : text;
 }
 
 /** What failed, in the backend's own words (first line, bounded), and what was asked, so nothing is lost. */
