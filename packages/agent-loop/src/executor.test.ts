@@ -42,6 +42,29 @@ describe('AgentExecutor — loop semantics', () => {
     expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(1);
   });
 
+  it('selfCheck: a tool-less turn gets the check back once and the second answer is the reply', async () => {
+    const llm = makeStubLLM({
+      scriptedResponses: [{ content: 'narrated' }, { content: 'checked' }],
+    });
+    const exec = new AgentExecutor({ registry, llm });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'what does the rule mean?' }],
+      selfCheck: 'Check every claim; look, then answer again.',
+    });
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('checked');
+    const calls = result.traces.filter((t) => t.trace_type === 'llm_call');
+    expect(calls).toHaveLength(2);
+    expect(String(calls[1]?.input_messages ?? '')).toContain('look, then answer again');
+    // Without selfCheck the same script ends after the first answer.
+    const plain = await new AgentExecutor({
+      registry,
+      llm: makeStubLLM({ scriptedResponses: [{ content: 'narrated' }] }),
+    }).run({ agentType: 'chat', messages: [{ role: 'user', content: 'hi' }] });
+    expect(plain.finalContent).toBe('narrated');
+  });
+
   it('SC3.2: two-iteration tool-use; trace order: iteration_boundary, llm_call, tool_call, iteration_boundary, llm_call', async () => {
     const llm = makeStubLLM({
       scriptedResponses: [

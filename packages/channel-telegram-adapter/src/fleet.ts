@@ -116,8 +116,14 @@ export async function fetchFleetNow(
   fleetUrl: string,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000,
+  query?: string,
 ): Promise<string | undefined> {
-  const res = await fetchImpl(`${fleetUrl.replace(/\/+$/u, '')}/missions`, {
+  // ?q=<message>: the launcher recalls the lessons that overlap this message.
+  const q =
+    query === undefined || query.trim() === ''
+      ? ''
+      : `?q=${encodeURIComponent(query.slice(0, 500))}`;
+  const res = await fetchImpl(`${fleetUrl.replace(/\/+$/u, '')}/missions${q}`, {
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) return undefined;

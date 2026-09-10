@@ -120,3 +120,19 @@ describe('writeBrainEpisode', () => {
     ).rejects.toThrow('HTTP 401');
   });
 });
+
+describe('earlier turns', () => {
+  it('renders older exchanges before the last one and strips back to the raw message', () => {
+    const text = withPreviousTurn({
+      text: 'Yeah',
+      previousMessage: 'why not retain over time?',
+      previousReply: 'because authority is bounded',
+      operatorName: 'Chris',
+      earlier: [{ message: 'You steer the fleet, no?', reply: 'I am the front desk.' }],
+    });
+    expect(text).toBe(
+      '[previous turn]\nChris: You steer the fleet, no?\nYou: I am the front desk.\nChris: why not retain over time?\nYou: because authority is bounded\n[current message]\nYeah',
+    );
+    expect(stripPreviousTurn(text)).toBe('Yeah');
+  });
+});

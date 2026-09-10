@@ -371,6 +371,9 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     ...(effectiveTokenLimit !== undefined && { tokenLimit: effectiveTokenLimit }),
     ...(effectiveCostLimit !== undefined && { costLimitUsd: effectiveCostLimit }),
     ...(effectiveMaxIter !== undefined && { maxIterations: effectiveMaxIter }),
+    ...(config.agentSpec.llmParams?.selfCheck !== undefined && {
+      selfCheck: config.agentSpec.llmParams.selfCheck,
+    }),
     // v0.1.9 — thread the operator-projected
     // KAGENT_AGENT_MODEL_CONTEXT_WINDOW (parsed onto config) onto
     // RunBudget.contextWindowTokens so the executor's pre-call safety-net

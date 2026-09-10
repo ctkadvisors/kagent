@@ -98,6 +98,23 @@ export function buildKubernetesChannelOutboxStore(input: {
       }
     },
 
+    async listSessionTasks(query): Promise<readonly AgentTask[]> {
+      const res = (await input.customApi.listNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace: query.namespace,
+        plural: AGENT_TASK_PLURAL,
+        labelSelector: `kagent.knuteson.io/channel-session=${query.sessionName}`,
+      })) as { readonly items?: readonly unknown[] };
+      const items = Array.isArray(res.items) ? res.items : [];
+      return items
+        .filter(isAgentTask)
+        .sort((a, b) =>
+          (a.metadata.creationTimestamp ?? '').localeCompare(b.metadata.creationTimestamp ?? ''),
+        )
+        .slice(-query.limit);
+    },
+
     async patchSessionStatus(
       namespace: string,
       name: string,

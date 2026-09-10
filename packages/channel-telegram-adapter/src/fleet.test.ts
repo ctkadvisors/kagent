@@ -103,6 +103,20 @@ describe('fleet now', () => {
   });
 });
 
+describe('fleet now query', () => {
+  it('passes the message to the launcher as ?q so the recall matches it', async () => {
+    const urls: string[] = [];
+    const f = ((url: string) => {
+      urls.push(url);
+      return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+    }) as unknown as typeof fetch;
+    await fetchFleetNow('http://launcher', f, 5000, 'what does refresh first mean?');
+    expect(urls).toEqual(['http://launcher/missions?q=what%20does%20refresh%20first%20mean%3F']);
+    await fetchFleetNow('http://launcher', f, 5000, '  ');
+    expect(urls[1]).toBe('http://launcher/missions');
+  });
+});
+
 describe('rule capture', () => {
   it('ruleIn takes only a message that starts with rule: or remember:', () => {
     expect(ruleIn('rule: never delete a fleet job\n on an unchecked clock')).toBe(

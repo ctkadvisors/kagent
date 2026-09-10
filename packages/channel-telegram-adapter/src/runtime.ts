@@ -202,6 +202,8 @@ export async function processTelegramUpdates(input: {
  * later still reads as a conversation. Best effort — any failure means
  * the message goes through as-is.
  */
+const EARLIER_TURNS = 5;
+
 async function bridgePreviousTurn(
   input: {
     readonly config: TelegramAdapterConfig;
@@ -231,6 +233,23 @@ async function bridgePreviousTurn(
     const previousMessage = task?.metadata.annotations?.['kagent.knuteson.io/channel-message'];
     const previousReply = task === undefined ? undefined : replyTextOf(task);
     if (previousMessage === undefined || previousReply === undefined) return envelope;
+    // The turns before that one: a discussion is not one exchange long.
+    let earlier: { message: string; reply: string }[] = [];
+    if (input.outbox.listSessionTasks !== undefined && session?.metadata.name !== undefined) {
+      const recent = await input.outbox.listSessionTasks({
+        namespace: input.config.namespace,
+        sessionName: session.metadata.name,
+        limit: EARLIER_TURNS + 1,
+      });
+      earlier = recent
+        .filter((t) => t.metadata.name !== ref.name)
+        .flatMap((t) => {
+          const message = t.metadata.annotations?.['kagent.knuteson.io/channel-message'];
+          const reply = replyTextOf(t);
+          return message === undefined || reply === undefined ? [] : [{ message, reply }];
+        })
+        .slice(-EARLIER_TURNS);
+    }
     return {
       ...envelope,
       text: withPreviousTurn({
@@ -238,6 +257,7 @@ async function bridgePreviousTurn(
         previousMessage,
         previousReply,
         operatorName: input.config.brain?.operatorName ?? 'the operator',
+        ...(earlier.length > 0 && { earlier }),
       }),
     };
   } catch (err) {
@@ -262,7 +282,7 @@ async function bridgeFleetNow(
     const rule = ruleIn(rawText);
     const ruleLine =
       rule === undefined ? undefined : renderRuleRecord(rule, await recordRule(url, rule));
-    const fetched = await fetchFleetNow(url);
+    const fetched = await fetchFleetNow(url, fetch, 5000, rawText);
     if (fetched === undefined && ruleLine === undefined) return envelope;
     const block = [fetched ?? '[fleet now]', ruleLine].filter((x) => x !== undefined).join('\n');
     return { ...envelope, text: withFleetNow(envelope.text, block) };

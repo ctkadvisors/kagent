@@ -104,6 +104,8 @@ export interface AgentSpec {
     readonly temperature?: number;
     readonly maxTokens?: number;
     readonly stopSequences?: readonly string[];
+    /** One self-check message for a tool-less turn; the model answers again and that answer is the reply. */
+    readonly selfCheck?: string;
   };
   /**
    * Opt-in per-Agent fairness cap (LLM-gateway bundle, spec §3.4).
