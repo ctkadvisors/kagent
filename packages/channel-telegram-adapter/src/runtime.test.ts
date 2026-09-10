@@ -124,7 +124,7 @@ describe('processTelegramUpdates', () => {
 
     expect(gateway.postInbound).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: '[previous turn]\nChris: whats the biggest pod\nYou: ornith-b12x-serve\n[current message]\nand the second biggest?',
+        text: '[earlier in this conversation]\nChris: whats the biggest pod\nYou: ornith-b12x-serve\n[current message]\nand the second biggest?',
       }),
     );
   });

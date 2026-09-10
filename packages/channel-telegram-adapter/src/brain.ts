@@ -19,7 +19,9 @@
  * again so the episode carries only what the human actually typed.
  */
 
-export const PREVIOUS_TURN_MARKER = '[previous turn]';
+// "[previous turn]" read as "not this thread": with three exchanges in front
+// of it the concierge said it had no earlier messages (2026-09-10 15:37Z).
+export const PREVIOUS_TURN_MARKER = '[earlier in this conversation]';
 export const CURRENT_MESSAGE_MARKER = '[current message]';
 /**
  * Telegram caps a single reply at 4000 chars. The bridged previous reply
