@@ -596,7 +596,33 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             bookkeeping.budget.cumulativeInputTokens + bookkeeping.budget.cumulativeOutputTokens;
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
-            const reason = `${CONTEXT_REFUSAL_PREFIX}: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
+            // 95% safety-net refuses the next call on cumulative tokens.
+            // Per trace.ts:75-93 / CONTEXT-AWARENESS.md §8 the
+            // `usage_source` provenance marker on each llm_call trace
+            // says whether those cumulative numbers are the backend's
+            // reported figures (`'reported'`) or the estimateTokens
+            // fallback (`'estimate'`) — which can drift 20-40% from real
+            // tokenization (executor.ts:1019-1024, trace.ts:189-191). The
+            // marker is written on every llm_call (executor.ts:1003) but
+            // previously read by no runtime path. Surfacing the *worst*
+            // provenance in the refusal string so an operator triaging a
+            // context-window incident (e.g. the 2026-09-11 Workers AI /
+            // Ollama / Exo usage-free runs) can tell a precise refusal
+            // from an approximate one without re-deriving it from traces.
+            let provenance: 'reported' | 'estimate' | undefined;
+            for (const t of bookkeeping.traces) {
+              if (t.trace_type === 'llm_call' && t.usage_source) {
+                // 'estimate' wins over 'reported' only if no estimate
+                // is seen: prefer the coarsest provenance present.
+                provenance =
+                  t.usage_source === 'estimate' ? 'estimate' : (provenance ?? t.usage_source);
+              }
+            }
+            const provenanceSuffix =
+              provenance === 'estimate'
+                ? ' (cumulative budget is an estimate, not backend-reported — 20-40% drift)'
+                : '';
+            const reason = `${CONTEXT_REFUSAL_PREFIX}: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}${provenanceSuffix}`;
             // Use status=0 so the existing 429-retry guard
             // (executor.ts:407 — gated to `status === 429`) does NOT
             // kick in: refusal is terminal. The reason string is

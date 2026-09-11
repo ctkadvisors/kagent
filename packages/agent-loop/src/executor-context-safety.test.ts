@@ -366,4 +366,84 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
     });
     expect(result.budget.contextWindowTokens).toBe(1234);
   });
+
+  it('usage-free run annotates the safety-net refusal as an estimate (provenance)', async () => {
+    // Workers AI / Ollama / Exo return NO usage, so the cumulative
+    // budget is built from `estimateTokens` (chars/4) and each llm_call
+    // trace carries `usage_source: 'estimate'` (executor.ts:1003). The
+    // 95% safety-net must surface that provenance in the refusal reason
+    // so an operator triaging the incident can tell a precise refusal
+    // from an approximate one — the marker the docs promise but no
+    // runtime path read before this fix.
+    //
+    // Iteration 0 returns a tool_call whose content is ~3800 chars:
+    // estimateTokens (ceil(len/4)) == 950, exactly the 0.95 * 1000
+    // threshold. Iteration 1 is therefore refused pre-flight on the
+    // *estimated* budget (no backend usage was reported).
+    const big = 'x'.repeat(3800);
+    const inner = makeStubLLM({
+      scriptedResponses: [
+        { content: big, tool_calls: [{ id: 'c1', name: 'noop', args: {} }] },
+        { content: 'should-not-be-reached' },
+      ],
+    });
+    const counting = countingLlm(inner);
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'noop', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'tool-ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm: counting.llm, toolProviders: tools });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+      contextWindowTokens: 1000,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.error?.message).toContain('context_window_substrate_refused');
+    // The estimate provenance is now surfaced in the refusal string.
+    expect(result.error?.message).toContain('estimate');
+    // Still one chat() — the second call was refused pre-flight.
+    expect(counting.calls()).toBe(1);
+  });
+
+  it('backend-reported run does NOT annotate the refusal with the estimate suffix (provenance)', async () => {
+    // When the backend reports usage the cumulative budget is precise,
+    // every llm_call trace carries `usage_source: 'reported'`, and the
+    // safety-net refusal must NOT claim the numbers are approximate.
+    const inner = makeStubLLM({
+      scriptedResponses: [
+        {
+          content: '',
+          tool_calls: [{ id: 'c1', name: 'noop', args: {} }],
+          usage: { inputTokens: 600, outputTokens: 350 }, // 950, exact
+        },
+        { content: 'should-not-be-reached' },
+      ],
+    });
+    const counting = countingLlm(inner);
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'noop', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'tool-ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm: counting.llm, toolProviders: tools });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+      contextWindowTokens: 1000,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.error?.message).toContain('context_window_substrate_refused');
+    // A precise, backend-reported refusal must not carry the estimate drift note.
+    expect(result.error?.message).not.toContain('estimate');
+    expect(result.error?.message).not.toContain('drift');
+    expect(counting.calls()).toBe(1);
+  });
 });
