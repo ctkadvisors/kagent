@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { processTelegramUpdates, startTelegramAdapter } from './runtime.js';
+import { ChannelGatewayHttpError } from './gateway.js';
 import type {
   AdapterLogger,
   ChannelStatusPatch,
@@ -30,6 +31,37 @@ const config: TelegramAdapterConfig = {
 };
 
 describe('processTelegramUpdates', () => {
+  it('skips an update the gateway definitively rejects instead of retrying it forever', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 10,
+          message: {
+            message_id: 1,
+            from: { id: 3175140114, is_bot: false, first_name: 'Chris' },
+            chat: { id: 3175140114, type: 'private' },
+            text: 'You dont need me to approve this',
+          },
+        },
+      ],
+    });
+    const gateway = {
+      postInbound: vi
+        .fn()
+        .mockRejectedValue(new ChannelGatewayHttpError(400, { code: 'invalid_json' })),
+    };
+
+    const result = await processTelegramUpdates({
+      config,
+      client,
+      gateway,
+      logger: quietLogger,
+      offset: 10,
+    });
+
+    expect(result).toEqual({ nextOffset: 11, accepted: 0, ignored: 0, failed: 1 });
+  });
+
   it('posts accepted Telegram updates and advances the polling offset', async () => {
     const client = makeClient({
       updates: [

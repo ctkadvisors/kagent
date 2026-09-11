@@ -12,7 +12,7 @@ import {
   type ChannelControllerStore,
 } from './channel-controller.js';
 
-const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 256 * 1024; // the [fleet now] + earlier-turns bridge is ~72 KiB (2026-09-10)
 
 export interface ChannelGatewayDeps {
   readonly namespace: string;
@@ -205,8 +205,9 @@ function readJsonBody(req: IncomingMessage, maxBodyBytes: number): Promise<unkno
     req.on('data', (chunk: Buffer) => {
       total += chunk.byteLength;
       if (total > maxBodyBytes) {
+        // no req.destroy(): the client must see the 400, not "other side closed"
+        // (the Telegram adapter retried one 72 KiB message for 21 h on 2026-09-10)
         reject(new Error(`request body exceeds ${String(maxBodyBytes)} bytes`));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
