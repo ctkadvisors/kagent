@@ -8,6 +8,7 @@ import { withPreviousTurn } from './brain.js';
 import { fetchFleetNow, recordRule, renderRuleRecord, ruleIn, withFleetNow } from './fleet.js';
 import { deliverOutboundTurns } from './outbound.js';
 import { adapterCondition } from './status.js';
+import { ChannelGatewayHttpError } from './gateway.js';
 import type {
   AdapterLogger,
   AgentTask,
@@ -189,6 +190,13 @@ export async function processTelegramUpdates(input: {
     } catch (err) {
       failed += 1;
       input.logger.error('[channel-telegram] inbound message rejected by channel gateway', err);
+      // A definitive no (4xx) is about this message: skip it, or the same update
+      // is retried forever and every later message waits behind it. Anything
+      // else (gateway down, 5xx) keeps the offset so the message is retried.
+      if (err instanceof ChannelGatewayHttpError && err.status < 500) {
+        nextOffset = Math.max(nextOffset ?? 0, updateId + 1);
+        continue;
+      }
       break;
     }
   }
