@@ -400,6 +400,10 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       agentType: 'chat',
       messages: [{ role: 'user', content: 'go' }],
       contextWindowTokens: 1000,
+      // Pin the 0.95 default so the test is explicit about the
+      // threshold the ~3800-char tool_call (estimateTokens == 950)
+      // is meant to trip, not an accidental re-default.
+      contextSafetyThreshold: 0.95,
     });
 
     expect(result.status).toBe('failed');
@@ -437,6 +441,8 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       agentType: 'chat',
       messages: [{ role: 'user', content: 'go' }],
       contextWindowTokens: 1000,
+      // Same pin as the estimate test above.
+      contextSafetyThreshold: 0.95,
     });
 
     expect(result.status).toBe('failed');

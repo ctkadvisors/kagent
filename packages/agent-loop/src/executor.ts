@@ -609,14 +609,24 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             // context-window incident (e.g. the 2026-09-11 Workers AI /
             // Ollama / Exo usage-free runs) can tell a precise refusal
             // from an approximate one without re-deriving it from traces.
+            // Coalesce the *coarsest* provenance across the run.
+            // 'estimate' outranks 'reported' whenever at least one
+            // llm_call carried the estimate marker, because ANY
+            // approximate reading means the cumulative figure may
+            // drift. Absent any marker, treat a nonzero budget as an
+            // estimate: the numbers existed but we never captured
+            // where they came from, which is the same 20-40% drift
+            // risk as an explicit estimate (not a backend-reported
+            // reading).
             let provenance: 'reported' | 'estimate' | undefined;
             for (const t of bookkeeping.traces) {
               if (t.trace_type === 'llm_call' && t.usage_source) {
-                // 'estimate' wins over 'reported' only if no estimate
-                // is seen: prefer the coarsest provenance present.
                 provenance =
                   t.usage_source === 'estimate' ? 'estimate' : (provenance ?? t.usage_source);
               }
+            }
+            if (provenance === undefined && used > 0) {
+              provenance = 'estimate';
             }
             const provenanceSuffix =
               provenance === 'estimate'
