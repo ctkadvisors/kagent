@@ -61,8 +61,56 @@ import { SseBroker } from './sse.js';
 
 const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 
+/**
+ * Parse + validate the `WORKBENCH_PORT` env var. `parseInt` turns
+ * 'abc', '' and undefined into `NaN`, AND silently truncates
+ * '8080.5' → 8080 — binding the server to a port the operator never
+ * asked for. Fail fast with a descriptive configuration error
+ * instead of a boot-time EINVAL or a silent wrong-port bind.
+ *
+ * `value` is the raw env var value; undefined/empty means the
+ * documented default of 8080.
+ */
+export function resolvePort(
+  value: string | undefined,
+): { ok: true; port: number } | { ok: false; error: Error } {
+  if (value === undefined || value.length === 0) {
+    return { ok: true, port: 8080 };
+  }
+
+  // parseInt accepts leading/trailing whitespace, a leading sign, and
+  // a trailing float suffix. Anchor the match on ^[0-9]+$ so a port of
+  // ' 8080', '+8080' or '8080.5' cannot sneak through, and cannot be
+  // silently truncated to a port the operator never asked for.
+  if (!/^[0-9]+$/.test(value)) {
+    return {
+      ok: false,
+      error: new Error(
+        `WORKBENCH_PORT is invalid (${value == null ? value : JSON.stringify(value)}): ` +
+          `expected an integer in the range 1..65535.`,
+      ),
+    };
+  }
+
+  const port = Number.parseInt(value, 10);
+  if (port < 1 || port > 65535) {
+    return {
+      ok: false,
+      error: new Error(
+        `WORKBENCH_PORT is out of range (${value}): expected an integer in the range 1..65535.`,
+      ),
+    };
+  }
+
+  return { ok: true, port };
+}
+
 async function main(): Promise<void> {
-  const port = Number.parseInt(process.env.WORKBENCH_PORT ?? '8080', 10);
+  const resolved = resolvePort(process.env.WORKBENCH_PORT);
+  if (!resolved.ok) {
+    throw resolved.error;
+  }
+  const port = resolved.port;
   const hostname = process.env.WORKBENCH_HOSTNAME ?? '0.0.0.0';
   const skipInformer = process.env.KAGENT_NO_INFORMER === '1';
 
