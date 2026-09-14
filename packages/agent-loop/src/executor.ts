@@ -156,6 +156,14 @@ export interface RunBudget {
   cumulativeInputTokens: number;
   /** Sum of output tokens across every LLM call in the run. */
   cumulativeOutputTokens: number;
+  /**
+   * Input + output tokens of the most recent LLM call: the size of the
+   * conversation the NEXT call will send (every call re-sends the whole
+   * history, so the cumulative sums above grow ~quadratically with the
+   * iteration count and say nothing about context-window pressure).
+   * Undefined until the first call returns.
+   */
+  contextTokens?: number;
   /** Sum of backend-reported cost in USD; `null` when no backend in the run reported any cost. */
   cumulativeCostUsd: number | null;
   /** Optional cap; if set and exceeded, executor exits with `status='budget_exceeded'`. */
@@ -592,11 +600,13 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         // is terminal in practice.
         const window = bookkeeping.budget.contextWindowTokens;
         if (window !== undefined) {
-          const used =
-            bookkeeping.budget.cumulativeInputTokens + bookkeeping.budget.cumulativeOutputTokens;
+          // 2026-09-14: the last call's context, not the cumulative sum —
+          // the sum refused every 20-iteration concierge task at
+          // "cumulative=265k" while its conversation was ~40k tokens.
+          const used = bookkeeping.budget.contextTokens ?? 0;
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
-            const reason = `${CONTEXT_REFUSAL_PREFIX}: cumulative=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
+            const reason = `${CONTEXT_REFUSAL_PREFIX}: context=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
             // Use status=0 so the existing 429-retry guard
             // (executor.ts:407 — gated to `status === 429`) does NOT
             // kick in: refusal is terminal. The reason string is
@@ -1017,11 +1027,13 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       await this.emitToSinks(llmEntry);
 
       // Token accounting — backend-reported wins; fallback to estimate.
-      budget.cumulativeInputTokens +=
+      const callInputTokens =
         llmResult.usage?.inputTokens ??
         estimateTokens(currentMessages.map((m) => m.content).join('\n'));
-      budget.cumulativeOutputTokens +=
-        llmResult.usage?.outputTokens ?? estimateTokens(llmResult.content);
+      const callOutputTokens = llmResult.usage?.outputTokens ?? estimateTokens(llmResult.content);
+      budget.cumulativeInputTokens += callInputTokens;
+      budget.cumulativeOutputTokens += callOutputTokens;
+      budget.contextTokens = callInputTokens + callOutputTokens;
       // Cost accounting — stays null until ANY backend reports cost.
       if (llmResult.usage?.costUsd != null) {
         budget.cumulativeCostUsd = (budget.cumulativeCostUsd ?? 0) + llmResult.usage.costUsd;
