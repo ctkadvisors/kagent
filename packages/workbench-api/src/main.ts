@@ -62,7 +62,14 @@ import { SseBroker } from './sse.js';
 const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 
 async function main(): Promise<void> {
-  const port = Number.parseInt(process.env.WORKBENCH_PORT ?? '8080', 10);
+  const portRaw = process.env.WORKBENCH_PORT ?? '8080';
+  const port = Number.parseInt(portRaw, 10);
+  if (!Number.isInteger(port) || port < 0 || port >= 65536) {
+    throw new Error(
+      `[workbench-api] invalid WORKBENCH_PORT=${JSON.stringify(portRaw)} ` +
+        '(expected an integer in the range 0..65535)',
+    );
+  }
   const hostname = process.env.WORKBENCH_HOSTNAME ?? '0.0.0.0';
   const skipInformer = process.env.KAGENT_NO_INFORMER === '1';
 
