@@ -61,15 +61,43 @@ import { SseBroker } from './sse.js';
 
 const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 
-async function main(): Promise<void> {
-  const portRaw = process.env.WORKBENCH_PORT ?? '8080';
-  const port = Number.parseInt(portRaw, 10);
-  if (!Number.isInteger(port) || port < 0 || port >= 65536) {
+/**
+ * Parse + validate the chart-managed `WORKBENCH_PORT` env var.
+ *
+ * Pure and side-effect free so it can be unit-tested without spawning a
+ * child process: this is the exact same code path `main()` runs before
+ * it hands `port` to `startServer` (and, transitively, `@hono/node-server`).
+ *
+ * The default is `8080` when the var is unset, matching the chart's
+ * `api.port`. The value must be a base-10 integer in the full TCP range
+ * `1..65535` — port 0 means "let the OS pick a port", which this
+ * chart-managed service does not want; the Kubernetes service and the
+ * workbench-ui both read a concrete `api.port`.
+ *
+ * Throws a descriptive Error on any other value so the process fails
+ * fast at boot rather than surfacing an uncaught, unlabelled
+ * `options.port should be >= 0 and < 65536` from the HTTP server.
+ */
+export function parseWorkbenchPort(raw: string | undefined = process.env.WORKBENCH_PORT): number {
+  const trimmed = (raw ?? '8080').trim();
+  if (!/^[0-9]+$/.test(trimmed)) {
     throw new Error(
-      `[workbench-api] invalid WORKBENCH_PORT=${JSON.stringify(portRaw)} ` +
-        '(expected an integer in the range 0..65535)',
+      `[workbench-api] invalid WORKBENCH_PORT=${JSON.stringify(raw ?? '')} ` +
+        '(expected an integer in the range 1..65535)',
     );
   }
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(
+      `[workbench-api] invalid WORKBENCH_PORT=${JSON.stringify(raw ?? '')} ` +
+        '(expected an integer in the range 1..65535)',
+    );
+  }
+  return port;
+}
+
+async function main(): Promise<void> {
+  const port = parseWorkbenchPort(process.env.WORKBENCH_PORT);
   const hostname = process.env.WORKBENCH_HOSTNAME ?? '0.0.0.0';
   const skipInformer = process.env.KAGENT_NO_INFORMER === '1';
 

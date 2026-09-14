@@ -3,51 +3,77 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { execFileSync } from 'node:child_process';
-
 import { describe, expect, it } from 'vitest';
 
-// `main()` is not exported from main.ts, so exercise the entrypoint as a
-// child process (the same `tsx src/main.ts` the `start` script runs). A
-// misconfigured WORKBENCH_PORT must fail fast with a descriptive error
-// *before* the server is created, rather than an uncaught Hono listen
-// throw once the chart-managed env var is set to a bad value.
-const runWithEnv = (portValue: string): { code: number; stdout: string; stderr: string } => {
-  try {
-    return execFileSync('npx', ['tsx', 'src/main.ts'], {
-      env: {
-        ...process.env,
-        WORKBENCH_PORT: portValue,
-        KAGENT_NO_INFORMER: '1',
-        // Keep the probe/auth paths from hanging on a real cluster.
-        WORKBENCH_AUTH_REQUIRED: 'false',
-      },
-      encoding: 'utf8',
-      timeout: 30_000,
-    });
-  } catch (err) {
-    // execFileSync throws a ChildProcessError on non-zero exit; read
-    // its stdout/stderr (if any) plus the exit status.
-    const e = err as { status?: number | null; stdout?: string; stderr?: string };
-    return {
-      code: typeof e.status === 'number' ? e.status : 1,
-      stdout: e.stdout ?? '',
-      stderr: e.stderr ?? '',
-    };
-  }
-};
+import { parseWorkbenchPort } from './main.js';
 
-describe('WORKBENCH_PORT validation', () => {
-  it('rejects a non-numeric port with a descriptive error', () => {
-    const { code, stderr } = runWithEnv('not-a-number');
-    expect(code).not.toBe(0);
-    expect(stderr).toContain('invalid WORKBENCH_PORT');
-    expect(stderr).toContain('not-a-number');
+// The port guard lives in a small, pure, exported helper (parseWorkbenchPort)
+// rather than in main() so it can be unit-tested directly. The previous
+// child-process smoke test (execFileSync('npx', ['tsx', 'src/main.ts'])) was
+// brittle: it depended on the cwd being the package root, npx/tsx being
+// installable in the sandbox, and the child's exit status / stderr buffering.
+// The main() entrypoint now delegates to exactly this helper, so testing it
+// covers the runtime validation path.
+
+describe('parseWorkbenchPort', () => {
+  it('defaults to 8080 when the env var is unset', () => {
+    // No argument → the helper falls back to process.env, which in the test
+    // runner has no WORKBENCH_PORT set, so it resolves to the 8080 default.
+    expect(parseWorkbenchPort()).toBe(8080);
   });
 
-  it('rejects an out-of-range port', () => {
-    const { code, stderr } = runWithEnv('70000');
-    expect(code).not.toBe(0);
-    expect(stderr).toContain('invalid WORKBENCH_PORT');
+  it('parses a plain integer string', () => {
+    expect(parseWorkbenchPort('3000')).toBe(3000);
+  });
+
+  it('accepts the upper bound of the TCP range', () => {
+    expect(parseWorkbenchPort('65535')).toBe(65535);
+  });
+
+  it('accepts the lower bound (rejects 0)', () => {
+    expect(parseWorkbenchPort('1')).toBe(1);
+  });
+
+  it('ignores surrounding whitespace', () => {
+    expect(parseWorkbenchPort('  8080  ')).toBe(8080);
+  });
+
+  it('rejects a non-numeric value', () => {
+    expect(() => parseWorkbenchPort('not-a-number')).toThrow(/invalid WORKBENCH_PORT/);
+  });
+
+  it('rejects a numeric value with trailing junk (parseInt would accept it)', () => {
+    expect(() => parseWorkbenchPort('8080abc')).toThrow(/invalid WORKBENCH_PORT/);
+  });
+
+  it('rejects a hexadecimal-looking value (parseInt would accept it)', () => {
+    expect(() => parseWorkbenchPort('0x10')).toThrow(/invalid WORKBENCH_PORT/);
+  });
+
+  it('rejects 0 (the chart-managed service needs a concrete port)', () => {
+    expect(() => parseWorkbenchPort('0')).toThrow(/invalid WORKBENCH_PORT/);
+  });
+
+  it('rejects a negative value', () => {
+    expect(() => parseWorkbenchPort('-1')).toThrow(/invalid WORKBENCH_PORT/);
+  });
+
+  it('rejects an out-of-range value above 65535', () => {
+    expect(() => parseWorkbenchPort('70000')).toThrow(/invalid WORKBENCH_PORT/);
+  });
+
+  it('produces a descriptive error message naming the offending value', () => {
+    try {
+      parseWorkbenchPort('not-a-number');
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect(String(err)).toContain('invalid WORKBENCH_PORT');
+      expect(String(err)).toContain('not-a-number');
+      expect(String(err)).toContain('1..65535');
+    }
+  });
+
+  it('accepts a leading-zero value as decimal, not octal', () => {
+    expect(parseWorkbenchPort('08080')).toBe(8080);
   });
 });
