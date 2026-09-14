@@ -54,22 +54,102 @@ describe('API constants mirror types.ts', () => {
 // ---------------------------------------------------------------------------
 
 function interfaceBody(text: string, name: string): string {
-  // Match `export interface Name { ... }` with the next `}` at any indent.
-  const re = new RegExp(`export interface ${name}\\s*\\{([^}]*)\\}`, 's');
-  const m = text.match(re);
-  if (!m) throw new Error(`could not find interface ${name} in types.ts`);
-  return m[1];
+  // Match `export interface Name {` then capture the body up to the matching
+  // closing brace at depth zero. A naive `\{([^}]*)\}` stops at the first `}`,
+  // which truncates any interface with an inline object type (e.g.
+  // `AgentSpec.systemPromptRef?: { readonly name: string }`) — the whole
+  // remainder of the interface, and every member after it, would be silently
+  // dropped. Walk brace depth from the opening brace instead.
+  //
+  // Depth is tracked while simultaneously skipping string literals and
+  // block comments, because a `/* ... */` (or a `/*` inside one) can embed a
+  // stray `{` / `}` — e.g. `terminate-and-restart-{tree,subset}` inside an
+  // AgentTaskSpec JSDoc — that would otherwise perturb the brace count and
+  // make the walker stop inside or past the interface. A single pass over the
+  // whole source is the only way to get strings and comments right, since a
+  // string can contain `/*` and a comment can contain `"` / `*/`.
+  const startRe = new RegExp(`export interface ${name}\\s*{`);
+  const sm = startRe.exec(text);
+  if (!sm) throw new Error(`could not find interface ${name} in types.ts`);
+  let depth = 0;
+  let i = sm.index + sm[0].length;
+  const n = text.length;
+  let inString: string | null = null;
+  let inComment = false;
+  for (; i < n; i++) {
+    const ch = text[i] ?? '';
+    const two = text.slice(i, i + 2);
+    if (inComment) {
+      if (two === '*/') {
+        inComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      if (ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === inString) inString = null;
+      continue;
+    }
+    if (two === '/*') {
+      inComment = true;
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inString = ch;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      if (depth === 0) return text.slice(sm.index + sm[0].length, i);
+      depth--;
+    }
+  }
+  throw new Error(`interface ${name} never closes`);
 }
 
 /** Required (non-optional) top-level member names of an interface body. */
 function requiredFields(interfaceBody: string): string[] {
-  // Lines of the form `readonly name: <type>;` — required — vs
-  // `readonly name?: <type>;` — optional. Strip block comments first.
+  // A required member is `readonly name: <type>;`; an optional one is
+  // `readonly name?: <type>;`. The `?` attaches to the member's own name,
+  // so we capture it with the property regex and reject only when the
+  // captured optional marker is present. Rejecting on `ln.includes('?:')`
+  // (the old approach) misclassifies a required member whose *type* happens
+  // to contain a nested `?:` — e.g. an object literal with its own optional
+  // member, or a `?:` inside an inline comment on the type — by dropping it
+  // from the required list. Strip block comments first so a `?:` hiding in
+  // a `/* ... */` block can never reach the line.
+  //
+  // A member line only counts when it sits at the interface's own member
+  // indent — not a member of a nested inline/`interface` object type nested
+  // inside. We derive that indent from the first matching member line (the
+  // TS here indents members at 2 spaces) and read every line whose leading
+  // whitespace is exactly that long; anything at a deeper indent is a nested
+  // member and is skipped. That is what keeps the equality assertions honest:
+  // only real top-level members feed the comparison, so `EventPublishDecl`'s
+  // `schema` nested inside `AgentSpec` never leaks into `AgentSpec`'s required
+  // set.
   const stripped = interfaceBody.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const lines = stripped.split(/\r?\n/);
   const out: string[] = [];
-  for (const ln of stripped.split(/\r?\n/)) {
-    const m = ln.trim().match(/^readonly\s+(\w+)\s*:\s/);
-    if (m && !ln.includes('?:')) out.push(m[1]);
+  let memberIndent: number | null = null;
+  for (const ln of lines) {
+    const m = ln.match(/^( {2,4})readonly\s+(\w+)(\?)?\s*:\s/);
+    if (!m) continue;
+    const indent = m[1].length;
+    // Lock the interface's member indent to the shallowest member we see.
+    // A member inside a nested inline object type sits one level deeper than
+    // the interface's own members, so the shallowest indent is the interface
+    // member indent (types.ts indents interface members at 2, their nested
+    // inline-object members at 4). Anything at a deeper indent is a nested
+    // member and is skipped.
+    if (memberIndent === null || indent < memberIndent) memberIndent = indent;
+    if (indent !== memberIndent) continue;
+    if (!m[3]) out.push(m[2]);
   }
   return out;
 }
@@ -84,7 +164,8 @@ describe('specRequired lists mirror types.ts non-optional spec fields', () => {
     const agentSpecRequired = requiredFields(interfaceBody(types, 'AgentSpec'));
     const exp = expectations.find((e) => e.file === 'agent.yaml');
     expect(exp, 'agent.yaml expectation must exist').toBeDefined();
-    expect(exp!.specRequired).toEqual([]);
+    // Full equality: adding a required (non-`?`) member to AgentSpec must fail.
+    expect(agentSpecRequired).toEqual(exp!.specRequired);
     expect(agentSpecRequired).not.toContain('model');
     expect(agentSpecRequired).not.toContain('modelClass');
   });
@@ -93,9 +174,11 @@ describe('specRequired lists mirror types.ts non-optional spec fields', () => {
     const agentTaskRequired = requiredFields(interfaceBody(types, 'AgentTaskSpec'));
     const exp = expectations.find((e) => e.file === 'agenttask.yaml');
     expect(exp, 'agenttask.yaml expectation must exist').toBeDefined();
-    // targetAgent / targetCapability are optional; the "at least one" rule is
-    // enforced by a oneOf in the YAML, not by spec.required.
-    expect(exp!.specRequired).toEqual(['payload']);
+    // Full equality: adding a required (non-`?`) member to AgentTaskSpec
+    // (or removing `payload`) must fail. targetAgent / targetCapability are
+    // optional; the "at least one" rule is enforced by a oneOf in the YAML,
+    // not by spec.required.
+    expect(agentTaskRequired).toEqual(exp!.specRequired);
     expect(agentTaskRequired).toContain('payload');
   });
 
@@ -103,7 +186,9 @@ describe('specRequired lists mirror types.ts non-optional spec fields', () => {
     const capRequired = requiredFields(interfaceBody(types, 'AgentCapabilitySpec'));
     const exp = expectations.find((e) => e.file === 'agentcapability.yaml');
     expect(exp, 'agentcapability.yaml expectation must exist').toBeDefined();
-    expect(exp!.specRequired).toEqual(['capability']);
+    // Full equality: agentSelector is optional (`?`), so it must not appear;
+    // adding a required member to AgentCapabilitySpec must fail.
+    expect(capRequired).toEqual(exp!.specRequired);
     expect(capRequired).toContain('capability');
     expect(capRequired).not.toContain('agentSelector');
   });
@@ -115,7 +200,9 @@ describe('specRequired lists mirror types.ts non-optional spec fields', () => {
 
 describe('expectation coverage', () => {
   it('the script declares an expectation for each shipped CRD file', () => {
-    const files = getExpectations().map((e) => e.file).sort();
+    const files = getExpectations()
+      .map((e) => e.file)
+      .sort();
     expect(files).toEqual(
       [
         'agent.yaml',

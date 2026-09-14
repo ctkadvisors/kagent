@@ -37,7 +37,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // Hard-coded constants mirroring `src/crds/types.ts`. Duplicated rather
 // than imported because the checker runs as a top-level tsx script and
@@ -530,7 +530,7 @@ function checkOne(exp: CRDExpectation): void {
   }
 }
 
-async function main(): Promise<void> {
+function main(): void {
   const present = new Set(readdirSync(crdsDir).filter((f) => f.endsWith('.yaml')));
   for (const exp of EXPECTATIONS) {
     if (!present.has(exp.file)) {
@@ -565,22 +565,27 @@ async function main(): Promise<void> {
   );
 }
 
-// Run only when invoked directly, not when imported by the vitest suite.
-// `import.meta.url` is the file:// URL of this module; when vitest (or any
-// other module) imports check-crd-drift.ts, this module's own URL differs
-// from the entry URL, so main() does not execute and only the exported
-// helpers above are consumed.
+// Run only when invoked directly, not when imported (e.g. by the vitest
+// suite). The previous guard matched on process.argv, which could fire
+// main() on import when an unrelated CLI arg happened to end with
+// '/check-crd-drift.ts'. Inspecting only the entry point instead is
+// precise: `tsx check-crd-drift.ts` resolves process.argv[1] to this
+// module's path, while `import './check-crd-drift.js'` from a test file
+// leaves process.argv[1] elsewhere. Prefer the file:// URL of argv[1]
+// so a bare module specifier still resolves; fall back to false when the
+// entry cannot be determined.
+const selfUrl = pathToFileURL(__dirname + '/check-crd-drift.ts').href;
 const isEntry = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
   try {
-    const here = fileURLToPath(import.meta.url);
-    const nodeArgs = process.argv.slice(1);
-    return nodeArgs.some((a) => a === here || a.endsWith('/check-crd-drift.ts') || a === 'check-crd-drift.ts');
+    if (entry.startsWith('file://')) return decodeURIComponent(entry) === selfUrl;
+    return pathToFileURL(entry).href === selfUrl;
   } catch {
-    return true;
+    return false;
   }
 })();
 
 if (isEntry) {
-  await main();
+  main();
 }
-
