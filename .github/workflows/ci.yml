@@ -359,6 +359,11 @@ jobs:
     strategy:
       # Keep image legs independent: one GHCR/package issue must not
       # cancel publishing unrelated images from the same release tag.
+      # 2026-09-14: four concurrent image pulls saturate elitemini2's uplink
+      # (100 % ping loss to the Deco, buildkit 'timeout awaiting response
+      # headers', two of eight builds failed on v0.2.64). Two at a time is
+      # slower on paper and faster in practice on this router.
+      max-parallel: 2
       fail-fast: false
       matrix:
         include:
