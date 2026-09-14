@@ -17,9 +17,18 @@ import { parseWorkbenchPort } from './main.js';
 
 describe('parseWorkbenchPort', () => {
   it('defaults to 8080 when the env var is unset', () => {
-    // No argument → the helper falls back to process.env, which in the test
-    // runner has no WORKBENCH_PORT set, so it resolves to the 8080 default.
-    expect(parseWorkbenchPort()).toBe(8080);
+    // No argument → the helper falls back to process.env. Make this hermetic
+    // (do not rely on the ambient env having WORKBENCH_PORT unset — a host or
+    // CI job may export it, which would otherwise flip this assertion): save
+    // the prior value, delete the var, and restore it in finally.
+    const prior = process.env.WORKBENCH_PORT;
+    delete process.env.WORKBENCH_PORT;
+    try {
+      expect(parseWorkbenchPort()).toBe(8080);
+    } finally {
+      if (prior === undefined) delete process.env.WORKBENCH_PORT;
+      else process.env.WORKBENCH_PORT = prior;
+    }
   });
 
   it('parses a plain integer string', () => {
