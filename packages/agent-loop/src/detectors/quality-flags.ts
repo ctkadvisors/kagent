@@ -159,7 +159,7 @@ export function detectContextPressureIgnored(
   const window = budget.contextWindowTokens;
   if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) return false;
 
-  const used = budget.cumulativeInputTokens + budget.cumulativeOutputTokens;
+  const used = budget.contextTokens ?? budget.cumulativeInputTokens + budget.cumulativeOutputTokens;
   const utilization = used / window;
   const threshold = opts.pressureThreshold ?? DEFAULT_PRESSURE_THRESHOLD;
   if (utilization < threshold) return false;

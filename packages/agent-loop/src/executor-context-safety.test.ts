@@ -94,12 +94,53 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
 
     expect(result.status).toBe('failed');
     expect(result.error?.message).toContain('context_window_substrate_refused');
-    expect(result.error?.message).toContain('cumulative=950');
+    expect(result.error?.message).toContain('context=950');
     expect(result.error?.message).toContain('window=1000');
     expect(result.error?.cause).toBeInstanceOf(LLMClientHttpError);
     expect((result.error?.cause as LLMClientHttpError).status).toBe(0);
     // Only one chat() — the second was refused before reaching the client.
     expect(counting.calls()).toBe(1);
+  });
+
+  it('measures the last call, not the sum: 3 calls of 400 tokens in a 1000 window complete', async () => {
+    // Every call re-sends the whole conversation, so summing input tokens
+    // across calls says nothing about the window. Sum = 1200 (> 950), but
+    // no single call exceeds 400: the run must complete.
+    const call = (
+      content: string,
+      tool_calls?: { id: string; name: string; args: Record<string, never> }[],
+    ) => ({
+      content,
+      ...(tool_calls && { tool_calls }),
+      usage: { inputTokens: 300, outputTokens: 100 },
+    });
+    const inner = makeStubLLM({
+      scriptedResponses: [
+        call('', [{ id: 'c1', name: 'noop', args: {} }]),
+        call('', [{ id: 'c2', name: 'noop', args: {} }]),
+        call('done'),
+      ],
+    });
+    const counting = countingLlm(inner);
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'noop', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'tool-ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm: counting.llm, toolProviders: tools });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+      contextWindowTokens: 1000,
+    });
+
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('done');
+    expect(counting.calls()).toBe(3);
+    expect(result.budget.cumulativeInputTokens + result.budget.cumulativeOutputTokens).toBe(1200);
+    expect(result.budget.contextTokens).toBe(400);
   });
 
   it('does NOT refuse when cumulative is just under threshold (940/1000 at default 0.95)', async () => {
