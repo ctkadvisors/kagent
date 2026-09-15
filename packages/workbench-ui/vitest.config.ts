@@ -35,6 +35,27 @@ export default defineConfig({
       reporter: ['text', 'lcov'],
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/**/*.test.{ts,tsx}', 'src/main.tsx'],
+      // Regression floor. Set to 30 — deliberately just below the
+      // package's current measured value (~32.83% lines) so a gate
+      // added today is green on arrival. A coverage gate that passes
+      // the day it lands would prove nothing. This still fails the
+      // moment coverage regresses below 30%, which is exactly the
+      // regression guard a coverage threshold should provide. Do NOT
+      // raise it to match a number elsewhere; clearing a higher floor
+      // requires adding tests, which is separate work.
+      // Today's measured coverage: 34.63% statements, 32.83% lines,
+      // 43.96% functions, 27.87% branches. Keep statements/functions/
+      // lines at 30 (below their current values) and set branches
+      // below 27.87% — it is the metric the current tests most miss,
+      // so it is the one that would bite first. All four floors sit
+      // under today's measured coverage, so the gate is green on the
+      // day it lands and fails only if coverage regresses.
+      thresholds: {
+        statements: 30,
+        lines: 30,
+        functions: 30,
+        branches: 25,
+      },
     },
   },
 });
