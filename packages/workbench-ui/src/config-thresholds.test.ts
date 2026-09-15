@@ -34,16 +34,22 @@ describe('coverage threshold contract', () => {
     expect(pkg.scripts['test:coverage']).toContain('--coverage');
   });
 
-  it('vitest.config.ts declares a non-zero coverage thresholds block', () => {
+  it('vitest.config.ts declares all four coverage metrics, each > 0', () => {
     expect(cfgText).toMatch(/thresholds\s*:/);
-    // At least one threshold must carry a real (non-zero) floor.
+    // The full thresholds block (its braces stay balanced on one line).
     const matches = cfgText.match(/thresholds\s*:\s*\{[^}]*\}/s);
     expect(matches, 'expected a thresholds block').toBeTruthy();
     const body = matches![0];
-    const numericValues = [...body.matchAll(/\d+/g)].map((m) => Number(m[0]));
-    expect(
-      numericValues.some((n) => n > 0),
-      'expected at least one non-zero threshold',
-    ).toBe(true);
+
+    // Every standard metric must be present with a real (non-zero)
+    // floor. A gate that only pins, say, statements would let the
+    // other three drift silently — enforcement requires all four.
+    for (const metric of ['statements', 'lines', 'functions', 'branches']) {
+      const re = new RegExp(`${metric}\\s*:\\s*(\\d+)`);
+      const m = body.match(re);
+      expect(m, `expected a non-zero '${metric}' threshold`).toBeTruthy();
+      const value = Number(m![1]);
+      expect(value > 0, `expected a non-zero '${metric}' floor, got ${value}`).toBe(true);
+    }
   });
 });
