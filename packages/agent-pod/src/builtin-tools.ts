@@ -1080,14 +1080,19 @@ export interface GetMyContextDeps {
   readonly capabilityBundle?: import('@kagent/capability-types').CapabilityBundle;
   /**
    * v0.1.9 piece 2 — live token-utilization snapshot. Returns
-   * `{ used, modelWindow }` at tool-call time so the LLM observes the
-   * cumulative input + output tokens against the model's context-window
-   * cap (per docs/CONTEXT-AWARENESS.md §4.4).
+   * `{ used, modelWindow }` at tool-call time so the LLM observes
+   * current context-window pressure against the model's window cap
+   * (per docs/CONTEXT-AWARENESS.md §4.4).
    *
    * Snapshot semantics (the values mutate live on `RunBudget` between
    * iterations — a thunk lets the handler read them at the moment the
    * tool fires, not at construction time):
-   *   - `used`: cumulativeInputTokens + cumulativeOutputTokens; always
+   *   - `used`: the CURRENT context-window usage (the most-recent call's
+    *     in+out, i.e. `RunBudget.contextTokens`) — the size of the conversation
+    *     the NEXT call will send. This is the number the substrate safety-net
+    *     refuses on. Always a number; 0 before any LLM call has fired. (The
+    *     run's cumulative input+output spend lives separately and backs
+    *     `tokensRemaining`, not this field — see the kagent#50 follow-up.)
    *     a number. Returns 0 before any LLM call has fired.
    *   - `modelWindow`: the model's declared window in tokens
    *     (KAGENT_AGENT_MODEL_CONTEXT_WINDOW resolved). `null` when the
@@ -1100,7 +1105,12 @@ export interface GetMyContextDeps {
    * dep is wired".)
    */
   readonly tokenUtilizationSnapshot?: () => {
+    // kagent#50 follow-up: `used` is the CURRENT context-window usage
+    // (last call's in+out); `usedCumulative` is the run's cumulative
+    // input+output spend, which still bounds cost via
+    // `tokensRemaining = tokenLimit - usedCumulative`.
     readonly used: number;
+    readonly usedCumulative?: number;
     readonly modelWindow: number | null;
   };
 }
@@ -1133,27 +1143,35 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       const parentUid = podConfig.taskSpec.parentTask;
       // v0.1.9 piece 2 — live token-utilization snapshot per
       // docs/CONTEXT-AWARENESS.md §4.4. Read at tool-call time (NOT at
-      // construction): the cumulative tokens are mutating live on
-      // RunBudget between iterations, so a thunk-style dep is the only
-      // way the LLM gets a fresh number when it asks. Defaults to
+      // construction): the executor mutates `contextTokens` (the last
+      // call's in+out) live on RunBudget between iterations, so a
+      // thunk-style dep is the only way the LLM gets a fresh number
+      // when it asks. Defaults to
       // `{ used: 0, modelWindow: null }` so the field is always present
       // (back-compat: existing callers that haven't wired the snapshot
       // yet still get a well-formed payload).
       //
-      // NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` is also
-      // computed from this snapshot's `used` field. Both `tokenLimit`
-      // (per-task user cap from `runConfig.tokenLimit`) and
-      // `snapshot.used` (cumulative input + output tokens off RunBudget)
-      // are the same currency; subtracting yields the actionable
-      // "remaining capacity" the agent's prompt logic uses to decide
-      // "should I hand off now?" Pre-fix, the handler reported the
-      // ceiling itself (`tokensRemaining = tokenLimit`), so any prompt
-      // logic like "if tokensRemaining < 5000, hand off" never
-      // triggered.
+      // NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` is computed
+      // from this snapshot's `used` field and the per-task cap. Since
+      // the kagent#50 follow-up now makes `snapshot.used` report the
+      // CURRENT context-window usage (last call's in+out) rather than
+      // cumulative spend, `tokensRemaining = tokenLimit - used` reads as
+      // "headroom before the current call's context would overflow the
+      // window". A caller that wants cumulative-cost headroom must track
+      // the run's cumulative spend elsewhere; keep `tokenLimit` as the
+      // cost bound. Pre-fix, the handler reported the ceiling itself
+      // (`tokensRemaining = tokenLimit`), so any prompt logic like
+      // "if tokensRemaining < 5000, hand off" never triggered.
       const snapshot = deps.tokenUtilizationSnapshot?.() ?? { used: 0, modelWindow: null };
       const budget: { tokensRemaining?: number; secondsRemaining?: number } = {};
       if (typeof tokenLimit === 'number' && tokenLimit > 0) {
-        budget.tokensRemaining = Math.max(0, tokenLimit - snapshot.used);
+        // Cost headroom still tracks cumulative spend, NOT `used`
+        // (which is now the last call's current context) — the kagent#50
+        // follow-up separated the two so the cost bound is unaffected.
+        budget.tokensRemaining = Math.max(
+          0,
+          tokenLimit - (snapshot.usedCumulative ?? snapshot.used),
+        );
       }
       if (typeof secondsRemaining === 'number' && Number.isFinite(secondsRemaining)) {
         budget.secondsRemaining = secondsRemaining;

@@ -224,7 +224,12 @@ export interface RunDeps {
    * (the §4.4 contract preserves the field shape regardless).
    */
   readonly tokenUtilizationSnapshot?: () => {
+    // kagent#50 follow-up: `used` is the CURRENT context-window usage
+    // (last call's in+out); `usedCumulative` is the run's cumulative
+    // input+output spend, which still bounds cost via
+    // `tokensRemaining = tokenLimit - usedCumulative`.
     readonly used: number;
+    readonly usedCumulative?: number;
     readonly modelWindow: number | null;
   };
   readonly remainingBudgetSeconds?: () => number | undefined;

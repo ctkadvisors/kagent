@@ -480,9 +480,12 @@ describe('NB1 regression — tokenUtilizationSnapshot wired through production p
     //   (3) tokenUtilization.percentage is a number (not null)
     expect(typeof observedUtilization.used).toBe('number');
     expect(observedUtilization.used as number).toBeGreaterThan(0);
-    // 600 input + 350 output = 950 cumulative; the get_my_context
-    // tool call happens AFTER the first chat() resolves, so the
-    // executor has already credited those tokens onto the live budget.
+    // 600 input + 350 output after chat #1; the get_my_context
+    // tool call happens AFTER that chat() resolves, so the executor
+    // has already set `contextTokens` (= last call's in+out = 950)
+    // onto the live budget, which is the current-context number the
+    // tool reports as `used` (not the run's cumulative sum — here the
+    // two coincide because there is exactly one call so far).
     expect(observedUtilization.used).toBe(950);
 
     expect(observedUtilization.modelWindow).toBe(131_072);
@@ -637,6 +640,27 @@ describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) 
     const remainingAfterCall2 = readTokensRemaining(ctxTraces[1]?.tool_output);
     expect(remainingAfterCall2).toBe(3050);
 
+    // kagent#50 follow-up: `used` is the CURRENT context (last call's
+    // in+out), NOT the cumulative spend. So at call #1 the agent reads
+    // used=950 (only one call so far), and at call #2 it reads used=1000
+    // (chat #2's 800+200), even though cumulative is 1950. This is what
+    // makes `tokensRemaining` — derived from cumulative — diverge from
+    // `used`, and it is exactly the split the audit follow-up required.
+    function readUsed(rawOutput: unknown): number {
+      const blocks = JSON.parse(rawOutput as string) as Array<{ type: string; text: string }>;
+      const innerJson = blocks[0]?.text;
+      const ctx = JSON.parse(innerJson as string) as {
+        tokenUtilization?: { used?: unknown };
+      };
+      expect(typeof ctx.tokenUtilization?.used).toBe('number');
+      return ctx.tokenUtilization!.used as number;
+    }
+    expect(readUsed(ctxTraces[0]?.tool_output)).toBe(950); // call #1: 600+350
+    expect(readUsed(ctxTraces[1]?.tool_output)).toBe(1000); // call #2: 800+200, not 1950
+    // The current-context number genuinely diverges from the cumulative
+    // number backing tokensRemaining.
+    expect(readUsed(ctxTraces[1]?.tool_output)).not.toBe(1950);
+
     // The whole point of NH1: monotonic decrease, not the ceiling.
     expect(remainingAfterCall2).toBeLessThan(remainingAfterCall1);
     // Pre-fix, BOTH calls would have observed `tokensRemaining: 5000`.
@@ -662,29 +686,68 @@ describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) 
 describe('buildTokenUtilizationBridge (NB1 helper)', () => {
   it('returns used=0 + modelWindow=null when contextWindowTokens is undefined and onBudgetReady has not fired', () => {
     const { tokenUtilizationSnapshot } = buildTokenUtilizationBridge(undefined);
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, modelWindow: null });
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, usedCumulative: 0, modelWindow: null });
   });
 
   it('returns modelWindow = configured contextWindowTokens even before onBudgetReady fires', () => {
     const { tokenUtilizationSnapshot } = buildTokenUtilizationBridge(131_072);
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, modelWindow: 131_072 });
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, usedCumulative: 0, modelWindow: 131_072 });
   });
 
-  it('after onBudgetReady fires, the snapshot reads cumulativeInputTokens + cumulativeOutputTokens LIVE from the captured ref', () => {
+  it('after onBudgetReady fires, the snapshot reads the current context (contextTokens) LIVE from the captured ref', () => {
     const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(8000);
+    // `used` reports the CURRENT context-window pressure (the last call's
+    // in+out, `RunBudget.contextTokens`), not the run's cumulative spend
+    // — see main.ts buildTokenUtilizationBridge (kagent#50 follow-up).
     const budget = {
       cumulativeInputTokens: 100,
       cumulativeOutputTokens: 50,
+      contextTokens: 700,
       cumulativeCostUsd: null,
     };
     onBudgetReady(budget);
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 150, modelWindow: 8000 });
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 700, usedCumulative: 150, modelWindow: 8000 });
 
     // Mutate the captured ref the way the executor does between
     // iterations — the snapshot MUST reflect the new value (live read,
-    // not at-construction snapshot).
+    // not at-construction snapshot). The cumulative sums grow here
+    // (they still back tokensRemaining), but the current-context number
+    // is what the tool surfaces.
     budget.cumulativeInputTokens = 600;
     budget.cumulativeOutputTokens = 350;
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 950, modelWindow: 8000 });
+    budget.contextTokens = 500;
+    // cumulative grew to 950 (still backs tokensRemaining) while
+    // the current-context number is 500.
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 500, usedCumulative: 950, modelWindow: 8000 });
+  });
+
+  it('reports used=0 before any LLM call has set contextTokens, even when cumulative > 0', () => {
+    // Defensive path: before the first chat() the executor never sets
+    // contextTokens, so the current-context number is undefined and the
+    // tool reports 0 even if cumulative fields were seeded.
+    const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(8000);
+    const budget = {
+      cumulativeInputTokens: 120,
+      cumulativeOutputTokens: 80,
+      cumulativeCostUsd: null,
+    };
+    onBudgetReady(budget);
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, usedCumulative: 200, modelWindow: 8000 });
+  });
+
+  it('exposes usedCumulative separately from the current context used', () => {
+    const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(8000);
+    const budget = {
+      cumulativeInputTokens: 400,
+      cumulativeOutputTokens: 300,
+      contextTokens: 500,
+      cumulativeCostUsd: null,
+    };
+    onBudgetReady(budget);
+    const snap = tokenUtilizationSnapshot();
+    // cumulative = 700 (backs tokensRemaining), current context = 500.
+    expect(snap.used).toBe(500);
+    expect(snap.usedCumulative).toBe(700);
+    expect(snap.used).not.toBe(snap.usedCumulative);
   });
 });

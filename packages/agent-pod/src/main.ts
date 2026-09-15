@@ -889,14 +889,29 @@ export function buildTokenUtilizationBridge(contextWindowTokens: number | undefi
   };
   const tokenUtilizationSnapshot = (): {
     readonly used: number;
+    readonly usedCumulative: number;
     readonly modelWindow: number | null;
   } => {
+    // kagent#50 follow-up: `used` reports the *current* context-window
+    // usage — the most-recent call's in+out, i.e. `RunBudget.contextTokens`
+    // (the size of the conversation the NEXT call re-sends). That is what
+    // a `get_my_context` agent reads to judge context-window pressure and
+    // what the substrate safety-net refuses on (executor.ts:603-606).
+    // `usedCumulative` keeps the run's cumulative input+output spend, so
+    // `get_my_context` can still report cost-bounding headroom
+    // (`tokensRemaining = tokenLimit - usedCumulative`) without the agent
+    // reading a number that grows ~quadratically with iteration count.
     const used =
+      liveBudget !== undefined && liveBudget.contextTokens !== undefined
+        ? liveBudget.contextTokens
+        : 0;
+    const usedCumulative =
       liveBudget !== undefined
         ? liveBudget.cumulativeInputTokens + liveBudget.cumulativeOutputTokens
         : 0;
     return {
       used,
+      usedCumulative,
       modelWindow: contextWindowTokens ?? null,
     };
   };
