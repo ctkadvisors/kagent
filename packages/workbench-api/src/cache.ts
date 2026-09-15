@@ -41,7 +41,33 @@ import type {
 /** Stable composite key — `<namespace>/<name>`. Used for all kinds. */
 export type CacheKey = string;
 
-export function cacheKey(namespace: string | undefined, name: string | undefined): CacheKey {
+/**
+ * Build the stable composite cache key `<namespace>/<name>`.
+ *
+ * Input contract:
+ *
+ *   - `namespace` and `name` are both `string | null | undefined`.
+ *   - A missing (`undefined` or `null`) `namespace` collapses to the
+ *     `'default'` sentinel; a missing (`undefined` or `null`) `name`
+ *     collapses to the empty-string sentinel. Neither is a distinct
+ *     key, and `undefined`/`null` collapse to the same value, so
+ *     `cacheKey('foo', undefined)` and `cacheKey('foo', null)` are the
+ *     identical key `'foo/'`, and `cacheKey(undefined, 'x')` and
+ *     `cacheKey(null, 'x')` are the identical key `'default/x'`.
+ *   - The function does NOT throw: a missing id collapses to a sentinel
+ *     key rather than failing. This is a silent-collision point — if a
+ *     bad id should fail loudly, validate it at the call site, not here.
+ *
+ * The parameter type is `string | null | undefined` to cover any caller
+ * that may pass a missing id. The `?? ''` / `?? 'default'` fallbacks
+ * treat `null` exactly like `undefined` — hence the two forms collapse
+ * to the same key. The function does not assert anything about the
+ * kind of object or the property a caller passes in.
+ */
+export function cacheKey(
+  namespace: string | null | undefined,
+  name: string | null | undefined,
+): CacheKey {
   return `${namespace ?? 'default'}/${name ?? ''}`;
 }
 
