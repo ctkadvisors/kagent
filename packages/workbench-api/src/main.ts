@@ -63,18 +63,23 @@ const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 
 /**
  * Parse + validate the `WORKBENCH_PORT` env var. `parseInt` turns
- * 'abc', '' and undefined into `NaN`, AND silently truncates
- * '8080.5' → 8080 — binding the server to a port the operator never
- * asked for. Fail fast with a descriptive configuration error
- * instead of a boot-time EINVAL or a silent wrong-port bind.
+ * 'abc' into `NaN`, AND silently truncates
+ * '8080.5' → 8080 and '' into 0 — binding the server to a port the
+ * operator never asked for, or a non-bindable port. Fail fast with a
+ * descriptive configuration error instead of a boot-time EINVAL or a
+ * silent wrong-port bind.
  *
- * `value` is the raw env var value; undefined/empty means the
- * documented default of 8080.
+ * `value` is the raw env var value. The documented default of 8080
+ * applies ONLY when the variable is UNSET (undefined); a set-but-empty
+ * '' is an explicit misconfiguration and fails fast, matching the
+ * mission brief which lists '' as an invalid value.
  */
 export function resolvePort(
   value: string | undefined,
 ): { ok: true; port: number } | { ok: false; error: Error } {
-  if (value === undefined || value.length === 0) {
+  // Unset (undefined) is the only "use the default" case. A set-but-empty
+  // string is an explicit misconfiguration and is rejected, not coerced.
+  if (value === undefined) {
     return { ok: true, port: 8080 };
   }
 
@@ -97,7 +102,8 @@ export function resolvePort(
     return {
       ok: false,
       error: new Error(
-        `WORKBENCH_PORT is out of range (${value}): expected an integer in the range 1..65535.`,
+        `WORKBENCH_PORT is out of range (${JSON.stringify(value)}): ` +
+          `expected an integer in the range 1..65535.`,
       ),
     };
   }
