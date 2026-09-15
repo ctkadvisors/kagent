@@ -13,7 +13,6 @@ import type {
   TelegramAdapterConfig,
   TelegramClient,
 } from './types.js';
-
 const config: TelegramAdapterConfig = {
   channelName: 'telegram-work',
   namespace: 'kagent-system',
@@ -223,6 +222,125 @@ describe('processTelegramUpdates', () => {
 
     expect(result).toEqual({ nextOffset: 20, accepted: 0, ignored: 0, failed: 1 });
     expect(gateway.postInbound).toHaveBeenCalledTimes(1);
+  });
+});
+
+// bridgeFleetNow is exercised through processTelegramUpdates: the envelope it
+// produces is what the gateway receives. The four cases the review asked for
+// — absent+no rule, absent+rule, stale+no rule, stale+rule — each assert the
+// block the bridge prepends (or, for absent+no rule, that it prepends nothing).
+describe('bridgeFleetNow', () => {
+  const baseConfig = (): TelegramAdapterConfig => ({ ...config, fleetUrl: 'http://launcher:8080' });
+
+  it('leaves the message untouched when the launcher is absent and there is no rule', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 30,
+          message: { message_id: 1, from: { id: 1, is_bot: false }, chat: { id: 1, type: 'private' }, text: 'hi' },
+        },
+      ],
+    });
+    // absent launcher: 200 with a fleet payload that has neither summary nor rules.
+    const fleetFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ fleet: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fleetFetch);
+    try {
+      const gateway = { postInbound: vi.fn().mockResolvedValue(null) };
+      await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
+      expect(gateway.postInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'hi' }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('appends a rule line even when the launcher is absent', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 31,
+          message: {
+            message_id: 2,
+            from: { id: 1, is_bot: false },
+            chat: { id: 1, type: 'private' },
+            text: 'rule: keep it one line',
+          },
+        },
+      ],
+    });
+    // A fresh body per call: recordRule also calls fetch for /remember, so a
+    // single shared Response would be read twice.
+    const fleetFetch = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ fleet: {} }), { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fleetFetch);
+    try {
+      const gateway = { postInbound: vi.fn().mockResolvedValue(null) };
+      await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
+      const [env] = gateway.postInbound.mock.calls[0];
+      const text = env as { readonly text: string };
+      expect(text.text).toContain('[rule]');
+      expect(text.text).toContain('keep it one line');
+      expect(text.text).not.toContain('[fleet now]');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('surfaces a stale launcher without appending the stale block, when there is no rule', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 32,
+          message: { message_id: 1, from: { id: 1, is_bot: false }, chat: { id: 1, type: 'private' }, text: 'hi' },
+        },
+      ],
+    });
+    // stale launcher: 503.
+    const fleetFetch = vi.fn(() => Promise.resolve(new Response('', { status: 503 })));
+    vi.stubGlobal('fetch', fleetFetch);
+    try {
+      const gateway = { postInbound: vi.fn().mockResolvedValue(null) };
+      await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
+      const [env] = gateway.postInbound.mock.calls[0];
+      const text = env as { readonly text: string };
+      expect(text.text).toContain('[fleet now] question unanswered');
+      expect(text.text).not.toContain('\n[fleet now]');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('surfaces a stale launcher alongside the rule line', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 33,
+          message: {
+            message_id: 3,
+            from: { id: 1, is_bot: false },
+            chat: { id: 1, type: 'private' },
+            text: 'rule: stay on one line',
+          },
+        },
+      ],
+    });
+    const fleetFetch = vi.fn(() => Promise.resolve(new Response('', { status: 500 })));
+    vi.stubGlobal('fetch', fleetFetch);
+    try {
+      const gateway = { postInbound: vi.fn().mockResolvedValue(null) };
+      await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
+      const [env] = gateway.postInbound.mock.calls[0];
+      const text = env as { readonly text: string };
+      expect(text.text).toContain('[fleet now] question unanswered');
+      expect(text.text).toContain('[rule]');
+      expect(text.text).toContain('stay on one line');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -111,6 +111,32 @@ describe('fleet now', () => {
     expect(aborted.kind).toBe('stale');
     if (aborted.kind === 'stale') expect(aborted.reason).toContain('Aborted');
   });
+
+  it('treats a 200 body the launcher cannot parse as stale, not a rejection', async () => {
+    // A 200 HTML/error body: JSON.parse throws inside fleetSnapshot(await json()).
+    const html = vi.fn().mockResolvedValue(new Response('<html>500</html>', { status: 200 }));
+    const result = await fetchFleetNow('http://launcher:8080', html);
+    expect(result.kind).toBe('stale');
+    if (result.kind === 'stale') {
+      expect(result.reason).toContain('unparseable');
+      expect(result.reason).not.toContain('\n');
+    }
+  });
+
+  it('sanitises a multiline launcher reason to one line', async () => {
+    // A fetch that throws synchronously (e.g. unreachable host) reaches the
+    // catch block; a generous timeout keeps AbortSignal from firing first and
+    // replacing the reason with its own single-line message. The point is the
+    // collapse: every newline is dropped, leaving just the first line.
+    const multiLine = (async () =>
+      Promise.reject(new Error('line one\n  line two\twith tabs'))) as unknown as typeof fetch;
+    const result = await fetchFleetNow('http://launcher:8080', multiLine, 1000);
+    expect(result.kind).toBe('stale');
+    if (result.kind === 'stale') {
+      expect(result.reason).toBe('line one');
+      expect(result.reason).not.toContain('\n');
+    }
+  });
 });
 
 describe('fleet now ideas', () => {

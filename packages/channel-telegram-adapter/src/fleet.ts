@@ -21,6 +21,15 @@ export const FLEET_NOW_MARKER = '[fleet now]';
 const MAX_RULES = 6;
 const MAX_RULE_CHARS = 220;
 
+/** A launcher reason is embedded verbatim in the message: keep it to one line. */
+function sanitizeReason(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Split to the first line, take it (non-null: slice(n) of a non-empty str
+  // always yields an element), then collapse any stray whitespace.
+  const first = msg.split(/\r?\n/u, 1)[0];
+  return (first ?? '').trim().replace(/\s+/gu, ' ');
+}
+
 export interface FleetRow {
   readonly source: string;
   readonly at: string;
@@ -175,11 +184,23 @@ export async function fetchFleetNow(
     // 'question_timeout'-style status rather than hang silently.
     return {
       kind: 'stale',
-      reason: err instanceof Error ? err.message : String(err),
+      reason: sanitizeReason(err),
     };
   }
   if (!res.ok) return { kind: 'stale', reason: `launcher answered HTTP ${res.status}` };
-  const snap = fleetSnapshot(await res.json());
+  // A 200 body that is not the launcher's payload (an error page, a redirect
+  // body) makes JSON.parse or fleetSnapshot throw: treat it as stale rather
+  // than letting it reject, so the run can halt with a status instead of
+  // crashing.
+  let snap: FleetSnapshot | undefined;
+  try {
+    snap = fleetSnapshot(await res.json());
+  } catch (err) {
+    return {
+      kind: 'stale',
+      reason: `launcher answered with an unparseable payload (${sanitizeReason(err)})`,
+    };
+  }
   if (snap === undefined || (snap.summary === undefined && snap.rules.length === 0))
     return { kind: 'absent' };
   return { kind: 'rendered', block: renderFleetNow(snap) };
