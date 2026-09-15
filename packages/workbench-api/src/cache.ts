@@ -58,10 +58,11 @@ export type CacheKey = string;
  *     key rather than failing. This is a silent-collision point — if a
  *     bad id should fail loudly, validate it at the call site, not here.
  *
- * The parameter type is `string | null | undefined`: callers holding a
- * `V1Job`/`V1Pod` pass `metadata?.name`, so `null` reaches here in
- * practice, and the `?? ''` / `?? 'default'` fallbacks treat it exactly
- * like `undefined` — hence the two forms collapse to the same key.
+ * The parameter type is `string | null | undefined` to cover any caller
+ * that may pass a missing id. The `?? ''` / `?? 'default'` fallbacks
+ * treat `null` exactly like `undefined` — hence the two forms collapse
+ * to the same key. The function does not assert anything about the
+ * kind of object or the property a caller passes in.
  */
 export function cacheKey(
   namespace: string | null | undefined,
