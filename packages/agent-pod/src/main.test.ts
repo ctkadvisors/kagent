@@ -762,4 +762,22 @@ describe('buildTokenUtilizationBridge (NB1 helper)', () => {
     expect(snap.usedCumulative).toBe(700);
     expect(snap.used).not.toBe(snap.usedCumulative);
   });
+
+  it('computes usedCumulative=0 when cumulativeInputTokens/cumulativeOutputTokens are undefined', () => {
+    // Defensive guard (usedCumulative branch): a partially initialized
+    // budget whose cumulative fields are undefined must contribute no
+    // cumulative spend, not NaN. The `RunBudget` type declares these
+    // fields as required numbers, so this exercises the guard by casting
+    // an unteryped object (see main.ts `Number(x ?? 0)` coercion).
+    const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(8000);
+    const budget = {
+      contextTokens: 300,
+    } as unknown as Parameters<ReturnType<typeof buildTokenUtilizationBridge>['onBudgetReady']>[0];
+    onBudgetReady(budget);
+    const snap = tokenUtilizationSnapshot();
+    expect(snap.usedCumulative).toBe(0);
+    // The current-context read is unaffected by the guard.
+    expect(snap.used).toBe(300);
+    expect(snap.modelWindow).toBe(8000);
+  });
 });

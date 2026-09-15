@@ -906,9 +906,13 @@ export function buildTokenUtilizationBridge(contextWindowTokens: number | undefi
       liveBudget !== undefined && liveBudget.contextTokens !== undefined
         ? liveBudget.contextTokens
         : 0;
+    // Guard each cumulative field against a partially initialized
+    // RunBudget (either key possibly undefined); fall back to 0 so a
+    // not-yet-populated budget contributes no cumulative spend.
     const usedCumulative =
       liveBudget !== undefined
-        ? liveBudget.cumulativeInputTokens + liveBudget.cumulativeOutputTokens
+        ? Number(liveBudget.cumulativeInputTokens ?? 0) +
+          Number(liveBudget.cumulativeOutputTokens ?? 0)
         : 0;
     return {
       used,

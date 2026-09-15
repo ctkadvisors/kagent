@@ -1155,16 +1155,17 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       // yet still get a well-formed payload).
       //
       // NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` is computed
-      // from this snapshot's `used` field and the per-task cap. Since
-      // the kagent#50 follow-up now makes `snapshot.used` report the
-      // CURRENT context-window usage (last call's in+out) rather than
-      // cumulative spend, `tokensRemaining = tokenLimit - used` reads as
-      // "headroom before the current call's context would overflow the
-      // window". A caller that wants cumulative-cost headroom must track
-      // the run's cumulative spend elsewhere; keep `tokenLimit` as the
-      // cost bound. Pre-fix, the handler reported the ceiling itself
-      // (`tokensRemaining = tokenLimit`), so any prompt logic like
-      // "if tokensRemaining < 5000, hand off" never triggered.
+      // from this snapshot and the per-task cap. Cost headroom tracks
+      // cumulative spend, not the current context `used` (which the
+      // kagent#50 follow-up separated out as the last call's in+out).
+      // So `tokensRemaining = tokenLimit - usedCumulative` reads as
+      // "cost headroom before the run's cumulative spend hits the cap".
+      // `usedCumulative` is used when present and falls back to `used`
+      // only for legacy cumulative providers that omit it; keep
+      // `tokenLimit` as the cost bound. Pre-fix, the handler reported
+      // the ceiling itself (`tokensRemaining = tokenLimit`), so any
+      // prompt logic like "if tokensRemaining < 5000, hand off" never
+      // triggered.
       const snapshot = deps.tokenUtilizationSnapshot?.() ?? { used: 0, modelWindow: null };
       const budget: { tokensRemaining?: number; secondsRemaining?: number } = {};
       if (typeof tokenLimit === 'number' && tokenLimit > 0) {
