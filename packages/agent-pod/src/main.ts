@@ -891,10 +891,7 @@ export function buildTokenUtilizationBridge(contextWindowTokens: number | undefi
     readonly used: number;
     readonly modelWindow: number | null;
   } => {
-    const used =
-      liveBudget !== undefined
-        ? liveBudget.contextTokens ?? 0
-        : 0;
+    const used = liveBudget !== undefined ? (liveBudget.contextTokens ?? 0) : 0;
     return {
       used,
       modelWindow: contextWindowTokens ?? null,
