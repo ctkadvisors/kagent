@@ -1088,11 +1088,11 @@ export interface GetMyContextDeps {
    * iterations — a thunk lets the handler read them at the moment the
    * tool fires, not at construction time):
    *   - `used`: the CURRENT context-window usage (the most-recent call's
-    *     in+out, i.e. `RunBudget.contextTokens`) — the size of the conversation
-    *     the NEXT call will send. This is the number the substrate safety-net
-    *     refuses on. Always a number; 0 before any LLM call has fired. (The
-    *     run's cumulative input+output spend lives separately and backs
-    *     `tokensRemaining`, not this field — see the kagent#50 follow-up.)
+   *     in+out, i.e. `RunBudget.contextTokens`) — the size of the conversation
+   *     the NEXT call will send. This is the number the substrate safety-net
+   *     refuses on. Always a number; 0 before any LLM call has fired. (The
+   *     run's cumulative input+output spend lives separately and backs
+   *     `tokensRemaining`, not this field — see the kagent#50 follow-up.)
    *     a number. Returns 0 before any LLM call has fired.
    *   - `modelWindow`: the model's declared window in tokens
    *     (KAGENT_AGENT_MODEL_CONTEXT_WINDOW resolved). `null` when the

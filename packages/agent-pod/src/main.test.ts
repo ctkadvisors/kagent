@@ -691,7 +691,11 @@ describe('buildTokenUtilizationBridge (NB1 helper)', () => {
 
   it('returns modelWindow = configured contextWindowTokens even before onBudgetReady fires', () => {
     const { tokenUtilizationSnapshot } = buildTokenUtilizationBridge(131_072);
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 0, usedCumulative: 0, modelWindow: 131_072 });
+    expect(tokenUtilizationSnapshot()).toEqual({
+      used: 0,
+      usedCumulative: 0,
+      modelWindow: 131_072,
+    });
   });
 
   it('after onBudgetReady fires, the snapshot reads the current context (contextTokens) LIVE from the captured ref', () => {
@@ -706,7 +710,11 @@ describe('buildTokenUtilizationBridge (NB1 helper)', () => {
       cumulativeCostUsd: null,
     };
     onBudgetReady(budget);
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 700, usedCumulative: 150, modelWindow: 8000 });
+    expect(tokenUtilizationSnapshot()).toEqual({
+      used: 700,
+      usedCumulative: 150,
+      modelWindow: 8000,
+    });
 
     // Mutate the captured ref the way the executor does between
     // iterations — the snapshot MUST reflect the new value (live read,
@@ -718,7 +726,11 @@ describe('buildTokenUtilizationBridge (NB1 helper)', () => {
     budget.contextTokens = 500;
     // cumulative grew to 950 (still backs tokensRemaining) while
     // the current-context number is 500.
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 500, usedCumulative: 950, modelWindow: 8000 });
+    expect(tokenUtilizationSnapshot()).toEqual({
+      used: 500,
+      usedCumulative: 950,
+      modelWindow: 8000,
+    });
   });
 
   it('reports used=0 before any LLM call has set contextTokens, even when cumulative > 0', () => {
