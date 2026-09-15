@@ -193,8 +193,9 @@ export interface RunDeps {
    * allocates the run's `RunBudget`. Production wiring uses this hook
    * in `main.ts` to capture the live mutable budget reference, then
    * feed `tokenUtilizationSnapshot` (the `defineGetMyContext` dep)
-   * with a thunk that reads `cumulativeInputTokens +
-   * cumulativeOutputTokens` AT TOOL-CALL time. Without this hook, the
+   * with a thunk that reads `budget.contextTokens ?? 0` (the last
+   * call's context size, not `cumulativeInputTokens +
+   * cumulativeOutputTokens`) AT TOOL-CALL time. Without this hook, the
    * `get_my_context` tool's tokenUtilization snapshot fell back to
    * `{ used: 0, modelWindow: null }` unconditionally — making the
    * marquee context-awareness feature inert in production while tests

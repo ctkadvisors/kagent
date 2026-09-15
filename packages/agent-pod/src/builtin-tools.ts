@@ -1081,14 +1081,15 @@ export interface GetMyContextDeps {
   /**
    * v0.1.9 piece 2 — live token-utilization snapshot. Returns
    * `{ used, modelWindow }` at tool-call time so the LLM observes the
-   * cumulative input + output tokens against the model's context-window
+   * last call's context size (`used`) against the model's context-window
    * cap (per docs/CONTEXT-AWARENESS.md §4.4).
    *
    * Snapshot semantics (the values mutate live on `RunBudget` between
    * iterations — a thunk lets the handler read them at the moment the
    * tool fires, not at construction time):
-   *   - `used`: cumulativeInputTokens + cumulativeOutputTokens; always
-   *     a number. Returns 0 before any LLM call has fired.
+   *   - `used`: `budget.contextTokens ?? 0` — the last LLM call's
+   *     context size (not the running cumulative input + output sum);
+   *     always a number. Returns 0 before any LLM call has fired.
    *   - `modelWindow`: the model's declared window in tokens
    *     (KAGENT_AGENT_MODEL_CONTEXT_WINDOW resolved). `null` when the
    *     env is unset (back-compat).

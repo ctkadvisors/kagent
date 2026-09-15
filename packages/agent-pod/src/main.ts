@@ -862,10 +862,9 @@ if (isDirectInvocation) {
  *     budget reference into a closure-shared variable.
  *   - `tokenUtilizationSnapshot()` is wired into `defineGetMyContext`
  *     via `GetMyContextDeps.tokenUtilizationSnapshot`. It reads
- *     cumulative input + output tokens off the SAME object the
- *     executor mutates after every successful chat() call, plus the
- *     operator-projected `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` (passed
- *     in via `contextWindowTokens`).
+ *     the LAST call context size (`budget.contextTokens ?? 0`) off the SAME object the
+ *     executor mutates after every successful chat() call, plus the operator-projected
+ *     `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` (passed in via `contextWindowTokens`).
  *
  * Before this bridge existed, the `tokenUtilizationSnapshot` dep was
  * omitted from production wiring while tests injected it directly,

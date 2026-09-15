@@ -511,13 +511,15 @@ describe('NB1 regression — tokenUtilizationSnapshot wired through production p
  * production via NB1's `buildTokenUtilizationBridge`) into
  * `defineGetMyContext` and uses `snapshot.used` to compute remaining.
  * Both `tokenLimit` and `snapshot.used` are the same currency
- * (cumulative input + output tokens off `RunBudget`), so
+ * (the last call context size off `RunBudget`, i.e.
+ * `budget.contextTokens ?? 0`, not a running cumulative sum), so
  * `tokensRemaining = max(0, tokenLimit - used)`.
  *
  * This test drives the FULL production wireup pattern (same
  * `buildTokenUtilizationBridge` + `onBudgetReady` triple `main.ts`
  * uses) across multiple iterations and asserts `tokensRemaining`
- * decreases monotonically as tokens are consumed.
+ * reflects the last call's context size each time (not a running
+ * cumulative sum), so it can move either way between iterations.
  * ===================================================================== */
 
 describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) through production pattern', () => {
@@ -644,9 +646,14 @@ describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) 
     expect(remainingAfterCall2).toBe(4000);
 
     // The whole point of NH1: the agent reads remaining budget from the
-    // last call's size, not the cumulative ceiling. Second call strictly
-    // lower than the first (monotonic decrease across iterations).
-    expect(remainingAfterCall2).toBeLessThan(remainingAfterCall1);
+    // last call's size, not the cumulative ceiling. The fixture's second
+    // get_my_context call reports a LARGER context size than the first
+    // (chat #2 usage 1000 > chat #1 usage 950), so this assertion holds
+    // only because each remaining value is derived from its own call's
+    // context, not a running total — if it were a cumulative sum, the
+    // second remaining (5000 - 1950 = 3050) would be smaller here too,
+    // hiding the distinction.
+    expect(remainingAfterCall2).toBe(4000);
   });
 
   // Clamp-to-0 behavior is covered at the unit level in
