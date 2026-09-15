@@ -757,8 +757,10 @@ async function main(): Promise<void> {
       ...(capabilityBundle !== undefined && { capabilityBundle }),
       // v0.1.9 / NB1 — capture the executor's live RunBudget into
       // `liveBudget` so the get_my_context tool's
-      // `tokenUtilizationSnapshot` thunk reads cumulative tokens off
-      // the SAME object the loop mutates each iteration.
+      // `tokenUtilizationSnapshot` thunk reads the last-call context
+      // size (`contextTokens`) off the SAME object the loop mutates
+      // each iteration — matching the exact field the executor's
+      // context-window guard refuses on.
       onBudgetReady,
       // Audit-rev2 NM5 — thread the production-ready snapshot +
       // budget-remaining thunks through to the runner's universal

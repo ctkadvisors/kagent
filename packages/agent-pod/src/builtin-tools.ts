@@ -1143,7 +1143,7 @@ export function defineGetMyContext(deps: GetMyContextDeps): InProcessToolDefinit
       // NH1 (audit-rev2 C2 §3) — `budget.tokensRemaining` is also
       // computed from this snapshot's `used` field. Both `tokenLimit`
       // (per-task user cap from `runConfig.tokenLimit`) and
-      // `snapshot.used` (cumulative input + output tokens off RunBudget)
+      // `snapshot.used` (last-call context size off RunBudget)
       // are the same currency; subtracting yields the actionable
       // "remaining capacity" the agent's prompt logic uses to decide
       // "should I hand off now?" Pre-fix, the handler reported the
