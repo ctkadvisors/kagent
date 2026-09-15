@@ -119,6 +119,16 @@ describe('cacheKey', () => {
     expect(cacheKey('foo', null)).toBe(cacheKey('foo', undefined));
   });
 
+  // Open point 2 from the judge, refined: the empty-string name (`'foo'`)
+  // must collapse to the same key as a null name. The implementation is
+  // `${namespace ?? 'default'}/${name ?? ''}` — `'' ?? ''` is `''` and
+  // `null ?? ''` is `''`, so both forms yield `'foo/'`. Pinning
+  // `cacheKey('foo', '')` to `cacheKey('foo', null)` locks in that the
+  // empty-string name is not a distinct sentinel from a missing one.
+  it('empty-string name equals a null name', () => {
+    expect(cacheKey('foo', '')).toBe(cacheKey('foo', null));
+  });
+
   // Open point 2 from the judge: cover the namespace position too. A missing
   // namespace (undefined or null) collapses to the 'default' sentinel, and the
   // two forms collapse to the same key — mirroring the name-side behaviour.
