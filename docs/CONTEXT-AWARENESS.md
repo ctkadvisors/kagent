@@ -164,11 +164,17 @@ Today `defineGetMyContext` returns `{ taskUid, taskName, taskNamespace, agentNam
 {
   // ... existing fields unchanged ...
   "tokenUtilization": {
-    "used": 12_450,                  // cumulativeInputTokens + cumulativeOutputTokens at call time
-    "modelWindow": 131072,           // null if KAGENT_AGENT_MODEL_CONTEXT_WINDOW unset
-    "percentage": 0.094              // used/modelWindow rounded to 4 decimals; null if window unset
-  }
-}
+     "used": 12_450,                  // CURRENT context-window usage: the
+                                      // most-recent call's in+out
+                                      // (RunBudget.contextTokens) — the
+                                      // size the NEXT call re-sends.
+     "usedCumulative": 980_000,       // run-wide cumulative input+output
+                                      // spend; backs tokensRemaining;
+                                      // omitted only for legacy providers.
+     "modelWindow": 131072,           // null if KAGENT_AGENT_MODEL_CONTEXT_WINDOW
+                                      // unset
+     "percentage": 0.095,             // used/modelWindow rounded to 4
+                                      // decimals; null if window unset
 ```
 
 The agent's prompt is responsible for reading `percentage` and acting (e.g., calling `spawn_child_task` with a

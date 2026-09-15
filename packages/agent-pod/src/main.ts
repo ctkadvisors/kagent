@@ -859,11 +859,12 @@ if (isDirectInvocation) {
  *     `RunDeps.onBudgetReady`. It captures the executor's mutable
  *     budget reference into a closure-shared variable.
  *   - `tokenUtilizationSnapshot()` is wired into `defineGetMyContext`
- *     via `GetMyContextDeps.tokenUtilizationSnapshot`. It reads
- *     cumulative input + output tokens off the SAME object the
- *     executor mutates after every successful chat() call, plus the
- *     operator-projected `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` (passed
- *     in via `contextWindowTokens`).
+ *     via `GetMyContextDeps.tokenUtilizationSnapshot`. It returns
+ *     `{ used, usedCumulative, modelWindow }` — the CURRENT
+ *     context-window usage, the run's cumulative input+output spend
+ *     (used to bound cost headroom), and the operator-projected
+ *     `KAGENT_AGENT_MODEL_CONTEXT_WINDOW` (passed in via
+ *     `contextWindowTokens`).
  *
  * Before this bridge existed, the `tokenUtilizationSnapshot` dep was
  * omitted from production wiring while tests injected it directly,

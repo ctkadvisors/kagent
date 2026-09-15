@@ -1080,9 +1080,9 @@ export interface GetMyContextDeps {
   readonly capabilityBundle?: import('@kagent/capability-types').CapabilityBundle;
   /**
    * v0.1.9 piece 2 — live token-utilization snapshot. Returns
-   * `{ used, modelWindow }` at tool-call time so the LLM observes
-   * current context-window pressure against the model's window cap
-   * (per docs/CONTEXT-AWARENESS.md §4.4).
+   * `{ used, usedCumulative, modelWindow }` at tool-call time so the
+   * LLM observes current context-window pressure against the model's
+   * window cap (per docs/CONTEXT-AWARENESS.md §4.4).
    *
    * Snapshot semantics (the values mutate live on `RunBudget` between
    * iterations — a thunk lets the handler read them at the moment the
@@ -1093,7 +1093,10 @@ export interface GetMyContextDeps {
    *     refuses on. Always a number; 0 before any LLM call has fired. (The
    *     run's cumulative input+output spend lives separately and backs
    *     `tokensRemaining`, not this field — see the kagent#50 follow-up.)
-   *     a number. Returns 0 before any LLM call has fired.
+   *   - `usedCumulative`: the run's cumulative input+output spend, backing
+   *     `tokensRemaining` (`tokenLimit - usedCumulative`). Required for new
+   *     providers; only legacy cumulative providers may omit it, in which
+   *     case the handler's `tokensRemaining` silently falls back to `used`.
    *   - `modelWindow`: the model's declared window in tokens
    *     (KAGENT_AGENT_MODEL_CONTEXT_WINDOW resolved). `null` when the
    *     env is unset (back-compat).
