@@ -37,7 +37,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // Hard-coded constants mirroring `src/crds/types.ts`. Duplicated rather
 // than imported because the checker runs as a top-level tsx script and
@@ -45,8 +45,18 @@ import { fileURLToPath } from 'node:url';
 // resolve TS module imports. If these constants change in types.ts,
 // this script will fail and force an explicit update here too — that's
 // the point.
-const API_GROUP = 'kagent.knuteson.io';
-const API_VERSION = 'v1alpha1';
+//
+// These constants are re-exported (via `getAPIConstants`) purely so the
+// vitest suite can import them the same way the script uses them and
+// assert they still match the source of truth in types.ts — the drift
+// guard expressed as a unit test.
+export const API_GROUP = 'kagent.knuteson.io';
+export const API_VERSION = 'v1alpha1';
+
+/** The API group + version this checker pins (mirrors `src/crds/types.ts`). */
+export function getAPIConstants(): { readonly API_GROUP: string; readonly API_VERSION: string } {
+  return { API_GROUP, API_VERSION };
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const operatorRoot = resolve(__dirname, '..');
@@ -227,7 +237,14 @@ interface CRDExpectation {
   readonly statusProperties?: readonly string[];
 }
 
-const expectations: readonly CRDExpectation[] = [
+// The per-CRD expectations the checker enforces. Exposed through
+// `getExpectations()` so the vitest suite can assert these hard-coded
+// lists still agree with the TS type surface in `src/crds/types.ts`.
+export function getExpectations(): readonly CRDExpectation[] {
+  return EXPECTATIONS;
+}
+
+const EXPECTATIONS: readonly CRDExpectation[] = [
   {
     file: 'agent.yaml',
     kind: 'Agent',
@@ -513,35 +530,62 @@ function checkOne(exp: CRDExpectation): void {
   }
 }
 
-const present = new Set(readdirSync(crdsDir).filter((f) => f.endsWith('.yaml')));
-for (const exp of expectations) {
-  if (!present.has(exp.file)) {
-    recordError(exp.file, 'expected CRD file is missing');
-    continue;
+function main(): void {
+  const present = new Set(readdirSync(crdsDir).filter((f) => f.endsWith('.yaml')));
+  for (const exp of EXPECTATIONS) {
+    if (!present.has(exp.file)) {
+      recordError(exp.file, 'expected CRD file is missing');
+      continue;
+    }
+    checkOne(exp);
   }
-  checkOne(exp);
-}
 
-const unexpected = [...present].filter(
-  (f) => !expectations.some((e) => e.file === f) && f !== 'README.md',
-);
-for (const f of unexpected) {
-  console.warn(`[check-crd-drift] note: unrecognized CRD file ${f} (no expectation)`);
-}
-
-if (errors.length > 0) {
-  console.error(`[check-crd-drift] DRIFT DETECTED — ${errors.length} issue(s):`);
-  for (const e of errors) console.error(`  - ${e}`);
-  console.error('');
-  console.error(
-    '  Fix by reconciling packages/operator/manifests/crds/*.yaml with packages/operator/src/crds/types.ts.',
+  const unexpected = [...present].filter(
+    (f) => !EXPECTATIONS.some((e) => e.file === f) && f !== 'README.md',
   );
-  console.error(
-    '  See packages/operator/scripts/CRD-DRIFT-NOTES.md for what is and is not checked.',
+  for (const f of unexpected) {
+    console.warn(`[check-crd-drift] note: unrecognized CRD file ${f} (no expectation)`);
+  }
+
+  if (errors.length > 0) {
+    console.error(`[check-crd-drift] DRIFT DETECTED — ${errors.length} issue(s):`);
+    for (const e of errors) console.error(`  - ${e}`);
+    console.error('');
+    console.error(
+      '  Fix by reconciling packages/operator/manifests/crds/*.yaml with packages/operator/src/crds/types.ts.',
+    );
+    console.error(
+      '  See packages/operator/scripts/CRD-DRIFT-NOTES.md for what is and is not checked.',
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `[check-crd-drift] OK — ${EXPECTATIONS.length} CRDs match TS types (group=${API_GROUP}, version=${API_VERSION})`,
   );
-  process.exit(1);
 }
 
-console.log(
-  `[check-crd-drift] OK — ${expectations.length} CRDs match TS types (group=${API_GROUP}, version=${API_VERSION})`,
-);
+// Run only when invoked directly, not when imported (e.g. by the vitest
+// suite). The previous guard matched on process.argv, which could fire
+// main() on import when an unrelated CLI arg happened to end with
+// '/check-crd-drift.ts'. Inspecting only the entry point instead is
+// precise: `tsx check-crd-drift.ts` resolves process.argv[1] to this
+// module's path, while `import './check-crd-drift.js'` from a test file
+// leaves process.argv[1] elsewhere. Prefer the file:// URL of argv[1]
+// so a bare module specifier still resolves; fall back to false when the
+// entry cannot be determined.
+const selfUrl = pathToFileURL(__dirname + '/check-crd-drift.ts').href;
+const isEntry = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    if (entry.startsWith('file://')) return decodeURIComponent(entry) === selfUrl;
+    return pathToFileURL(entry).href === selfUrl;
+  } catch {
+    return false;
+  }
+})();
+
+if (isEntry) {
+  main();
+}
