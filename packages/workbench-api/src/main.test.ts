@@ -29,7 +29,12 @@ describe('resolvePort — fail-fast on invalid WORKBENCH_PORT', () => {
     expect(empty.ok).toBe(false);
     if (!empty.ok) {
       expect(empty.error.message).toContain('WORKBENCH_PORT');
-      expect(empty.error.message).toContain('');
+      // Point (e) of the ctkadvisors/kagent#55 review: `toContain('')` is a
+      // vacuous assertion (every string contains the empty string). Assert the
+      // exact quoted empty value instead — JSON.stringify('') === '""' — which
+      // is the value rendered into the error message above.
+      expect(empty.error.message).toContain('""');
+      expect(empty.error.message).toContain(JSON.stringify(''));
     }
   });
 
@@ -107,10 +112,31 @@ describe('resolvePort — fail-fast on invalid WORKBENCH_PORT', () => {
 //
 // A fresh module graph (resetModules) isolates the second, "again" load so it
 // is genuinely a re-import rather than a memoized module-object reuse.
+//
+// Point (c) of the ctkadvisors/kagent#55 review asked for the listener
+// baseline to be captured BEFORE the first import of main.js, not after the
+// string of dynamic imports that the resolvePort describe block above performs.
+// We therefore capture the baseline once at test-module load (before the first
+// dynamic import anywhere in this file) and assert it is unchanged everywhere.
 // ---------------------------------------------------------------------------
+
+// Signal-handler counts captured at test-module load, before the very first
+// dynamic import of ./main.js anywhere in this file.
+const SIGINT_BASELINE = process.listenerCount('SIGINT');
+const SIGTERM_BASELINE = process.listenerCount('SIGTERM');
+
 describe('importing main.js — no side effects on import', () => {
   afterEach(() => {
     vi.resetModules();
+  });
+
+  it('baseline signal-handler count is captured before the first import', () => {
+    // This is the first test to run in the block, before any dynamic import
+    // of main.js has been awaited. If the baseline were captured after an
+    // import, main() would already have registered handlers and these would
+    // fail — the whole suite hinges on this ordering.
+    expect(process.listenerCount('SIGINT')).toBe(SIGINT_BASELINE);
+    expect(process.listenerCount('SIGTERM')).toBe(SIGTERM_BASELINE);
   });
 
   it('records listeners, then a fresh dynamic import changes neither SIGINT nor SIGTERM', async () => {
@@ -118,6 +144,9 @@ describe('importing main.js — no side effects on import', () => {
 
     const sigintBefore = process.listenerCount('SIGINT');
     const sigtermBefore = process.listenerCount('SIGTERM');
+    // The pre-import baseline is exactly what we measured at load time.
+    expect(sigintBefore).toBe(SIGINT_BASELINE);
+    expect(sigtermBefore).toBe(SIGTERM_BASELINE);
 
     // This is the FIRST dynamic import of ./main.js in a fresh module graph.
     // If main() ran on load it would register handlers via `process.on(...)`
@@ -153,8 +182,6 @@ describe('importing main.js — no side effects on import', () => {
     expect(mod.resolvePort).toBeTypeOf('function');
     expect('main' in mod).toBe(false);
     // No other export should start with the boot verbs either.
-    expect(
-      Object.keys(mod).filter((k) => k.toLowerCase().startsWith('start')),
-    ).toEqual([]);
+    expect(Object.keys(mod).filter((k) => k.toLowerCase().startsWith('start'))).toEqual([]);
   });
 });
