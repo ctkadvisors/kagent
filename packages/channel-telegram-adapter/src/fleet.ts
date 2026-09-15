@@ -144,25 +144,45 @@ export function withFleetNow(text: string, block: string): string {
   return [block, CURRENT_MESSAGE_MARKER, text].join('\n');
 }
 
+export type FleetNowResult =
+  | { readonly kind: 'rendered'; readonly block: string }
+  | { readonly kind: 'absent' }
+  | {
+      readonly kind: 'stale';
+      /** Why the launcher produced no usable block: a timeout, a non-2xx reply, or an empty body. */
+      readonly reason: string;
+    };
+
 export async function fetchFleetNow(
   fleetUrl: string,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 5000,
   query?: string,
-): Promise<string | undefined> {
+): Promise<FleetNowResult> {
   // ?q=<message>: the launcher recalls the lessons that overlap this message.
   const q =
     query === undefined || query.trim() === ''
       ? ''
       : `?q=${encodeURIComponent(query.slice(0, 500))}`;
-  const res = await fetchImpl(`${fleetUrl.replace(/\/+$/u, '')}/missions${q}`, {
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) return undefined;
+  let res: Response;
+  try {
+    res = await fetchImpl(`${fleetUrl.replace(/\/+$/u, '')}/missions${q}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    // A timeout or unreachable launcher is a question left unanswered: surface
+    // it instead of returning undefined, so the caller can halt with a
+    // 'question_timeout'-style status rather than hang silently.
+    return {
+      kind: 'stale',
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (!res.ok) return { kind: 'stale', reason: `launcher answered HTTP ${res.status}` };
   const snap = fleetSnapshot(await res.json());
   if (snap === undefined || (snap.summary === undefined && snap.rules.length === 0))
-    return undefined;
-  return renderFleetNow(snap);
+    return { kind: 'absent' };
+  return { kind: 'rendered', block: renderFleetNow(snap) };
 }
 
 /**

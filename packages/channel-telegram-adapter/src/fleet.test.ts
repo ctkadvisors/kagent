@@ -84,22 +84,32 @@ describe('fleet now', () => {
     expect(stripPreviousTurn(bridged)).toBe('and now?');
   });
 
-  it('fetches /missions and returns nothing when the launcher is silent or empty', async () => {
+  it('fetches /missions and returns the block when the launcher answers, or absent', async () => {
     const ok = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
-    expect(await fetchFleetNow('http://launcher:8080/', ok as unknown as typeof fetch)).toContain(
-      '[fleet now]',
-    );
+    const hit = await fetchFleetNow('http://launcher:8080/', ok);
+    expect(hit.kind).toBe('rendered');
+    expect(hit.kind === 'rendered' && hit.block).toContain('[fleet now]');
     expect(ok).toHaveBeenCalledWith('http://launcher:8080/missions', expect.anything());
-    const down = vi.fn().mockResolvedValue(new Response('', { status: 503 }));
-    expect(
-      await fetchFleetNow('http://launcher:8080', down as unknown as typeof fetch),
-    ).toBeUndefined();
     const empty = vi
       .fn()
       .mockResolvedValue(new Response(JSON.stringify({ fleet: {} }), { status: 200 }));
-    expect(
-      await fetchFleetNow('http://launcher:8080', empty as unknown as typeof fetch),
-    ).toBeUndefined();
+    const silent = await fetchFleetNow('http://launcher:8080', empty);
+    expect(silent.kind).toBe('absent');
+  });
+
+  it('reports a stale launcher (non-2xx or unreachable) instead of returning nothing', async () => {
+    const down = vi.fn().mockResolvedValue(new Response('', { status: 503 }));
+    const stale = await fetchFleetNow('http://launcher:8080', down);
+    expect(stale.kind).toBe('stale');
+    if (stale.kind === 'stale') expect(stale.reason).toContain('HTTP 503');
+
+    const timesOut = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      throw new DOMException('Aborted', 'TimeoutError');
+    }) as unknown as typeof fetch;
+    const aborted = await fetchFleetNow('http://launcher:8080', timesOut, 1);
+    expect(aborted.kind).toBe('stale');
+    if (aborted.kind === 'stale') expect(aborted.reason).toContain('Aborted');
   });
 });
 

@@ -298,9 +298,18 @@ async function bridgeFleetNow(
     const ruleLine =
       rule === undefined ? undefined : renderRuleRecord(rule, await recordRule(url, rule));
     const fetched = await fetchFleetNow(url, fetch, 5000, rawText);
-    if (fetched === undefined && ruleLine === undefined) return envelope;
-    const block = [fetched ?? '[fleet now]', ruleLine].filter((x) => x !== undefined).join('\n');
-    return { ...envelope, text: withFleetNow(envelope.text, block) };
+    // A stale/unanswered launcher is a question left open: surface it as a
+    // status line (so the run records a question_timeout status) instead of
+    // appending a stale block or hanging silently. An absent launcher adds
+    // nothing.
+    const block = fetched.kind === 'rendered' ? fetched.block : undefined;
+    const staleLine =
+      fetched.kind === 'stale'
+        ? `[fleet now] question unanswered (${fetched.reason}); halt with a question_timeout status, do not hang`
+        : undefined;
+    const appended = ruleLine === undefined ? undefined : `[rule] ${ruleLine}`;
+    const blockText = [block, staleLine, appended].filter((x) => x !== undefined).join('\n');
+    return { ...envelope, text: withFleetNow(envelope.text, blockText) };
   } catch (err) {
     input.logger.warn('[channel-telegram] fleet-now bridge skipped', err);
     return envelope;
