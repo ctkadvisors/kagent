@@ -23,13 +23,10 @@ import { dirname, resolve } from 'node:path';
  * contract. If the number drifts, that is a decision for a human.
  */
 const here = dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(
-  readFileSync(resolve(here, '../package.json'), 'utf-8')
-) as { scripts: Record<string, string> };
-const cfgText = readFileSync(
-  resolve(here, '../vitest.config.ts'),
-  'utf-8'
-);
+const pkg = JSON.parse(readFileSync(resolve(here, '../package.json'), 'utf-8')) as {
+  scripts: Record<string, string>;
+};
+const cfgText = readFileSync(resolve(here, '../vitest.config.ts'), 'utf-8');
 
 describe('coverage threshold contract', () => {
   it('declares a test:coverage script that enables coverage', () => {
@@ -43,12 +40,10 @@ describe('coverage threshold contract', () => {
     const matches = cfgText.match(/thresholds\s*:\s*\{[^}]*\}/s);
     expect(matches, 'expected a thresholds block').toBeTruthy();
     const body = matches![0];
-    const numericValues = [...body.matchAll(/\d+/g)].map((m) =>
-      Number(m[0])
-    );
+    const numericValues = [...body.matchAll(/\d+/g)].map((m) => Number(m[0]));
     expect(
       numericValues.some((n) => n > 0),
-      'expected at least one non-zero threshold'
+      'expected at least one non-zero threshold',
     ).toBe(true);
   });
 });
