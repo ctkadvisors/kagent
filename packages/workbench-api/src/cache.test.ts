@@ -98,6 +98,21 @@ describe('cacheKey', () => {
   it('handles missing name', () => {
     expect(cacheKey('foo', undefined)).toBe('foo/');
   });
+
+  // cacheKey does NOT throw on a null/undefined name — it falls back to the
+  // empty-string sentinel ('foo/'). That fallback is the exact behaviour the
+  // candidate in 01-findings.json calls out: a route that passes a missing
+  // agent id collapses to the same key as an empty one, silently. We pin both
+  // the null and undefined forms to that sentinel so a future refactor that
+  // "defensively throws" cannot change it unnoticed, and we assert the two
+  // forms collide so the collision is a documented contract, not a surprise.
+  it('resolves a null name to the empty-string sentinel', () => {
+    expect(cacheKey('foo', null)).toBe('foo/');
+  });
+
+  it('treats null and undefined names as the same key', () => {
+    expect(cacheKey('foo', null)).toBe(cacheKey('foo', undefined));
+  });
 });
 
 describe('SnapshotCache tasks', () => {
