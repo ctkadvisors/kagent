@@ -237,7 +237,12 @@ describe('bridgeFleetNow', () => {
       updates: [
         {
           update_id: 30,
-          message: { message_id: 1, from: { id: 1, is_bot: false }, chat: { id: 1, type: 'private' }, text: 'hi' },
+          message: {
+            message_id: 1,
+            from: { id: 1, is_bot: false },
+            chat: { id: 1, type: 'private' },
+            text: 'hi',
+          },
         },
       ],
     });
@@ -249,9 +254,7 @@ describe('bridgeFleetNow', () => {
     try {
       const gateway = { postInbound: vi.fn().mockResolvedValue(null) };
       await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
-      expect(gateway.postInbound).toHaveBeenCalledWith(
-        expect.objectContaining({ text: 'hi' }),
-      );
+      expect(gateway.postInbound).toHaveBeenCalledWith(expect.objectContaining({ text: 'hi' }));
     } finally {
       vi.unstubAllGlobals();
     }
@@ -295,7 +298,12 @@ describe('bridgeFleetNow', () => {
       updates: [
         {
           update_id: 32,
-          message: { message_id: 1, from: { id: 1, is_bot: false }, chat: { id: 1, type: 'private' }, text: 'hi' },
+          message: {
+            message_id: 1,
+            from: { id: 1, is_bot: false },
+            chat: { id: 1, type: 'private' },
+            text: 'hi',
+          },
         },
       ],
     });

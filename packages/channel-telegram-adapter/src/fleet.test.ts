@@ -142,8 +142,7 @@ describe('fleet now', () => {
     // An error whose message is whitespace would otherwise surface as
     // "launcher fetch failed ()" in the user-visible stale line; the guard
     // substitutes a neutral marker instead.
-    const blank = (async () =>
-      Promise.reject(new Error('   '))) as unknown as typeof fetch;
+    const blank = (async () => Promise.reject(new Error('   '))) as unknown as typeof fetch;
     const result = await fetchFleetNow('http://launcher:8080', blank, 1000);
     expect(result.kind).toBe('stale');
     if (result.kind === 'stale') {

@@ -306,7 +306,9 @@ async function bridgeFleetNow(
     // failed, with no claim about who resolves it.
     const block = fetched.kind === 'rendered' ? fetched.block : undefined;
     const staleLine =
-      fetched.kind === 'stale' ? `🛟 [fleet now] launcher fetch failed (${fetched.reason})` : undefined;
+      fetched.kind === 'stale'
+        ? `🛟 [fleet now] launcher fetch failed (${fetched.reason})`
+        : undefined;
     const appended = ruleLine === undefined ? undefined : `[rule] ${ruleLine}`;
     const blockText = [block, staleLine, appended].filter((x) => x !== undefined).join('\n');
     // Preserve the old early return: when nothing was fetched and there is no
