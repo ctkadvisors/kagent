@@ -21,13 +21,16 @@ export const FLEET_NOW_MARKER = '[fleet now]';
 const MAX_RULES = 6;
 const MAX_RULE_CHARS = 220;
 
-/** A launcher reason is embedded verbatim in the message: keep it to one line. */
+/** A launcher reason is embedded verbatim in the message: keep it to one line.
+ * A blank reason (an empty error message) is replaced with a neutral marker so
+ * the stale line never renders as "launcher fetch failed ()". */
 function sanitizeReason(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   // Split to the first line, take it (non-null: slice(n) of a non-empty str
   // always yields an element), then collapse any stray whitespace.
   const first = msg.split(/\r?\n/u, 1)[0];
-  return (first ?? '').trim().replace(/\s+/gu, ' ');
+  const trimmed = (first ?? '').trim().replace(/\s+/gu, ' ');
+  return trimmed.length === 0 ? 'no response' : trimmed;
 }
 
 export interface FleetRow {

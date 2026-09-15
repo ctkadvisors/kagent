@@ -307,7 +307,7 @@ describe('bridgeFleetNow', () => {
       await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
       const [env] = gateway.postInbound.mock.calls[0];
       const text = env as { readonly text: string };
-      expect(text.text).toContain('[fleet now] question unanswered');
+      expect(text.text).toContain('[fleet now] launcher fetch failed');
       expect(text.text).not.toContain('\n[fleet now]');
     } finally {
       vi.unstubAllGlobals();
@@ -335,7 +335,7 @@ describe('bridgeFleetNow', () => {
       await processTelegramUpdates({ config: baseConfig(), client, gateway, logger: quietLogger });
       const [env] = gateway.postInbound.mock.calls[0];
       const text = env as { readonly text: string };
-      expect(text.text).toContain('[fleet now] question unanswered');
+      expect(text.text).toContain('[fleet now] launcher fetch failed');
       expect(text.text).toContain('[rule]');
       expect(text.text).toContain('stay on one line');
     } finally {

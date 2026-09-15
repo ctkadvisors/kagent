@@ -137,6 +137,20 @@ describe('fleet now', () => {
       expect(result.reason).not.toContain('\n');
     }
   });
+
+  it('never leaves a blank launcher reason empty in the stale line', async () => {
+    // An error whose message is whitespace would otherwise surface as
+    // "launcher fetch failed ()" in the user-visible stale line; the guard
+    // substitutes a neutral marker instead.
+    const blank = (async () =>
+      Promise.reject(new Error('   '))) as unknown as typeof fetch;
+    const result = await fetchFleetNow('http://launcher:8080', blank, 1000);
+    expect(result.kind).toBe('stale');
+    if (result.kind === 'stale') {
+      expect(result.reason.length).toBeGreaterThan(0);
+      expect(result.reason).not.toMatch(/^\s*$/u);
+    }
+  });
 });
 
 describe('fleet now ideas', () => {
