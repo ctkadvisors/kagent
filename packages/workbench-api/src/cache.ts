@@ -46,22 +46,27 @@ export type CacheKey = string;
  *
  * Input contract:
  *
- *   - `namespace` and `name` are both `string | undefined`.
+ *   - `namespace` and `name` are both `string | null | undefined`.
  *   - A missing (`undefined` or `null`) `namespace` collapses to the
  *     `'default'` sentinel; a missing (`undefined` or `null`) `name`
  *     collapses to the empty-string sentinel. Neither is a distinct
  *     key, and `undefined`/`null` collapse to the same value, so
  *     `cacheKey('foo', undefined)` and `cacheKey('foo', null)` are the
- *     identical key `'foo/'`.
+ *     identical key `'foo/'`, and `cacheKey(undefined, 'x')` and
+ *     `cacheKey(null, 'x')` are the identical key `'default/x'`.
+ *   - The function does NOT throw: a missing id collapses to a sentinel
+ *     key rather than failing. This is a silent-collision point — if a
+ *     bad id should fail loudly, validate it at the call site, not here.
  *
- * The signature is `string | undefined` — plain `null` is not a
- * documented input. Callers that hold a `V1Job`/`V1Pod` pass
- * `metadata?.name`, so a `null` can reach here in practice; the
- * `?? ''` fallback treats it exactly like `undefined`. If you want a
- * bad id to fail loudly instead of silently colliding, validate it
- * at the call site, not here — see the SnapshotCache tests.
+ * The parameter type is `string | null | undefined`: callers holding a
+ * `V1Job`/`V1Pod` pass `metadata?.name`, so `null` reaches here in
+ * practice, and the `?? ''` / `?? 'default'` fallbacks treat it exactly
+ * like `undefined` — hence the two forms collapse to the same key.
  */
-export function cacheKey(namespace: string | undefined, name: string | undefined): CacheKey {
+export function cacheKey(
+  namespace: string | null | undefined,
+  name: string | null | undefined,
+): CacheKey {
   return `${namespace ?? 'default'}/${name ?? ''}`;
 }
 
