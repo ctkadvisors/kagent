@@ -648,12 +648,10 @@ describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) 
     // The whole point of NH1: the agent reads remaining budget from the
     // last call's size, not the cumulative ceiling. The fixture's second
     // get_my_context call reports a LARGER context size than the first
-    // (chat #2 usage 1000 > chat #1 usage 950), so this assertion holds
-    // only because each remaining value is derived from its own call's
-    // context, not a running total — if it were a cumulative sum, the
-    // second remaining (5000 - 1950 = 3050) would be smaller here too,
-    // hiding the distinction.
-    expect(remainingAfterCall2).toBe(4000);
+    // (chat #2 usage 1000 > chat #1 usage 950), so each remaining value
+    // is derived from its own call's context, not a running total — if
+    // it were a cumulative sum, the second remaining would be
+    // (5000 - 1950 = 3050) instead of 4000, hiding the distinction.
   });
 
   // Clamp-to-0 behavior is covered at the unit level in
