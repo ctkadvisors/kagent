@@ -893,7 +893,7 @@ export function buildTokenUtilizationBridge(contextWindowTokens: number | undefi
   } => {
     const used =
       liveBudget !== undefined
-        ? liveBudget.cumulativeInputTokens + liveBudget.cumulativeOutputTokens
+        ? liveBudget.contextTokens ?? 0
         : 0;
     return {
       used,

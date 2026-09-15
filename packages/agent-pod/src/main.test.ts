@@ -629,19 +629,24 @@ describe('NH1 regression — budget.tokensRemaining reports remaining (not cap) 
       return tr as number;
     }
 
-    // After chat #1 (950 tokens consumed): tokensRemaining = 5000 - 950 = 4050.
+    // `used` is the last-call size (budget.contextTokens), read live
+    // from the captured ref. The executor records the chat's usage into
+    // budget.contextTokens and then dispatches that chat's tool_call, so
+    // the get_my_context snapshot in each iteration sees that iteration's
+    // own call size (950 for chat #1, 1000 for chat #2).
+    //
+    // After chat #1 (950 tokens): tokensRemaining = 5000 - 950 = 4050.
     const remainingAfterCall1 = readTokensRemaining(ctxTraces[0]?.tool_output);
     expect(remainingAfterCall1).toBe(4050);
 
-    // After chat #2 (cumulative 1950): tokensRemaining = 5000 - 1950 = 3050.
+    // After chat #2 (1000 tokens): tokensRemaining = 5000 - 1000 = 4000.
     const remainingAfterCall2 = readTokensRemaining(ctxTraces[1]?.tool_output);
-    expect(remainingAfterCall2).toBe(3050);
+    expect(remainingAfterCall2).toBe(4000);
 
-    // The whole point of NH1: monotonic decrease, not the ceiling.
+    // The whole point of NH1: the agent reads remaining budget from the
+    // last call's size, not the cumulative ceiling. Second call strictly
+    // lower than the first (monotonic decrease across iterations).
     expect(remainingAfterCall2).toBeLessThan(remainingAfterCall1);
-    // Pre-fix, BOTH calls would have observed `tokensRemaining: 5000`.
-    expect(remainingAfterCall1).not.toBe(5000);
-    expect(remainingAfterCall2).not.toBe(5000);
   });
 
   // Clamp-to-0 behavior is covered at the unit level in
@@ -670,21 +675,21 @@ describe('buildTokenUtilizationBridge (NB1 helper)', () => {
     expect(tokenUtilizationSnapshot()).toEqual({ used: 0, modelWindow: 131_072 });
   });
 
-  it('after onBudgetReady fires, the snapshot reads cumulativeInputTokens + cumulativeOutputTokens LIVE from the captured ref', () => {
+  it('after onBudgetReady fires, the snapshot reads contextTokens (last-call size) LIVE from the captured ref', () => {
     const { onBudgetReady, tokenUtilizationSnapshot } = buildTokenUtilizationBridge(8000);
     const budget = {
       cumulativeInputTokens: 100,
       cumulativeOutputTokens: 50,
+      contextTokens: 75,
       cumulativeCostUsd: null,
     };
     onBudgetReady(budget);
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 150, modelWindow: 8000 });
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 75, modelWindow: 8000 });
 
     // Mutate the captured ref the way the executor does between
     // iterations — the snapshot MUST reflect the new value (live read,
     // not at-construction snapshot).
-    budget.cumulativeInputTokens = 600;
-    budget.cumulativeOutputTokens = 350;
-    expect(tokenUtilizationSnapshot()).toEqual({ used: 950, modelWindow: 8000 });
+    budget.contextTokens = 480;
+    expect(tokenUtilizationSnapshot()).toEqual({ used: 480, modelWindow: 8000 });
   });
 });
