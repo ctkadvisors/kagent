@@ -41,6 +41,26 @@ import type {
 /** Stable composite key — `<namespace>/<name>`. Used for all kinds. */
 export type CacheKey = string;
 
+/**
+ * Build the stable composite cache key `<namespace>/<name>`.
+ *
+ * Input contract:
+ *
+ *   - `namespace` and `name` are both `string | undefined`.
+ *   - A missing (`undefined` or `null`) `namespace` collapses to the
+ *     `'default'` sentinel; a missing (`undefined` or `null`) `name`
+ *     collapses to the empty-string sentinel. Neither is a distinct
+ *     key, and `undefined`/`null` collapse to the same value, so
+ *     `cacheKey('foo', undefined)` and `cacheKey('foo', null)` are the
+ *     identical key `'foo/'`.
+ *
+ * The signature is `string | undefined` — plain `null` is not a
+ * documented input. Callers that hold a `V1Job`/`V1Pod` pass
+ * `metadata?.name`, so a `null` can reach here in practice; the
+ * `?? ''` fallback treats it exactly like `undefined`. If you want a
+ * bad id to fail loudly instead of silently colliding, validate it
+ * at the call site, not here — see the SnapshotCache tests.
+ */
 export function cacheKey(namespace: string | undefined, name: string | undefined): CacheKey {
   return `${namespace ?? 'default'}/${name ?? ''}`;
 }
