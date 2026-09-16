@@ -29,6 +29,9 @@ export const CURRENT_MESSAGE_MARKER = '[current message]';
  */
 const MAX_BRIDGE_REPLY_CHARS = 1500;
 const MAX_EARLIER_REPLY_CHARS = 500;
+// The human's side of a bridged turn is bounded too: a bridge that can only
+// grow is how one message wedged the channel for four days (see stripPreviousTurn).
+const MAX_BRIDGE_MESSAGE_CHARS = 1500;
 const MAX_EPISODE_CHARS = 6000;
 
 export interface BrainConfig {
@@ -56,13 +59,13 @@ export function withPreviousTurn(input: {
 }): string {
   const reply = truncate(input.previousReply, MAX_BRIDGE_REPLY_CHARS);
   const earlier = (input.earlier ?? []).flatMap((t) => [
-    `${input.operatorName}: ${stripPreviousTurn(t.message)}`,
+    `${input.operatorName}: ${truncate(stripPreviousTurn(t.message), MAX_BRIDGE_MESSAGE_CHARS)}`,
     `You: ${truncate(t.reply, MAX_EARLIER_REPLY_CHARS)}`,
   ]);
   return [
     PREVIOUS_TURN_MARKER,
     ...earlier,
-    `${input.operatorName}: ${stripPreviousTurn(input.previousMessage)}`,
+    `${input.operatorName}: ${truncate(stripPreviousTurn(input.previousMessage), MAX_BRIDGE_MESSAGE_CHARS)}`,
     `You: ${reply}`,
     CURRENT_MESSAGE_MARKER,
     input.text,
@@ -71,10 +74,15 @@ export function withPreviousTurn(input: {
 
 /** Inverse of withPreviousTurn: the text the human actually sent. */
 export function stripPreviousTurn(text: string): string {
-  const idx = text.indexOf(`\n${CURRENT_MESSAGE_MARKER}\n`);
-  if (idx === -1 || !(text.startsWith(PREVIOUS_TURN_MARKER) || text.startsWith('[fleet now]')))
-    return text;
-  return text.slice(idx + CURRENT_MESSAGE_MARKER.length + 2);
+  // The LAST marker, whatever the text opens with. The old version took the
+  // first marker and only when the text began with the current opening
+  // marker: the 2026-09-10 rename of that marker made one stored message
+  // fail the check, every later turn nested the one before it (4 KB -> 213 KB
+  // in six turns), and from 2026-09-11 20:29Z the gateway answered 400 to
+  // every message for four days.
+  const marker = `\n${CURRENT_MESSAGE_MARKER}\n`;
+  const idx = text.lastIndexOf(marker);
+  return idx === -1 ? text : text.slice(idx + marker.length);
 }
 
 export function channelTurnEpisode(input: {

@@ -42,6 +42,31 @@ describe('previous-turn bridge', () => {
     });
     expect(second).toBe('[earlier in this conversation]\nChris: b\nYou: rb\n[current message]\nc');
   });
+
+  it('unnests a message stored under the pre-v0.2.60 opening marker, however deep, and caps the human side', () => {
+    // What the 2026-09-11 tasks looked like: the legacy marker in front, then
+    // turn after turn nested inside, each with its own [current message].
+    const legacy =
+      '[previous turn]\nChris: a\nYou: ra\n[current message]\n[previous turn]\nChris: b\nYou: rb\n[fleet now]\nidle\n[current message]\nOk';
+    expect(stripPreviousTurn(legacy)).toBe('Ok');
+    const bridged = withPreviousTurn({
+      text: 'next',
+      previousMessage: legacy,
+      previousReply: 'fine',
+      operatorName: 'Chris',
+      earlier: [{ message: legacy, reply: 'earlier reply' }],
+    });
+    expect(bridged).toBe(
+      '[earlier in this conversation]\nChris: Ok\nYou: earlier reply\nChris: Ok\nYou: fine\n[current message]\nnext',
+    );
+    const long = withPreviousTurn({
+      text: 'x',
+      previousMessage: 'm'.repeat(5000),
+      previousReply: 'r',
+      operatorName: 'Chris',
+    });
+    expect(long.length).toBeLessThan(1700);
+  });
 });
 
 describe('channelTurnEpisode', () => {
