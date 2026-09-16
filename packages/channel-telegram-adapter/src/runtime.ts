@@ -195,6 +195,16 @@ export async function processTelegramUpdates(input: {
       // else (gateway down, 5xx) keeps the offset so the message is retried.
       if (err instanceof ChannelGatewayHttpError && err.status < 500) {
         nextOffset = Math.max(nextOffset ?? 0, updateId + 1);
+        // Say so. A dropped message nobody mentions reads as "not responding":
+        // four days of it, 2026-09-11..15.
+        try {
+          await input.client.sendMessage({
+            chatId: envelope.peer.id,
+            text: `I couldn't take that message (the gateway said HTTP ${String(err.status)}). Send it again, shorter if it was long.`,
+          });
+        } catch (sendErr) {
+          input.logger.warn('[channel-telegram] could not report the rejected message', sendErr);
+        }
         continue;
       }
       break;
