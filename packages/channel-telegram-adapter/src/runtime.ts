@@ -4,7 +4,8 @@
  */
 
 import { normalizeTelegramUpdate } from './normalize.js';
-import { withPreviousTurn } from './brain.js';
+import { stripPreviousTurn, withPreviousTurn } from './brain.js';
+import { checkInbound } from './sentinel.js';
 import { fetchFleetNow, recordRule, renderRuleRecord, ruleIn, withFleetNow } from './fleet.js';
 import { deliverOutboundTurns } from './outbound.js';
 import { adapterCondition } from './status.js';
@@ -172,11 +173,21 @@ export async function processTelegramUpdates(input: {
       nextOffset = Math.max(nextOffset ?? 0, updateId + 1);
       continue;
     }
-    const envelope = await bridgeFleetNow(
+    const bridged = await bridgeFleetNow(
       input,
       await bridgePreviousTurn(input, normalized),
       normalized.text,
     );
+    // The sentinel: a nested or bloated bridge never reaches the gateway; the raw
+    // text goes instead and the finding is logged for the fleet's observer.
+    const finding = checkInbound(bridged.text);
+    const envelope =
+      finding === undefined ? bridged : { ...bridged, text: stripPreviousTurn(bridged.text) };
+    if (finding !== undefined) {
+      input.logger.warn(
+        `[channel-telegram] sentinel: ${finding.check} (${finding.evidence}); posting the raw text only`,
+      );
+    }
 
     try {
       await input.gateway.postInbound(envelope);

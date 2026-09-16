@@ -66,6 +66,50 @@ describe('processTelegramUpdates', () => {
     expect(sent.text).toContain('HTTP 400');
   });
 
+  it('strips a nested bridge to the raw text and warns instead of posting it', async () => {
+    const client = makeClient({
+      updates: [
+        {
+          update_id: 12,
+          message: {
+            message_id: 3,
+            from: { id: 3175140114, is_bot: false, first_name: 'Chris' },
+            chat: { id: 3175140114, type: 'private' },
+            text: 'Ok',
+          },
+        },
+      ],
+    });
+    const gateway = { postInbound: vi.fn().mockResolvedValue({ action: 'created' }) };
+    const warn = vi.fn();
+    const nested =
+      '[earlier in this conversation]\nChris: a\nYou: b\n[current message]\n[fleet now]\nidle\n[current message]\nOk';
+    const outbox = {
+      listChannelSessions: vi.fn().mockResolvedValue([
+        {
+          spec: { peer: { kind: 'dm', id: '3175140114' } },
+          status: { lastTaskRef: { name: 't', namespace: 'n' } },
+          metadata: { name: 's' },
+        },
+      ]),
+      getAgentTask: vi.fn().mockResolvedValue({
+        metadata: { name: 't', annotations: { 'kagent.knuteson.io/channel-message': nested } },
+        status: { phase: 'Completed', result: { content: 'fine' } },
+      }),
+    };
+    await processTelegramUpdates({
+      config,
+      client,
+      gateway,
+      logger: { ...quietLogger, warn },
+      outbox: outbox as never,
+      offset: 12,
+    });
+    const posted = gateway.postInbound.mock.calls[0]?.[0] as { text: string };
+    expect(posted.text.split('[current message]').length - 1).toBeLessThanOrEqual(1);
+    expect(posted.text.endsWith('Ok')).toBe(true);
+  });
+
   it('posts accepted Telegram updates and advances the polling offset', async () => {
     const client = makeClient({
       updates: [
