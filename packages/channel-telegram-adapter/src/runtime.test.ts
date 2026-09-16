@@ -60,6 +60,10 @@ describe('processTelegramUpdates', () => {
     });
 
     expect(result).toEqual({ nextOffset: 11, accepted: 0, ignored: 0, failed: 1 });
+    // ...and the human hears that it was dropped, not silence.
+    const [sent] = client.sendMessage.mock.calls[0] as [{ chatId: string; text: string }];
+    expect(sent.chatId).toBe('3175140114');
+    expect(sent.text).toContain('HTTP 400');
   });
 
   it('posts accepted Telegram updates and advances the polling offset', async () => {
