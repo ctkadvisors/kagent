@@ -721,7 +721,16 @@ function commandResultToToolResult(result: {
   readonly exitCode: number | null;
   readonly timedOut: boolean;
 }): ToolResult {
-  const content = result.stdout.length > 0 ? result.stdout : result.stderr;
+  // Never hand the model an empty string: it retries the identical call, and
+  // the loop's identical-call guard then refuses it (concierge, 2026-09-15:
+  // "returned empty output on every call and then refused to run"). A snippet
+  // whose last line is a bare expression prints nothing under `node file.js`.
+  const content =
+    result.stdout.length > 0
+      ? result.stdout
+      : result.stderr.length > 0
+        ? result.stderr
+        : `(exit ${String(result.exitCode)}, no output. This ran as a script, not a REPL: a bare final expression prints nothing. console.log / print what you want to read, then call again.)`;
   return {
     content,
     isError: result.exitCode !== 0 || result.timedOut,

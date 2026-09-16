@@ -484,6 +484,22 @@ describe('ToolGatewayHttpHandler', () => {
     expect(body.content as string).toContain('hi');
   });
 
+  it('never returns an empty result: a silent exit 0 says so, so the model prints instead of retrying', async () => {
+    const shellRunner = {
+      exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, timedOut: false }),
+    };
+    const handler = new ToolGatewayHttpHandler({ shellRunner });
+
+    const response = await handler.handle(
+      request(invokeBody('shell.exec', { host: 'jetson2', command: 'true' })),
+    );
+    const body = asRecord(await json(response));
+
+    expect(body.isError).toBe(false);
+    expect(body.content as string).toContain('no output');
+    expect(body.content as string).toContain('console.log');
+  });
+
   it('propagates shell runner errors through the standard runtime-error path', async () => {
     const shellRunner = {
       exec: vi.fn().mockRejectedValue(new Error('policy_denied: host jetson1 is not allowed')),
