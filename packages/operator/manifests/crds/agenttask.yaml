@@ -231,6 +231,11 @@ spec:
                     - Dispatched
                     - Completed
                     - Failed
+                    # Unanswered forum question past the forum-watchdog
+                    # threshold — a human-latency block, archived under
+                    # 'human-latency' rather than read as agent
+                    # 'system-failure'. See forum-watchdog.ts.
+                    - halted-forum-wait
                 result:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
