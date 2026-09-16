@@ -664,7 +664,19 @@ export interface Agent {
  * AgentTask — single invocation request, addressed by agent or capability.
  * ===================================================================== */
 
-export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
+export type AgentTaskPhase =
+  | 'Pending'
+  | 'Dispatched'
+  | 'Completed'
+  | 'Failed'
+  /**
+   * The owning run asked a forum question that went unanswered past
+   * the `forum-watchdog` threshold. Distinct from `Failed` so the
+   * cleanup mechanism can archive the run under a `human-latency` tag
+   * instead of reading the block as an agent `system-failure`. See
+   * `forum-watchdog.ts`.
+   */
+  | 'halted-forum-wait';
 
 /**
  * Per-run knobs surfaced to the agent loop. Mirrors `RunInput`'s

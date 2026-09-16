@@ -65,6 +65,7 @@ import {
   type Agent,
   type AgentTask,
   type AgentTaskCondition,
+  type AgentTaskPhase,
   type Tenant,
   type OutputRef,
   isAgent,
@@ -971,7 +972,7 @@ async function markFailed(task: AgentTask, reason: string, deps: ReconcileDeps):
 }
 
 interface StatusPatch {
-  phase?: 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
+  phase?: AgentTaskPhase;
   podName?: string;
   startedAt?: string;
   completedAt?: string;

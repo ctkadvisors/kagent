@@ -79,6 +79,7 @@ import { buildKubernetesChannelControllerStore } from './channel-controller.js';
 import { startChannelGatewayServer } from './channel-gateway.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
+import { checkForumTimeouts } from './forum-watchdog.js';
 import { jobNameForTask, type BuildJobSpecOptions, type EnvVarSpec } from './job-spec.js';
 import type { ModelClassEntry, ModelClassMap } from './model-class-resolver.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
@@ -3151,6 +3152,75 @@ async function main(): Promise<void> {
     }
   } else {
     console.log('[kagent-operator] CAS GC disabled (set KAGENT_CAS_ENABLED=true to enable)');
+  }
+
+  // === Forum watchdog ===
+  // Detect forum questions the human has left unanswered long enough
+  // to be treated as *human latency* (not agent error). Scans the
+  // forum directory on the same cadence as the CAS-GC sweep; on a
+  // timeout it writes a `00-forum-timeout.json` artifact beside the
+  // stale question and returns the list so the owning run can be
+  // archived under `human-latency` rather than `system-failure`.
+  //
+  // OFF by default: the operator does not know the fleet's forum
+  // directory, so it is flipped on via KAGENT_FORUM_DIR. When unset we
+  // log + skip (a silent no-op keeps the sweep from erroring every
+  // tick on a missing mount).
+  {
+    const forumDir = process.env.KAGENT_FORUM_DIR;
+    if (typeof forumDir === 'string' && forumDir.length > 0) {
+      const thresholdRaw = process.env.KAGENT_FORUM_THRESHOLD_HOURS ?? '4';
+      const thresholdHours = Number.parseInt(thresholdRaw, 10);
+      const thresholdMs =
+        Number.isFinite(thresholdHours) && thresholdHours > 0
+          ? thresholdHours * 60 * 60 * 1000
+          : 4 * 60 * 60 * 1000;
+      const intervalSeconds = Number.parseInt(
+        process.env.KAGENT_FORUM_CHECK_INTERVAL_SECONDS ?? '300',
+        10,
+      );
+      const intervalMs =
+        Number.isFinite(intervalSeconds) && intervalSeconds > 0
+          ? intervalSeconds * 1000
+          : 5 * 60 * 1000;
+
+      const sweep = (): void => {
+        try {
+          const { timedOut, artifacts } = checkForumTimeouts(forumDir, thresholdMs);
+          if (timedOut.length > 0) {
+            console.log(
+              `[kagent-operator/forum-watchdog] ${String(timedOut.length)} unanswered ` +
+                `question(s) past ${String(thresholdMs)}ms — artifacts: ` +
+                `${artifacts.join(', ')}`,
+            );
+            // The owning run is archived on the NEXT reconcile once it
+            // observes the phase; here we only record the block so a
+            // downstream consumer (cleanup/tagging) has the artifact.
+          }
+        } catch (err) {
+          console.error(
+            `[kagent-operator/forum-watchdog] sweep failed: ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      };
+
+      sweep();
+      const timer = setInterval(sweep, intervalMs);
+      if (typeof timer.unref === 'function') timer.unref();
+
+      const previous = onShutdownExtra;
+      onShutdownExtra = async (): Promise<void> => {
+        try {
+          clearInterval(timer);
+        } catch (err) {
+          console.error('[kagent-operator/forum-watchdog] stop failed:', err);
+        }
+        if (previous !== undefined) await previous();
+      };
+    } else {
+      console.log('[kagent-operator] forum-watchdog disabled (set KAGENT_FORUM_DIR to enable)');
+    }
   }
 
   // === Wave 3 — Cache ===
