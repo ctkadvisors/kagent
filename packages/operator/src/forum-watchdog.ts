@@ -95,6 +95,15 @@ function readForumQuestions(forumDir: string): ForumQuestionResult[] {
     return [];
   }
   for (const entry of entries) {
+    // Skip the watchdog's own timeout artifacts: a `00-forum-timeout.json`
+    // written beside a stale question is metadata for the next reconcile,
+    // NOT a fresh question. Re-reading it would (a) treat the artifact as a
+    // question — flagging it and writing a *second* artifact next to it,
+    // producing chains like `run-1-00-forum-timeout-00-forum-timeout.json`
+    // on every subsequent sweep — and (b) inflate `timedOut` on the second
+    // pass. Filter here so a sweep is idempotent regardless of how many
+    // artifacts a prior sweep dropped.
+    if (entry.endsWith(`-${FORUM_TIMEOUT_ARTIFACT}`)) continue;
     if (!entry.endsWith('.json')) continue;
     const file = resolve(forumDir, entry);
     try {

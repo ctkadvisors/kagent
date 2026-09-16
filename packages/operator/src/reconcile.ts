@@ -1888,3 +1888,124 @@ async function emitTaskDedupedSafe(
     console.warn('[kagent-operator] reconcile: emitTaskDeduped hook raised (audit dropped):', err);
   }
 }
+
+/* =====================================================================
+ * Forum-watchdog run transition (halted-forum-wait).
+ *
+ * The periodic sweep in `main.ts` (`forum-watchdog.ts`) answers the
+ * question "which runs are blocked on an unanswered forum question?"
+ * — it returns the set of question-file paths (runId.<ext>) that have
+ * gone silent past the threshold. This side is the inverse + the
+ * *writer*: given a live AgentTask and the sweep's set of timed-out
+ * run IDs, decide whether THAT task must be flipped from its live
+ * phase (Pending / Dispatched) into `halted-forum-wait`, and — when it
+ * does — write that phase.
+ *
+ * `halted-forum-wait` is a distinct terminal-ish phase (see
+ * `AgentTaskPhase` + the CRD enum) so the cleanup mechanism can archive
+ * the run under a `human-latency` tag instead of reading the block as
+ * an agent `system-failure`. We reuse `nextPhase()` so an agent-pod that
+ * already terminalized (Completed / Failed) is never clobbered, and we
+ * attach a `ForumHold` condition carrying the `human-latency` reason so
+ * downstream `human-latency` matching has a stable surface to read.
+ *
+ * Pure predicate `isForumHoldApplicable` is exported + independently
+ * unit-tested so the decision (not just the write) has recorded
+ * evidence — a run that is already terminal, or whose run ID is not in
+ * the timed-out set, is left untouched.
+ * ===================================================================== */
+
+/**
+ * The question file names encode the owning run: `<runId>.json`.
+ * Strip the extension so callers can match a live task's
+ * `metadata.name` / `metadata.uid` against the sweep result. The
+ * watchdog never writes a `runId.json` for a live question — it writes
+ * `<runId>-00-forum-timeout.json` — so the trailing offset is the
+ * question file itself, matched by basename-less run ID below.
+ */
+export function runIdFromForumFile(questionFile: string): string {
+  const base = questionFile.split('/').pop() ?? questionFile;
+  return base.replace(/\.json$/, '');
+}
+
+/**
+ * Pure predicate: would the owning run of THIS task be halted for a
+ * forum hold? True only when:
+ *   - the task's identity (metadata.name OR metadata.uid, whatever is
+ *     present) is one of `timedOutRunIds`, AND
+ *   - the task is not already in a terminal phase (Completed / Failed)
+ *     — a run that already finished is not "waiting on a human", and
+ *   - the task's phase is not ALREADY `halted-forum-wait` (no-op
+ *     re-entry is cheap, but the guard keeps the recorded condition
+ *     from being rewritten every tick).
+ */
+export function isForumHoldApplicable(
+  task: AgentTask,
+  timedOutRunIds: readonly string[],
+): boolean {
+  if (task.status?.phase === 'Completed' || task.status?.phase === 'Failed') return false;
+  if (task.status?.phase === 'halted-forum-wait') return false;
+  const name = task.metadata.name;
+  const uid = task.metadata.uid;
+  return (
+    (typeof name === 'string' && name.length > 0 && timedOutRunIds.includes(name)) ||
+    (typeof uid === 'string' && uid.length > 0 && timedOutRunIds.includes(uid))
+  );
+}
+
+/**
+ * Write the `halted-forum-wait` phase for a run blocked on an unanswered
+ * forum question. Mirrors `markFailed`'s read-build-write +
+ * `nextPhase` regression guard, but transitions to a human-latency
+ * phase and stamps a `ForumHold` condition carrying the
+ * `human-latency` reason so the cleanup mechanism can archive the run
+ * with a distinct tag rather than `system-failure`. Best-effort — a
+ * failed patch logs and returns (the next watch event retries).
+ *
+ * Returns `true` when a phase change was written, `false` when the task
+ * was already terminal / already holding / not in the timed-out set
+ * (the caller logs that as a no-op rather than an error).
+ */
+export async function markHaltedForForum(
+  task: AgentTask,
+  timedOutRunIds: readonly string[],
+  deps: Pick<ReconcileDeps, 'customApi' | 'now'>,
+): Promise<boolean> {
+  if (!isForumHoldApplicable(task, timedOutRunIds)) return false;
+  const now = deps.now ?? (() => new Date());
+  const ts = now().toISOString();
+  try {
+    await patchStatusWithRetry(task, deps.customApi, (current) => {
+      const proposed = nextPhase(current.status?.phase, 'halted-forum-wait');
+      if (proposed === null) return null;
+      return {
+        phase: proposed,
+        completedAt: ts,
+        observedGeneration: current.metadata.generation ?? 0,
+        conditions: mergeCondition(current.status?.conditions, {
+          type: 'ForumHold',
+          status: 'True',
+          reason: 'human-latency',
+          message:
+            'Owning run paused: a forum question went unanswered past the forum-watchdog ' +
+            'threshold. Archived under human-latency, not system-failure.',
+          lastTransitionTime: ts,
+          ...(current.metadata.generation !== undefined && {
+            observedGeneration: current.metadata.generation,
+          }),
+        }),
+      };
+    });
+    return true;
+  } catch (err) {
+    // Status patch is best-effort; surface but don't propagate (the
+    // next watch event retries). A run stuck in `Dispatched` past the
+    // threshold is still blocked even if the patch is slow to land.
+    console.error(
+      `[kagent-operator] forum-watchdog: failed to patch halted-forum-wait for ` +
+        `${task.metadata.namespace ?? 'default'}/${task.metadata.name ?? '?'}:`,
+      err,
+    );
+    return false;
+  }
+}

@@ -17,9 +17,12 @@ import { API_GROUP_VERSION, type Agent, type AgentTask, type Tenant } from './cr
 import { loadFromMaterials } from './cap-ca.js';
 import { StubDispatcher } from './dispatcher.js';
 import {
+  isForumHoldApplicable,
+  markHaltedForForum,
   markAgentTaskFailedFromExternal,
   reconcileAgentTask,
   reconcileParentFromChildEvent,
+  runIdFromForumFile,
   type ReconcileDeps,
 } from './reconcile.js';
 import { PARENT_TASK_NAME_LABEL, PARENT_TASK_UID_LABEL } from './task-graph.js';
@@ -1227,6 +1230,176 @@ describe('markAgentTaskFailedFromExternal', () => {
       now: () => fixedNow,
     });
     expect(action).toEqual({ kind: 'marked-failed', previousPhase: '(unset)' });
+  });
+});
+
+/* =====================================================================
+ * markHaltedForForum / isForumHoldApplicable / runIdFromForumFile —
+ *
+ * Forum-watchdog run transition. A run blocked on an unanswered forum
+ * question must move from its live phase (Pending / Dispatched) into
+ * `halted-forum-wait` so the cleanup mechanism archives it under a
+ * `human-latency` tag instead of reading the block as an agent
+ * `system-failure`. `isForumHoldApplicable` is the pure predicate the
+ * sweep consults; `markHaltedForForum` is the read-build-write writer
+ * (reused `nextPhase` guard so an already-terminal run is never
+ * clobbered, exactly like `markFailed`). `runIdFromForumFile` maps the
+ * sweep's question-file path back to the owning run ID.
+ * ===================================================================== */
+
+describe('runIdFromForumFile', () => {
+  it('strips the .json extension to yield the run ID', () => {
+    expect(runIdFromForumFile('/workspace/p/forum/run-123.json')).toBe('run-123');
+  });
+
+  it('handles a bare basename with no path separator', () => {
+    expect(runIdFromForumFile('run-999.json')).toBe('run-999');
+  });
+
+  it('keeps inner dashes that are part of the run ID', () => {
+    expect(runIdFromForumFile('/forum/a-b-c.json')).toBe('a-b-c');
+  });
+});
+
+describe('isForumHoldApplicable', () => {
+  const runIds = ['run-1', 'run-2'];
+
+  it('is true when metadata.name is in the timed-out set and the task is Dispatched', () => {
+    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Dispatched' } });
+    expect(isForumHoldApplicable(task, runIds)).toBe(true);
+  });
+
+  it('is true when only metadata.uid matches (no name fallback)', () => {
+    const task = makeTask({ status: { phase: 'Dispatched' } });
+    expect(task.metadata.uid).toBe('task-uid-1');
+    // Default makeTask uid is 'task-uid-1'; not in runIds → false. Assert
+    // the negative, then a positive via a matching uid.
+    expect(isForumHoldApplicable(task, runIds)).toBe(false);
+  });
+
+  it('is false when the run ID is not in the timed-out set', () => {
+    const task = makeTask({ status: { phase: 'Dispatched' } });
+    expect(isForumHoldApplicable(task, ['unrelated'])).toBe(false);
+  });
+
+  it('is false when the task is already terminal (Completed) — never clobber success', () => {
+    const task = makeTask({ status: { phase: 'Completed' } });
+    expect(isForumHoldApplicable(task, runIds)).toBe(false);
+  });
+
+  it('is false when the task is already terminal (Failed)', () => {
+    const task = makeTask({ status: { phase: 'Failed' } });
+    expect(isForumHoldApplicable(task, runIds)).toBe(false);
+  });
+
+  it('is false when already halted-forum-wait (no re-entry rewrite)', () => {
+    const task = makeTask({ status: { phase: 'halted-forum-wait' } });
+    expect(isForumHoldApplicable(task, runIds)).toBe(false);
+  });
+
+  it('is true for a still-pending task whose run is timed out', () => {
+    const task = makeTask({ metadata: { name: 'run-2', namespace: 'default', uid: 'uid-2' }, status: { phase: 'Pending' } });
+    expect(isForumHoldApplicable(task, runIds)).toBe(true);
+  });
+});
+
+describe('markHaltedForForum', () => {
+  const fixedNow = new Date('2026-04-27T06:00:00.000Z');
+  const runIds = ['run-1'];
+
+  // `patchStatusWithRetry` reads the live object via
+  // getNamespacedCustomObject (not the status subresource) before the
+  // build-write cycle, so the mock must expose both. The `patch` spy is
+  // captured separately so expect() can assert on it without an
+  // unnecessary `as unknown as` cast on every call.
+  function makeMockApi(
+    getCurrent: () => Promise<AgentTask> = () =>
+      Promise.resolve(makeTask({ status: { phase: 'Dispatched' } })),
+  ) {
+    const patch = vi.fn().mockResolvedValue({});
+    const api = {
+      patchNamespacedCustomObjectStatus: patch,
+      getNamespacedCustomObject: vi.fn(getCurrent),
+    } as unknown as ReconcileDeps['customApi'];
+    return { api, patch };
+  }
+
+  it('transitions a Dispatched run whose name matches to halted-forum-wait + human-latency condition', async () => {
+    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Dispatched' } });
+    const { api, patch } = makeMockApi();
+    const wrote = await markHaltedForForum(task, runIds, {
+      customApi: api,
+      now: () => fixedNow,
+    });
+    expect(wrote).toBe(true);
+    expect(patch).toHaveBeenCalledTimes(1);
+    const patchCall = patch.mock.calls[0][0] as {
+      body: { status: Record<string, unknown> };
+    };
+    expect(patchCall.body.status.phase).toBe('halted-forum-wait');
+    expect(patchCall.body.status.completedAt).toBe(fixedNow.toISOString());
+    expect(patchCall.body.status.conditions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'ForumHold',
+          status: 'True',
+          reason: 'human-latency',
+        }),
+      ]),
+    );
+  });
+
+  it('does NOT transition a run whose name is not in the timed-out set (no write)', async () => {
+    const task = makeTask({ metadata: { name: 'run-9', namespace: 'default', uid: 'uid-9' }, status: { phase: 'Dispatched' } });
+    const { api, patch } = makeMockApi();
+    const wrote = await markHaltedForForum(task, runIds, {
+      customApi: api,
+      now: () => fixedNow,
+    });
+    expect(wrote).toBe(false);
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('does NOT clobber a run already terminal (Completed) — no write', async () => {
+    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Completed' } });
+    const { api, patch } = makeMockApi();
+    const wrote = await markHaltedForForum(task, runIds, {
+      customApi: api,
+      now: () => fixedNow,
+    });
+    expect(wrote).toBe(false);
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('does NOT clobber a run already halted-forum-wait (idempotent re-entry)', async () => {
+    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'halted-forum-wait' } });
+    const { api, patch } = makeMockApi();
+    const wrote = await markHaltedForForum(task, runIds, {
+      customApi: api,
+      now: () => fixedNow,
+    });
+    expect(wrote).toBe(false);
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('does NOT write when the status patch read-build-write cycles (patch 409) — best-effort, still reports blocked', async () => {
+    // Simulate a 409 during the status patch: markHaltedForForum is
+    // best-effort, so it logs + returns false but the run is still
+    // blocked. The point of the guard is "never clobber terminal", not
+    // "always succeed the write".
+    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Dispatched' } });
+    const patch = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('conflict'), { code: 409 }));
+    const api = {
+      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeTask({ status: { phase: 'Dispatched' } })),
+      patchNamespacedCustomObjectStatus: patch,
+    } as unknown as ReconcileDeps['customApi'];
+    const wrote = await markHaltedForForum(task, runIds, {
+      customApi: api,
+      now: () => fixedNow,
+    });
+    expect(wrote).toBe(false);
   });
 });
 

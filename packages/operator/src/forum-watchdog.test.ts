@@ -8,7 +8,14 @@
  * past a threshold and writes a `00-forum-timeout.json` artifact.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -101,5 +108,46 @@ describe('checkForumTimeouts', () => {
 
   it('refuses a threshold below the minimum', () => {
     expect(() => checkForumTimeouts('/tmp', MIN_THRESHOLD_MS - 1, Date.now())).toThrow();
+  });
+
+  /* =====================================================================
+   * Regression guard — the watchdog must NOT re-read its own timeout
+   * artifacts. A `00-forum-timeout.json` written beside a stale question
+   * is metadata for the next reconcile, NOT a fresh question: re-reading
+   * it would flag the artifact, write a SECOND artifact beside it, and
+   * chain like `run-1-00-forum-timeout-00-forum-timeout.json` on every
+   * subsequent sweep. The sweep is idempotent: repeated passes never
+   * grow the timed-out set or the artifact count.
+   * ===================================================================== */
+
+  it('does NOT re-read its own 00-forum-timeout.json artifact (no chained artifacts) across repeated sweeps', () => {
+    const dir = forumDirWith(FIVE_HOURS);
+    try {
+      const first = checkForumTimeouts(dir, FOUR_HOURS, Date.now());
+      expect(first.timedOut).toHaveLength(1);
+      expect(first.timedOut[0]).toEqual(resolve(dir, 'run-1.json'));
+      expect(first.artifacts).toHaveLength(1);
+      expect(first.artifacts[0]).toEqual(resolve(dir, 'run-1-00-forum-timeout.json'));
+      expect(existsSync(resolve(dir, 'run-1-00-forum-timeout.json'))).toBe(true);
+
+      // Second + third sweep: the artifact is ignored, so nothing new is
+      // flagged or written — the sweep is idempotent.
+      const second = checkForumTimeouts(dir, FOUR_HOURS, Date.now());
+      expect(second.timedOut).toHaveLength(1);
+      expect(second.timedOut[0]).toEqual(resolve(dir, 'run-1.json'));
+      expect(second.artifacts).toHaveLength(1);
+      expect(second.artifacts[0]).toEqual(resolve(dir, 'run-1-00-forum-timeout.json'));
+
+      const third = checkForumTimeouts(dir, FOUR_HOURS, Date.now());
+      expect(third.timedOut).toHaveLength(1);
+      expect(third.artifacts).toHaveLength(1);
+
+      // Exactly two JSON files in the directory: the original question
+      // and its ONE artifact — never a chained artifact.
+      const jsonFiles = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+      expect(jsonFiles).toEqual(['run-1-00-forum-timeout.json', 'run-1.json'].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

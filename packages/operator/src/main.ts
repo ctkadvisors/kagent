@@ -80,6 +80,7 @@ import { startChannelGatewayServer } from './channel-gateway.js';
 import { StubDispatcher, type Dispatcher } from './dispatcher.js';
 import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import { checkForumTimeouts } from './forum-watchdog.js';
+import { markHaltedForForum, runIdFromForumFile } from './reconcile.js';
 import { jobNameForTask, type BuildJobSpecOptions, type EnvVarSpec } from './job-spec.js';
 import type { ModelClassEntry, ModelClassMap } from './model-class-resolver.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
@@ -3184,19 +3185,35 @@ async function main(): Promise<void> {
           ? intervalSeconds * 1000
           : 5 * 60 * 1000;
 
-      const sweep = (): void => {
+      // A single periodic sweep: (1) find stale forum questions, (2)
+      // transition every owning run blocked on one to `halted-forum-
+      // wait`, (3) log both so the operator-visible record shows the
+      // run actually moved — not just that a file went quiet. A run
+      // blocked on an unanswered question is halted (not read as a
+      // Failed run) so cleanup archives it under `human-latency`.
+      const sweep = async (): Promise<void> => {
         try {
           const { timedOut, artifacts } = checkForumTimeouts(forumDir, thresholdMs);
-          if (timedOut.length > 0) {
-            console.log(
-              `[kagent-operator/forum-watchdog] ${String(timedOut.length)} unanswered ` +
-                `question(s) past ${String(thresholdMs)}ms — artifacts: ` +
-                `${artifacts.join(', ')}`,
+          // Strip the question-file extension so each entry is the
+          // owning run's ID. The owning AgentTask is named after (or
+          // UID-matched to) that run ID — this is how a forum file
+          // maps back to the run to transition.
+          const timedOutRunIds = timedOut.map(runIdFromForumFile);
+          let transitioned = 0;
+          for (const t of informer.list()) {
+            const ok = await markHaltedForForum(
+              t,
+              timedOutRunIds,
+              { customApi, now: () => new Date() },
             );
-            // The owning run is archived on the NEXT reconcile once it
-            // observes the phase; here we only record the block so a
-            // downstream consumer (cleanup/tagging) has the artifact.
+            if (ok) transitioned += 1;
           }
+          console.log(
+            `[kagent-operator/forum-watchdog] ${String(timedOut.length)} unanswered ` +
+              `question(s) past ${String(thresholdMs)}ms; ` +
+              `transitioned ${String(transitioned)} run(s) → halted-forum-wait` +
+              (artifacts.length > 0 ? ` — artifacts: ${artifacts.join(', ')}` : ''),
+          );
         } catch (err) {
           console.error(
             `[kagent-operator/forum-watchdog] sweep failed: ` +
@@ -3205,8 +3222,15 @@ async function main(): Promise<void> {
         }
       };
 
-      sweep();
-      const timer = setInterval(sweep, intervalMs);
+      void sweep();
+
+      // `setInterval` expects a sync callback; the transition work is
+      // async (K8s status writes), so the interval just kicks off a
+      // fire-and-forget sweep. `void` marks the floating promise and the
+      // per-sweep try/catch already surfaces any error.
+      const timer = setInterval(() => {
+        void sweep();
+      }, intervalMs);
       if (typeof timer.unref === 'function') timer.unref();
 
       const previous = onShutdownExtra;
