@@ -1939,10 +1939,7 @@ export function runIdFromForumFile(questionFile: string): string {
  *     re-entry is cheap, but the guard keeps the recorded condition
  *     from being rewritten every tick).
  */
-export function isForumHoldApplicable(
-  task: AgentTask,
-  timedOutRunIds: readonly string[],
-): boolean {
+export function isForumHoldApplicable(task: AgentTask, timedOutRunIds: readonly string[]): boolean {
   if (task.status?.phase === 'Completed' || task.status?.phase === 'Failed') return false;
   if (task.status?.phase === 'halted-forum-wait') return false;
   const name = task.metadata.name;

@@ -8,14 +8,7 @@
  * past a threshold and writes a `00-forum-timeout.json` artifact.
  */
 
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -144,7 +137,9 @@ describe('checkForumTimeouts', () => {
 
       // Exactly two JSON files in the directory: the original question
       // and its ONE artifact — never a chained artifact.
-      const jsonFiles = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+      const jsonFiles = readdirSync(dir)
+        .filter((f) => f.endsWith('.json'))
+        .sort();
       expect(jsonFiles).toEqual(['run-1-00-forum-timeout.json', 'run-1.json'].sort());
     } finally {
       rmSync(dir, { recursive: true, force: true });

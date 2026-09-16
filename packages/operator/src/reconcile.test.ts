@@ -1265,7 +1265,10 @@ describe('isForumHoldApplicable', () => {
   const runIds = ['run-1', 'run-2'];
 
   it('is true when metadata.name is in the timed-out set and the task is Dispatched', () => {
-    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Dispatched' } });
+    const task = makeTask({
+      metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' },
+      status: { phase: 'Dispatched' },
+    });
     expect(isForumHoldApplicable(task, runIds)).toBe(true);
   });
 
@@ -1298,7 +1301,10 @@ describe('isForumHoldApplicable', () => {
   });
 
   it('is true for a still-pending task whose run is timed out', () => {
-    const task = makeTask({ metadata: { name: 'run-2', namespace: 'default', uid: 'uid-2' }, status: { phase: 'Pending' } });
+    const task = makeTask({
+      metadata: { name: 'run-2', namespace: 'default', uid: 'uid-2' },
+      status: { phase: 'Pending' },
+    });
     expect(isForumHoldApplicable(task, runIds)).toBe(true);
   });
 });
@@ -1325,7 +1331,10 @@ describe('markHaltedForForum', () => {
   }
 
   it('transitions a Dispatched run whose name matches to halted-forum-wait + human-latency condition', async () => {
-    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Dispatched' } });
+    const task = makeTask({
+      metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' },
+      status: { phase: 'Dispatched' },
+    });
     const { api, patch } = makeMockApi();
     const wrote = await markHaltedForForum(task, runIds, {
       customApi: api,
@@ -1350,7 +1359,10 @@ describe('markHaltedForForum', () => {
   });
 
   it('does NOT transition a run whose name is not in the timed-out set (no write)', async () => {
-    const task = makeTask({ metadata: { name: 'run-9', namespace: 'default', uid: 'uid-9' }, status: { phase: 'Dispatched' } });
+    const task = makeTask({
+      metadata: { name: 'run-9', namespace: 'default', uid: 'uid-9' },
+      status: { phase: 'Dispatched' },
+    });
     const { api, patch } = makeMockApi();
     const wrote = await markHaltedForForum(task, runIds, {
       customApi: api,
@@ -1361,7 +1373,10 @@ describe('markHaltedForForum', () => {
   });
 
   it('does NOT clobber a run already terminal (Completed) — no write', async () => {
-    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Completed' } });
+    const task = makeTask({
+      metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' },
+      status: { phase: 'Completed' },
+    });
     const { api, patch } = makeMockApi();
     const wrote = await markHaltedForForum(task, runIds, {
       customApi: api,
@@ -1372,7 +1387,10 @@ describe('markHaltedForForum', () => {
   });
 
   it('does NOT clobber a run already halted-forum-wait (idempotent re-entry)', async () => {
-    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'halted-forum-wait' } });
+    const task = makeTask({
+      metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' },
+      status: { phase: 'halted-forum-wait' },
+    });
     const { api, patch } = makeMockApi();
     const wrote = await markHaltedForForum(task, runIds, {
       customApi: api,
@@ -1387,12 +1405,15 @@ describe('markHaltedForForum', () => {
     // best-effort, so it logs + returns false but the run is still
     // blocked. The point of the guard is "never clobber terminal", not
     // "always succeed the write".
-    const task = makeTask({ metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' }, status: { phase: 'Dispatched' } });
-    const patch = vi
-      .fn()
-      .mockRejectedValue(Object.assign(new Error('conflict'), { code: 409 }));
+    const task = makeTask({
+      metadata: { name: 'run-1', namespace: 'default', uid: 'uid-1' },
+      status: { phase: 'Dispatched' },
+    });
+    const patch = vi.fn().mockRejectedValue(Object.assign(new Error('conflict'), { code: 409 }));
     const api = {
-      getNamespacedCustomObject: vi.fn().mockResolvedValue(makeTask({ status: { phase: 'Dispatched' } })),
+      getNamespacedCustomObject: vi
+        .fn()
+        .mockResolvedValue(makeTask({ status: { phase: 'Dispatched' } })),
       patchNamespacedCustomObjectStatus: patch,
     } as unknown as ReconcileDeps['customApi'];
     const wrote = await markHaltedForForum(task, runIds, {

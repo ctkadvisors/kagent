@@ -3201,11 +3201,10 @@ async function main(): Promise<void> {
           const timedOutRunIds = timedOut.map(runIdFromForumFile);
           let transitioned = 0;
           for (const t of informer.list()) {
-            const ok = await markHaltedForForum(
-              t,
-              timedOutRunIds,
-              { customApi, now: () => new Date() },
-            );
+            const ok = await markHaltedForForum(t, timedOutRunIds, {
+              customApi,
+              now: () => new Date(),
+            });
             if (ok) transitioned += 1;
           }
           console.log(
