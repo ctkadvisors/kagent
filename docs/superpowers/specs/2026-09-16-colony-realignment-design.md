@@ -41,6 +41,16 @@ overlay exists in the cluster (the Phase 1 demo ConfigMaps are gone), so no agen
 for 100 days. Evidence, Review and Promotion, the half of the loop that makes the colony grow, is
 switched off.
 
+Live, from `kagent.knuteson.io` and `fleet.knuteson.io` on 2026-09-17 02:30Z: five Agents, one in
+use. The concierge took 28 tasks in a day (15 failed: `fetch failed`, `maxIterations`), nearly all
+of them reconcile forwarding the fleet's own canary alarms from the forum; no human-originated task
+in 5 days. The review queue (`/api/review-queue`) holds 64 rows, every one
+`suspicious-detector: truncated_synthesis`, the oldest from 2026-05-07: the designed review surface
+is live and nobody, human or agent, attends it. `/api/dispositions` is empty. The fleet's last 20
+runs: 15 halted (7 by the sentinel added the day before), 4 shipped; every run's subject was the
+pipeline's own halts. Of 40 forum posts, 24 are the sentinel's and none is a person's. The system
+is mostly servicing itself.
+
 Beside the substrate: `new_localai/services/fleet-scripts`, about 7,000 lines of Python written
 2026-08-30 to 09-16, mostly by Claude steward sessions (126 merged PRs in the last week against 3
 from the fleet). It rebuilt each designed organ as a private copy:
