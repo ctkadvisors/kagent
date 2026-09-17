@@ -177,10 +177,10 @@ hand-written brief at 70%). The substrate provides the data; the application cho
 ### 4.5 Safety-net behavior (piece 3)
 
 In `packages/agent-loop/src/executor.ts`, **before every LLM call** (i.e., at the top of `chatWithRetry` or its
-caller), if `budget.contextWindowTokens !== undefined` AND `budget.cumulativeInputTokens + budget.cumulativeOutputTokens >= safetyThreshold * budget.contextWindowTokens` (where `safetyThreshold` defaults to `0.95` and is read from `KAGENT_CONTEXT_SAFETY_THRESHOLD`):
+caller), if `budget.contextWindowTokens !== undefined` AND **the `contextTokens` of the last LLM call** `>= safetyThreshold * budget.contextWindowTokens` (where `safetyThreshold` defaults to `0.95` and is read from `KAGENT_CONTEXT_SAFETY_THRESHOLD`):
 
-- **Throw `LLMClientHttpError(0, 'context_window_substrate_refused: cumulative=<used> window=<limit> threshold=<pct>')`** with `status: 0` so the existing 429-retry path does NOT kick in (only 429 retries; everything else fails terminal).
-- The loop's existing catch path at `executor.ts:577` writes the error to `RunBudget`'s terminal-state slot.
+- **Throw `LLMClientHttpError(0, 'context_window_substrate_refused: context=<used> window=<limit> threshold=<pct>')`** with `status: 0` so the existing 429-retry path does NOT kick in (only 429 retries; everything else fails terminal).
+- The loop's existing catch path at `executor.ts:602-623` writes the error to `RunBudget`'s terminal-state slot.
 - The agent-pod's existing `writeStatus` path (per `packages/agent-pod/src/status.ts`) writes `phase: 'Failed'` with `error: 'context_window_substrate_refused: ...'`.
 - The last successful `RunResult.finalContent` (the LLM's most recent assistant message) and the most recent tool result MUST be preserved on the terminal status so any downstream resume has a starting point. (This is already the executor's behavior on terminal errors; verify the test asserts it.)
 
