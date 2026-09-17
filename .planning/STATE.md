@@ -89,6 +89,23 @@ workflows, workspaces, egress, quota, versioning, events, blackboard); `console.
 is the logger. Fleet-side design notes live in
 `../new_localai/docs/superpowers/specs/2026-09-02-telegram-concierge-design.md`.
 
+### Reconciliation note (2026-09-16)
+
+The fleet that became this substrate's consumer on 2026-08-30 was built beside it, not on it.
+`../new_localai/services/fleet-scripts` (about 7,000 lines of Python) holds private copies of the
+designed organs: missions run as raw K8s Jobs instead of `AgentTask`s, an 11-table Postgres ledger
+stands in for task status + audit + artifacts, `review.py` (an LLM confidence >= 85 merges) stands
+in for `verifyContract` + the Phase 4 review queue, a forum for discourse, a dream Job for
+consolidation, `reconcile.py`'s idle ladder for AgentDisposition, `console.py` for the Workbench.
+In production `audit` (NATS is not deployed), `verifier` and `artifactStorage` are off and no
+disposition overlay exists, so the Evidence -> Review -> Promotion half of the loop has never run
+here. 39 fleet PRs since 2026-09-09, 7 merged; 141 steward PRs merged in the same window.
+
+Operator direction 2026-09-16: kagent stays the substrate; realign to the north stars. Proposed
+path, pending acceptance: `docs/superpowers/specs/2026-09-16-colony-realignment-design.md` (D8–D10,
+close v0.2, open v0.3 "colony", promote 999.2 / 999.3 / 999.8). Nothing in `ROADMAP.md` or
+`REQUIREMENTS.md` changes until that spec is accepted.
+
 ### Deployed on the homelab (image tags pinned in `../new_localai`)
 
 Read from `k8s-kustomized/overlays/production/kagent/*.yaml`:
