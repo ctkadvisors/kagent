@@ -51,6 +51,20 @@ runs: 15 halted (7 by the sentinel added the day before), 4 shipped; every run's
 pipeline's own halts. Of 40 forum posts, 24 are the sentinel's and none is a person's. The system
 is mostly servicing itself.
 
+Measured on the spark (ornith15's vLLM counters, 5.3 days of uptime to 2026-09-17 03:40Z): 20,194
+requests, 12% of them one-token canary pings; 786M prompt tokens against 8.5M generated, 93 read
+for every 1 written; of the real requests 75% carry more than 20k prompt tokens, 34% more than 50k,
+6% more than 100k, and the median reply is about 150 tokens. Total queue time across all requests
+was 32 seconds and there were no preemptions: the spark has never been contended, and summed
+request time is at most 37% of wall clock. The nightly bench (four one-file fixtures, 9 KB prompts)
+passed 4 of 4 in 2 to 7 minutes each, while production runs halt 51% of the time (n=158) with a
+median 280k tokens per implement stage. Same model, same harness: the difference is the size of
+the work order and the context it drags. All 55 detector flags this month are the concierge's
+(`context_pressure_ignored` 25, `tool_use_omission` 18) under a 17.8k-character system prompt.
+`spawnChild` produced 3 child tasks this month; no task has ever recorded an artifact or a
+verification. The design's answer to long context, many session-scoped agents with small work
+orders and `parentDistillation` between them, is the part not in use.
+
 Beside the substrate: `new_localai/services/fleet-scripts`, about 7,000 lines of Python written
 2026-08-30 to 09-16, mostly by Claude steward sessions (126 merged PRs in the last week against 3
 from the fleet). It rebuilt each designed organ as a private copy:
