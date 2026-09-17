@@ -75,7 +75,8 @@ import { parseSSEStream } from './sse-parser.js';
  *   2. `Retry-After: Wed, 21 Oct 2026 07:28:00 GMT` (HTTP-date)
  *
  * We only handle form (1) — the kagent llm-gateway emits `String(retryAfterSec)`
- * (an integer) at `server.ts:289`, and most upstream LLM backends (OpenAI,
+ * (an integer) from the `Retry-After` header sets in the `route()` switch of
+ * `llm-gateway/src/server.ts`, and most upstream LLM backends (OpenAI,
  * vLLM, Anthropic) do the same. Form (2) returns `undefined` so the consumer
  * falls back to its default backoff schedule rather than us guessing.
  *
