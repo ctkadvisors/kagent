@@ -207,6 +207,8 @@ options are a smaller ambition or a stronger implementer. Decide then, from numb
 
 So the fleet stops stalling while the substrate work happens. Both are deletions.
 
+**Status 2026-09-17:** item 1 shipped as new_localai#277 on the operator's word ("it still needs a punt. we've changed some variables and seen no effect": the model had changed to Qwen3.8-Flash-Next that morning, model-caused halts went from 51% to 0 of 9 runs, and the merge rate stayed at 1 in 5). Observed live the same afternoon: kagent#83, closed that morning by the round-2 rule at confidence 0 unjudged, was reopened, passed the mechanical gate and was merged by the fleet at 16:45Z after its 15-minute veto window. Scope differs from the text below in one way: a human's branch is advised and left to its author.
+
 1. `review.py`: the merge decision is CI green + `verify.sh` green + scope rules (diff size, no
    deleted tests, path allowlist), with observed outcomes as the revert path. The qwen38 review is
    posted as a comment and feeds the next idea. Remove rounds, the 85/70 bars, close-after-two.
