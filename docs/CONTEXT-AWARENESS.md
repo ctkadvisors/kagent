@@ -118,7 +118,7 @@ agent:
       contextWindowTokens: 131072      # NEW
 
 agentPod:
-  # Substrate-side circuit breaker. When cumulative tokens reach this fraction
+  # Substrate-side circuit breaker. When the last call's context tokens reach this fraction
   # of the model's context window, the executor refuses the next LLM call with
   # a substrate-side error instead of letting the upstream's 400 land.
   contextSafetyThreshold: 0.95         # NEW
@@ -177,10 +177,10 @@ hand-written brief at 70%). The substrate provides the data; the application cho
 ### 4.5 Safety-net behavior (piece 3)
 
 In `packages/agent-loop/src/executor.ts`, **before every LLM call** (i.e., at the top of `chatWithRetry` or its
-caller), if `budget.contextWindowTokens !== undefined` AND `budget.cumulativeInputTokens + budget.cumulativeOutputTokens >= safetyThreshold * budget.contextWindowTokens` (where `safetyThreshold` defaults to `0.95` and is read from `KAGENT_CONTEXT_SAFETY_THRESHOLD`):
+caller), if `budget.contextWindowTokens !== undefined` AND **the last-call `contextTokens`** (the last LLM call's input + output tokens; last-call contextTokens, not the cumulative sum) `>= safetyThreshold * budget.contextWindowTokens` (where `safetyThreshold` defaults to `0.95` and is read from `KAGENT_CONTEXT_SAFETY_THRESHOLD`):
 
-- **Throw `LLMClientHttpError(0, 'context_window_substrate_refused: cumulative=<used> window=<limit> threshold=<pct>')`** with `status: 0` so the existing 429-retry path does NOT kick in (only 429 retries; everything else fails terminal).
-- The loop's existing catch path at `executor.ts:577` writes the error to `RunBudget`'s terminal-state slot.
+- **Throw `LLMClientHttpError(0, 'context_window_substrate_refused: context=<used> window=<limit> threshold=<pct>')`** with `status: 0` so the existing 429-retry path does NOT kick in (only 429 retries; everything else fails terminal).
+- The loop's existing catch path at `executor.ts:602-623` writes the error to `RunBudget`'s terminal-state slot. Threshold validation (out-of-range values fail-FAST at the top of `run()`): `executor.ts:747-753`.
 - The agent-pod's existing `writeStatus` path (per `packages/agent-pod/src/status.ts`) writes `phase: 'Failed'` with `error: 'context_window_substrate_refused: ...'`.
 - The last successful `RunResult.finalContent` (the LLM's most recent assistant message) and the most recent tool result MUST be preserved on the terminal status so any downstream resume has a starting point. (This is already the executor's behavior on terminal errors; verify the test asserts it.)
 
@@ -265,10 +265,10 @@ The migration story for existing operators: bump chart values to add `contextWin
 - **Per-task `runConfig.contextSafetyThreshold` override.** Possible future addition; v0.1.9 ships with chart-wide setting only. Most consumers won't need per-task variance.
 - **Adaptive thresholds.** No "if last 3 tasks blew context, lower the threshold." That's autopilot; the substrate stays a good copilot.
 - **Cross-model window heuristics.** The chart values are explicit per class; the substrate does not infer windows from model names.
-- **Pre-flight estimation.** The check is `cumulative + 0` against threshold — we do NOT try to estimate the size of the next prompt. That estimate would be wrong often enough to be misleading. The 95% safety margin absorbs the next call's input budget by convention.
+- **Pre-flight estimation.** The check is `last-call contextTokens + 0` against threshold — we do NOT try to estimate the size of the next prompt. That estimate would be wrong often enough to be misleading. The 95% safety margin absorbs the next call's input budget by convention.
 - **Compaction-quality detector.** No flag like `compaction_lossy`. If the agent self-managed handoff with a bad summary, the existing F1/F2/F3 detectors will catch downstream symptoms (synthesis vacuity, methodology fabrication).
 
-> **`estimateTokens` fallback caveat (audit-rev2 NM6).** The safety-net + detector both read cumulative tokens off `RunBudget.cumulativeInputTokens + cumulativeOutputTokens`. The executor populates that pair from `usage.inputTokens` / `usage.outputTokens` reported by the gateway response. When the upstream gateway/provider does not report `usage.{inputTokens,outputTokens}` (some Workers AI shapes, older vLLM builds, untyped openai-compat backends), the executor falls back to `estimateTokens` — a character-count heuristic in `packages/agent-loop/src/trace.ts`. The estimate can be 20–40% off depending on the model's tokenization (Llama 4 vs Claude vs GPT-4 each tokenize differently). The 5% margin between Piece 3's 95% safety-net and the upstream provider's hard 100% reject (HTTP 400 — context window exceeded) absorbs most of this drift, but operators relying on tight context budgets should ensure their gateway reports usage. Cloudflare AI Gateway DOES report usage on the modern Workers AI endpoints; LiteLLM Proxy DOES when fed a proper provider; bare-metal Ollama via `/v1/chat/completions` DOES. Verify by inspecting an `llm_call` trace entry — when the `*_tokens_est` fallback fired, the trace will show the heuristic count and a `usage_source: 'estimate'` marker (forthcoming).
+> **`estimateTokens` fallback caveat (audit-rev2 NM6).** The safety-net (Piece 3) reads the last call's context size off `RunBudget.contextTokens`; the `context_pressure_ignored` detector (Piece 4) reads the same field, falling back to `cumulativeInputTokens + cumulativeOutputTokens` only before the first call. The executor populates that pair from `usage.inputTokens` / `usage.outputTokens` reported by the gateway response. When the upstream gateway/provider does not report `usage.{inputTokens,outputTokens}` (some Workers AI shapes, older vLLM builds, untyped openai-compat backends), the executor falls back to `estimateTokens` — a character-count heuristic in `packages/agent-loop/src/trace.ts`. The estimate can be 20–40% off depending on the model's tokenization (Llama 4 vs Claude vs GPT-4 each tokenize differently). The 5% margin between Piece 3's 95% safety-net and the upstream provider's hard 100% reject (HTTP 400 — context window exceeded) absorbs most of this drift, but operators relying on tight context budgets should ensure their gateway reports usage. Cloudflare AI Gateway DOES report usage on the modern Workers AI endpoints; LiteLLM Proxy DOES when fed a proper provider; bare-metal Ollama via `/v1/chat/completions` DOES. Verify by inspecting an `llm_call` trace entry — when the `*_tokens_est` fallback fired, the trace will show the heuristic count and a `usage_source: 'estimate'` marker (forthcoming).
 
 ---
 
