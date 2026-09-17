@@ -276,7 +276,11 @@ export class LLMClientHttpError extends LLMClientError {
    *
    * Populated by the adapter call site when the backend returns a
    * `Retry-After` header. The `@kagent/llm-gateway` AIMD limiter emits this
-   * with status 429 (`server.ts:289`); upstream rate-limited backends
+   * with status 429 in the `route()` `at_cap` arm of the gateway's chat
+   * handler (`llm-gateway/src/server.ts`). The `backend_throttled` arm
+   * propagates the upstream status (429 or 503), while the
+   * `provider_dispatch_disabled` and `provider_failure_backoff` arms are
+   * always 503; all three set this header. Upstream rate-limited backends
    * (OpenAI, Anthropic, vLLM) emit it with 429 / 503 too. Consumers of
    * `chat()` (notably `AgentExecutor`'s 429-retry policy) honor this hint
    * over the default exponential backoff schedule.
