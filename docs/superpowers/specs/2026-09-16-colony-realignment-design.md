@@ -61,6 +61,11 @@ passed 4 of 4 in 2 to 7 minutes each, while production runs halt 51% of the time
 median 280k tokens per implement stage. Same model, same harness: the difference is the size of
 the work order and the context it drags. All 55 detector flags this month are the concierge's
 (`context_pressure_ignored` 25, `tool_use_omission` 18) under a 17.8k-character system prompt.
+qwen38 (llama-server, no `--metrics`; figures from llama-swap's last 1,000 requests, a 6 h window):
+54 requests, 33 of them canary pings; the 21 real ones read about 10k tokens and then think for 7k
+to 16k tokens at 10 to 20 tok/s, 8 to 19 minutes each, one cut off at the 16,384 cap. Those 21 calls
+held the GPU for 10,134 s against 6,940 s for ornith15's 875: the judge is the largest consumer of
+the spark, and it shares the GPU with the implementer it is judging.
 `spawnChild` produced 3 child tasks this month; no task has ever recorded an artifact or a
 verification. The design's answer to long context, many session-scoped agents with small work
 orders and `parentDistillation` between them, is the part not in use.
