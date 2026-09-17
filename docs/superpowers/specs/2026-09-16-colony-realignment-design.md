@@ -136,8 +136,16 @@ with trace, artifacts and verification; ledger `run` rows become a projection of
 **Phase 3 — Seed the colony.** Standing Agents from versioned templates, each with a real
 disposition (attention budget, read channels, proposal scope): concierge (front door, exists),
 scout/ideator, coder, reviewer (qwen38), investigator (exists), curator, ops (homelab-builder,
-exists). Budgets come from the flow economy the spark actually has (8 ornith15 streams, 2 qwen38
-slots). `reconcile.py`'s idle ladder is replaced by dispositions plus `KagentSchedule`/triggers.
+exists). Budgets come from the flow economy the spark actually has, measured 2026-09-17 with short
+prompts: ornith15 gives 77 tok/s to one stream, 167 to four, 283 to eight and about 318 at ten,
+where llama-swap starts returning 429 (the source of this month's 14 `HTTP 429` task failures);
+current use is about 6% of that. qwen38 gives 17 to 20 tok/s alone. They share one GPU: while
+qwen38 decoded two streams (26 tok/s), eight ornith15 streams fell from 283 to 107 tok/s, so a
+judge token costs about seven implementer tokens. The spark can feed roughly ten small-context
+agents; host pressure on the K3s nodes is welcome; the scarce flow is qwen38 thinking. Give each
+ModelEndpoint a `maxInFlight` (none is set today), ration qwen38 by disposition budget, keep its
+thinking off or bounded unless a task pays for it, and keep work orders small, since long contexts
+slow every stream. `reconcile.py`'s idle ladder is replaced by dispositions plus `KagentSchedule`/triggers.
 Ad-hoc work from Telegram becomes a root task the concierge may split with `spawnChild`.
 *Observed:* two or more agents working concurrently from one ad-hoc request; every token spent
 idle attributed to a disposition in `/api/dispositions`.
@@ -175,9 +183,13 @@ Stated in the spirit of WHY §6, before the work starts:
   history (the fleet's own halted and merged work orders, replayed) that today's colony fails a
   meaningful share of. This is the "ground-truth eval external to the society's signals" the
   proto-society doc asks for. Without it Phase 4 must not start.
-- **Seeding is the operator's.** The proto-society doc says so. The colony needs standing goals it
-  did not invent (which repos and outcomes matter), or it will return to working on itself or go
-  quiet. With no ad-hoc task in 5 days and no seeded goals, self-direction has nothing to aim at.
+- **The colony generates its own content; the operator steers.** (Chris, 2026-09-17: "operator
+  doesn't seed, it might direct/steer but the fleet agents should generate its own content.") The
+  operator's levers are steering events (§7.1) and review, not a goal list. The risk that remains
+  is what the colony looks at: for two weeks its only input was its own halts, so that is all it
+  worked on. Dispositions must give ideating agents wide `readChannels`: the org's repos, cluster
+  and spark telemetry, the brain, the web, the discourse, other agents' outputs. Whether it then
+  picks work worth doing is what the ruler above is for.
 - **Decomposition is unproven.** Small work orders pass; nobody has shown a Spark-class model
   splitting a real task into them well. Phase 3 has to measure this first, on the new held-out set.
 - **Human-gated queues stall.** 64 review rows have waited up to 133 days. Anything the design
