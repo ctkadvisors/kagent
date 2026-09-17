@@ -142,8 +142,8 @@ where llama-swap starts returning 429 (the source of this month's 14 `HTTP 429` 
 current use is about 6% of that. qwen38 gives 17 to 20 tok/s alone. They share one GPU: while
 qwen38 decoded two streams (26 tok/s), eight ornith15 streams fell from 283 to 107 tok/s, so a
 judge token costs about seven implementer tokens. The spark can feed roughly ten small-context
-agents; host pressure on the K3s nodes is welcome; the scarce flow is qwen38 thinking. Give each
-ModelEndpoint a `maxInFlight` (none is set today), ration qwen38 by disposition budget, keep its
+agents; host pressure on the K3s nodes is welcome; the scarce flow is qwen38 thinking. ModelEndpoints already cap in-flight requests (`inFlight.max`, 8 for ornith15); size those caps
+to the measured curve, ration qwen38 by disposition budget, keep its
 thinking off or bounded unless a task pays for it, and keep work orders small, since long contexts
 slow every stream. `reconcile.py`'s idle ladder is replaced by dispositions plus `KagentSchedule`/triggers.
 Ad-hoc work from Telegram becomes a root task the concierge may split with `spawnChild`.
