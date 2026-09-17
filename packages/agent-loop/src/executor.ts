@@ -607,8 +607,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
             const reason = `${CONTEXT_REFUSAL_PREFIX}: context=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
-            // Use status=0 so the existing 429-retry guard
-            // (executor.ts:407 — gated to `status === 429`) does NOT
+            // Use status=0 so the existing 429-retry guard (the
+            // `is429` check gated to `status === 429` in
+            // `chatWithRetry`'s catch arm) does NOT
             // kick in: refusal is terminal. The reason string is
             // carried in `body` per the canonical
             // `LLMClientHttpError(status, body, ...)` arg order, and
