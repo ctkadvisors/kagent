@@ -165,6 +165,32 @@ coalition work.
 Not in v0.3: CoalitionProposal, reputation, voting, behavior-tree policy (HYBRID-AGENT-POLICY stays
 a seed), the `main.ts` split. Each waits for its own evidence.
 
+## 4a. What this spec does not guarantee, and the fail-state
+
+Implementing the phases puts the fleet on the design. It does not by itself make the colony grow.
+Stated in the spirit of WHY §6, before the work starts:
+
+- **No ruler with headroom exists.** The bench is four toy fixtures at 4 of 4. Promotion judged
+  against it is accumulation, not improvement. Before Phase 4, build a held-out set from real
+  history (the fleet's own halted and merged work orders, replayed) that today's colony fails a
+  meaningful share of. This is the "ground-truth eval external to the society's signals" the
+  proto-society doc asks for. Without it Phase 4 must not start.
+- **Seeding is the operator's.** The proto-society doc says so. The colony needs standing goals it
+  did not invent (which repos and outcomes matter), or it will return to working on itself or go
+  quiet. With no ad-hoc task in 5 days and no seeded goals, self-direction has nothing to aim at.
+- **Decomposition is unproven.** Small work orders pass; nobody has shown a Spark-class model
+  splitting a real task into them well. Phase 3 has to measure this first, on the new held-out set.
+- **Human-gated queues stall.** 64 review rows have waited up to 133 days. Anything the design
+  leaves human-gated (tools, capability, egress) needs a named reviewer and a cadence, or an
+  explicit delegation.
+- **The substrate will still need a frontier model or a person.** Culture-level growth can be the
+  colony's. Changes to the 168k-line substrate are beyond what ornith15 has shown it can land.
+
+Fail-state: two weeks after Phase 4, if the colony has not promoted capabilities that later tasks
+used with a measured gain on the held-out set, while halts stay above 25% and human interventions
+above a handful a week, this approach has not earned its keep on these models, and the honest
+options are a smaller ambition or a stronger implementer. Decide then, from numbers.
+
 ## 5. Until Phase 2 lands: two rule changes to the running fleet
 
 So the fleet stops stalling while the substrate work happens. Both are deletions.
