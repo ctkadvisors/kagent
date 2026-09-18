@@ -223,10 +223,11 @@ Locally, without a cluster: `pnpm i && pnpm -r build && pnpm -r test`, plus `pnp
 │   ├── workbench-{api,ui}/       <- operator console (#/command RTS view, Architect, review queue)
 │   ├── trace-sinks/              <- OtelTraceSink for Langfuse-native export
 │   ├── capability-types/         <- shared cap-JWT shape across operator + agent-pod
+│   ├── cli/                      <- the kagent command-line entry point
 │   └── ... 17 more (egress/quota/versioning/keyrotation/locality/cache controllers,
 │                    blackboard, events, audit-events, triggers, supervision,
 │                    http/mcp/in-process tool providers, agent-workflow-runtime,
-│                    openai-compat, dto, cli)
+│                    openai-compat, dto)
 ├── examples/
 │   ├── rc-pilot/                 <- GA evidence checklist (8 scenarios)
 │   └── rc-spectrum/              <- wider task spectrum (6 scenarios, 2 CF gateway models)
