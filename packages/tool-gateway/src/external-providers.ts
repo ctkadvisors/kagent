@@ -342,10 +342,11 @@ class RemoteMcpToolProvider implements ToolProvider {
     if (this.toolsCache !== null) return this.toolsCache;
     if (ctx?.abortSignal.aborted) throw new Error('remote MCP describe aborted');
 
-    const client = await this.ensureConnected();
-    const listed = await client.listTools(
-      undefined,
-      ctx?.abortSignal === undefined ? undefined : { signal: ctx.abortSignal },
+    const listed = await this.withClient((client) =>
+      client.listTools(
+        undefined,
+        ctx?.abortSignal === undefined ? undefined : { signal: ctx.abortSignal },
+      ),
     );
     this.toolsCache = listed.tools.map((tool) => ({
       name: tool.name,
@@ -356,13 +357,31 @@ class RemoteMcpToolProvider implements ToolProvider {
   }
 
   async executeTool(call: ToolCall, ctx: ToolInvocationContext): Promise<ToolResult> {
-    const client = await this.ensureConnected();
-    const result = await client.callTool(
-      { name: call.name, arguments: (call.args ?? {}) as Record<string, unknown> },
-      CallToolResultSchema,
-      { signal: ctx.abortSignal },
+    const result = await this.withClient((client) =>
+      client.callTool(
+        { name: call.name, arguments: (call.args ?? {}) as Record<string, unknown> },
+        CallToolResultSchema,
+        { signal: ctx.abortSignal },
+      ),
     );
     return mapMcpResultToToolResult(result as McpCallToolResult);
+  }
+
+  /**
+   * Run `fn` against the connected client. A throw here is a transport or
+   * protocol failure (tool-level errors come back as `isError` results), so
+   * drop the client: the next call reconnects instead of reusing a session the
+   * server forgot when it restarted.
+   */
+  private async withClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+    const client = await this.ensureConnected();
+    try {
+      return await fn(client);
+    } catch (err) {
+      if (this.client === client) this.client = null;
+      void client.close().catch(() => undefined);
+      throw err;
+    }
   }
 
   private async ensureConnected(): Promise<Client> {

@@ -163,7 +163,12 @@ export interface ToolProvider {
 export class ToolProviderRegistry {
   private readonly providers = new Map<string, ToolProvider>();
   private readonly toolToProvider = new Map<string, ToolProvider>();
-  private readonly pendingClaims: Promise<void>[] = [];
+  private readonly pendingClaims = new Map<string, Promise<void>>();
+  /** Providers whose last claim failed: the error, and a thunk that re-attempts it. */
+  private readonly failedClaims = new Map<
+    string,
+    { readonly error: unknown; readonly retry: () => Promise<void> }
+  >();
 
   /**
    * Register a provider. Throws `DuplicateToolNameError` if any tool
@@ -201,7 +206,20 @@ export class ToolProviderRegistry {
       // Track the promise so describeAll() / ready() can await it. Errors
       // propagate to the awaiter (claim() may throw DuplicateToolNameError
       // mid-resolve when a conflicting tool name is discovered post-register).
-      this.pendingClaims.push(toolList.then(claim));
+      //
+      // A failed claim is recorded with a retry thunk rather than kept as a
+      // rejected promise: a provider that was unreachable at register time
+      // (remote MCP server still booting after a power loss, 2026-09-18)
+      // otherwise fails every later ready()/describeAll() until the process
+      // restarts. ready() retries it and rethrows only if it fails again.
+      const run = (list: Promise<ToolDescriptor[]>): Promise<void> =>
+        list.then(claim).catch((error: unknown) => {
+          this.failedClaims.set(provider.id, {
+            error,
+            retry: () => run(Promise.resolve().then(() => provider.describeTools())),
+          });
+        });
+      this.pendingClaims.set(provider.id, run(toolList));
     } else {
       claim(toolList);
     }
@@ -217,8 +235,14 @@ export class ToolProviderRegistry {
    * required test-side pre-priming + setImmediate microtask drains.
    */
   async ready(): Promise<void> {
-    if (this.pendingClaims.length === 0) return;
-    await Promise.all(this.pendingClaims);
+    await Promise.all(this.pendingClaims.values());
+    if (this.failedClaims.size === 0) return;
+    for (const [id, { retry }] of this.failedClaims) {
+      this.failedClaims.delete(id);
+      this.pendingClaims.set(id, retry());
+    }
+    await Promise.all(this.pendingClaims.values());
+    for (const { error } of this.failedClaims.values()) throw error;
   }
 
   /** Returns the provider that owns `toolName`, or undefined if none. */
