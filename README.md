@@ -213,21 +213,21 @@ Locally, without a cluster: `pnpm i && pnpm -r build && pnpm -r test`, plus `pnp
 
 ```
 .
-├── packages/                     <- 30 TypeScript workspace packages (pnpm)
+├── packages/                     <- 29 TypeScript workspace packages (pnpm)
 │   ├── operator/                 <- the K8s operator + Helm charts + CRDs
 │   ├── agent-pod/                <- in-pod runtime (built-in tools, cap-consumer, runner)
 │   ├── agent-loop/               <- AgentExecutor + detectors + middleware
-│   ├── agent-loop-vercel-ai/     <- reference adapter on Vercel AI SDK (proves any-framework-in-pod)
 │   ├── llm-gateway/              <- OpenAI-compat gateway with AIMD + admin surface
 │   ├── tool-gateway/             <- out-of-pod tool runtime (browser, code interpreter, shell.exec)
 │   ├── channel-{telegram,whatsapp}-adapter/  <- external chat channels -> AgentTasks
 │   ├── workbench-{api,ui}/       <- operator console (#/command RTS view, Architect, review queue)
 │   ├── trace-sinks/              <- OtelTraceSink for Langfuse-native export
 │   ├── capability-types/         <- shared cap-JWT shape across operator + agent-pod
-│   └── ... 18 more (egress/quota/versioning/keyrotation/locality/cache controllers,
+│   ├── cli/                      <- the kagent command-line entry point
+│   └── ... 17 more (egress/quota/versioning/keyrotation/locality/cache controllers,
 │                    blackboard, events, audit-events, triggers, supervision,
 │                    http/mcp/in-process tool providers, agent-workflow-runtime,
-│                    openai-compat, dto, cli)
+│                    openai-compat, dto)
 ├── examples/
 │   ├── rc-pilot/                 <- GA evidence checklist (8 scenarios)
 │   └── rc-spectrum/              <- wider task spectrum (6 scenarios, 2 CF gateway models)
