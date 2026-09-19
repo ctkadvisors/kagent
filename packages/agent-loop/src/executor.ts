@@ -99,11 +99,14 @@ const RETRY_AFTER_MAX_MS = 30_000;
 /**
  * Retry policy applied around every `LLMClient.chat()` call.
  *
- * Triggers ONLY on `LLMClientHttpError` with `status === 429` — other 5xx
- * errors, network errors, protocol errors, and abort errors propagate
- * immediately. This is by design: 429 is the LLM gateway's "absorb a burst
- * via backoff" signal (AIMD at-cap), and folding 5xx into the same path
- * would mask transport-level outages that should fail loud.
+ * Triggers on `LLMClientHttpError` with `status === 429` — the LLM gateway's
+ * "absorb a burst via backoff" signal (AIMD at-cap) — OR `status === 0`
+ * (transport failures from a rejected `fetch`: connection reset, DNS, a socket
+ * closed mid-request), provided the error's `body` does not start with
+ * `CONTEXT_REFUSAL_PREFIX`. Other 5xx errors, protocol errors, and abort
+ * errors propagate immediately. This is by design: folding 5xx into the same
+ * path would mask transport-level outages that should fail loud, while 429 and
+ * an unprefixed status-0 transport rejection are both genuinely transient.
  *
  * `Retry-After` (when present on the error via `LLMClientHttpError.retryAfterSec`)
  * wins over the local `backoffSchedule` so the gateway's preferred pacing is
@@ -607,8 +610,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
             const reason = `${CONTEXT_REFUSAL_PREFIX}: context=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
-            // Use status=0 so the existing 429-retry guard (the
-            // `is429` check gated to `status === 429` in
+            // Use status=0 so the existing transient-retry gate (the
+            // `isTransient` check gated to `status === 429` and
+            // unprefixed `status === 0` in
             // `chatWithRetry`'s catch arm) does NOT
             // kick in: refusal is terminal. The reason string is
             // carried in `body` per the canonical
@@ -629,28 +633,22 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         // Retry on LLMClientHttpError(status=429). Aborts, protocol
         // errors and other HTTP statuses propagate immediately.
         // Also retry transport failures (status 0 from a rejected fetch:
-        // ECONNRESET, DNS, a socket closed mid-upload). The substrate's
-        // own context-window refusal shares status 0 but is terminal —
-        // its body prefix keeps it out of the retry path.
+        // ECONNRESET, DNS, a socket closed mid-upload). Together with 429,
+        // these are the two transient triggers the gate below implements. The
+        // substrate's own context-window refusal shares status 0 but is
+        // terminal — its body prefix keeps it out of the retry path.
         const isTransient =
           err instanceof LLMClientHttpError &&
           (err.status === 429 ||
             (err.status === 0 && !(err.body ?? '').startsWith(CONTEXT_REFUSAL_PREFIX)));
-        const is429 = isTransient && err.status === 429;
         const canRetry = isTransient && attemptIdx < this.maxRetries;
         if (!canRetry) {
-          // If this WAS the final 429 attempt, emit a per-attempt trace
+          // If this WAS the final transient attempt, emit a per-attempt trace
           // so observers see the full ladder; the run loop's catch arm
           // emits its own llm_call entry for the final failure record
           // too — but that one is keyed on the LATEST attempt. Emit
           // here only for the EARLIER attempts that the run loop's
           // catch will not see (it sees only the last throw).
-          if (is429 && attemptIdx > 0) {
-            // We already traced attempts 0..attemptIdx-1 below; this
-            // particular throw will be re-raised and the run loop
-            // emits its own trace for attempt `attemptIdx`. No
-            // duplication.
-          }
           throw err;
         }
         // Trace the failed attempt BEFORE sleeping so the trace order
