@@ -195,4 +195,64 @@ describe('withMcpToolPrefix — per-provider prefix', () => {
     );
     expect(providers[0]).toMatchObject({ kind: 'remoteMcp', toolPrefix: 'mcp.cf.' });
   });
+
+  it('recovers when a remote MCP server was down at boot, and reconnects after a dropped session', async () => {
+    let up = false;
+    let initializes = 0;
+    let failNextList = false;
+    const json = (body: unknown): Response =>
+      new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+    const respond = (init?: RequestInit): Response => {
+      if (!up) throw new TypeError('fetch failed');
+      if (init?.method !== 'POST' || typeof init.body !== 'string') {
+        return new Response(null, { status: 405 });
+      }
+      const msg = JSON.parse(init.body) as { id?: number; method: string };
+      if (msg.method === 'initialize') {
+        initializes += 1;
+        return json({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: {
+            protocolVersion: '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'fake', version: '0' },
+          },
+        });
+      }
+      if (msg.method === 'tools/list') {
+        if (failNextList) {
+          failNextList = false;
+          throw new TypeError('fetch failed');
+        }
+        return json({
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { tools: [{ name: 'search_nodes', inputSchema: { type: 'object' } }] },
+        });
+      }
+      return new Response(null, { status: 202 });
+    };
+    const fetchImpl: typeof fetch = (_url, init) =>
+      new Promise((resolve) => {
+        resolve(respond(init));
+      });
+
+    // The gateway boots while the server is still down (power-loss restart order).
+    const registry = buildExternalToolRegistry(
+      { providers: [{ kind: 'remoteMcp', id: 'brain', url: 'http://brain/mcp' }] },
+      { fetch: fetchImpl },
+    );
+    await expect(registry.describeTools(ctx())).rejects.toThrow('fetch failed');
+
+    // Server is up but the first tools/list dies mid-session: the client is dropped.
+    up = true;
+    failNextList = true;
+    await expect(registry.describeTools(ctx())).rejects.toThrow('fetch failed');
+
+    // Next describe reconnects and succeeds, with no process restart.
+    const tools = await registry.describeTools(ctx());
+    expect(tools.map((tool) => tool.name)).toEqual(['mcp.search_nodes']);
+    expect(initializes).toBe(2);
+  });
 });
