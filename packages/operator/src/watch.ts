@@ -115,8 +115,9 @@ export function createAgentTaskInformer(
   // groundwork for M21 readiness-probe wiring (W3-Operator).
   const restartLogger: InformerRestartLogger = {
     onStartRejected(err, attempt, nextDelayMs): void {
-      // Surface the rejection to the caller's existing onError sink
-      // (main.ts:1134-1136 → console.error). The structured shape lets
+      // Surface the rejection to the caller's existing onError sink in
+      // main.ts (the AgentTask watch handler's `onError` → console.error).
+      // The structured shape lets
       // M21 hook a metric/audit emitter in here without touching the
       // restart path.
       handler.onError?.(err);

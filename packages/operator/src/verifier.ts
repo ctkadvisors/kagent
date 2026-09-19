@@ -207,8 +207,8 @@ export interface VerifierAuditHooks {
 
 /**
  * Resolves a Langfuse-managed prompt body to a literal string. Mirror
- * of the agent-pod's `fetchPrompt` callback in
- * `packages/agent-pod/src/runner.ts:140` (kept structurally identical
+ * of the agent-pod's `fetchPrompt` callback declared in
+ * `packages/agent-pod/src/runner.ts` (kept structurally identical
  * so the operator and the agent-pod can share the same Langfuse v2
  * fetcher in a future refactor).
  *
