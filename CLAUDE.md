@@ -42,7 +42,7 @@ All eight exist (verified 2026-08-05). They describe the *why* and the v0.1 shap
 - **MIT license header** on every `.ts` source file
 - **Conventional commits** with co-author attribution per Chris's ctkadvisors style
 - **No squash-on-merge** — keep history legible
-- **Tests:** vitest, co-located `*.test.ts`. CI runs `pnpm -r test` and does **not** run coverage at all. The "≥85% on the operator reconciler, ≥75% on glue code" targets carried in `.planning/PROJECT.md` are aspirational, not enforced: of 29 `vitest.config.ts` files, 27 declare a `thresholds` block, but only `operator`, `agent-pod`, and `agent-loop-vercel-ai` set real numbers (lines/functions/statements 80, branches 70) — the other 24 are set to `0`, and `cli` / `workbench-ui` declare none. Treat the targets as intent; if you want them enforced, wire `test:coverage` into `.github/workflows/ci.yml` first.
+- **Tests:** vitest, co-located `*.test.ts`. CI runs `pnpm -r test` and does **not** run coverage at all. The "≥85% on the operator reconciler, ≥75% on glue code" targets carried in `.planning/PROJECT.md` are aspirational, not enforced: of 29 `vitest.config.ts` files, 27 declare a `thresholds` block, but only `operator` and `agent-pod` set real numbers (lines/functions/statements 80, branches 70) — the other 24 are set to `0` (`agent-loop-vercel-ai`, the third package that once set them, was removed at v0.2.46), and `cli` / `workbench-ui` declare none. Treat the targets as intent; if you want them enforced, wire `test:coverage` into `.github/workflows/ci.yml` first.
 
 ## Phase discipline
 
