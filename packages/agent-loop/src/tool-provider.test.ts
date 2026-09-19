@@ -231,4 +231,37 @@ describe('ToolProvider — interface shape', () => {
     expect(all.map((d) => d.name)).toEqual(['flaky_tool']);
     expect(registry.providerFor('flaky_tool')).toBe(flaky);
   });
+
+  it('concurrent ready() calls share one retry; none reports ready while it is still pending', async () => {
+    const registry = new ToolProviderRegistry();
+    let calls = 0;
+    let release: (tools: ToolDescriptor[]) => void = () => undefined;
+    const slow: ToolProvider = {
+      id: 'slow',
+      describeTools(): Promise<ToolDescriptor[]> {
+        calls += 1;
+        if (calls === 1) return Promise.reject(new Error('fetch failed'));
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      },
+      executeTool(): Promise<ToolResult> {
+        return Promise.resolve({ content: 'ok', isError: false });
+      },
+    };
+    registry.register(slow);
+
+    let settled = 0;
+    const both = Promise.all([
+      registry.ready().then(() => (settled += 1)),
+      registry.ready().then(() => (settled += 1)),
+    ]);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(settled).toBe(0); // the retry is in flight; nobody is ready yet
+    expect(calls).toBe(2); // one failed claim + one shared retry
+
+    release([{ name: 'slow_tool', description: 'd', inputSchema: {} }]);
+    await both;
+    expect(registry.providerFor('slow_tool')).toBe(slow);
+  });
 });

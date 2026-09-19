@@ -169,6 +169,7 @@ export class ToolProviderRegistry {
     string,
     { readonly error: unknown; readonly retry: () => Promise<void> }
   >();
+  private settling: Promise<void> | null = null;
 
   /**
    * Register a provider. Throws `DuplicateToolNameError` if any tool
@@ -234,10 +235,21 @@ export class ToolProviderRegistry {
    * Added per Phase 7 D-13 to close the async-claim race that previously
    * required test-side pre-priming + setImmediate microtask drains.
    */
-  async ready(): Promise<void> {
+  ready(): Promise<void> {
+    // Concurrent callers share one settle pass: otherwise a second caller can
+    // see `failedClaims` emptied by the first caller's in-flight retry and
+    // report ready while that retry is still pending.
+    this.settling ??= this.settle().finally(() => {
+      this.settling = null;
+    });
+    return this.settling;
+  }
+
+  private async settle(): Promise<void> {
     await Promise.all(this.pendingClaims.values());
-    if (this.failedClaims.size === 0) return;
-    for (const [id, { retry }] of this.failedClaims) {
+    for (const [id, { error, retry }] of this.failedClaims) {
+      // A name conflict is a configuration error; asking again cannot fix it.
+      if (error instanceof DuplicateToolNameError) continue;
       this.failedClaims.delete(id);
       this.pendingClaims.set(id, retry());
     }
