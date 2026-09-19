@@ -902,7 +902,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           // Piece 3 — substrate-side context-window safety-net
           // threading. Pass the live budget by reference so the
           // pre-call check sees mutations from prior successful
-          // chat() calls (executor.ts:646-654).
+          // chat() calls (token accounting block, `budget.cumulativeInputTokens +=` below).
           budget,
           contextSafetyThreshold,
         });
