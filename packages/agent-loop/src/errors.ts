@@ -377,9 +377,9 @@ export class LLMClientTimeoutError extends LLMClientError {
  * Adapter, executor, LLM-client, and tool-provider errors are all SIBLING
  * families: a `HttpToolProviderNetworkError` thrown by an adapter is NOT
  * `instanceof AgentExecutorError` and NOT `instanceof LLMClientError`. The
- * executor (executor.ts:452-482) catches the family separately and maps
- * tool-provider throws to `ToolResult{isError:true, content:'Error: ...'}`
- * per the loop convention.
+ * executor catches the family separately in its tool-execution catch arm
+ * (`AgentExecutor.run`, executor.ts) and maps tool-provider throws to
+ * `ToolResult{isError:true, content:'Error: ...'}` per the loop convention.
  *
  * Note: `InProcessToolProvider` has no provider-level failure mode (D-26)
  * — handler throws map to `ToolResult{isError:true}` (D-20) not propagated.
@@ -406,7 +406,7 @@ export class ToolProviderError extends Error {
  *
  * The provider classifies the underlying throw and rethrows this typed
  * error so the executor's exception handler can map to `ToolResult`
- * uniformly (executor.ts:452-482).
+ * uniformly (`AgentExecutor.run`, executor.ts).
  */
 export class HttpToolProviderNetworkError extends ToolProviderError {}
 

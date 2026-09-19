@@ -79,7 +79,8 @@ export interface TraceEntry {
    *     `ChatResult.usage.{inputTokens, outputTokens}` and the trace
    *     entry's token fields reflect those numbers verbatim.
    *   - `'estimate'`: the gateway omitted usage; the executor fell
-   *     back to `estimateTokens` (chars/4 heuristic, see trace.ts:168).
+   *     back to `estimateTokens` (chars/4 heuristic, defined below in
+   *     this module by that name).
    *     Per docs/CONTEXT-AWARENESS.md §8 the heuristic is 20–40% off
    *     depending on tokenization. The 5% margin between Piece 3's
    *     safety-net (95%) and the upstream's hard 100% reject absorbs
