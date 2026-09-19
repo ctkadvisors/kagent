@@ -52,7 +52,7 @@ The list below is "in the cluster, executing real work, observable in evidence p
 
 ### Agent-side primitives
 
-- ✅ AgentExecutor loop (`@kagent/agent-loop` + `@kagent/agent-loop-vercel-ai` reference adapter on Vercel AI SDK).
+- ✅ AgentExecutor loop (`@kagent/agent-loop`).
 - ✅ Built-in tools: `spawn_child_task`, `wait_for_child_task`, `wait_for_children_all`, `write_artifact`, `read_artifact`, `get_my_context`, `ensure_agent_from_template`, `publish_event`, `read/write/list/append_blackboard`, `http_get`, `rss_fetch`, `extract_text`.
 - ✅ `Agent.spec.modelClass` logical-tier routing — decouples Agent CR from physical model id (`tool-caller-default`, `text-generator-default`, `reasoner-default` map to physical models in the cluster's chart values).
 - ✅ Per-attempt latency-accurate retry with 429 + Retry-After honoring on the agent-pod side; AIMD doesn't have to drop the protective floor for bursty fan-outs.
@@ -251,7 +251,7 @@ The peer review wouldn't be honest without these:
 5. **Name collision** with Solo.io's kagent.dev. Rename TBD before any wider release.
 6. **The defensible scope claim is bounded by `docs/PRIOR-ART.md` audit dates** (2026-05-06 / 2026-05-07). Both the sigs project and the proprietary substrates are moving; what's distinctive today may not be in 6 months.
 7. **Comparison rig is not yet executed.** [`docs/ROADMAP.md`](./docs/ROADMAP.md) §"Comparison rig — the falsifiable test" commits the project to a no-regression measurement vs the prior `homelab-orchestrator`. That hasn't run end-to-end yet. Until it does, the substrate's claim of "improving on the baseline" is theoretical.
-8. **`@kagent/agent-loop` is lifted from a learning experiment.** It works, but it's not a "third-party-validated" agent loop. Vercel AI SDK adapter (`@kagent/agent-loop-vercel-ai`) exists specifically so the in-pod runtime is replaceable.
+8. **`@kagent/agent-loop` is lifted from a learning experiment.** It works, but it's not a "third-party-validated" agent loop.
 
 ---
 
