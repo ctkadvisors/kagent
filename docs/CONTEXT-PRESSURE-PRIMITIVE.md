@@ -68,7 +68,7 @@ kagent's implementation is four small pieces, each independently testable and ea
 
 ### Piece 3 — Executor: pre-call refusal at the safety threshold
 
-**What it does.** **Before every LLM call**, when both `RunBudget.contextWindowTokens` and the per-run safety threshold are set and **the last-call `contextTokens`** (the last LLM call's input + output tokens; last-call contextTokens, not the cumulative sum) `>= safetyThreshold * contextWindowTokens` (default 0.95), the executor throws `LLMClientHttpError(0, 'context_window_substrate_refused: context=<used> window=<limit> threshold=<pct>')`. Status `0` keeps the existing 429-retry path inert (only `status === 429` retries); the loop's normal failed-LLM-call catch arm writes a structured terminal `phase: 'Failed'` with `error.message` reflecting the refusal reason.
+**What it does.** **Before every LLM call**, when both `RunBudget.contextWindowTokens` and the per-run safety threshold are set and **the last-call `contextTokens`** (the last LLM call's input + output tokens; last-call contextTokens, not the cumulative sum) `>= safetyThreshold * contextWindowTokens` (default 0.95), the executor throws `LLMClientHttpError(0, 'context_window_substrate_refused: context=<used> window=<limit> threshold=<pct>')`. Status `0` keeps the existing 429-retry path inert (it retries `status === 429` and status-0 transport errors that do not carry the `context_window_substrate_refused` prefix; this status-0 refusal does carry it, so it is not retried); the loop's normal failed-LLM-call catch arm writes a structured terminal `phase: 'Failed'` with `error.message` reflecting the refusal reason.
 
 **Cited code.** The pre-call check sits inside `chatWithRetry`, immediately before `this.llm.chat()`:
 
