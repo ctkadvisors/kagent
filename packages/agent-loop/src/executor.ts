@@ -65,7 +65,7 @@ import {
 import { randomUUID } from 'node:crypto';
 
 // =====================================================================
-// 429-retry policy (resilience for AIMD at-cap rejections)
+// 429/0-retry policy (resilience for AIMD at-cap rejections and transient transport failures)
 // =====================================================================
 
 /**
@@ -121,7 +121,7 @@ export interface RetryPolicy {
    * Maximum retries AFTER the original attempt; original + maxRetries = total round-trips.
    *
    * Default: `2` (so 1 original + 2 retries = 3 chat() calls in the worst
-   * case). Set to `0` to disable retry entirely (429 fails immediately).
+   * case). Set to `0` to disable retry entirely (429 and status 0 fail immediately).
    * MUST be a non-negative integer.
    */
   maxRetries?: number;
@@ -322,7 +322,7 @@ export interface AgentExecutorOptions<
   sinks?: readonly TraceSink[];
   defaultMaxIterations?: number;
   /**
-   * Optional 429-retry policy applied around every `LLMClient.chat()` call.
+   * Optional 429/0-retry policy applied around every `LLMClient.chat()` call.
    *
    * Defaults: `{ maxRetries: 2, backoffSchedule: [200, 800, 3200] }`. Pass
    * `{ maxRetries: 0 }` to disable retry entirely. See `RetryPolicy`.
@@ -518,10 +518,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
   }
 
   /**
-   * Wrap one `LLMClient.chat()` call with the 429-retry policy.
+   * Wrap one `LLMClient.chat()` call with the 429/0-retry policy.
    *
    * Returns either a `ChatResult` (success on attempt 0..N) or rethrows
-   * the final error (any non-429, OR the last 429 after exhausting
+   * the final error (any non-429/non-0, OR the last 429/0 after exhausting
    * retries). Emits one `llm_call` trace per attempt with the executor's
    * shared `seq` counter — the caller (run loop) appends the success trace
    * separately when this resolves successfully, so `chatWithRetry` ONLY
@@ -592,9 +592,12 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         // LLM call when cumulative tokens reach the configured
         // fraction of the model's window — fail clean here instead
         // of letting the upstream's terminal `400
-        // context_length_exceeded` land. Status 0 ensures the
-        // existing 429-retry path (gated to `status === 429`) does
-        // NOT kick in: refusal is terminal.
+        // context_length_exceeded` land. Status 0 on a genuine transport
+        // failure DOES reach the transient-retry gate at :640-643, which
+        // retries on `status === 429` OR an unprefixed `status === 0`
+        // transport failure; this refusal carries the
+        // `CONTEXT_REFUSAL_PREFIX` body, which the gate's body check uses to
+        // keep the refusal out of the retry path, so refusal is terminal.
         //
         // Gate on `contextWindowTokens !== undefined` so back-compat
         // configs (no chart entry, env unset) are no-ops. When both
