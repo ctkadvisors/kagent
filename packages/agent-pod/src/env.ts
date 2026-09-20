@@ -663,8 +663,9 @@ function parseJson<T>(raw: string, key: string): T {
  * instead of a generic exec failure with no operator-visible signal.
  *
  * The cap applies to the env-JSON path ONLY. ConfigMap-mounted files
- * have a separate operator-side cap (W3-Operator scope, follow-up to
- * `packages/operator/src/job-spec.ts:666-671`).
+ * currently have no byte cap enforced by the operator; see
+ * `buildAgentTaskConfigMap` in the operator package for the current
+ * implementation.
  *
  * Exported so tests can drive the boundary without re-deriving it.
  */
