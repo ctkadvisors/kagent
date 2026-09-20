@@ -37,7 +37,8 @@ safety per spec §3.2.
 | `DATABASE_URL`               | yes      | —                   | libpq DSN. Gateway never owns the DB; the chart wires this from a Secret per §3.7. |
 | `ADMIN_API_TOKEN`            | yes      | —                   | Bearer for `/admin/*`.                     |
 | `PORT`                       | no       | `4000`              | http listen port.                          |
-| `BACKEND_TIMEOUT_MS`         | no       | `60000`             | Per-backend dispatch timeout (currently a hint; provider impls own timeout). |
+| `BACKEND_TIMEOUT_MS`         | no       | `7200000`           | Hard cap on one backend call. Backend calls use `long-fetch.ts` (node:http), not Node's fetch, whose hidden 300 s limits killed long thinking turns. |
+| `BACKEND_IDLE_TIMEOUT_MS`    | no       | `600000`            | Longest silence on a streamed backend call (queueing + prefill, then between tokens). This, not the cap, is what detects a dead backend. |
 | `MODEL_ENDPOINT_NAMESPACE`   | no       | `kagent-system`     | K8s namespace the informer watches for `ModelEndpoint` CRs. |
 
 ## Design highlights

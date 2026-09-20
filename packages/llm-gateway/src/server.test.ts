@@ -357,6 +357,35 @@ describe('POST /v1/chat/completions safety responses', () => {
 
       expect(res.status).toBe(503);
       expect(res.headers.get('retry-after')).toBe('5');
+
+      // The same outcome for a `stream: true` caller (2026-09-20: until then the gateway
+      // answered 400 "streaming responses are not yet supported"): the 200 is spent on a
+      // connection that never goes quiet, so status and Retry-After travel in-band.
+      const streamed = await fetch(`${booted.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm',
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(streamed.status).toBe(200);
+      expect(streamed.headers.get('content-type')).toContain('text/event-stream');
+      const text = await streamed.text();
+      expect(text.startsWith(': ping\n\n')).toBe(true);
+      expect(text.endsWith('data: [DONE]\n\n')).toBe(true);
+      const event = JSON.parse(
+        text
+          .split('\n\n')
+          .find((e) => e.startsWith('data: {'))
+          ?.slice(6) ?? '{}',
+      ) as { error: { status: number; retry_after_sec: number; type: string } };
+      expect(event.error).toMatchObject({
+        status: 503,
+        retry_after_sec: 5,
+        type: 'service_unavailable_error',
+      });
     } finally {
       await booted.close();
     }

@@ -20,6 +20,7 @@
  * land here in v0.2 — non-streaming responses are the v1 wire.
  */
 
+import { openSse } from './sse-reply.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import {
@@ -141,6 +142,8 @@ export interface ServerDeps {
    */
   readonly mtlsIdentityResolver?: MtlsIdentityResolver;
   readonly readinessProbe: () => Promise<boolean>;
+  /** Interval of the `: ping` comment on a `stream: true` chat reply (sse-reply.ts). Tests shorten it. */
+  readonly ssePingMs?: number;
 }
 
 export function buildHandler(
@@ -415,28 +418,41 @@ export function buildHandler(
         );
         return;
       }
-      if (body.stream === true) {
-        // SSE streaming is deferred to v0.2; reject explicitly so the
-        // caller doesn't silently get a non-streaming response.
-        writeJson(
-          res,
-          400,
-          createOpenAIError(
-            'streaming responses are not yet supported (v1)',
-            'invalid_request_error',
-          ),
-        );
-        return;
-      }
       const headers = parseKagentHeaders(req);
       const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      // `stream: true` buys the caller a connection that never goes quiet
+      // (sse-reply.ts): the 200 is committed now, pings flow while the turn
+      // runs, and the outcome below travels in-band. The identity header
+      // describes the handshake, not the outcome, so it can go out first.
+      const wantsStream = body.stream === true;
+      if (wantsStream) maybeEmitIdentityHeader(req, res, deps.mtlsIdentityResolver);
+      const sse = wantsStream ? openSse(res, deps.ssePingMs) : null;
+      const out = (status: number, payload: unknown, retryAfterSec?: number): void => {
+        if (sse !== null) {
+          sse.finish(status, payload, retryAfterSec);
+          return;
+        }
+        if (retryAfterSec !== undefined) res.setHeader('Retry-After', String(retryAfterSec));
+        writeJson(res, status, payload);
+      };
       const result = await route(deps.routerDeps, {
         requestId,
-        request: body,
+        request: wantsStream ? { ...body, stream: false } : body,
         apiKeyPrefix: auth.keyPrefix,
         taskUid: headers.taskUid,
         agentName: headers.agentName,
+      }).catch((err: unknown) => {
+        // With the 200 already committed nothing else can end this response:
+        // without this the caller would be pinged forever.
+        if (sse === null) throw err;
+        console.error('[llm-gateway] route threw on a streamed reply:', err);
+        sse.finish(
+          500,
+          createOpenAIError(err instanceof Error ? err.message : String(err), 'server_error'),
+        );
+        return null;
       });
+      if (result === null) return;
 
       switch (result.kind) {
         case 'dispatched': {
@@ -446,24 +462,22 @@ export function buildHandler(
           // logs UNVERIFIED (per probeGatewayMtls). Never
           // fabricate; the security posture depends on this header
           // reflecting real handshake state.
-          maybeEmitIdentityHeader(req, res, deps.mtlsIdentityResolver);
-          writeJson(res, 200, result.body);
+          if (!wantsStream) maybeEmitIdentityHeader(req, res, deps.mtlsIdentityResolver);
+          out(200, result.body);
           return;
         }
         case 'at_cap':
-          res.setHeader('Retry-After', String(result.retryAfterSec));
-          writeJson(
-            res,
+          out(
             429,
             createOpenAIError(
               `model ${result.model} at capacity (in-flight=${String(result.inFlight)} cap=${String(result.currentCap)})`,
               'rate_limit_error',
             ),
+            result.retryAfterSec,
           );
           return;
         case 'unknown_model':
-          writeJson(
-            res,
+          out(
             400,
             createOpenAIError(
               `unknown model: ${result.model} — no ModelEndpoint registered`,
@@ -477,27 +491,24 @@ export function buildHandler(
           // cap) consumes Retry-After cleanly; without this branch a
           // raw upstream 429 would land as 502 and trigger an
           // immediate retry stampede.
-          res.setHeader('Retry-After', String(result.retryAfterSec));
-          writeJson(
-            res,
+          out(
             result.statusCode,
             createOpenAIError(
               `upstream ${result.backend} ${String(result.statusCode)} for ${result.model}: ${result.message}`,
               result.statusCode === 503 ? 'service_unavailable_error' : 'rate_limit_error',
             ),
+            result.retryAfterSec,
           );
           return;
         case 'provider_dispatch_disabled':
-          res.setHeader('Retry-After', String(result.retryAfterSec));
-          writeJson(
-            res,
+          out(
             503,
             createOpenAIError(`${result.message} for ${result.model}`, 'service_unavailable_error'),
+            result.retryAfterSec,
           );
           return;
         case 'provider_config_error':
-          writeJson(
-            res,
+          out(
             400,
             createOpenAIError(
               `provider configuration error for ${result.model}: ${result.message}`,
@@ -508,19 +519,17 @@ export function buildHandler(
           );
           return;
         case 'provider_failure_backoff':
-          res.setHeader('Retry-After', String(result.retryAfterSec));
-          writeJson(
-            res,
+          out(
             503,
             createOpenAIError(
               `${result.message} (backend=${result.backend})`,
               'service_unavailable_error',
             ),
+            result.retryAfterSec,
           );
           return;
         case 'dispatch_error':
-          writeJson(
-            res,
+          out(
             502,
             createOpenAIError(
               `backend error for ${result.model}: ${result.message}`,

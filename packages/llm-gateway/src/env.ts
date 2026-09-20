@@ -48,7 +48,8 @@
  *
  * Optional with defaults:
  *   PORT                       (default 4000)
- *   BACKEND_TIMEOUT_MS         (default 60000)
+ *   BACKEND_TIMEOUT_MS         (default 7200000) hard cap on one backend call
+ *   BACKEND_IDLE_TIMEOUT_MS    (default 600000) longest silence on a streamed backend call
  *   MODEL_ENDPOINT_NAMESPACE   (default 'kagent-system')
  *   KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED
  *                              (default false) — hard kill switch:
@@ -136,7 +137,10 @@ export interface GatewayConfig {
    */
   readonly adminApiTokenReadonly: string | null;
   readonly port: number;
+  /** Hard cap on one backend call (long-fetch.ts). */
   readonly backendTimeoutMs: number;
+  /** Longest silence tolerated on a streamed backend call: queueing plus prefill, then the gap between tokens. */
+  readonly backendIdleTimeoutMs: number;
   readonly modelEndpointNamespace: string;
   readonly providerDispatchDisabled: boolean;
   readonly providerFailureBackoffThreshold: number;
@@ -145,7 +149,11 @@ export interface GatewayConfig {
 }
 
 const DEFAULT_PORT = 4000;
-const DEFAULT_BACKEND_TIMEOUT_MS = 60_000;
+// Two hours, not 60 s: until 2026-09-20 this value was parsed and applied nowhere, and the
+// only limit was undici's hidden 300 s. A thinking turn may run 30 min+; the idle timer
+// below, not this cap, is what catches a dead backend.
+const DEFAULT_BACKEND_TIMEOUT_MS = 7_200_000;
+const DEFAULT_BACKEND_IDLE_TIMEOUT_MS = 600_000;
 const DEFAULT_NAMESPACE = 'kagent-system';
 const DEFAULT_PROVIDER_FAILURE_BACKOFF_THRESHOLD = 3;
 const DEFAULT_PROVIDER_FAILURE_BACKOFF_SECONDS = 300;
@@ -241,6 +249,11 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
     DEFAULT_BACKEND_TIMEOUT_MS,
     'BACKEND_TIMEOUT_MS',
   );
+  const backendIdleTimeoutMs = parsePositiveInt(
+    env.BACKEND_IDLE_TIMEOUT_MS,
+    DEFAULT_BACKEND_IDLE_TIMEOUT_MS,
+    'BACKEND_IDLE_TIMEOUT_MS',
+  );
   const modelEndpointNamespace = (env.MODEL_ENDPOINT_NAMESPACE ?? DEFAULT_NAMESPACE).trim();
   const providerDispatchDisabled = parseBoolean(
     env.KAGENT_LLM_GATEWAY_PROVIDER_DISPATCH_DISABLED,
@@ -266,6 +279,7 @@ export function parseEnv(env: NodeJS.ProcessEnv): GatewayConfig {
     adminApiTokenReadonly,
     port,
     backendTimeoutMs,
+    backendIdleTimeoutMs,
     modelEndpointNamespace:
       modelEndpointNamespace.length > 0 ? modelEndpointNamespace : DEFAULT_NAMESPACE,
     providerDispatchDisabled,
