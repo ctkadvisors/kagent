@@ -25,8 +25,10 @@
  *      a stop-gap until a v0.2 minor-bump adds
  *      `substrate.informer_error` to the union; the format is
  *      deliberately easy to swap for `auditPublisher.publish(...)`
- *      once that lands. (Same forward-compat shape the Blackboard GC
- *      audit uses at `main.ts:1838`.)
+ *      once that lands. (Same forward-compat shape as the Blackboard
+ *      bucket manager's onDestroyed audit hook in the operator control
+ *      loop in packages/operator/src/main.ts — the
+ *      '[kagent-operator/blackboard.gc]' console.log.)
  *
  *   3. {@link startSubstrateHealthServer} — boots a tiny `node:http`
  *      server on the configured port (env `KAGENT_HEALTHZ_PORT`,
