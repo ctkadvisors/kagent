@@ -266,8 +266,8 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
       const meta = readMeta(created);
       // L8 (audit-rev2 C2 §1) — assert `meta.uid` is present rather than
       // silently degrading to `uid: ''`. The downstream
-      // `wait_for_child_task` tool polls by uid (`getTaskByUid` at
-      // k8s-task-creator.ts:296-314 + builtin-tools-wait.ts polling
+      // `wait_for_child_task` tool polls by uid (the
+      // `getTaskByUid` + builtin-tools-wait.ts polling
       // loop): a uid of `''` will never match any AgentTask, producing a
       // silent timeout. The apiserver always echoes `metadata.uid` on a
       // 201 Created response (it's stamped server-side and is the very
