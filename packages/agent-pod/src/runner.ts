@@ -723,7 +723,7 @@ export function pickUserMessage(config: PodConfig): string {
  * `assertSubstrateToolAdmitted` predicate (see that helper for the
  * full implicit-when-X policy). Failing the cross-check is fail-FAST
  * at boot, matching the existing "unknown built-in tool" precedent in
- * `builtin-tools.ts:986`. The Audit found that an Agent without
+ * `resolveBuiltinTools` in `builtin-tools.ts`. The Audit found that an Agent without
  * `spawn_child_task` in its spec could nonetheless reach the global
  * federation lookup once the env-flag fired the substrate provider on;
  * this gate closes that gap.

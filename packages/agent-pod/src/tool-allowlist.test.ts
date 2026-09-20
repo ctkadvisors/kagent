@@ -23,7 +23,7 @@
  * universally admitted as introspection-only.
  *
  * Failing the cross-check is fail-FAST at boot, matching the existing
- * "unknown built-in tool" precedent in `builtin-tools.ts:986`.
+ * "unknown built-in tool" precedent in `resolveBuiltinTools` in `builtin-tools.ts`.
  */
 
 import type { ToolInvocationContext, ToolProvider, ToolResult } from '@kagent/agent-loop';
