@@ -342,17 +342,46 @@ export interface AgentExecutorOptions<
 export interface ToolGuards {
   /** Same tool name + identical args: calls beyond this count are refused. */
   maxIdenticalCalls?: number;
-  /** Same tool name, any args: calls beyond this count in one run are refused. */
+  /**
+   * Same tool name, any args: calls beyond this count in one run are refused.
+   * Off unless set. A run is already bounded by `maxIterations`, its timeout,
+   * the identical-call guard and the result cap; see `DEFAULT_TOOL_GUARDS`.
+   */
   maxCallsPerTool?: number;
   /** Tool result text longer than this is elided in the middle before it enters the context. */
   maxToolResultChars?: number;
 }
 
-export const DEFAULT_TOOL_GUARDS: Required<ToolGuards> = {
+/**
+ * No default `maxCallsPerTool`. It was 8 from 2026-09-02, sized for the
+ * concierge's 12-iteration chat turn (two memory tools, seven calls each,
+ * 206k tokens, no answer). What actually stopped that class was the
+ * identical-call guard and the result cap. The constant then applied to every
+ * run: on 2026-09-19 and -20 the fleet-auditor (30 iterations, one
+ * general-purpose tool for every read and every write) was refused its 9th
+ * call and could not post its audit, twice. Calling one tool many times with
+ * different arguments is what a single-tool agent is supposed to do.
+ *
+ * The useful half of that guard was the nudge, not the refusal, and it belongs
+ * to the run's turn budget: see `TURNS_LEFT_NOTE_AT`.
+ */
+export const DEFAULT_TOOL_GUARDS: {
+  readonly maxIdenticalCalls: number;
+  readonly maxCallsPerTool: number | undefined;
+  readonly maxToolResultChars: number;
+} = {
   maxIdenticalCalls: 2,
-  maxCallsPerTool: 8,
+  maxCallsPerTool: undefined,
   maxToolResultChars: 16_000,
 };
+
+/**
+ * With this many turns (or fewer) left in the run, every tool result says so.
+ * The model cannot plan around a limit it cannot see: both auditor failures
+ * were a model reading until the wall with no turn left to write in, and
+ * warning it in a prompt meant hard-coding the loop's numbers there.
+ */
+export const TURNS_LEFT_NOTE_AT = 3;
 
 /** Middle-elide a tool result so one oversized payload cannot own the context. */
 export function capToolResult(text: string, max: number): string {
@@ -374,7 +403,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
   private readonly maxRetries: number;
   private readonly backoffSchedule: readonly number[];
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly toolGuards: Required<ToolGuards>;
+  private readonly toolGuards: typeof DEFAULT_TOOL_GUARDS;
 
   constructor(options: AgentExecutorOptions<TType, TPhase>) {
     if (!options.llm) {
@@ -1121,9 +1150,16 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         const guardMsg =
           identical > this.toolGuards.maxIdenticalCalls
             ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments and the answer has not changed. Do not call it again; answer with what you have, or say what is missing.`
-            : perTool > this.toolGuards.maxCallsPerTool
+            : this.toolGuards.maxCallsPerTool !== undefined &&
+                perTool > this.toolGuards.maxCallsPerTool
               ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
               : undefined;
+        // `iteration` is 0-based and this turn is already spent.
+        const turnsLeft = maxIterations - iteration - 1;
+        const turnsNote =
+          turnsLeft <= TURNS_LEFT_NOTE_AT
+            ? `\n\n[loop: ${turnsLeft === 0 ? 'this was the last turn of the run' : `${String(turnsLeft)} turn${turnsLeft === 1 ? '' : 's'} left in this run`}. Do what must still be done (write, post, answer) before reading anything more.]`
+            : '';
         if (guardMsg !== undefined) {
           const guardEntry: TraceEntry = {
             schema_version: '1',
@@ -1142,7 +1178,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(guardEntry);
           currentMessages.push({
             role: 'tool',
-            content: guardMsg,
+            content: guardMsg + turnsNote,
             tool_call_id: callId,
             name: rawToolCall.name,
           });
@@ -1202,10 +1238,11 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(toolEntry);
           currentMessages.push({
             role: 'tool',
-            content: capToolResult(
-              stringifyToolContent(toolResult.content),
-              this.toolGuards.maxToolResultChars,
-            ),
+            content:
+              capToolResult(
+                stringifyToolContent(toolResult.content),
+                this.toolGuards.maxToolResultChars,
+              ) + turnsNote,
             tool_call_id: callId,
             name: rawToolCall.name,
           });
@@ -1235,7 +1272,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(errEntry);
           currentMessages.push({
             role: 'tool',
-            content: `Error: ${msg}`,
+            content: `Error: ${msg}${turnsNote}`,
             tool_call_id: callId,
             name: rawToolCall.name,
           });
