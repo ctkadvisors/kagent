@@ -45,7 +45,8 @@ export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
 
 /**
  * Label the operator's WS-M template-instantiator stamps on every
- * Agent it materializes (`template-instantiator.ts:216`). The spawn
+ * Agent it materializes (`template-instantiator.ts:225`, in the `labels`
+ * map — not the adjacent `annotations` map). The spawn
  * tool's v0.1.3 `allowedChildTemplates` check matches against this
  * label to admit content-addressed Agent names without enumerating
  * them in `allowedChildAgents`.
