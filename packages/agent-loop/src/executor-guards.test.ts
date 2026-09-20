@@ -103,6 +103,50 @@ describe('AgentExecutor — tool guards', () => {
     expect(last?.error).toContain('has been called 3 times in this run');
   });
 
+  it('has no per-tool cap unless one is set: a single-tool agent may use every turn it has', async () => {
+    // 2026-09-19/20: the fleet-auditor does every read and every write through one tool and
+    // was refused its 9th call under the old constant 8, twice, with its audit unposted.
+    const provider = echoProvider('ok');
+    const llm = makeStubLLM({
+      scriptedChat: [
+        ...Array.from({ length: 12 }, (_, i) => call(`c${String(i)}`, `q${String(i)}`)),
+        { content: 'posted' },
+      ],
+    });
+    const exec = new AgentExecutor({ registry, llm, toolProviders: [provider] });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxIterations: 30,
+    });
+    expect(result.status).toBe('completed');
+    expect(provider.calls).toBe(12);
+    expect(result.traces.filter((t) => String(t.error ?? '').startsWith('guard:'))).toHaveLength(0);
+  });
+
+  it('tells the model when the run is nearly out of turns, and not before', async () => {
+    const provider = echoProvider('data');
+    const recordedRequests: { messages: { role: string; content: unknown }[] }[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [call('c1', 'a'), call('c2', 'b'), call('c3', 'c'), { content: 'done' }],
+      recordedRequests: recordedRequests as never,
+    });
+    const exec = new AgentExecutor({ registry, llm, toolProviders: [provider] });
+    await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxIterations: 5,
+    });
+    const toolResults = (recordedRequests.at(-1)?.messages ?? [])
+      .filter((m) => m.role === 'tool')
+      .map((m) => String(m.content));
+    // turn 1 of 5 leaves 4: no note. Turn 2 leaves 3, turn 3 leaves 2: noted.
+    expect(toolResults[0]).toBe('data');
+    expect(toolResults[1]).toContain('[loop: 3 turns left in this run.');
+    expect(toolResults[2]).toContain('[loop: 2 turns left in this run.');
+    expect(toolResults[2]).toContain('before reading anything more');
+  });
+
   it('caps an oversized tool result before it enters the conversation', async () => {
     const provider = echoProvider('x'.repeat(50_000));
     const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
