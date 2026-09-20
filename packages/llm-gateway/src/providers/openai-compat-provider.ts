@@ -27,6 +27,8 @@
 
 import { BaseProvider } from './base-provider.js';
 import { BackendError } from '../backend-error.js';
+import type { LongFetchInit } from '../long-fetch.js';
+import { assembleChatCompletion, sseData } from '../stream-assembler.js';
 import type {
   BackendKind,
   ChatCompletionChunk,
@@ -61,16 +63,19 @@ export abstract class OpenAICompatProvider extends BaseProvider {
   async chatCompletion(request: ProviderRequest): Promise<ProviderResponse> {
     const startTime = Date.now();
     const headers = this.buildHeaders(request);
+    // Always stream from the backend, even for a caller that wants one JSON
+    // body: tokens on the wire are what lets long-fetch's idle timer tell a
+    // slow backend from a dead one, and a thinking turn can run 30 min+.
+    // The status line still arrives before any token, so the 429/5xx
+    // mapping below is unchanged.
     const body = JSON.stringify({
       ...request.request,
       model: request.config.providerModelId,
-      stream: false,
+      stream: true,
+      stream_options: { include_usage: true },
     });
-    const response = await this.fetchImpl(`${this.baseUrl(request)}${this.chatPath()}`, {
-      method: 'POST',
-      headers,
-      body,
-    });
+    const init: LongFetchInit = { method: 'POST', headers, body, streaming: true };
+    const response = await this.fetchImpl(`${this.baseUrl(request)}${this.chatPath()}`, init);
     if (!response.ok) {
       // H13/H15 — surface a typed error envelope. BackendError carries
       // status + Retry-After (when present) so the router can map 429
@@ -83,7 +88,13 @@ export abstract class OpenAICompatProvider extends BaseProvider {
         response,
       });
     }
-    const data = (await response.json()) as ChatCompletionResponse;
+    // A backend (or a test stub) that ignored `stream` answers with plain JSON.
+    const streamed =
+      response.body !== null &&
+      (response.headers.get('content-type') ?? '').includes('text/event-stream');
+    const data = streamed
+      ? await assembleChatCompletion(sseData(response.body))
+      : ((await response.json()) as ChatCompletionResponse);
     const stamped: ChatCompletionResponse = {
       ...data,
       id: request.requestId.length > 0 ? request.requestId : data.id,

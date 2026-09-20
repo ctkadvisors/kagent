@@ -33,6 +33,7 @@ import { applyMigrations, loadMigrationsFromDir } from './db/migrations.js';
 import { createPool, pingPool } from './db/pool.js';
 import { createUsageRepo } from './db/usage.js';
 import { parseEnv } from './env.js';
+import { createLongFetch } from './long-fetch.js';
 import { FailureBackoffController } from './failure-backoff.js';
 import { InFlightCounter } from './inflight-counter.js';
 import { ModelIndex } from './model-index.js';
@@ -132,6 +133,12 @@ async function main(): Promise<void> {
       backendApiKeys: cfg.backendApiKeys,
       providerDispatchDisabled: () => providerDispatchControl.isDisabled(),
       failureBackoff,
+      providerFactoryOpts: {
+        fetchImpl: createLongFetch({
+          maxMs: cfg.backendTimeoutMs,
+          idleMs: cfg.backendIdleTimeoutMs,
+        }),
+      },
     },
   });
 

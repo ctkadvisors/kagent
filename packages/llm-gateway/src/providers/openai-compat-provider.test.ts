@@ -48,7 +48,9 @@ describe('OpenAICompatProvider via OpenAIProvider', () => {
 
   it('forwards request body with re-stamped model + Authorization header', async () => {
     let captured: CapturedCall | null = null;
+    let init0: RequestInit | undefined;
     const fakeFetch = vi.fn((url: string, init?: RequestInit) => {
+      init0 = init;
       captured = {
         url,
         headers: (init?.headers ?? {}) as Record<string, string>,
@@ -83,9 +85,55 @@ describe('OpenAICompatProvider via OpenAIProvider', () => {
     expect(cap.headers.Authorization).toBe('Bearer sk-x');
     const body = JSON.parse(cap.bodyText) as Record<string, unknown>;
     expect(body.model).toBe('gpt-4o');
-    expect(body.stream).toBe(false);
+    // Always streamed upstream, so long-fetch's idle timer can see a live backend (2026-09-20).
+    expect(body.stream).toBe(true);
+    expect((init0 as { streaming?: boolean }).streaming).toBe(true);
     expect(result.response.choices[0]?.message.content).toBe('pong');
     expect(result.response.id).toBe('req-1'); // re-stamped to caller's requestId
+  });
+
+  it('assembles a streamed backend reply into the non-streamed response', async () => {
+    const sse = [
+      ': ping',
+      'data: {"id":"c1","created":7,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}',
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning":"think "}}]}',
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning_content":"hard"}}]}',
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"content":"po"}}]}',
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"content":"ng","tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"look","arguments":"{\\"q\\":"}}]}}]}',
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"x\\"}"}}]},"finish_reason":"tool_calls"}]}',
+      'data: {"id":"c1","choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}',
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    const fakeFetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      ),
+    );
+    const provider = new OpenAIProvider('https://x/v1', fakeFetch);
+    const result = await provider.chatCompletion(chatBody('gpt-4o', 'sk-x'));
+    const message = result.response.choices[0]?.message as unknown as Record<string, unknown>;
+    expect(message['content']).toBe('pong');
+    expect(message['reasoning']).toBe('think hard');
+    expect(message['tool_calls']).toEqual([
+      { id: 't1', type: 'function', function: { name: 'look', arguments: '{"q":"x"}' } },
+    ]);
+    expect(result.response.choices[0]?.finish_reason).toBe('tool_calls');
+    expect(result.inputTokens).toBe(11);
+    expect(result.outputTokens).toBe(4);
+  });
+
+  it('a stream cut before its finish_reason is an error, never a short answer', async () => {
+    const sse = 'data: {"id":"c1","choices":[{"index":0,"delta":{"content":"half an ans"}}]}\n\n';
+    const fakeFetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      ),
+    );
+    const provider = new OpenAIProvider('https://x/v1', fakeFetch);
+    await expect(provider.chatCompletion(chatBody('gpt-4o', 'sk-x'))).rejects.toThrow(
+      /without a finish_reason/,
+    );
   });
 
   it('LocalAI does not require apiKey and skips Authorization header', async () => {

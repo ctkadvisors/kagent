@@ -18,7 +18,8 @@ describe('parseEnv', () => {
     expect(cfg.adminApiToken).toBe('tok-123');
     expect(cfg.adminApiTokenReadonly).toBeNull();
     expect(cfg.port).toBe(4000);
-    expect(cfg.backendTimeoutMs).toBe(60000);
+    expect(cfg.backendTimeoutMs).toBe(7_200_000);
+    expect(cfg.backendIdleTimeoutMs).toBe(600_000);
     expect(cfg.modelEndpointNamespace).toBe('kagent-system');
     expect(cfg.backendApiKeys).toEqual({});
   });

@@ -50,6 +50,12 @@ A gateway is **kagent-compatible** if and only if it satisfies every MUST in thi
 
 **MUST** stream via Server-Sent Events when `stream: true` and emit a terminal usage chunk when `stream_options.include_usage: true`.
 
+**MUST** keep a `stream: true` response from going quiet for the whole turn, however long the model thinks (turns of 30 min+ are in scope). The agent pod asks for `stream: true` on every turn for exactly this: its HTTP client drops a response after 300 s without headers, and again after 300 s without body bytes (2026-09-20: a turn died at 5m0.55s as `LLM backend returned HTTP 502`). A gateway meets this by relaying tokens as they decode, by writing SSE comments (`: ping`) while it waits, or both. The built-in gateway commits `200` at once and pings every 15 s.
+
+**MUST**, once the `200` of a streamed response is committed, report a failed outcome in-band as `data: {"error": {"message", "type", "status": <the HTTP status it would have been>, "retry_after_sec"?}}` followed by `data: [DONE]`. `@kagent/openai-compat` turns that back into the same error a plain 429/503 raises, so §7 backpressure still reaches the agent's retry loop.
+
+**SHOULD** bound its own upstream calls with an idle timeout on a streamed call plus a generous hard cap, never with a short total deadline: a slow provider must be visibly slow, never indistinguishable from a dead one.
+
 **SHOULD** support `/v1/embeddings` if the substrate adopts embedding-using agents (currently not in v0.1; reserved for v0.3+).
 
 The contract does NOT depend on which provider the gateway routes to. OpenRouter underneath, direct OpenAI, Anthropic-via-translation, on-prem — all equivalent from kagent's perspective.

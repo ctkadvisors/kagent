@@ -66,6 +66,7 @@ import {
 import { buildOpenAIRequestBody, buildOpenAIHeaders } from './request-builder.js';
 import { mapOpenAIResponseToChatResult } from './response-mapper.js';
 import { parseSSEStream } from './sse-parser.js';
+import { assembleChatCompletion, sseData } from './stream-assembler.js';
 
 /**
  * Parse `Retry-After` response header into delta-seconds.
@@ -164,8 +165,12 @@ export class OpenAICompatibleLLMClient implements LLMClient {
     // `this.*` for any caller going through the constructor; documenting the
     // shared pattern keeps future mutations-in-flight explicit.
     const { fetchImpl, baseUrl, model, apiKey, defaultHeaders } = this;
-    const body = buildOpenAIRequestBody(request, model, { stream: false });
-    const headers = buildOpenAIHeaders(apiKey, defaultHeaders, { stream: false });
+    // chat() returns one whole turn but asks the backend to stream it: a
+    // thinking turn outlasts the 300 s Node's fetch allows a silent response
+    // (stream-assembler.ts has the incident). Headers then arrive at once and
+    // bytes keep coming, so fetch's limits only fire on a peer that went quiet.
+    const body = buildOpenAIRequestBody(request, model, { stream: true });
+    const headers = buildOpenAIHeaders(apiKey, defaultHeaders, { stream: true });
     const url = `${baseUrl}/chat/completions`;
 
     let response: Response;
@@ -200,6 +205,25 @@ export class OpenAICompatibleLLMClient implements LLMClient {
       throw new LLMClientHttpError(response.status, truncated, requestId, retryAfterSec);
     }
 
+    const streamed =
+      response.body !== null &&
+      (response.headers.get('content-type') ?? '').includes('text/event-stream');
+    if (streamed && response.body !== null) {
+      try {
+        return mapOpenAIResponseToChatResult(
+          await assembleChatCompletion(sseData(response.body, ctx?.abortSignal)),
+        );
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw new LLMClientAbortError();
+        }
+        if (err instanceof LLMClientHttpError || err instanceof LLMClientProtocolError) throw err;
+        // The connection died mid-turn: same class as a fetch that never connected.
+        throw new LLMClientHttpError(0, describeFetchError(err));
+      }
+    }
+
+    // A backend that ignored `stream` answered with one JSON body.
     let json: unknown;
     try {
       json = await response.json();
