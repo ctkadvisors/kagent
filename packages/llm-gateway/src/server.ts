@@ -61,7 +61,7 @@ class BodyTooLargeError extends Error {
 /**
  * Audit-rev2 M7 follow-up — gateway-side mTLS identity resolver.
  *
- * The agent-pod's `probeGatewayMtls` (svid-client.ts:249-298) treats
+ * The agent-pod's `probeGatewayMtls` treats
  * `X-Kagent-Identity-Verified` absence as "UNVERIFIED" and presence as
  * the SPIFFE ID the gateway resolved during the mTLS handshake. The
  * gateway-side emission was the open question in
@@ -443,7 +443,7 @@ export function buildHandler(
           // Audit-rev2 M7 follow-up — emit X-Kagent-Identity-Verified
           // ONLY when the resolver actually verified an SVID for this
           // request. Absence on success means the agent-pod's probe
-          // logs UNVERIFIED (per svid-client.ts:249-298). Never
+          // logs UNVERIFIED (per probeGatewayMtls). Never
           // fabricate; the security posture depends on this header
           // reflecting real handshake state.
           maybeEmitIdentityHeader(req, res, deps.mtlsIdentityResolver);

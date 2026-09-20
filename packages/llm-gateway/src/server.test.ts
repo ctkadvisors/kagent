@@ -700,7 +700,7 @@ describe('POST /v1/chat/completions — touchLastUsed (H18)', () => {
  * Audit-rev2 M7 follow-up — `X-Kagent-Identity-Verified` header
  * emission.
  *
- * The agent-pod's `probeGatewayMtls` (svid-client.ts:249-298) treats
+ * The agent-pod's `probeGatewayMtls` treats
  * the header's PRESENCE as "VERIFIED=spiffe://..." and absence as
  * "UNVERIFIED". Per docs/GATEWAY-CONTRACT.md §4.3, the gateway-side
  * emission is the closing of that loop. Contract:
