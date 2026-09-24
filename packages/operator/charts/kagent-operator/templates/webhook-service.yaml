@@ -29,6 +29,7 @@ spec:
   type: ClusterIP
   selector:
     {{- include "kagent-operator.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
   ports:
     - name: webhook
       port: {{ .Values.triggers.webhook.port }}
