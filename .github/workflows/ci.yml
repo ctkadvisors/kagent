@@ -41,7 +41,10 @@ env:
 jobs:
   verify:
     name: Install + Typecheck + Lint + Test + Build + Format
-    runs-on: homelab
+    # Mac mini Tart VM (arm64, Apple SSD; new_localai scripts/mac-ci). Pure
+    # node, no images: the pnpm install was the heaviest disk load on
+    # elitemini2's QLC NVMe (new_localai #428).
+    runs-on: homelab-arm64
     timeout-minutes: 10
     steps:
       - name: Checkout
