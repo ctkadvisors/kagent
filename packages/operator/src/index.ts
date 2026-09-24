@@ -63,6 +63,21 @@ export type { BuildJobSpecOptions } from './job-spec.js';
 export { buildHandler } from './main.js';
 
 export {
+  buildAdvisoryTask,
+  dispatchAdvisoryQuestion,
+  kubernetesAdvisoryTaskStore,
+  readAdvisoryResult,
+} from './fleet-advisory.js';
+export type {
+  AdvisoryQuestion,
+  AdvisoryModelRoute,
+  AdvisoryAttempt,
+  AdvisoryReceipt,
+  AdvisoryResult,
+  AdvisoryTaskStore,
+} from './fleet-advisory.js';
+
+export {
   buildKubernetesChannelControllerStore,
   reconcileChannelInbound,
 } from './channel-controller.js';
