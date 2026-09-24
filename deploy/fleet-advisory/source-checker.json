@@ -32,7 +32,7 @@
         "browser.goto",
         "browser.extract_text"
       ],
-      "models": ["ornith15"],
+      "models": ["flashnext"],
       "spawn": [],
       "egress": []
     },

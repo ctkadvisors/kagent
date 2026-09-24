@@ -70,6 +70,8 @@ export {
 } from './fleet-advisory.js';
 export type {
   AdvisoryQuestion,
+  AdvisoryModelRoute,
+  AdvisoryAttempt,
   AdvisoryReceipt,
   AdvisoryResult,
   AdvisoryTaskStore,

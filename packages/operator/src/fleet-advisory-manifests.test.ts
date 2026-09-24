@@ -6,6 +6,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { kubernetesAdvisoryTaskStore } from './fleet-advisory.js';
+import { resolveAgentModel } from './model-class-resolver.js';
 import type { Agent } from './crds/index.js';
 
 const manifestDir = new URL('../../../deploy/fleet-advisory/', import.meta.url);
@@ -22,13 +24,46 @@ describe('fleet advisory Agent manifests', () => {
       expect(agent.metadata.namespace).toBe('kagent-system');
       expect(agent.spec.modelClass).toBe('reasoner-default');
       expect(agent.spec.model).toBeUndefined();
-      expect(agent.spec.capabilityClaims?.models).toEqual(['ornith15']);
+      expect(agent.spec.capabilityClaims?.models).toEqual(['flashnext']);
+      const resolved = resolveAgentModel({
+        agentSpec: agent.spec,
+        classMap: { 'reasoner-default': { model: 'flashnext' } },
+      });
+      expect(resolved).toMatchObject({ kind: 'resolved', model: 'flashnext', source: 'class' });
       expect(agent.spec.capabilityClaims?.egress).toEqual([]);
       expect(agent.spec.tools).not.toContain('shell.exec');
       expect(agent.spec.tools).not.toContain('mcp.add_memory');
       expect(agent.spec.tools).not.toContain('http.github.pr_comment');
       expect(agent.spec.toolProfileRef).toBeUndefined();
     }
+  });
+
+  it('rejects a cloud or non-Spark class mapping before creating a Kubernetes store', () => {
+    const api = {
+      createNamespacedCustomObject: () => Promise.resolve(undefined),
+      getNamespacedCustomObject: () => Promise.resolve(undefined),
+    };
+    const route = {
+      classMap: { 'reasoner-default': { model: 'flashnext' } },
+      endpoint: {
+        model: 'flashnext',
+        backendKind: 'localai',
+        backendUrl: 'http://spark-llamaswap.ai-services.svc.cluster.local:9090/v1',
+      },
+    };
+    expect(() => kubernetesAdvisoryTaskStore(api, route)).not.toThrow();
+    expect(() =>
+      kubernetesAdvisoryTaskStore(api, {
+        ...route,
+        classMap: { 'reasoner-default': { model: 'workers-ai/@cf/example' } },
+      }),
+    ).toThrow(/Spark/u);
+    expect(() =>
+      kubernetesAdvisoryTaskStore(api, {
+        ...route,
+        endpoint: { ...route.endpoint, backendUrl: 'https://api.openai.com/v1' },
+      }),
+    ).toThrow(/Spark/u);
   });
 
   it('permits one research child and no onward delegation', () => {

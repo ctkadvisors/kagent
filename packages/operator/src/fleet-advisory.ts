@@ -12,11 +12,14 @@ import { createHash } from 'node:crypto';
 
 import type { AgentTask } from './crds/index.js';
 import { API_GROUP_VERSION, isAgentTask } from './crds/index.js';
+import { resolveAgentModel, type ModelClassMap } from './model-class-resolver.js';
 
 const NAMESPACE = 'kagent-system';
 const AGENT = 'fleet-question-researcher';
 const DIGEST_ANNOTATION = 'fleet.knuteson.io/question-digest';
 const REPOSITORIES = new Set(['ctkadvisors/new_localai', 'ctkadvisors/kagent']);
+const SPARK_MODEL = 'flashnext';
+const SPARK_BACKEND = 'http://spark-llamaswap.ai-services.svc.cluster.local:9090/v1';
 
 export interface AdvisoryQuestion {
   readonly id: string;
@@ -33,6 +36,13 @@ export interface AdvisoryReceipt {
   readonly uid: string;
   readonly digest: string;
   readonly evidenceIds: readonly string[];
+  readonly generation: number;
+  readonly attempt: number;
+}
+
+export interface AdvisoryAttempt {
+  readonly generation: number;
+  readonly attempt: number;
 }
 
 export interface AdvisoryTaskStore {
@@ -57,20 +67,61 @@ interface AdvisoryCustomObjectsApi {
   }): Promise<unknown>;
 }
 
+export interface AdvisoryModelRoute {
+  readonly classMap: ModelClassMap;
+  readonly endpoint: {
+    readonly model: string;
+    readonly backendKind: string;
+    readonly backendUrl: string;
+  };
+}
+
+function requireSparkRoute(route: AdvisoryModelRoute): void {
+  const resolved = resolveAgentModel({
+    agentSpec: { modelClass: 'reasoner-default' },
+    classMap: route.classMap,
+  });
+  if (
+    resolved.kind !== 'resolved' ||
+    resolved.source !== 'class' ||
+    resolved.model !== SPARK_MODEL ||
+    route.endpoint.model !== SPARK_MODEL ||
+    route.endpoint.backendKind !== 'localai' ||
+    route.endpoint.backendUrl !== SPARK_BACKEND
+  ) {
+    throw new Error('fleet advisory requires the local Spark route');
+  }
+}
+
 const TASK_NAME = /^fleet-question-[a-f0-9]{24}$/u;
 
 /** The Kubernetes port has no generic CR or cross-namespace operation. */
-export function kubernetesAdvisoryTaskStore(api: AdvisoryCustomObjectsApi): AdvisoryTaskStore {
+export function kubernetesAdvisoryTaskStore(
+  api: AdvisoryCustomObjectsApi,
+  route: AdvisoryModelRoute,
+): AdvisoryTaskStore {
+  requireSparkRoute(route);
   return {
     async create(task) {
-      const digest = task.metadata.annotations?.[DIGEST_ANNOTATION];
+      let canonical: AgentTask;
+      try {
+        const payload = task.spec.payload as AdvisoryQuestion & AdvisoryAttempt;
+        canonical = buildAdvisoryTask(payload, {
+          generation: payload.generation,
+          attempt: payload.attempt,
+        });
+      } catch {
+        throw new Error('invalid advisory task');
+      }
       if (
+        task.apiVersion !== canonical.apiVersion ||
+        task.kind !== canonical.kind ||
         task.metadata.namespace !== NAMESPACE ||
-        !TASK_NAME.test(task.metadata.name ?? '') ||
-        task.spec.targetAgent !== AGENT ||
-        typeof digest !== 'string' ||
-        task.spec.idempotencyKey !== digest ||
-        createHash('sha256').update(JSON.stringify(task.spec.payload)).digest('hex') !== digest
+        task.metadata.name !== canonical.metadata.name ||
+        JSON.stringify(task.metadata.annotations) !==
+          JSON.stringify(canonical.metadata.annotations) ||
+        JSON.stringify(task.metadata.labels) !== JSON.stringify(canonical.metadata.labels) ||
+        JSON.stringify(task.spec) !== JSON.stringify(canonical.spec)
       ) {
         throw new Error('invalid advisory task');
       }
@@ -117,7 +168,13 @@ function bounded(value: unknown, field: string, max: number): string {
   return value.trim();
 }
 
-function normalize(question: AdvisoryQuestion) {
+function normalize(question: AdvisoryQuestion, retry: AdvisoryAttempt) {
+  if (!Number.isInteger(retry.generation) || retry.generation < 1 || retry.generation > 2) {
+    throw new Error('invalid advisory generation');
+  }
+  if (!Number.isInteger(retry.attempt) || retry.attempt < 1 || retry.attempt > 3) {
+    throw new Error('invalid advisory attempt');
+  }
   const id = bounded(question.id, 'id', 120);
   const repository = bounded(question.repository, 'repository', 100);
   if (!REPOSITORIES.has(repository)) throw new Error('forbidden repository');
@@ -144,6 +201,8 @@ function normalize(question: AdvisoryQuestion) {
   }
   return {
     contract: 'fleet-advisory-question/v1',
+    generation: retry.generation,
+    attempt: retry.attempt,
     id,
     repository,
     source: { kind, ref },
@@ -154,8 +213,11 @@ function normalize(question: AdvisoryQuestion) {
 }
 
 /** Stable name and digest make a retry of the same question a replay. */
-export function buildAdvisoryTask(question: AdvisoryQuestion): AgentTask {
-  const payload = normalize(question);
+export function buildAdvisoryTask(
+  question: AdvisoryQuestion,
+  retry: AdvisoryAttempt = { generation: 1, attempt: 1 },
+): AgentTask {
+  const payload = normalize(question, retry);
   const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   return {
     apiVersion: API_GROUP_VERSION,
@@ -189,8 +251,9 @@ function sameTask(actual: AgentTask, expected: AgentTask): boolean {
 export async function dispatchAdvisoryQuestion(
   store: AdvisoryTaskStore,
   question: AdvisoryQuestion,
+  retry: AdvisoryAttempt = { generation: 1, attempt: 1 },
 ): Promise<AdvisoryReceipt> {
-  const expected = buildAdvisoryTask(question);
+  const expected = buildAdvisoryTask(question, retry);
   let created: AgentTask;
   try {
     created = await store.create(expected);
@@ -209,6 +272,8 @@ export async function dispatchAdvisoryQuestion(
     uid: created.metadata.uid,
     digest: expected.spec.idempotencyKey!,
     evidenceIds: payload.evidence.map((item) => item.id),
+    generation: retry.generation,
+    attempt: retry.attempt,
   };
 }
 
@@ -217,6 +282,13 @@ export type AdvisoryResult =
   | { readonly state: 'failed'; readonly error: string }
   | {
       readonly state: 'completed';
+      readonly sources: readonly {
+        readonly id: string;
+        readonly system: 'graphiti' | 'searxng' | 'steel';
+        readonly ref: string;
+        readonly status: 'retrieved' | 'unavailable';
+        readonly verification: 'unverified';
+      }[];
       readonly hypotheses: readonly {
         readonly predicate: string;
         readonly scope: string;
@@ -224,6 +296,7 @@ export type AdvisoryResult =
         readonly evidenceIds: readonly string[];
         readonly sampleCount: 0;
         readonly status: 'unverified';
+        readonly expiresAt: string;
       }[];
       readonly plan: readonly string[];
     };
@@ -232,8 +305,22 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return Object.keys(value).every((key) => keys.includes(key)) && keys.every((key) => key in value);
 }
 
-function parseResult(content: unknown, receipt: AdvisoryReceipt): AdvisoryResult {
+function parseResult(
+  content: unknown,
+  receipt: AdvisoryReceipt,
+  completedAt: unknown,
+  now: Date,
+): AdvisoryResult {
   if (typeof content !== 'string' || content.length > 16384) return { state: 'invalid' };
+  if (Number.isNaN(now.getTime())) return { state: 'invalid' };
+  if (
+    typeof completedAt !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(completedAt)
+  )
+    return { state: 'invalid' };
+  const completedMs = Date.parse(completedAt);
+  if (!Number.isFinite(completedMs) || completedMs > now.getTime() + 5 * 60 * 1000)
+    return { state: 'invalid' };
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
@@ -244,13 +331,50 @@ function parseResult(content: unknown, receipt: AdvisoryReceipt): AdvisoryResult
     return { state: 'invalid' };
   const output = parsed as Record<string, unknown>;
   if (
-    !exactKeys(output, ['hypotheses', 'plan']) ||
+    !(
+      exactKeys(output, ['hypotheses', 'plan']) ||
+      exactKeys(output, ['hypotheses', 'plan', 'sources'])
+    ) ||
     !Array.isArray(output.hypotheses) ||
     !Array.isArray(output.plan) ||
     output.hypotheses.length > 5 ||
     output.plan.length > 5
   )
     return { state: 'invalid' };
+  const rawSources = output.sources ?? [];
+  if (!Array.isArray(rawSources) || rawSources.length > 12) return { state: 'invalid' };
+  const sources: Extract<AdvisoryResult, { state: 'completed' }>['sources'][number][] = [];
+  const seen = new Set(receipt.evidenceIds);
+  for (const item of rawSources) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item))
+      return { state: 'invalid' };
+    const source = item as Record<string, unknown>;
+    if (
+      !exactKeys(source, ['id', 'system', 'ref', 'status']) ||
+      (source.system !== 'graphiti' && source.system !== 'searxng' && source.system !== 'steel') ||
+      (source.status !== 'retrieved' && source.status !== 'unavailable')
+    )
+      return { state: 'invalid' };
+    try {
+      const id = bounded(source.id, 'source id', 120);
+      if (seen.has(id)) return { state: 'invalid' };
+      seen.add(id);
+      sources.push({
+        id,
+        system: source.system,
+        ref: bounded(source.ref, 'source ref', 500),
+        status: source.status,
+        verification: 'unverified',
+      });
+    } catch {
+      return { state: 'invalid' };
+    }
+  }
+  const evidenceIds = new Set([
+    ...receipt.evidenceIds,
+    ...sources.filter((source) => source.status === 'retrieved').map((source) => source.id),
+  ]);
+  const expiresAt = new Date(completedMs + 7 * 24 * 60 * 60 * 1000).toISOString();
   const hypotheses: Extract<AdvisoryResult, { state: 'completed' }>['hypotheses'][number][] = [];
   for (const item of output.hypotheses) {
     if (typeof item !== 'object' || item === null || Array.isArray(item))
@@ -262,9 +386,7 @@ function parseResult(content: unknown, receipt: AdvisoryReceipt): AdvisoryResult
       claim.evidenceIds.length > 12
     )
       return { state: 'invalid' };
-    if (
-      !claim.evidenceIds.every((id) => typeof id === 'string' && receipt.evidenceIds.includes(id))
-    )
+    if (!claim.evidenceIds.every((id) => typeof id === 'string' && evidenceIds.has(id)))
       return { state: 'invalid' };
     try {
       hypotheses.push({
@@ -274,6 +396,7 @@ function parseResult(content: unknown, receipt: AdvisoryReceipt): AdvisoryResult
         evidenceIds: claim.evidenceIds,
         sampleCount: 0,
         status: 'unverified',
+        expiresAt,
       });
     } catch {
       return { state: 'invalid' };
@@ -285,13 +408,14 @@ function parseResult(content: unknown, receipt: AdvisoryReceipt): AdvisoryResult
   } catch {
     return { state: 'invalid' };
   }
-  return { state: 'completed', hypotheses, plan };
+  return { state: 'completed', sources, hypotheses, plan };
 }
 
 /** Result text is model output. It is always advisory, even on Completed. */
 export function readAdvisoryResult(
   task: AgentTask | undefined,
   receipt: AdvisoryReceipt,
+  now: Date = new Date(),
 ): AdvisoryResult {
   if (
     task === undefined ||
@@ -304,10 +428,13 @@ export function readAdvisoryResult(
   )
     return { state: 'stale' };
   try {
-    const payload = normalize(task.spec.payload as AdvisoryQuestion);
+    const source = task.spec.payload as AdvisoryQuestion & AdvisoryAttempt;
+    const payload = normalize(source, { generation: source.generation, attempt: source.attempt });
     const digest = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
     if (
       digest !== receipt.digest ||
+      payload.generation !== receipt.generation ||
+      payload.attempt !== receipt.attempt ||
       JSON.stringify(payload.evidence.map((item) => item.id)) !==
         JSON.stringify(receipt.evidenceIds)
     ) {
@@ -323,5 +450,5 @@ export function readAdvisoryResult(
     };
   if (task.status?.phase !== 'Completed') return { state: 'pending' };
   const result = task.status.result as { content?: unknown } | undefined;
-  return parseResult(result?.content, receipt);
+  return parseResult(result?.content, receipt, task.status.completedAt, now);
 }
