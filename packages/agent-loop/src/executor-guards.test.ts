@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from './registry.js';
 import { AgentExecutor, capToolResult, loopTurnNote } from './executor.js';
+import { MALFORMED_TOOL_ARGS } from './llm-client.js';
 import type { MyType, MyPhase } from './__fixtures__/agents.js';
 import { chatAgent } from './__fixtures__/agents.js';
 import { makeStubLLM } from './__fixtures__/stub-llm.js';
@@ -159,6 +160,36 @@ describe('AgentExecutor — tool guards', () => {
     expect(loopTurnNote(0, 5)).toBe('\n\n[loop: turn 1 of 5.]');
     expect(loopTurnNote(1, 5)).toContain('3 turns left');
     expect(loopTurnNote(9, 19)).toBe('\n\n[loop: turn 10 of 19.]');
+  });
+
+  it('answers a tool call with malformed arguments with a tool error and lets the run go on', async () => {
+    const provider = echoProvider('data');
+    const recordedRequests: { messages: { role: string; content: unknown }[] }[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [
+        {
+          content: '',
+          tool_calls: [{ id: 'c1', name: 'echo', args: { [MALFORMED_TOOL_ARGS]: '{"q": ' } }],
+        },
+        call('c2', 'again'),
+        { content: 'done' },
+      ],
+      recordedRequests: recordedRequests as never,
+    });
+    const exec = new AgentExecutor({ registry, llm, toolProviders: [provider] });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxIterations: 5,
+    });
+    expect(result.status).toBe('completed');
+    expect(provider.calls).toBe(1);
+    const toolResults = (recordedRequests.at(-1)?.messages ?? [])
+      .filter((m) => m.role === 'tool')
+      .map((m) => String(m.content));
+    expect(toolResults[0]).toContain('were not valid JSON');
+    expect(toolResults[0]).toContain('Send it again');
+    expect(toolResults[1]).toContain('data');
   });
 
   it('caps an oversized tool result before it enters the conversation', async () => {

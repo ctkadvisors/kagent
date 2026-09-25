@@ -43,6 +43,7 @@ import type {
   ChatResult,
   ClientContext,
 } from './llm-client.js';
+import { malformedToolArgs } from './llm-client.js';
 import type {
   ToolProvider,
   ToolResult,
@@ -1181,13 +1182,16 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         const signature = `${toolCall.name}:${JSON.stringify(toolCall.args ?? {})}`;
         const identical = (identicalCalls.get(signature) ?? 0) + 1;
         identicalCalls.set(signature, identical);
+        const malformed = malformedToolArgs(toolCall.args);
         const guardMsg =
-          identical > this.toolGuards.maxIdenticalCalls
-            ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments and the answer has not changed. Do not call it again; answer with what you have, or say what is missing.`
-            : this.toolGuards.maxCallsPerTool !== undefined &&
-                perTool > this.toolGuards.maxCallsPerTool
-              ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
-              : undefined;
+          malformed !== undefined
+            ? `guard: the arguments of "${toolCall.name}" were not valid JSON (they began: ${JSON.stringify(malformed.slice(0, 160))}). The call was not run. Send it again with valid JSON arguments.`
+            : identical > this.toolGuards.maxIdenticalCalls
+              ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments and the answer has not changed. Do not call it again; answer with what you have, or say what is missing.`
+              : this.toolGuards.maxCallsPerTool !== undefined &&
+                  perTool > this.toolGuards.maxCallsPerTool
+                ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
+                : undefined;
         const turnsNote = loopTurnNote(iteration, maxIterations);
         if (guardMsg !== undefined) {
           const guardEntry: TraceEntry = {

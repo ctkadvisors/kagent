@@ -47,6 +47,20 @@ export interface ToolCall {
 }
 
 /**
+ * When a model emits `function.arguments` that are not JSON, the adapter keeps
+ * the call and puts the raw text under this key instead of throwing: one slip
+ * should cost the model a turn, not the run. The executor answers such a call
+ * with a tool error and never dispatches it.
+ */
+export const MALFORMED_TOOL_ARGS = '__kagent_malformed_arguments';
+
+export function malformedToolArgs(args: unknown): string | undefined {
+  if (typeof args !== 'object' || args === null) return undefined;
+  const raw = (args as Record<string, unknown>)[MALFORMED_TOOL_ARGS];
+  return typeof raw === 'string' ? raw : undefined;
+}
+
+/**
  * Canonical-shape chat message — D-01.
  *
  * Every major provider SDK normalizes to this shape; provider-native
