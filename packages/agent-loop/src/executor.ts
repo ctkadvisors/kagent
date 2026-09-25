@@ -376,13 +376,38 @@ export const DEFAULT_TOOL_GUARDS: {
 };
 
 /**
- * Every tool result ends with the turn number ("turn 12 of 100"); with this
- * many turns (or fewer) left, it also says so and tells the model to finish.
- * The model cannot plan around a limit it cannot see: both auditor failures
- * were a model reading until the wall with no turn left to write in, and a
- * prompt that says "ship by turn 45" is empty unless the loop counts for it.
+ * Every tool result ends with the turn number ("turn 12 of 100"). With this
+ * many turns left, or 15% of the run, whichever is more, it also tells the
+ * model to finish. From the halfway turn on a long run it asks for what runs
+ * so far to be saved. The model cannot plan around a limit it cannot see:
+ * both auditor failures were a model reading until the wall with no turn
+ * left to write in, and three inventor runs showed a prompt rule ("commit by
+ * turn 45") changes nothing while the loop's own note does: the model ships
+ * when the loop says so, so the loop has to say so while there is still time
+ * to write, post and commit.
  */
 export const TURNS_LEFT_NOTE_AT = 3;
+export const TURNS_LEFT_NOTE_SHARE = 0.15;
+/** Runs shorter than this get no halfway note: a chat turn is not a build. */
+export const HALFWAY_NOTE_MIN_ITERATIONS = 20;
+
+export function loopTurnNote(iteration: number, maxIterations: number): string {
+  // `iteration` is 0-based and this turn is already spent.
+  const turnsLeft = maxIterations - iteration - 1;
+  const turnNo = `turn ${String(iteration + 1)} of ${String(maxIterations)}`;
+  const noteAt = Math.max(TURNS_LEFT_NOTE_AT, Math.ceil(maxIterations * TURNS_LEFT_NOTE_SHARE));
+  if (turnsLeft <= noteAt) {
+    const left =
+      turnsLeft === 0
+        ? 'this was the last turn of the run'
+        : `${String(turnsLeft)} turn${turnsLeft === 1 ? '' : 's'} left in this run`;
+    return `\n\n[loop: ${turnNo}, ${left}. Do what must still be done (write, post, answer, commit) before reading anything more.]`;
+  }
+  if (maxIterations >= HALFWAY_NOTE_MIN_ITERATIONS && iteration + 1 >= maxIterations / 2) {
+    return `\n\n[loop: ${turnNo}. Half the run is spent: save what runs so far (commit, post) now, then keep improving.]`;
+  }
+  return `\n\n[loop: ${turnNo}.]`;
+}
 
 /** Middle-elide a tool result so one oversized payload cannot own the context. */
 export function capToolResult(text: string, max: number): string {
@@ -1155,13 +1180,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
                 perTool > this.toolGuards.maxCallsPerTool
               ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
               : undefined;
-        // `iteration` is 0-based and this turn is already spent.
-        const turnsLeft = maxIterations - iteration - 1;
-        const turnNo = `turn ${String(iteration + 1)} of ${String(maxIterations)}`;
-        const turnsNote =
-          turnsLeft <= TURNS_LEFT_NOTE_AT
-            ? `\n\n[loop: ${turnNo}, ${turnsLeft === 0 ? 'this was the last turn of the run' : `${String(turnsLeft)} turn${turnsLeft === 1 ? '' : 's'} left in this run`}. Do what must still be done (write, post, answer) before reading anything more.]`
-            : `\n\n[loop: ${turnNo}.]`;
+        const turnsNote = loopTurnNote(iteration, maxIterations);
         if (guardMsg !== undefined) {
           const guardEntry: TraceEntry = {
             schema_version: '1',
