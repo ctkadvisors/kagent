@@ -71,6 +71,34 @@ describe('AgentExecutor — 429 retry policy', () => {
     expect(llmTraces[1]?.retry_backoff_ms).toBe(200);
   });
 
+  it('a 502, 503 or 504 from the gateway → same bounded retry → success', async () => {
+    for (const status of [502, 503, 504]) {
+      const recordedSleeps: number[] = [];
+      const llm = makeStubLLM({
+        scriptedChat: [new LLMClientHttpError(status, 'backend not there'), { content: 'ok' }],
+      });
+      const exec = new AgentExecutor({
+        registry,
+        llm,
+        retryPolicy: {
+          maxRetries: 2,
+          backoffSchedule: [200, 800, 3200],
+          sleep: (ms) => {
+            recordedSleeps.push(ms);
+            return Promise.resolve();
+          },
+        },
+      });
+      const result = await exec.run({
+        agentType: 'chat',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(result.status).toBe('completed');
+      expect(result.finalContent).toBe('ok');
+      expect(recordedSleeps).toEqual([200]);
+    }
+  });
+
   it('two 429s → two retries → success: 3 chat() calls; backoffs 200ms then 800ms', async () => {
     const recordedSleeps: number[] = [];
     const llm = makeStubLLM({
