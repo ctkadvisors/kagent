@@ -100,7 +100,9 @@ const RETRY_AFTER_MAX_MS = 30_000;
  * Retry policy applied around every `LLMClient.chat()` call.
  *
  * Triggers on `LLMClientHttpError` with `status === 429` — the LLM gateway's
- * "absorb a burst via backoff" signal (AIMD at-cap) — OR `status === 0`
+ * "absorb a burst via backoff" signal (AIMD at-cap) — or 502/503/504 (the
+ * backend was not there for this one call; on a single local GPU that is a
+ * reload or a long generation, not an outage) — OR `status === 0`
  * (transport failures from a rejected `fetch`: connection reset, DNS, a socket
  * closed mid-request), provided the error's `body` does not start with
  * `CONTEXT_REFUSAL_PREFIX`. Other 5xx errors, protocol errors, and abort
@@ -695,9 +697,15 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         // these are the two transient triggers the gate below implements. The
         // substrate's own context-window refusal shares status 0 but is
         // terminal — its body prefix keeps it out of the retry path.
+        // 502/503/504 are the gateway saying its backend was not there for
+        // this one call (a reload, a timeout, a busy GPU): the same bounded
+        // ladder as a 429, never an open-ended one. A 500 is still terminal.
         const isTransient =
           err instanceof LLMClientHttpError &&
           (err.status === 429 ||
+            err.status === 502 ||
+            err.status === 503 ||
+            err.status === 504 ||
             (err.status === 0 && !(err.body ?? '').startsWith(CONTEXT_REFUSAL_PREFIX)));
         const canRetry = isTransient && attemptIdx < this.maxRetries;
         if (!canRetry) {
