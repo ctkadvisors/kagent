@@ -37,6 +37,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
+  # docker/build-push-action v6 uploads a build record per build as a workflow
+  # artifact (775 of them, Sep 2026); GitHub artifact storage is off-limits.
+  DOCKER_BUILD_RECORD_UPLOAD: false
 
 jobs:
   verify:
@@ -451,9 +454,10 @@ jobs:
         with:
           image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
           format: spdx-json
-          # Upload as a workflow artifact so the SBOM is downloadable
-          # alongside the image.
-          artifact-name: sbom-${{ matrix.name }}.spdx.json
+          # Not a workflow artifact: the org is on GitHub's free plan (0.5
+          # GB-month of artifact storage, blown in Sep 2026) and Chris keeps
+          # artifacts off GitHub. The SBOM rides on the image (cosign attest).
+          upload-artifact: false
           output-file: ${{ runner.temp }}/sbom-${{ matrix.name }}.spdx.json
 
       - name: Cosign sign image (keyless OIDC)
