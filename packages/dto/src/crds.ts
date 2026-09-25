@@ -598,6 +598,16 @@ export interface KagentScheduleSpec {
   readonly schedule: string;
   /** Pause the schedule without deleting the CR. Default `false`. */
   readonly suspend?: boolean;
+  /**
+   * When set, a matching tick fires only if the namespace is idle: no
+   * AgentTask has been active (Pending/Dispatched) for `quietSeconds`,
+   * and this schedule's last task was created at least `minGapSeconds`
+   * ago. `schedule` then reads as the polling cadence.
+   */
+  readonly whenIdle?: {
+    readonly quietSeconds?: number;
+    readonly minGapSeconds?: number;
+  };
   readonly taskTemplate: KagentScheduleTaskTemplate;
 }
 

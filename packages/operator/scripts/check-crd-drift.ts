@@ -395,7 +395,7 @@ const EXPECTATIONS: readonly CRDExpectation[] = [
     kind: 'KagentSchedule',
     plural: 'kagentschedules',
     specRequired: ['schedule', 'taskTemplate'],
-    specProperties: ['schedule', 'suspend', 'taskTemplate'],
+    specProperties: ['schedule', 'suspend', 'whenIdle', 'taskTemplate'],
     statusProperties: ['lastTickAt', 'nextTickAt', 'conditions'],
   },
   // v0.2.1-workspaces — Wave 1 / Workspace sub-team. See

@@ -113,9 +113,34 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
     });
   };
 
+  // `whenIdle` schedules ask when their namespace last went quiet: no
+  // AgentTask Pending or Dispatched, measured from the newest completion.
+  const namespaceIdleSince = async (namespace: string): Promise<Date | undefined> => {
+    const res = (await customApi.listNamespacedCustomObject({
+      group: API_GROUP,
+      version: API_VERSION,
+      namespace,
+      plural: AGENT_TASK_PLURAL,
+    })) as {
+      items?: ReadonlyArray<{
+        metadata?: { creationTimestamp?: string };
+        status?: { phase?: string; completedAt?: string };
+      }>;
+    };
+    let newest = 0;
+    for (const item of res.items ?? []) {
+      const phase = item.status?.phase;
+      if (phase === undefined || phase === 'Pending' || phase === 'Dispatched') return undefined;
+      const done = Date.parse(item.status?.completedAt ?? item.metadata?.creationTimestamp ?? '');
+      if (Number.isFinite(done) && done > newest) newest = done;
+    }
+    return new Date(newest);
+  };
+
   const scheduleController = buildScheduleController({
     createAgentTask,
     patchScheduleStatus,
+    namespaceIdleSince,
   });
 
   // ---- KagentSchedule informer --------------------------------------
@@ -154,6 +179,10 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
         ...(obj.metadata.uid !== undefined && { uid: obj.metadata.uid }),
       },
       spec: obj.spec,
+      // `whenIdle` measures its gap from the last tick the API recorded.
+      ...(obj.status?.lastTickAt !== undefined && {
+        status: { lastTickAt: obj.status.lastTickAt },
+      }),
     });
   };
   const removeFromCache = (obj: KagentSchedule): void => {
