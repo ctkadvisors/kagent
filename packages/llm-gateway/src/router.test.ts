@@ -205,6 +205,39 @@ describe('route', () => {
     });
   });
 
+  it('does not open the failure circuit on backend throttling (429/503): AIMD owns capacity', async () => {
+    const deps = {
+      ...buildDeps(modelEp('m', 8, 8)),
+      failureBackoff: new FailureBackoffController({
+        failureThreshold: 1,
+        backoffSeconds: 300,
+        clock: () => 1_000,
+      }),
+    };
+    let providerCalls = 0;
+    const provider = new FakeProvider('mock', () => {
+      providerCalls += 1;
+      return Promise.reject(
+        new BackendError({ backend: 'mock', status: 429, message: 'mock error 429: busy' }),
+      );
+    });
+    const ctx = {
+      requestId: 'r-throttle',
+      request: { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] },
+      apiKeyPrefix: 'sk-pfx',
+      taskUid: 'task-throttle',
+      agentName: 'researcher',
+      providerOverride: provider,
+    };
+
+    const first = await route(deps, ctx);
+    const second = await route(deps, ctx);
+
+    expect(first.kind).toBe('backend_throttled');
+    expect(second.kind).toBe('backend_throttled');
+    expect(providerCalls).toBe(2);
+  });
+
   it('classifies provider invalid-model 400s as non-retryable config errors and opens backoff', async () => {
     const deps = {
       ...buildDeps(modelEp('workers-ai/@cf/meta/bad-model', 8, 8)),

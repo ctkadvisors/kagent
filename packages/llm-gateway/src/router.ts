@@ -327,9 +327,14 @@ export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteR
     // backend_throttled discriminator. AIMD still gets `onError` so
     // the local cap halves; we want the upstream's pressure to be
     // visible in our admission control, not just propagated.
+    // The failure circuit does NOT count a throttle: it exists for
+    // requests that are known-bad on repeat (a 400 "No such model"), and
+    // a busy backend is the opposite of that. Counting 429s let one burst
+    // open the circuit for a whole model, and every probe during the
+    // burst re-armed it, so a local single-GPU backend went dark for
+    // the full backoff window on ordinary load.
     if (err instanceof BackendError && (err.status === 429 || err.status === 503)) {
       deps.aimd.onError(endpoint.model, backendUrl);
-      deps.failureBackoff?.recordFailure(endpoint.model, backendUrl);
       const sanitisedMessage = sanitizeUpstreamErrorBody(err.message);
       const retryAfterSec = err.retryAfter ?? DEFAULT_BACKEND_RETRY_AFTER_SECONDS;
       const upstreamStatus = err.status;
