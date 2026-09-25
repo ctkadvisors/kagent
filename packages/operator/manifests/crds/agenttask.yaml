@@ -76,7 +76,7 @@ spec:
                     maxIterations:
                       type: integer
                       minimum: 1
-                      maximum: 100
+                      maximum: 1000
                       description: 'Override the executor default of 8.'
                     timeoutSeconds:
                       type: integer

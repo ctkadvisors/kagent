@@ -109,7 +109,7 @@ spec:
                         maxIterations:
                           type: integer
                           minimum: 1
-                          maximum: 100
+                          maximum: 1000
                         timeoutSeconds:
                           type: integer
                           minimum: 1
