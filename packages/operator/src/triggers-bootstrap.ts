@@ -49,6 +49,7 @@ import {
 } from '@kagent/triggers';
 
 import { API_GROUP, API_VERSION, isKagentSchedule, type KagentSchedule } from './crds/index.js';
+import { mergePatchOptions } from './k8s.js';
 
 const KAGENT_SCHEDULE_PLURAL = 'kagentschedules';
 const AGENT_TASK_PLURAL = 'agenttasks';
@@ -103,14 +104,20 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
     name: string,
     patch: ScheduleStatusPatch,
   ): Promise<void> => {
-    await customApi.patchNamespacedCustomObjectStatus({
-      group: API_GROUP,
-      version: API_VERSION,
-      namespace,
-      plural: KAGENT_SCHEDULE_PLURAL,
-      name,
-      body: { status: patch },
-    });
+    // Merge-patch, like every other status writer in this package: the
+    // generated client defaults to a content type the API server answers
+    // with 400, so no KagentSchedule ever recorded lastTickAt until now.
+    await customApi.patchNamespacedCustomObjectStatus(
+      {
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace,
+        plural: KAGENT_SCHEDULE_PLURAL,
+        name,
+        body: { status: patch },
+      },
+      mergePatchOptions,
+    );
   };
 
   // `whenIdle` schedules ask when their namespace last went quiet: no
