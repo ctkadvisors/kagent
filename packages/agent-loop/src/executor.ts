@@ -379,6 +379,46 @@ export const DEFAULT_TOOL_GUARDS: {
 };
 
 /**
+ * Context compaction. A long run's conversation outgrows the model's window
+ * (80 turns of 16k-char tool results is several times a 131k window) and the
+ * backend answers 400, which no retry fixes. Before every call, when the
+ * estimated prompt passes `COMPACT_AT` of the window, the oldest tool
+ * results are replaced with a one-line stub, oldest first, until the estimate
+ * is under `COMPACT_TO`; the newest `KEEP_RECENT_TOOL_RESULTS` tool results,
+ * and every system, user and assistant message, are never touched. This is
+ * the "observation stub" policy, the one that kept every task passing in the
+ * fleet's own compactproof measurement (2026-09-26-compactproof); the model
+ * can re-run a tool it still needs. The substrate's 95% refusal stays as the
+ * last line.
+ */
+export const COMPACT_AT = 0.6;
+export const COMPACT_TO = 0.45;
+export const KEEP_RECENT_TOOL_RESULTS = 6;
+
+export function compactConversation(messages: ChatMessage[], windowTokens: number): number {
+  const estimate = (): number => estimateTokens(messages.map((m) => m.content).join('\n'));
+  if (estimate() <= COMPACT_AT * windowTokens) return 0;
+  const toolIdx = messages
+    .map((m, i) => (m.role === 'tool' && !m.content.startsWith('[compacted') ? i : -1))
+    .filter((i) => i >= 0);
+  const eligible = toolIdx.slice(0, Math.max(0, toolIdx.length - KEEP_RECENT_TOOL_RESULTS));
+  let compacted = 0;
+  for (const i of eligible) {
+    const m = messages[i];
+    if (m === undefined) continue;
+    const chars = m.content.length;
+    const label = m.name !== undefined ? ` of ${m.name}` : '';
+    messages[i] = {
+      ...m,
+      content: `[compacted: an earlier tool result${label} (${String(chars)} chars) was elided to fit the context window. Run the tool again if you still need it.]`,
+    };
+    compacted += 1;
+    if (estimate() <= COMPACT_TO * windowTokens) break;
+  }
+  return compacted;
+}
+
+/**
  * Every tool result ends with the turn number ("turn 12 of 100"). With this
  * many turns left, or 15% of the run, whichever is more, it also tells the
  * model to finish. From the halfway turn on a long run it asks for what runs
@@ -930,6 +970,16 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       };
       traces.push(boundaryEntry);
       await this.emitToSinks(boundaryEntry);
+
+      // (0) Fit the conversation to the model's window before asking.
+      if (budget.contextWindowTokens !== undefined) {
+        const compacted = compactConversation(currentMessages, budget.contextWindowTokens);
+        if (compacted > 0) {
+          console.warn(
+            `[agent-loop] run ${runId}: compacted ${String(compacted)} earlier tool result(s) to fit the context window`,
+          );
+        }
+      }
 
       // (1) Call LLM
       const llmCtx: ClientContext = { runId, abortSignal: signal };
