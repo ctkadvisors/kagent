@@ -5,8 +5,15 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from './registry.js';
-import { AgentExecutor, capToolResult, loopTurnNote } from './executor.js';
+import {
+  AgentExecutor,
+  capToolResult,
+  compactConversation,
+  KEEP_RECENT_TOOL_RESULTS,
+  loopTurnNote,
+} from './executor.js';
 import { MALFORMED_TOOL_ARGS } from './llm-client.js';
+import type { ChatMessage } from './llm-client.js';
 import type { MyType, MyPhase } from './__fixtures__/agents.js';
 import { chatAgent } from './__fixtures__/agents.js';
 import { makeStubLLM } from './__fixtures__/stub-llm.js';
@@ -31,6 +38,53 @@ function echoProvider(reply: string): ToolProvider & { calls: number } {
 const call = (id: string, q: string) => ({
   content: '',
   tool_calls: [{ id, name: 'echo', args: { q } }],
+});
+
+describe('compactConversation', () => {
+  const big = 'x'.repeat(4000); // ~1000 tokens each
+  const conversation = (n: number): ChatMessage[] => {
+    const msgs: ChatMessage[] = [
+      { role: 'system', content: 'be useful' },
+      { role: 'user', content: 'build it' },
+    ];
+    for (let i = 0; i < n; i += 1) {
+      msgs.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: `c${String(i)}`, name: 'echo', args: {} }],
+      });
+      msgs.push({ role: 'tool', content: big, tool_call_id: `c${String(i)}`, name: 'echo' });
+    }
+    return msgs;
+  };
+
+  it('does nothing while the prompt fits', () => {
+    const msgs = conversation(3);
+    expect(compactConversation(msgs, 100_000)).toBe(0);
+    expect(msgs.every((m) => !m.content.startsWith('[compacted'))).toBe(true);
+  });
+
+  it('stubs the oldest tool results until the prompt is under the target, keeping the newest ones', () => {
+    const msgs = conversation(20); // ~20k tokens of tool results
+    const compacted = compactConversation(msgs, 20_000); // 60% = 12k -> compact to 9k
+    expect(compacted).toBeGreaterThan(0);
+    const tools = msgs.filter((m) => m.role === 'tool');
+    const stubbed = tools.filter((m) => m.content.startsWith('[compacted'));
+    expect(stubbed.length).toBe(compacted);
+    expect(tools.slice(0, compacted).every((m) => m.content.startsWith('[compacted'))).toBe(true);
+    expect(tools.slice(-KEEP_RECENT_TOOL_RESULTS).every((m) => m.content === big)).toBe(true);
+    expect(stubbed[0]?.content).toContain('of echo (4000 chars)');
+    expect(msgs[0]?.content).toBe('be useful');
+    expect(
+      msgs.filter((m) => m.role === 'assistant').every((m) => m.tool_calls !== undefined),
+    ).toBe(true);
+    expect(compactConversation(msgs, 20_000)).toBe(0);
+  });
+
+  it('never stubs the newest results even when that leaves the prompt over the target', () => {
+    const msgs = conversation(4);
+    expect(compactConversation(msgs, 2_000)).toBe(0);
+  });
 });
 
 describe('capToolResult', () => {
