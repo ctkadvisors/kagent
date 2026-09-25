@@ -85,6 +85,14 @@ describe('compactConversation', () => {
     const msgs = conversation(4);
     expect(compactConversation(msgs, 2_000)).toBe(0);
   });
+
+  it('uses the measured tokens-per-char: denser text compacts sooner than chars/4 would', () => {
+    // 20 results x 4000 chars = 80k chars: 20k tokens at 0.25, 32k at 0.4.
+    // Window 40k: 60% = 24k. Under chars/4 nothing happens; measured, it compacts.
+    expect(compactConversation(conversation(20), 40_000)).toBe(0);
+    const msgs = conversation(20);
+    expect(compactConversation(msgs, 40_000, 0.4)).toBeGreaterThan(0);
+  });
 });
 
 describe('capToolResult', () => {

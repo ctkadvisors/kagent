@@ -395,8 +395,22 @@ export const COMPACT_AT = 0.6;
 export const COMPACT_TO = 0.45;
 export const KEEP_RECENT_TOOL_RESULTS = 6;
 
-export function compactConversation(messages: ChatMessage[], windowTokens: number): number {
-  const estimate = (): number => estimateTokens(messages.map((m) => m.content).join('\n'));
+/**
+ * Chars-per-token is not four: the first run with compaction died at 114,948
+ * real input tokens while the chars/4 estimate said the prompt was under 60%
+ * of a 131k window, so the guess never fired. The loop measures the ratio
+ * from the backend's own `usage.inputTokens` on each call and passes it in;
+ * `DEFAULT_TOKENS_PER_CHAR` covers the calls before the first measurement.
+ */
+export const DEFAULT_TOKENS_PER_CHAR = 0.25;
+
+export function compactConversation(
+  messages: ChatMessage[],
+  windowTokens: number,
+  tokensPerChar: number = DEFAULT_TOKENS_PER_CHAR,
+): number {
+  const estimate = (): number =>
+    Math.ceil(messages.reduce((n, m) => n + m.content.length + 1, 0) * tokensPerChar);
   if (estimate() <= COMPACT_AT * windowTokens) return 0;
   const toolIdx = messages
     .map((m, i) => (m.role === 'tool' && !m.content.startsWith('[compacted') ? i : -1))
@@ -924,6 +938,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     // Build initial messages: prepend systemPrompt as `role: 'system'` if set
     // and not already supplied by the caller.
     const currentMessages: ChatMessage[] = [...input.messages];
+    // Measured from the backend's usage on each call; drives compaction.
+    let tokensPerChar = DEFAULT_TOKENS_PER_CHAR;
+    let requestChars = 0;
     if (
       agentDef.systemPrompt &&
       (currentMessages.length === 0 || currentMessages[0]?.role !== 'system')
@@ -973,7 +990,11 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
       // (0) Fit the conversation to the model's window before asking.
       if (budget.contextWindowTokens !== undefined) {
-        const compacted = compactConversation(currentMessages, budget.contextWindowTokens);
+        const compacted = compactConversation(
+          currentMessages,
+          budget.contextWindowTokens,
+          tokensPerChar,
+        );
         if (compacted > 0) {
           console.warn(
             `[agent-loop] run ${runId}: compacted ${String(compacted)} earlier tool result(s) to fit the context window`,
@@ -1001,6 +1022,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           extraBody: agentDef.llmParams.extraBody,
         }),
       };
+      requestChars = currentMessages.reduce((n, m) => n + m.content.length + 1, 0);
       let llmStart = Date.now();
       let llmResult: ChatResult;
       let retryAttempts = 0;
@@ -1150,6 +1172,13 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       budget.cumulativeInputTokens += callInputTokens;
       budget.cumulativeOutputTokens += callOutputTokens;
       budget.contextTokens = callInputTokens + callOutputTokens;
+      if (llmResult.usage?.inputTokens !== undefined && requestChars > 0) {
+        // Never below the chars/4 default: an under-count is what killed runs.
+        tokensPerChar = Math.max(
+          DEFAULT_TOKENS_PER_CHAR,
+          llmResult.usage.inputTokens / requestChars,
+        );
+      }
       // Cost accounting — stays null until ANY backend reports cost.
       if (llmResult.usage?.costUsd != null) {
         budget.cumulativeCostUsd = (budget.cumulativeCostUsd ?? 0) + llmResult.usage.costUsd;
