@@ -49,7 +49,15 @@ export interface KagentScheduleResource {
   readonly spec: {
     readonly schedule: string;
     readonly suspend?: boolean;
+    /** Idle gate — see `KagentScheduleSpec.whenIdle` in the operator mirror. */
+    readonly whenIdle?: {
+      readonly quietSeconds?: number;
+      readonly minGapSeconds?: number;
+    };
     readonly taskTemplate: AgentTaskTemplateSpec;
+  };
+  readonly status?: {
+    readonly lastTickAt?: string;
   };
 }
 
@@ -58,9 +66,18 @@ export interface ScheduleStatusPatch {
   readonly nextTickAt?: string;
 }
 
+export const DEFAULT_QUIET_SECONDS = 300;
+
 export interface ScheduleControllerDeps {
   /** Factory that creates the rendered AgentTask in K8s. */
   readonly createAgentTask: (manifest: RenderedAgentTask) => Promise<void> | void;
+  /**
+   * For `whenIdle` schedules: when did the namespace last go idle? The
+   * instant the last active AgentTask finished; `undefined` while one is
+   * active. Omitted = every namespace is treated as busy, so `whenIdle`
+   * schedules never fire (fail closed).
+   */
+  readonly namespaceIdleSince?: (namespace: string) => Promise<Date | undefined>;
   /** PATCH `KagentSchedule.status` (server-side merge). */
   readonly patchScheduleStatus: (
     namespace: string,
@@ -143,6 +160,10 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
       }
       if (resource.spec.suspend === true) continue;
       if (!cronMatches(parsed, at)) continue;
+      if (resource.spec.whenIdle !== undefined) {
+        const gate = await idleGateOpen(resource, at);
+        if (!gate) continue;
+      }
       try {
         const manifest = renderAgentTaskFromTemplate({
           triggerName: resource.metadata.name,
@@ -179,6 +200,33 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
       }
     }
     return created;
+  }
+
+  /**
+   * `whenIdle`: the namespace must have been idle for `quietSeconds`
+   * (nothing Pending/Dispatched, and the last task finished that long
+   * ago) and this schedule's previous task must be `minGapSeconds` old.
+   * The previous-task instant comes from `status.lastTickAt`, which the
+   * informer keeps current, so a restart does not forget the gap.
+   */
+  async function idleGateOpen(resource: KagentScheduleResource, at: Date): Promise<boolean> {
+    if (deps.namespaceIdleSince === undefined) return false;
+    const quietMs = (resource.spec.whenIdle?.quietSeconds ?? DEFAULT_QUIET_SECONDS) * 1000;
+    const gapMs = (resource.spec.whenIdle?.minGapSeconds ?? 0) * 1000;
+    const last = resource.status?.lastTickAt;
+    if (last !== undefined && at.getTime() - Date.parse(last) < gapMs) return false;
+    let idleSince: Date | undefined;
+    try {
+      idleSince = await deps.namespaceIdleSince(resource.metadata.namespace);
+    } catch (err) {
+      console.error(
+        `[kagent-triggers] idle check failed for schedule ` +
+          `${resource.metadata.namespace}/${resource.metadata.name}:`,
+        err,
+      );
+      return false;
+    }
+    return idleSince !== undefined && at.getTime() - idleSince.getTime() >= quietMs;
   }
 
   function start(): void {

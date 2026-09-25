@@ -58,6 +58,24 @@ spec:
                     Pause the schedule without deleting the CR. The
                     controller skips suspended schedules even when the
                     cron matches the current minute.
+                whenIdle:
+                  type: object
+                  description: |
+                    Idle gate. When set, a matching tick fires only if the
+                    namespace is idle: no AgentTask has been active
+                    (Pending/Dispatched) for quietSeconds, and this
+                    schedule's last task was created at least
+                    minGapSeconds ago. `schedule` then reads as the
+                    polling cadence.
+                  properties:
+                    quietSeconds:
+                      type: integer
+                      minimum: 0
+                      default: 300
+                    minGapSeconds:
+                      type: integer
+                      minimum: 0
+                      default: 0
                 taskTemplate:
                   type: object
                   required:

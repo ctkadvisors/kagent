@@ -57,6 +57,20 @@ export interface KagentScheduleSpec {
   readonly suspend?: boolean;
 
   /**
+   * Idle gate. When set, a tick that matches the cron fires only if the
+   * namespace is idle: no AgentTask has been active (Pending or
+   * Dispatched) for `quietSeconds` (default 300), and this schedule's
+   * last task was created at least `minGapSeconds` (default 0) ago.
+   * `schedule` then reads as the polling cadence ("check every five
+   * minutes; run whenever the fleet is quiet"), which is how an agent
+   * with idle behavior gets its turns without a fixed hour.
+   */
+  readonly whenIdle?: {
+    readonly quietSeconds?: number;
+    readonly minGapSeconds?: number;
+  };
+
+  /**
    * The AgentTask body the controller materializes per tick. Validated
    * by admission against the same shape as `AgentTask.spec`; mutually-
    * exclusive `targetAgent` / `targetCapability` rule applies here too.
