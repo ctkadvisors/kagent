@@ -376,10 +376,11 @@ export const DEFAULT_TOOL_GUARDS: {
 };
 
 /**
- * With this many turns (or fewer) left in the run, every tool result says so.
+ * Every tool result ends with the turn number ("turn 12 of 100"); with this
+ * many turns (or fewer) left, it also says so and tells the model to finish.
  * The model cannot plan around a limit it cannot see: both auditor failures
- * were a model reading until the wall with no turn left to write in, and
- * warning it in a prompt meant hard-coding the loop's numbers there.
+ * were a model reading until the wall with no turn left to write in, and a
+ * prompt that says "ship by turn 45" is empty unless the loop counts for it.
  */
 export const TURNS_LEFT_NOTE_AT = 3;
 
@@ -1156,10 +1157,11 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
               : undefined;
         // `iteration` is 0-based and this turn is already spent.
         const turnsLeft = maxIterations - iteration - 1;
+        const turnNo = `turn ${String(iteration + 1)} of ${String(maxIterations)}`;
         const turnsNote =
           turnsLeft <= TURNS_LEFT_NOTE_AT
-            ? `\n\n[loop: ${turnsLeft === 0 ? 'this was the last turn of the run' : `${String(turnsLeft)} turn${turnsLeft === 1 ? '' : 's'} left in this run`}. Do what must still be done (write, post, answer) before reading anything more.]`
-            : '';
+            ? `\n\n[loop: ${turnNo}, ${turnsLeft === 0 ? 'this was the last turn of the run' : `${String(turnsLeft)} turn${turnsLeft === 1 ? '' : 's'} left in this run`}. Do what must still be done (write, post, answer) before reading anything more.]`
+            : `\n\n[loop: ${turnNo}.]`;
         if (guardMsg !== undefined) {
           const guardEntry: TraceEntry = {
             schema_version: '1',

@@ -140,10 +140,11 @@ describe('AgentExecutor — tool guards', () => {
     const toolResults = (recordedRequests.at(-1)?.messages ?? [])
       .filter((m) => m.role === 'tool')
       .map((m) => String(m.content));
-    // turn 1 of 5 leaves 4: no note. Turn 2 leaves 3, turn 3 leaves 2: noted.
-    expect(toolResults[0]).toBe('data');
-    expect(toolResults[1]).toContain('[loop: 3 turns left in this run.');
-    expect(toolResults[2]).toContain('[loop: 2 turns left in this run.');
+    // Every result carries the turn number; turn 1 of 5 leaves 4: no urgency.
+    // Turn 2 leaves 3, turn 3 leaves 2: told to finish.
+    expect(toolResults[0]).toBe('data\n\n[loop: turn 1 of 5.]');
+    expect(toolResults[1]).toContain('[loop: turn 2 of 5, 3 turns left in this run.');
+    expect(toolResults[2]).toContain('[loop: turn 3 of 5, 2 turns left in this run.');
     expect(toolResults[2]).toContain('before reading anything more');
   });
 
