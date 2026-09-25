@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from './registry.js';
-import { AgentExecutor, capToolResult } from './executor.js';
+import { AgentExecutor, capToolResult, loopTurnNote } from './executor.js';
 import type { MyType, MyPhase } from './__fixtures__/agents.js';
 import { chatAgent } from './__fixtures__/agents.js';
 import { makeStubLLM } from './__fixtures__/stub-llm.js';
@@ -146,6 +146,19 @@ describe('AgentExecutor — tool guards', () => {
     expect(toolResults[1]).toContain('[loop: turn 2 of 5, 3 turns left in this run.');
     expect(toolResults[2]).toContain('[loop: turn 3 of 5, 2 turns left in this run.');
     expect(toolResults[2]).toContain('before reading anything more');
+  });
+
+  it('on a long run, asks to save at halfway and to finish with 15% left', () => {
+    expect(loopTurnNote(0, 100)).toBe('\n\n[loop: turn 1 of 100.]');
+    expect(loopTurnNote(48, 100)).toBe('\n\n[loop: turn 49 of 100.]');
+    expect(loopTurnNote(49, 100)).toContain('[loop: turn 50 of 100. Half the run is spent');
+    expect(loopTurnNote(83, 100)).toContain('Half the run is spent');
+    expect(loopTurnNote(84, 100)).toContain('[loop: turn 85 of 100, 15 turns left in this run.');
+    expect(loopTurnNote(99, 100)).toContain('this was the last turn of the run');
+    // A short run keeps the fixed three-turn note and no halfway note.
+    expect(loopTurnNote(0, 5)).toBe('\n\n[loop: turn 1 of 5.]');
+    expect(loopTurnNote(1, 5)).toContain('3 turns left');
+    expect(loopTurnNote(9, 19)).toBe('\n\n[loop: turn 10 of 19.]');
   });
 
   it('caps an oversized tool result before it enters the conversation', async () => {
