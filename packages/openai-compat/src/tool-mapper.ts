@@ -17,7 +17,7 @@
  */
 
 import type { ToolDescriptor, ToolCall } from '@kagent/agent-loop';
-import { LLMClientProtocolError } from '@kagent/agent-loop';
+import { MALFORMED_TOOL_ARGS } from '@kagent/agent-loop';
 
 /** OpenAI `tools[i]` shape — internal to the adapter. */
 export interface OpenAITool {
@@ -185,8 +185,9 @@ function sanitizeToolCallName(name: string): {
  * kernel's `ToolCall[]` shape.
  *
  * `function.arguments` is JSON-string-encoded on the wire; this function
- * `JSON.parse`s it into `ToolCall.args: unknown`. Parse failure throws
- * `LLMClientProtocolError` carrying the offending string for caller debug.
+ * `JSON.parse`s it into `ToolCall.args: unknown`. When it is not JSON the
+ * call is kept with the raw text under `MALFORMED_TOOL_ARGS`, and the
+ * executor answers it with a tool error instead of ending the run.
  *
  * Returns `undefined` when input is undefined or empty.
  */
@@ -199,10 +200,10 @@ export function fromOpenAIToolCalls(
     try {
       args = JSON.parse(tc.function.arguments);
     } catch {
-      throw new LLMClientProtocolError(
-        `tool_call function.arguments is not valid JSON (tool_call id=${tc.id}, name=${tc.function.name})`,
-        tc.function.arguments,
-      );
+      // Not a transport failure: the model slipped on one call. Keep the
+      // call; the executor answers it with a tool error so the model can
+      // send it again. Throwing here ended whole runs on one slip.
+      args = { [MALFORMED_TOOL_ARGS]: tc.function.arguments };
     }
     const sanitized = sanitizeToolCallName(tc.function.name);
     return {

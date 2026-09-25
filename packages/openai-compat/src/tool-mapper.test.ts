@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { toOpenAITools, toOpenAIToolCalls, fromOpenAIToolCalls } from './tool-mapper.js';
-import { LLMClientProtocolError } from '@kagent/agent-loop';
+import { MALFORMED_TOOL_ARGS } from '@kagent/agent-loop';
 import type { ToolDescriptor, ToolCall } from '@kagent/agent-loop';
 
 const sampleDescriptor: ToolDescriptor = {
@@ -77,6 +77,20 @@ describe('fromOpenAIToolCalls (VALIDATION row 7)', () => {
     expect(result).toEqual([{ id: 'call_abc', name: 'get_time', args: { tz: 'UTC' } }]);
   });
 
+  it('keeps a call whose arguments are not JSON, marking the raw text for the executor', () => {
+    const raw = [
+      {
+        id: 'call_bad',
+        type: 'function' as const,
+        function: { name: 'get_time', arguments: '{"tz": UTC' },
+      },
+    ];
+    const result = fromOpenAIToolCalls(raw);
+    expect(result).toEqual([
+      { id: 'call_bad', name: 'get_time', args: { [MALFORMED_TOOL_ARGS]: '{"tz": UTC' } },
+    ]);
+  });
+
   it('VALIDATION.7: id + name preserved', () => {
     const raw = [
       {
@@ -88,25 +102,6 @@ describe('fromOpenAIToolCalls (VALIDATION row 7)', () => {
     const result = fromOpenAIToolCalls(raw);
     expect(result?.[0]?.id).toBe('call_xyz');
     expect(result?.[0]?.name).toBe('compute');
-  });
-
-  it('JSON.parse failure on arguments throws LLMClientProtocolError carrying raw', () => {
-    const raw = [
-      {
-        id: 'call_bad',
-        type: 'function' as const,
-        function: { name: 'broken', arguments: '{not_valid_json' },
-      },
-    ];
-    expect(() => fromOpenAIToolCalls(raw)).toThrow(LLMClientProtocolError);
-    try {
-      fromOpenAIToolCalls(raw);
-    } catch (err) {
-      expect(err).toBeInstanceOf(LLMClientProtocolError);
-      expect((err as LLMClientProtocolError).raw).toBe('{not_valid_json');
-      expect((err as LLMClientProtocolError).message).toContain('call_bad');
-      expect((err as LLMClientProtocolError).message).toContain('broken');
-    }
   });
 
   it('undefined input returns undefined', () => {

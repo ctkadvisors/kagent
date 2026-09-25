@@ -151,6 +151,7 @@ export type {
   ClientContext,
   ToolCall,
 } from './llm-client.js';
+export { MALFORMED_TOOL_ARGS, malformedToolArgs } from './llm-client.js';
 export type {
   ToolProvider,
   ToolDescriptor,
