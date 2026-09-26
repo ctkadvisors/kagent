@@ -42,6 +42,7 @@ import type {
   ChatRequest,
   ChatResult,
   ClientContext,
+  ToolCall,
 } from './llm-client.js';
 import { malformedToolArgs } from './llm-client.js';
 import type {
@@ -404,30 +405,87 @@ export const KEEP_RECENT_TOOL_RESULTS = 6;
  */
 export const DEFAULT_TOKENS_PER_CHAR = 0.25;
 
+/** What a message costs on the wire: its content plus its tool-call arguments. */
+export function messageChars(m: ChatMessage): number {
+  let n = m.content.length + 1;
+  for (const tc of m.tool_calls ?? []) n += JSON.stringify(tc.args ?? {}).length + tc.name.length;
+  return n;
+}
+
+export function conversationChars(messages: readonly ChatMessage[]): number {
+  return messages.reduce((n, m) => n + messageChars(m), 0);
+}
+
+const COMPACTED_ARGS_KEY = '__compacted';
+/** Arguments shorter than this stay: a stub would not be smaller. */
+const COMPACT_ARGS_OVER_CHARS = 200;
+
+/**
+ * Compacts in place; returns how many items were stubbed. Eligible items, oldest
+ * first: tool results, and the arguments of the assistant's own earlier tool
+ * calls (the code and files it wrote, which a builder run accumulates by the
+ * hundred kilobytes and which the first version never counted: 42 compactions
+ * and the prompt still climbed from 79k to 114k real tokens). The newest
+ * `KEEP_RECENT_TOOL_RESULTS` exchanges stay whole. `lastInputTokens`, the
+ * backend's count for the previous call, is the truth the estimate is checked
+ * against: compaction runs when either says the prompt is past `COMPACT_AT`,
+ * and removes at least enough chars to bring that real count under `COMPACT_TO`.
+ */
 export function compactConversation(
   messages: ChatMessage[],
   windowTokens: number,
   tokensPerChar: number = DEFAULT_TOKENS_PER_CHAR,
+  lastInputTokens?: number,
 ): number {
-  const estimate = (): number =>
-    Math.ceil(messages.reduce((n, m) => n + m.content.length + 1, 0) * tokensPerChar);
-  if (estimate() <= COMPACT_AT * windowTokens) return 0;
-  const toolIdx = messages
-    .map((m, i) => (m.role === 'tool' && !m.content.startsWith('[compacted') ? i : -1))
-    .filter((i) => i >= 0);
-  const eligible = toolIdx.slice(0, Math.max(0, toolIdx.length - KEEP_RECENT_TOOL_RESULTS));
+  const estimate = (): number => Math.ceil(conversationChars(messages) * tokensPerChar);
+  const startChars = conversationChars(messages);
+  const over = Math.max(estimate(), lastInputTokens ?? 0);
+  if (over <= COMPACT_AT * windowTokens) return 0;
+  // Chars that must go so the real count lands under the target.
+  const mustRemove = Math.max(0, (over - COMPACT_TO * windowTokens) / tokensPerChar);
+  const bigArgs = (tc: ToolCall): boolean =>
+    !(COMPACTED_ARGS_KEY in ((tc.args as object) ?? {})) &&
+    JSON.stringify(tc.args ?? {}).length > COMPACT_ARGS_OVER_CHARS;
+  const eligible = (m: ChatMessage): boolean =>
+    m.role === 'tool'
+      ? !m.content.startsWith('[compacted')
+      : m.role === 'assistant' && (m.tool_calls ?? []).some(bigArgs);
+  const candidates = messages.map((m, i) => (eligible(m) ? i : -1)).filter((i) => i >= 0);
+  // Protect the newest exchanges: the last KEEP_RECENT tool results and the calls that made them.
+  const recentTools = messages
+    .map((m, i) => (m.role === 'tool' ? i : -1))
+    .filter((i) => i >= 0)
+    .slice(-KEEP_RECENT_TOOL_RESULTS);
+  const protectFrom = recentTools[0] !== undefined ? recentTools[0] - 1 : messages.length;
   let compacted = 0;
-  for (const i of eligible) {
+  for (const i of candidates) {
+    if (i >= protectFrom) break;
     const m = messages[i];
     if (m === undefined) continue;
-    const chars = m.content.length;
-    const label = m.name !== undefined ? ` of ${m.name}` : '';
-    messages[i] = {
-      ...m,
-      content: `[compacted: an earlier tool result${label} (${String(chars)} chars) was elided to fit the context window. Run the tool again if you still need it.]`,
-    };
+    if (m.role === 'tool') {
+      const chars = m.content.length;
+      const label = m.name !== undefined ? ` of ${m.name}` : '';
+      messages[i] = {
+        ...m,
+        content: `[compacted: an earlier tool result${label} (${String(chars)} chars) was elided to fit the context window. Run the tool again if you still need it.]`,
+      };
+    } else {
+      messages[i] = {
+        ...m,
+        tool_calls: (m.tool_calls ?? []).map((tc) => {
+          const chars = JSON.stringify(tc.args ?? {}).length;
+          return chars > COMPACT_ARGS_OVER_CHARS
+            ? {
+                ...tc,
+                args: { [COMPACTED_ARGS_KEY]: `${String(chars)} chars of arguments elided` },
+              }
+            : tc;
+        }),
+      };
+    }
     compacted += 1;
-    if (estimate() <= COMPACT_TO * windowTokens) break;
+    const removed = startChars - conversationChars(messages);
+    if (removed >= mustRemove && estimate() <= COMPACT_TO * windowTokens) break;
   }
   return compacted;
 }
@@ -941,6 +999,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     // Measured from the backend's usage on each call; drives compaction.
     let tokensPerChar = DEFAULT_TOKENS_PER_CHAR;
     let requestChars = 0;
+    let lastInputTokens: number | undefined;
     if (
       agentDef.systemPrompt &&
       (currentMessages.length === 0 || currentMessages[0]?.role !== 'system')
@@ -994,6 +1053,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           currentMessages,
           budget.contextWindowTokens,
           tokensPerChar,
+          lastInputTokens,
         );
         if (compacted > 0) {
           console.warn(
@@ -1022,7 +1082,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           extraBody: agentDef.llmParams.extraBody,
         }),
       };
-      requestChars = currentMessages.reduce((n, m) => n + m.content.length + 1, 0);
+      requestChars = conversationChars(currentMessages);
       let llmStart = Date.now();
       let llmResult: ChatResult;
       let retryAttempts = 0;
@@ -1178,6 +1238,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           DEFAULT_TOKENS_PER_CHAR,
           llmResult.usage.inputTokens / requestChars,
         );
+        lastInputTokens = llmResult.usage.inputTokens;
       }
       // Cost accounting — stays null until ANY backend reports cost.
       if (llmResult.usage?.costUsd != null) {

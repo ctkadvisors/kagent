@@ -93,6 +93,38 @@ describe('compactConversation', () => {
     const msgs = conversation(20);
     expect(compactConversation(msgs, 40_000, 0.4)).toBeGreaterThan(0);
   });
+
+  it("counts and stubs the assistant's own earlier tool-call arguments", () => {
+    const code = 'print("x")\n'.repeat(400); // ~4.4k chars of arguments per call
+    const msgs: ChatMessage[] = [{ role: 'system', content: 'be useful' }];
+    for (let i = 0; i < 20; i += 1) {
+      msgs.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: `c${String(i)}`, name: 'code', args: { code } }],
+      });
+      msgs.push({ role: 'tool', content: 'ok', tool_call_id: `c${String(i)}`, name: 'code' });
+    }
+    // ~88k chars of arguments and almost no tool-result text: the old estimate saw nothing.
+    const compacted = compactConversation(msgs, 40_000);
+    expect(compacted).toBeGreaterThan(0);
+    const calls = msgs.filter((m) => m.role === 'assistant');
+    const first = calls[0]?.tool_calls?.[0]?.args as Record<string, unknown>;
+    expect(first.__compacted).toContain('chars of arguments elided');
+    // the newest calls keep their arguments
+    const last = calls.at(-1)?.tool_calls?.[0]?.args as Record<string, unknown>;
+    expect(last.code).toBe(code);
+  });
+
+  it("removes enough for the backend's real count even when the estimate is low", () => {
+    const msgs = conversation(20); // estimate ~20k tokens at 0.25
+    // The backend says the last prompt was 70k tokens on a 100k window (over 60%);
+    // the estimate alone would do nothing.
+    expect(compactConversation(conversation(20), 100_000)).toBe(0);
+    const compacted = compactConversation(msgs, 100_000, 0.25, 70_000);
+    // must remove (70k - 45k) / 0.25 = 100k chars: everything eligible goes
+    expect(compacted).toBe(20 - KEEP_RECENT_TOOL_RESULTS);
+  });
 });
 
 describe('capToolResult', () => {
