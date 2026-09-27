@@ -1,0 +1,30 @@
+{{/*
+SPDX-License-Identifier: MIT
+Copyright (c) 2026 Chris Knuteson
+
+Per-task code sandboxes answer the tool-gateway and nothing else. Their
+egress is the agents' egress, set by the cluster (new_localai agent-egress).
+*/}}
+{{- if and .Values.toolRuntime.enabled .Values.toolRuntime.code.sandbox.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kagent-operator.fullname" . }}-code-sandbox
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kagent-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: code-sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: code-sandbox
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "kagent-operator.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: tool-gateway
+      ports:
+        - { protocol: TCP, port: 8080 }
+{{- end }}

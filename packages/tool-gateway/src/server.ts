@@ -3,6 +3,8 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { inClusterSandboxKube } from './kube-jobs.js';
+import { createPodCodeRunnerFactory } from './pod-code-runner.js';
 import { createCallerVerifier } from './caller-verifier.js';
 import {
   FLEET_RUN_TOOL_DESCRIPTOR,
@@ -25,6 +27,7 @@ import {
 import {
   ToolGatewayHttpHandler,
   type ToolGatewayHttpHandlerOptions,
+  type ToolGatewayCodeRunnerFactory,
   type ToolGatewayTaskIdentity,
 } from './http-server.js';
 import { createPlaywrightCdpDriver } from './playwright-driver.js';
@@ -48,6 +51,14 @@ export interface ToolGatewayServerConfig {
   readonly fleetSigningKey?: string;
   readonly callerJwksUrl?: string;
   readonly callerIssuer?: string;
+  readonly sandbox?: {
+    readonly image: string;
+    readonly namespace: string;
+    readonly runtimeClassName?: string;
+    readonly idleSeconds?: number;
+    readonly resources?: Record<string, unknown>;
+    readonly nodeSelector?: Record<string, string>;
+  };
 }
 
 export interface ToolGatewayServerHandlerOptions {
@@ -77,6 +88,14 @@ export function parseToolGatewayServerConfig(
     fleetSigningKey?: string;
     callerJwksUrl?: string;
     callerIssuer?: string;
+    sandbox?: {
+      image: string;
+      namespace: string;
+      runtimeClassName?: string;
+      idleSeconds?: number;
+      resources?: Record<string, unknown>;
+      nodeSelector?: Record<string, string>;
+    };
   } = {
     shellHosts: parseShellHostsEnv(env.KAGENT_SHELL_HOSTS),
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
@@ -104,6 +123,25 @@ export function parseToolGatewayServerConfig(
   if (fleetSigningKey !== undefined) config.fleetSigningKey = fleetSigningKey;
   // Callers prove their task with the operator-minted capability JWT; set the
   // operator's JWKS URL to require it.
+  // Agent code runs in a per-task sandbox Job from this image, not in the gateway.
+  const sandboxImage = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_IMAGE);
+  if (sandboxImage !== undefined) {
+    const runtimeClassName = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_RUNTIME_CLASS);
+    const resources = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_RESOURCES_JSON);
+    const nodeSelector = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_NODE_SELECTOR_JSON);
+    config.sandbox = {
+      image: sandboxImage,
+      namespace: nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_NAMESPACE) ?? 'default',
+      idleSeconds: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_SANDBOX_IDLE_SECONDS, 1800),
+      ...(runtimeClassName !== undefined && { runtimeClassName }),
+      ...(resources !== undefined && {
+        resources: JSON.parse(resources) as Record<string, unknown>,
+      }),
+      ...(nodeSelector !== undefined && {
+        nodeSelector: JSON.parse(nodeSelector) as Record<string, string>,
+      }),
+    };
+  }
   const callerJwksUrl = nonEmpty(env.KAGENT_TOOL_GATEWAY_CALLER_JWKS_URL);
   if (callerJwksUrl !== undefined) {
     config.callerJwksUrl = callerJwksUrl;
@@ -152,8 +190,10 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     }
   }
 
-  const codeRunnerFactory = (task: ToolGatewayTaskIdentity) =>
-    buildLocalCodeRunner(config.workspaceRoot, task);
+  const codeRunnerFactory: ToolGatewayCodeRunnerFactory =
+    config.sandbox !== undefined
+      ? createPodCodeRunnerFactory({ kube: inClusterSandboxKube(), ...config.sandbox })
+      : (task: ToolGatewayTaskIdentity) => buildLocalCodeRunner(config.workspaceRoot, task);
   // fleet.run_tool: the catalog's executable half. Present only when the
   // gateway knows the playground and holds the fleet signing key.
   const fleetTool =
