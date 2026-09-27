@@ -3,6 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { createCallerVerifier } from './caller-verifier.js';
 import {
   FLEET_RUN_TOOL_DESCRIPTOR,
   FLEET_RUN_TOOL_NAME,
@@ -45,6 +46,8 @@ export interface ToolGatewayServerConfig {
   readonly toolProfiles: ToolProfileConfig;
   readonly fleetPlaygroundUrl?: string;
   readonly fleetSigningKey?: string;
+  readonly callerJwksUrl?: string;
+  readonly callerIssuer?: string;
 }
 
 export interface ToolGatewayServerHandlerOptions {
@@ -72,6 +75,8 @@ export function parseToolGatewayServerConfig(
     shellHosts: Readonly<Record<string, string>>;
     fleetPlaygroundUrl?: string;
     fleetSigningKey?: string;
+    callerJwksUrl?: string;
+    callerIssuer?: string;
   } = {
     shellHosts: parseShellHostsEnv(env.KAGENT_SHELL_HOSTS),
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
@@ -97,6 +102,13 @@ export function parseToolGatewayServerConfig(
   const fleetSigningKey = nonEmpty(env.KAGENT_FLEET_SIGNING_KEY);
   if (fleetPlaygroundUrl !== undefined) config.fleetPlaygroundUrl = fleetPlaygroundUrl;
   if (fleetSigningKey !== undefined) config.fleetSigningKey = fleetSigningKey;
+  // Callers prove their task with the operator-minted capability JWT; set the
+  // operator's JWKS URL to require it.
+  const callerJwksUrl = nonEmpty(env.KAGENT_TOOL_GATEWAY_CALLER_JWKS_URL);
+  if (callerJwksUrl !== undefined) {
+    config.callerJwksUrl = callerJwksUrl;
+    config.callerIssuer = nonEmpty(env.KAGENT_CAP_ISSUER) ?? 'kagent.knuteson.io/operator';
+  }
   const steelBaseUrl = nonEmpty(env.KAGENT_STEEL_BASE_URL);
   const steelApiKey = nonEmpty(env.KAGENT_STEEL_API_KEY);
   const steelConnectBaseUrl = nonEmpty(env.KAGENT_STEEL_CONNECT_BASE_URL);
@@ -166,6 +178,12 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     ...(browser !== undefined && { browser }),
     ...(shellRunner !== undefined && { shellRunner }),
     ...fleetTool,
+    ...(config.callerJwksUrl !== undefined && {
+      verifyCaller: createCallerVerifier({
+        jwksUrl: config.callerJwksUrl,
+        issuer: config.callerIssuer ?? 'kagent.knuteson.io/operator',
+      }),
+    }),
   };
 
   return new ToolGatewayHttpHandler(options);

@@ -188,6 +188,12 @@ export interface CapabilityBundle {
   readonly iat?: number;
   readonly nbf?: number;
   readonly jti: string;
+  /**
+   * The Agent the task runs as, `<namespace>/<name>`. With `sub` it is the
+   * identity the tool-gateway signs for the task; the gateway takes both
+   * from this verified token, never from the request.
+   */
+  readonly agt?: string;
   readonly claims: CapabilityClaims;
 }
 

@@ -755,6 +755,7 @@ async function main(): Promise<void> {
       ...(eventsTools !== undefined && { eventsTools }),
       ...(langfuseFetcher !== undefined && { fetchPrompt: langfuseFetcher }),
       ...(capabilityBundle !== undefined && { capabilityBundle }),
+      ...(loadedCapability !== undefined && { capabilityJwt: loadedCapability.jwt }),
       // v0.1.9 / NB1 — capture the executor's live RunBudget into
       // `liveBudget` so the get_my_context tool's
       // `tokenUtilizationSnapshot` thunk reads cumulative tokens off

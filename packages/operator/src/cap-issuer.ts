@@ -347,6 +347,7 @@ export async function mintCapabilityForTask(
 
   const result: MintCapResult = await ca.mint({
     subjectTaskUid: taskUid,
+    subjectAgent: `${input.agent.metadata.namespace ?? input.task.metadata.namespace ?? 'default'}/${input.agent.metadata.name ?? input.task.spec.targetAgent}`,
     jti,
     claims: withTenant,
     ...(ttlSeconds !== undefined && { ttlSeconds }),

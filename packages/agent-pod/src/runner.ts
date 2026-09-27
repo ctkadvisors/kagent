@@ -177,6 +177,8 @@ export interface RunDeps {
    * the full `CapabilityBundle` shape lives in `@kagent/capability-types`.
    */
   readonly capabilityBundle?: { readonly claims?: { readonly tenant?: string } };
+  /** The compact capability JWT itself, sent to the tool-gateway as the caller's proof. */
+  readonly capabilityJwt?: string;
   /**
    * v0.1 P3 — in-pod artifact registry. The `write_artifact` tool
    * pushes successful refs into this registry as they are produced;
@@ -878,6 +880,7 @@ function buildToolGatewayProvider(
     },
     tools: gatewayToolNames,
     toolProfileRefs,
+    ...(deps.capabilityJwt !== undefined && { capabilityJwt: deps.capabilityJwt }),
   });
 }
 

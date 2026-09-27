@@ -87,6 +87,15 @@ spec:
             - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_EXTRA_JSON
               value: {{ dict "providers" . | toJson | quote }}
             {{- end }}
+            {{- if .Values.toolRuntime.gateway.verifyCaller }}
+            {{/* Every describe/invoke must carry the calling task's capability JWT,
+                 verified against the operator's keys: the identity the gateway signs
+                 and the workspace it opens come from that token, not from headers. */}}
+            - name: KAGENT_TOOL_GATEWAY_CALLER_JWKS_URL
+              value: {{ default (printf "http://%s-templates.%s.svc.cluster.local:%v/.well-known/jwks.json" (include "kagent-operator.fullname" .) .Release.Namespace .Values.agentPod.templates.serverPort) .Values.capabilities.jwksUrl | quote }}
+            - name: KAGENT_CAP_ISSUER
+              value: {{ .Values.capabilities.issuer | quote }}
+            {{- end }}
             {{- with .Values.toolRuntime.gateway.fleetPlaygroundUrl }}
             - name: KAGENT_FLEET_PLAYGROUND_URL
               value: {{ . | quote }}

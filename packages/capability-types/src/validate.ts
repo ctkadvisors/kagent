@@ -224,6 +224,7 @@ export function validateCapabilityBundle(raw: unknown): Validation<CapabilityBun
     exp: r.exp,
     ...(typeof r.iat === 'number' && { iat: r.iat }),
     ...(typeof r.nbf === 'number' && { nbf: r.nbf }),
+    ...(typeof r.agt === 'string' && r.agt.length > 0 && { agt: r.agt }),
     claims: claimsResult.value,
   };
   return { ok: true, value: bundle };
