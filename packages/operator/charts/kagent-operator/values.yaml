@@ -73,6 +73,11 @@ toolRuntime:
     externalProvidersSecretRef:
       name: ''
       key: 'providers.json'
+    # An http external provider with {"identity": {"signingKeyEnv": "KAGENT_FLEET_SIGNING_KEY"}}
+    # signs the calling task's identity with this key; the services it calls hold the same key.
+    fleetSigningKeySecretRef: {}
+    # Providers that carry no credential, kept here and concatenated after the Secret's.
+    externalProvidersExtra: []
     # Gateway-owned agent/tool profiles. Agents can set
     # spec.toolProfileRef (or spec.agentType as an alias) to one of
     # these names, then the gateway resolves the concrete browser.*,

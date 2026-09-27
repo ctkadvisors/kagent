@@ -113,6 +113,13 @@ export interface ToolInvocationContext {
   abortSignal: AbortSignal;
   /** Forward-compat slot (inert in M1; populated by M2 ctx.delegate primitive). */
   parentRunId?: string;
+  /**
+   * The calling task's identity as the tool-gateway verified it per call
+   * (headers matched against the invocation body). Providers that speak to
+   * services which need to know WHO is calling (a forum, a store) read it
+   * here; it is never taken from tool arguments.
+   */
+  task?: { tenant: string; namespace: string; taskUid: string; agentName: string };
 }
 
 /**

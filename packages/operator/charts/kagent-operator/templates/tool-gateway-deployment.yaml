@@ -82,6 +82,21 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.toolRuntime.gateway.externalProvidersExtra }}
+            {{/* Credential-free providers kept in values: concatenated after the Secret's. */}}
+            - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_EXTRA_JSON
+              value: {{ dict "providers" . | toJson | quote }}
+            {{- end }}
+            {{- $signing := (.Values.toolRuntime.gateway.fleetSigningKeySecretRef | default dict) -}}
+            {{- if $signing.name }}
+            {{/* The key an http provider with identity.signingKeyEnv signs the calling
+                 task's identity with; the receiving services hold the same key. */}}
+            - name: KAGENT_FLEET_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $signing.name | quote }}
+                  key: {{ $signing.key | default "key" | quote }}
+            {{- end }}
             {{- $toolProfilesJson := .Values.toolRuntime.gateway.toolProfilesJson -}}
             {{- if and (not $toolProfilesJson) .Values.toolRuntime.gateway.toolProfiles }}
             {{- $toolProfilesJson = dict "profiles" .Values.toolRuntime.gateway.toolProfiles | toJson -}}

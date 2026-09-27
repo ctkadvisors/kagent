@@ -91,7 +91,12 @@ function deDupe(values: readonly string[]): readonly string[] {
 }
 
 function isGatewayProfileToolName(name: string): boolean {
-  return isToolRuntimeTool(name) || name.startsWith('mcp.') || name.startsWith('http.');
+  return (
+    isToolRuntimeTool(name) ||
+    name.startsWith('mcp.') ||
+    name.startsWith('http.') ||
+    name.startsWith('fleet.')
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

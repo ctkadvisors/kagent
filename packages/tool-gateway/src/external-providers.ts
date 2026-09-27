@@ -35,6 +35,8 @@ export interface ExternalHttpProviderSpec {
   readonly baseUrl?: string;
   readonly defaultHeaders?: Record<string, string>;
   readonly tools: readonly HttpToolDefinition[];
+  /** Present when the provider signs the calling task's identity (see HttpToolProviderOptions). */
+  readonly signIdentityWith?: string;
 }
 
 export interface ExternalMcpStdioProviderSpec {
@@ -160,6 +162,7 @@ function providerForSpec(
         ...(spec.id !== undefined && { id: spec.id }),
         ...(spec.baseUrl !== undefined && { baseUrl: spec.baseUrl }),
         ...(spec.defaultHeaders !== undefined && { defaultHeaders: spec.defaultHeaders }),
+        ...(spec.signIdentityWith !== undefined && { signIdentityWith: spec.signIdentityWith }),
         ...(options.fetch !== undefined && { fetch: options.fetch }),
         tools: [...spec.tools],
       });
@@ -212,6 +215,7 @@ function parseHttpProvider(raw: Record<string, unknown>): ExternalHttpProviderSp
     baseUrl?: string;
     defaultHeaders?: Record<string, string>;
     tools: readonly HttpToolDefinition[];
+    signIdentityWith?: string;
   } = {
     kind: 'http',
     tools: raw.tools.map(parseHttpToolDefinition),
@@ -219,6 +223,17 @@ function parseHttpProvider(raw: Record<string, unknown>): ExternalHttpProviderSp
   if (typeof raw.id === 'string') spec.id = raw.id;
   if (typeof raw.baseUrl === 'string') spec.baseUrl = raw.baseUrl;
   if (isStringRecord(raw.defaultHeaders)) spec.defaultHeaders = raw.defaultHeaders;
+  // {"identity": {"signingKeyEnv": "KAGENT_FLEET_SIGNING_KEY"}}: the key itself never
+  // sits in the providers JSON; the gateway reads it from its own environment.
+  if (isRecord(raw.identity) && typeof raw.identity.signingKeyEnv === 'string') {
+    const key = process.env[raw.identity.signingKeyEnv];
+    if (key === undefined || key.length === 0) {
+      throw new Error(
+        `http external provider ${spec.id ?? ''} signs identity but ${raw.identity.signingKeyEnv} is unset`,
+      );
+    }
+    spec.signIdentityWith = key;
+  }
   return spec;
 }
 

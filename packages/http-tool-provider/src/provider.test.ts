@@ -664,3 +664,49 @@ describe('HttpToolProvider — call.args defaults to {} when undefined', () => {
     expect(recordedCalls[0]?.body).toEqual({});
   });
 });
+
+describe('signed identity', () => {
+  it('signs the calling task and the body; refuses a call with no task', async () => {
+    const { signedIdentityHeaders } = await import('./provider.js');
+    const task = { tenant: 't', namespace: 'ns', taskUid: 'uid-1', agentName: 'inventor' };
+    const h = signedIdentityHeaders('k', task, '{"a":1}', 1000_000);
+    expect(h['X-Kagent-Agent']).toBe('inventor');
+    expect(h['X-Kagent-Ts']).toBe('1000');
+    expect(h['X-Kagent-Sig']).toMatch(/^[0-9a-f]{64}$/);
+    expect(signedIdentityHeaders('k', task, '{"a":2}', 1000_000)['X-Kagent-Sig']).not.toBe(
+      h['X-Kagent-Sig'],
+    );
+    expect(signedIdentityHeaders('other', task, '{"a":1}', 1000_000)['X-Kagent-Sig']).not.toBe(
+      h['X-Kagent-Sig'],
+    );
+    const seen: Array<{ url: string; init: RequestInit }> = [];
+    const provider = new HttpToolProvider({
+      baseUrl: 'http://forum',
+      signIdentityWith: 'k',
+      fetch: ((url: string, init: RequestInit) => {
+        seen.push({ url, init });
+        return Promise.resolve(new Response('{"id":1}', { status: 201 }));
+      }) as unknown as typeof fetch,
+      tools: [
+        {
+          name: 'fleet.forum_post',
+          description: 'p',
+          inputSchema: {},
+          method: 'POST',
+          path: '/api/post',
+        },
+      ],
+    });
+    const ctx = { runId: 'r', abortSignal: new AbortController().signal, task };
+    await provider.executeTool({ id: 'c1', name: 'fleet.forum_post', args: { body: 'hi' } }, ctx);
+    const headers = seen[0]?.init.headers as Record<string, string>;
+    expect(headers['X-Kagent-Agent']).toBe('inventor');
+    expect(headers['X-Kagent-Sig']).toMatch(/^[0-9a-f]{64}$/);
+    await expect(
+      provider.executeTool(
+        { id: 'c2', name: 'fleet.forum_post', args: {} },
+        { runId: 'r', abortSignal: new AbortController().signal },
+      ),
+    ).rejects.toThrow(/identity/);
+  });
+});
