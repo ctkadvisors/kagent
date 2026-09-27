@@ -118,6 +118,7 @@ async function main(): Promise<void> {
 
   const uiUpstream = process.env.WORKBENCH_UI_UPSTREAM;
   const langfuseBaseUrl = process.env.LANGFUSE_BASE_URL;
+  const reviewToken = process.env.WORKBENCH_REVIEW_TOKEN;
   const authRequired = resolveAuthRequired();
 
   // Gateway admin client — drives `/api/gateway/capacity` + `/api/gateway/usage`.
@@ -229,6 +230,7 @@ async function main(): Promise<void> {
     authRequired,
     ...(typeof uiUpstream === 'string' && uiUpstream.length > 0 && { uiUpstream }),
     ...(typeof langfuseBaseUrl === 'string' && langfuseBaseUrl.length > 0 && { langfuseBaseUrl }),
+    ...(typeof reviewToken === 'string' && reviewToken.length > 0 && { reviewToken }),
     ...(writeCustomApi !== undefined && { customApi: writeCustomApi }),
     ...(typeof defaultNamespace === 'string' &&
       defaultNamespace.length > 0 && { defaultNamespace }),

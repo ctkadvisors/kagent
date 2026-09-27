@@ -1202,3 +1202,31 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     );
   });
 });
+
+describe('POST /api/review-queue — reviewer token', () => {
+  it('refuses a write without the reviewer token and accepts one with it', async () => {
+    const customApi = makeMockCustomApi();
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([verifierFailTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher: makeMockAuditPublisher(),
+        now: () => new Date('2026-09-27T21:00:00Z'),
+        reviewToken: 'secret-t',
+      }),
+    );
+    const post = (headers: Record<string, string>) =>
+      app.request('/kagent-system/verifier-fail-1/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ reviewerId: 'agent-code' }),
+      });
+    expect((await post({})).status).toBe(401);
+    expect((await post({ Authorization: 'Bearer wrong' })).status).toBe(401);
+    expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
+    expect((await post({ Authorization: 'Bearer secret-t' })).status).toBe(200);
+    expect((await app.request('/')).status).toBe(200); // reads stay open
+  });
+});

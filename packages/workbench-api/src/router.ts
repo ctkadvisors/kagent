@@ -72,6 +72,8 @@ export interface RouterDeps {
    * derivation; this field just supplies the base URL.
    */
   readonly langfuseBaseUrl?: string;
+  /** Bearer token required on review-queue writes (see ReviewQueueRouteDeps). */
+  readonly reviewToken?: string;
   /**
    * K8s CustomObjects client for the WS-J write surface (POST /api/tasks).
    * When omitted, POST returns 503 — kept opt-in so a chart install with
@@ -264,6 +266,7 @@ export function buildRouter(deps: RouterDeps): Hono {
       ...(deps.auditPublisher !== undefined && { auditPublisher: deps.auditPublisher }),
       ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
       ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
+      ...(deps.reviewToken !== undefined && { reviewToken: deps.reviewToken }),
     }),
   );
 

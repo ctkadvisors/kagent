@@ -33,6 +33,7 @@
  * @see RESEARCH.md Q3, Q4, Q11
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
 import {
@@ -96,6 +97,14 @@ const FORWARDED_USER_HEADER = 'X-Forwarded-User';
 export interface ReviewQueueRouteDeps {
   /** Required: source of task snapshots. */
   readonly cache: SnapshotCache;
+  /**
+   * When set, every POST (accept / reject / request) must carry
+   * `Authorization: Bearer <reviewToken>`. The queue's accept path creates
+   * AgentTemplates: with in-cluster auth off, any pod that can reach the
+   * workbench — agent code included — could otherwise promote its own
+   * candidate. Only the reviewer holds this token.
+   */
+  readonly reviewToken?: string;
   /** Optional: K8s write client for POST handlers. */
   readonly customApi?: CustomObjectsApi;
   /**
@@ -136,6 +145,17 @@ export interface ReviewQueueRouteDeps {
  */
 export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
   const app = new Hono();
+  if (deps.reviewToken !== undefined && deps.reviewToken.length > 0) {
+    const expected = Buffer.from(`Bearer ${deps.reviewToken}`);
+    app.use('*', async (c, next) => {
+      if (c.req.method !== 'POST') return next();
+      const got = Buffer.from(c.req.header('authorization') ?? '');
+      if (got.length !== expected.length || !timingSafeEqual(got, expected)) {
+        return c.json({ error: 'review-queue writes need the reviewer token' }, 401);
+      }
+      return next();
+    });
+  }
   const now = deps.now ?? ((): Date => new Date());
   const logWarn =
     deps.logger !== undefined

@@ -29,6 +29,10 @@ replicaCount: 1
 # using the chart-managed ServiceAccount (read-only RBAC). Serves the
 # UI at `/` (proxies to the sidecar) and the JSON/SSE surface at `/api`.
 api:
+  # Secret holding the bearer token review-queue writes require; empty name = no check.
+  reviewTokenSecret:
+    name: ''
+    key: token
   image:
     repository: ghcr.io/ctkadvisors/kagent-workbench-api
     # Defaults to .Chart.appVersion when empty; override here for dev pins.
