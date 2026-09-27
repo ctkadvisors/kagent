@@ -351,19 +351,31 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
               ? scrubSecrets(createErr.message)
               : 'unknown error';
 
-        if (status === 409 || status === 422) {
+        // A template the review queue promoted earlier is revised in place by a
+        // later accepted candidate of the same name (a fixed check at a new sha).
+        // Anything else by that name (a hand-authored template) is never touched.
+        if (status === 409) {
+          const revised = await reviseQueueTemplate(deps.customApi, proposedNamespace, manifest);
+          if (revised !== undefined) {
+            agentTemplateRef = revised;
+          } else {
+            return c.json({ error: 'AgentTemplate creation failed', detail: errBody }, 422);
+          }
+        } else if (status === 422) {
           return c.json({ error: 'AgentTemplate creation failed', detail: errBody }, 422);
         }
-        if (status === 403) {
-          return c.json({ error: 'forbidden: RBAC denied AgentTemplate creation' }, 403);
+        if (agentTemplateRef === undefined) {
+          if (status === 403) {
+            return c.json({ error: 'forbidden: RBAC denied AgentTemplate creation' }, 403);
+          }
+          logError(
+            `[workbench-api] POST accept — unhandled K8s error creating AgentTemplate: ${JSON.stringify({ namespace, name, status: status ?? null })}`,
+          );
+          return c.json(
+            { error: 'internal error processing review accept; see workbench-api logs' },
+            500,
+          );
         }
-        logError(
-          `[workbench-api] POST accept — unhandled K8s error creating AgentTemplate: ${JSON.stringify({ namespace, name, status: status ?? null })}`,
-        );
-        return c.json(
-          { error: 'internal error processing review accept; see workbench-api logs' },
-          500,
-        );
       }
     }
 
@@ -755,6 +767,46 @@ interface AgentTemplateManifestArgs {
 }
 
 /**
+ * Replace an existing AgentTemplate with an accepted candidate's manifest, but
+ * only when the review queue created it (it carries the promoted-from-task
+ * annotation). Returns the revised template's meta, or undefined when the
+ * existing template is not the queue's or the replace fails.
+ */
+async function reviseQueueTemplate(
+  customApi: CustomObjectsApi,
+  namespace: string,
+  manifest: Record<string, unknown>,
+): Promise<ReturnType<typeof readCreatedMeta> | undefined> {
+  const meta = manifest['metadata'] as { name: string; annotations: Record<string, string> };
+  try {
+    const existing = (await customApi.getNamespacedCustomObject({
+      group: KAGENT_GROUP,
+      version: KAGENT_VERSION,
+      namespace,
+      plural: 'agenttemplates',
+      name: meta.name,
+    })) as { metadata?: { resourceVersion?: string; annotations?: Record<string, string> } };
+    if (existing.metadata?.annotations?.[ANNOTATION_PROMOTED_FROM_TASK] === undefined) {
+      return undefined;
+    }
+    const replaced: unknown = await customApi.replaceNamespacedCustomObject({
+      group: KAGENT_GROUP,
+      version: KAGENT_VERSION,
+      namespace,
+      plural: 'agenttemplates',
+      name: meta.name,
+      body: {
+        ...manifest,
+        metadata: { ...meta, resourceVersion: existing.metadata.resourceVersion },
+      },
+    });
+    return readCreatedMeta(replaced);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Build the AgentTemplate CR manifest from the accepted candidate.
  * Pure function — no I/O. Builds per CONTEXT.md D-03-A manifest spec.
  */
@@ -765,19 +817,12 @@ function buildAgentTemplateManifest(args: AgentTemplateManifestArgs): Record<str
     metadata: {
       name: args.proposedTemplateName,
       namespace: args.proposedNamespace,
+      // Provenance is this annotation, not an ownerReference: an accepted
+      // template is the catalog, and must not be garbage-collected with the
+      // task that happened to file it.
       annotations: {
         [ANNOTATION_PROMOTED_FROM_TASK]: `${args.taskNamespace}/${args.taskName}`,
       },
-      ownerReferences: [
-        {
-          apiVersion: `${KAGENT_GROUP}/${KAGENT_VERSION}`,
-          kind: 'AgentTask',
-          name: args.taskName,
-          uid: args.taskUid,
-          controller: false,
-          blockOwnerDeletion: false,
-        },
-      ],
     },
     spec: args.spec,
   };
