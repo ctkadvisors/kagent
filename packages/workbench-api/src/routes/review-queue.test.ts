@@ -1029,6 +1029,81 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     expect(auditPublisher.publish).not.toHaveBeenCalled();
   });
 
+  it('revises a template the queue created earlier: 409 then replace with its resourceVersion, no ownerReference', async () => {
+    const customApi = {
+      ...makeMockCustomApi({ createRejectsWith: { code: 409, body: 'already exists' } }),
+      getNamespacedCustomObject: vi.fn().mockResolvedValue({
+        metadata: {
+          name: 'researcher-v2',
+          resourceVersion: '42',
+          annotations: { 'kagent.knuteson.io/promoted-from-task': 'kagent-system/older-task' },
+        },
+      }),
+      replaceNamespacedCustomObject: vi.fn().mockResolvedValue({
+        metadata: { name: 'researcher-v2', namespace: 'kagent-system', uid: 'uid-revised' },
+      }),
+    };
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([candidateTemplateTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher: makeMockAuditPublisher(),
+        now: () => fixedPostNow,
+        readArtifact: () => Promise.resolve(candidateYaml),
+      }),
+    );
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['agentTemplateRef']).toMatchObject({ name: 'researcher-v2', uid: 'uid-revised' });
+    const replaced = customApi.replaceNamespacedCustomObject.mock.calls[0]?.[0] as {
+      body: { metadata: Record<string, unknown> };
+    };
+    expect(replaced.body.metadata['resourceVersion']).toBe('42');
+    expect(replaced.body.metadata['ownerReferences']).toBeUndefined();
+    expect(
+      (replaced.body.metadata['annotations'] as Record<string, string>)[
+        'kagent.knuteson.io/promoted-from-task'
+      ],
+    ).toBe('kagent-system/candidate-template-1');
+    expect(customApi.patchNamespacedCustomObject).toHaveBeenCalledOnce();
+  });
+
+  it('never revises a hand-authored template of the same name (no promoted-from-task): 422, no replace', async () => {
+    const customApi = {
+      ...makeMockCustomApi({ createRejectsWith: { code: 409, body: 'already exists' } }),
+      getNamespacedCustomObject: vi
+        .fn()
+        .mockResolvedValue({ metadata: { name: 'researcher-v2', resourceVersion: '7' } }),
+      replaceNamespacedCustomObject: vi.fn(),
+    };
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([candidateTemplateTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher: makeMockAuditPublisher(),
+        now: () => fixedPostNow,
+        readArtifact: () => Promise.resolve(candidateYaml),
+      }),
+    );
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(422);
+    expect(customApi.replaceNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
+  });
+
   // ------------------------------------------------------------------
   // W2-Test 8 — POST reject happy path — never creates CR, emits review.rejected
   // ------------------------------------------------------------------
