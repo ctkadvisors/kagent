@@ -33,6 +33,11 @@ export interface ToolGatewayProviderOptions {
   readonly task: ToolGatewayTaskIdentity;
   readonly tools: readonly string[];
   readonly toolProfileRefs?: readonly string[];
+  /**
+   * The task's capability JWT. Sent as a bearer token so the gateway takes
+   * the task's identity from a token the operator signed, not from headers.
+   */
+  readonly capabilityJwt?: string;
   readonly fetch?: typeof fetch;
 }
 
@@ -43,6 +48,7 @@ export class ToolGatewayProvider implements ToolProvider {
   private readonly baseUrl: string;
   private readonly task: ToolGatewayTaskIdentity;
   private readonly fetchImpl: typeof fetch;
+  private readonly capabilityJwt: string | undefined;
   private readonly explicitGrantedToolNames: ReadonlySet<string>;
   private readonly profileGrantedToolNames = new Set<string>();
   private readonly toolProfileRefs: readonly string[];
@@ -56,6 +62,7 @@ export class ToolGatewayProvider implements ToolProvider {
     this.baseUrl = trimTrailingSlash(options.baseUrl);
     this.task = options.task;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.capabilityJwt = options.capabilityJwt;
     const gatewayToolNames = requestedGatewayToolNames(options.tools);
     this.explicitGrantedToolNames = new Set(gatewayToolNames);
     this.toolProfileRefs = normalizeToolProfileRefs(options.toolProfileRefs);
@@ -95,6 +102,9 @@ export class ToolGatewayProvider implements ToolProvider {
         'x-kagent-namespace': this.task.namespace,
         'x-kagent-task-uid': this.task.taskUid,
         'x-kagent-tenant': this.task.tenant,
+        ...(this.capabilityJwt !== undefined && {
+          authorization: `Bearer ${this.capabilityJwt}`,
+        }),
       },
       body: JSON.stringify({
         task: this.task,
@@ -129,6 +139,9 @@ export class ToolGatewayProvider implements ToolProvider {
         'x-kagent-namespace': this.task.namespace,
         'x-kagent-task-uid': this.task.taskUid,
         'x-kagent-tenant': this.task.tenant,
+        ...(this.capabilityJwt !== undefined && {
+          authorization: `Bearer ${this.capabilityJwt}`,
+        }),
       },
       body: JSON.stringify({
         task: this.task,

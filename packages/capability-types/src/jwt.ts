@@ -77,6 +77,8 @@ export const DEFAULT_CAP_JWT_TTL_SECONDS = 600;
 export interface BuildCapabilityJwtInput {
   readonly issuer: string;
   readonly subjectTaskUid: string;
+  /** The task's Agent, `<namespace>/<name>`; stamped as the `agt` claim. */
+  readonly subjectAgent?: string;
   readonly jti: string;
   readonly claims: CapabilityClaims;
   /** TTL in seconds; defaults to `DEFAULT_CAP_JWT_TTL_SECONDS`. */
@@ -103,6 +105,7 @@ export function buildCapabilityJwt(input: BuildCapabilityJwtInput): SignJWT {
     exp: nowSec + ttl,
     iat: nowSec,
     jti: input.jti,
+    ...(input.subjectAgent !== undefined && { agt: input.subjectAgent }),
     claims: input.claims,
   } satisfies JWTPayload & { claims: CapabilityClaims };
 

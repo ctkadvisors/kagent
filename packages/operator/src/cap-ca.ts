@@ -96,6 +96,8 @@ export interface CapCa {
  */
 export interface MintCapInput {
   readonly subjectTaskUid: string;
+  /** The task's Agent, `<namespace>/<name>` (the `agt` claim). */
+  readonly subjectAgent?: string;
   readonly jti: string;
   readonly claims: CapabilityClaims;
   /** TTL in seconds; defaults from the JWT helper. */
@@ -187,6 +189,7 @@ export async function loadFromMaterials(input: CapCaMaterials): Promise<CapCa> {
       const builder = buildCapabilityJwt({
         issuer: effectiveIssuer,
         subjectTaskUid: req.subjectTaskUid,
+        ...(req.subjectAgent !== undefined && { subjectAgent: req.subjectAgent }),
         jti: req.jti,
         claims: req.claims,
         ...(req.ttlSeconds !== undefined && { ttlSeconds: req.ttlSeconds }),

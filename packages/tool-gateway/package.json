@@ -24,6 +24,7 @@
   ],
   "dependencies": {
     "@kagent/agent-loop": "workspace:*",
+    "@kagent/capability-types": "workspace:*",
     "@kagent/dto": "workspace:*",
     "@kagent/http-tool-provider": "workspace:*",
     "@kagent/mcp-tool-provider": "workspace:*",

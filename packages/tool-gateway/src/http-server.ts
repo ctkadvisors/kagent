@@ -32,6 +32,7 @@ import {
   type ExecuteCommandInput,
   type StartedCommand,
 } from './code-runner.js';
+import type { CallerVerifier } from './caller-verifier.js';
 import type { ExternalToolRegistry } from './external-providers.js';
 import { resolveToolProfileToolNames, type ToolProfileConfig } from './tool-profiles.js';
 
@@ -97,6 +98,11 @@ export interface ToolGatewayHttpHandlerOptions {
   readonly externalRegistry?: ExternalToolRegistry;
   readonly toolProfiles?: ToolProfileConfig;
   readonly paused?: boolean;
+  /**
+   * Proves the caller is the task it names (its capability JWT). When set,
+   * every describe and invoke without a valid token is refused 401.
+   */
+  readonly verifyCaller?: CallerVerifier;
 }
 
 export class ToolGatewayHttpHandler {
@@ -109,6 +115,7 @@ export class ToolGatewayHttpHandler {
   private readonly externalRegistry: ExternalToolRegistry | undefined;
   private readonly toolProfiles: ToolProfileConfig;
   private readonly browserSessions = new Map<string, SteelBrowserSession>();
+  private readonly verifyCaller: CallerVerifier | undefined;
   private paused: boolean;
 
   constructor(options: ToolGatewayHttpHandlerOptions = {}) {
@@ -121,6 +128,17 @@ export class ToolGatewayHttpHandler {
     this.externalRegistry = options.externalRegistry;
     this.toolProfiles = options.toolProfiles ?? { profiles: [] };
     this.paused = options.paused ?? false;
+    this.verifyCaller = options.verifyCaller;
+  }
+
+  /** 401 unless the bearer token proves the caller is this task; null when it does. */
+  private async refuseUnproven(
+    request: Request,
+    task: ToolGatewayTaskIdentity,
+  ): Promise<Response | null> {
+    if (this.verifyCaller === undefined) return null;
+    const why = await this.verifyCaller(request.headers.get('authorization'), task);
+    return why === null ? null : jsonResponse({ error: `unauthenticated: ${why}` }, 401);
   }
 
   setPaused(paused: boolean): void {
@@ -151,6 +169,8 @@ export class ToolGatewayHttpHandler {
         403,
       );
     }
+    const unproven = await this.refuseUnproven(request, invocation.task);
+    if (unproven !== null) return unproven;
 
     try {
       const external = this.externalHandlers[invocation.call.name];
@@ -187,6 +207,8 @@ export class ToolGatewayHttpHandler {
         403,
       );
     }
+    const unproven = await this.refuseUnproven(request, parsed.task);
+    if (unproven !== null) return unproven;
 
     const profileResolution = resolveToolProfileToolNames(
       this.toolProfiles,
