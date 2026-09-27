@@ -489,14 +489,18 @@ export function mergeArtifactSources(
   const byUri = new Map<string, ArtifactRef>();
   // Registry first so the same URI from a later trace harvest does not
   // overwrite the registry's authoritative metadata.
+  // An inline ref is followable only when it carries its bytes (payloadBase64,
+  // small inline artifacts such as a template candidate the review queue reads).
+  const followable = (ref: ArtifactRef): boolean =>
+    !ref.uri.startsWith('inline://') || typeof ref.payloadBase64 === 'string';
   for (const ref of registry) {
     if (typeof ref.uri !== 'string' || ref.uri.length === 0) continue;
-    if (ref.uri.startsWith('inline://')) continue;
+    if (!followable(ref)) continue;
     byUri.set(ref.uri, ref);
   }
   for (const ref of fromTraces) {
     if (typeof ref.uri !== 'string' || ref.uri.length === 0) continue;
-    if (ref.uri.startsWith('inline://')) continue;
+    if (!followable(ref)) continue;
     if (!byUri.has(ref.uri)) byUri.set(ref.uri, ref);
   }
   return [...byUri.values()];
