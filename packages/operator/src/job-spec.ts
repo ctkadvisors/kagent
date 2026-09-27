@@ -497,6 +497,9 @@ export const CAP_JWT_VOLUME_NAME = 'cap-jwt';
  * the same Job name and CreateNamespacedJob returns AlreadyExists
  * instead of producing a duplicate Pod.
  */
+/** Set by spawn_child_task on a child AgentTask; copied onto its Job. */
+export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
+
 export function jobNameForTask(task: AgentTask): string {
   const uid = task.metadata.uid;
   if (typeof uid !== 'string' || uid.length === 0) {
@@ -1000,6 +1003,11 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         'kagent.knuteson.io/agent': agent.metadata.name ?? '',
         'kagent.knuteson.io/task': task.metadata.name ?? '',
         'kagent.knuteson.io/managed-by': 'kagent-operator',
+        // A child's Job names its parent task, so admission can tell a parent
+        // that is waiting on it from one that is calling its model.
+        ...(typeof task.metadata.labels?.[PARENT_TASK_UID_LABEL] === 'string' && {
+          [PARENT_TASK_UID_LABEL]: task.metadata.labels[PARENT_TASK_UID_LABEL],
+        }),
       },
       // OwnerReference makes the Job a child of the AgentTask — kubectl
       // delete agenttask cleans up the Job (and its Pod) automatically.

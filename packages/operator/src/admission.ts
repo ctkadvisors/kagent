@@ -61,6 +61,7 @@ import type { V1Job } from '@kubernetes/client-node';
 
 import type { Agent, ModelEndpoint } from './crds/index.js';
 import { unsuspendJob as unsuspendJobApi } from './job-annotator.js';
+import { PARENT_TASK_UID_LABEL } from './job-spec.js';
 
 /* =====================================================================
  * Audit emission — Wave 0 sub-team Audit (v0.1.15-audit-stream).
@@ -290,11 +291,25 @@ export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[
   // around for inspection but they don't hold capacity.
   const liveByModel = new Map<string, number>();
   const liveByAgent = new Map<string, number>();
+  // A parent with a live child (running or queued) is blocked in
+  // wait_for_child*, not calling its model, so it lends its model slot to its
+  // children. Counting it deadlocked the fleet on 2026-09-27: every slot held
+  // by an inventor waiting on a verifier child that could never be admitted.
+  // ponytail: a parent that keeps calling its model while children run is
+  // under-counted by one; bounded by maxConcurrentChildren and the endpoint's
+  // own queue.
+  const waitingParents = new Set<string>();
+  for (const job of [...runningJobs, ...suspendedJobs]) {
+    if (isTerminalJob(job)) continue;
+    const parent = job.metadata?.labels?.[PARENT_TASK_UID_LABEL];
+    if (typeof parent === 'string' && parent.length > 0) waitingParents.add(parent);
+  }
   for (const job of runningJobs) {
     if (job.spec?.suspend === true) continue;
     if (isTerminalJob(job)) continue;
     const model = extractModelFromJob(job);
-    if (model !== undefined) {
+    const ownTaskUid = job.metadata?.ownerReferences?.find((o) => o.kind === 'AgentTask')?.uid;
+    if (model !== undefined && !(ownTaskUid !== undefined && waitingParents.has(ownTaskUid))) {
       liveByModel.set(model, (liveByModel.get(model) ?? 0) + 1);
     }
     const agentName = job.metadata?.labels?.[AGENT_LABEL];

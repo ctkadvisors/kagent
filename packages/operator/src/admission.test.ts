@@ -734,6 +734,40 @@ describe('findDepthViolatingJobs (v0.1.9)', () => {
   });
 });
 
+describe('selectAdmittable — a parent waiting on its child lends its slot', () => {
+  const endpoints = new Map([['m', makeModelEndpoint({ name: 'e', model: 'm', seed: 1, max: 1 })]]);
+  const parent = makeJob({
+    name: 'kat-p',
+    agent: 'inventor',
+    model: 'm',
+    suspended: false,
+    taskUid: 'uid-p',
+  });
+
+  it('admits the queued child of a running parent at capacity', () => {
+    const child = makeJob({ name: 'kat-c', agent: 'verifier', model: 'm', suspended: true });
+    child.metadata!.labels!['kagent.knuteson.io/parent-task-uid'] = 'uid-p';
+    const admitted = selectAdmittable({
+      suspendedJobs: [child],
+      runningJobs: [parent],
+      modelEndpoints: endpoints,
+      agentMaxInFlight: new Map(),
+    });
+    expect(admitted.map((r) => r.name)).toEqual(['kat-c']);
+  });
+
+  it('still counts a running parent against an unrelated queued job', () => {
+    const other = makeJob({ name: 'kat-o', agent: 'other', model: 'm', suspended: true });
+    const admitted = selectAdmittable({
+      suspendedJobs: [other],
+      runningJobs: [parent],
+      modelEndpoints: endpoints,
+      agentMaxInFlight: new Map(),
+    });
+    expect(admitted).toEqual([]);
+  });
+});
+
 describe('selectAdmittable — depth cap (v0.1.9)', () => {
   it('skips suspended Jobs that exceed maxDepth (never un-suspends)', () => {
     const tooDeep = makeJob({
