@@ -45,7 +45,7 @@ describe('fleet.run_tool', () => {
   it('fetches the pinned tree with the signed identity, writes it into the workspace, runs the command', async () => {
     const fetched: Array<{ url: string; headers: Record<string, string> }> = [];
     const written: Array<{ path: string; content: string }> = [];
-    const ran: Array<{ command: string; args?: readonly string[]; timeoutMs?: number }> = [];
+    const ran: Array<{ language: string; code: string; timeoutMs?: number }> = [];
     const runner = {
       writeFiles: (files: readonly { path: string; content: string }[]) => {
         written.push(...files);
@@ -86,11 +86,11 @@ describe('fleet.run_tool', () => {
       '2026-09-26-egressmeter/a.py',
       '2026-09-26-egressmeter/lib/b.py',
     ]);
-    expect(ran[0]).toEqual({
-      command: 'sh',
-      args: ['-c', "cd '2026-09-26-egressmeter' && python3 a.py --json"],
-      timeoutMs: 900_000,
-    });
+    expect(ran[0]?.language).toBe('javascript');
+    expect(ran[0]?.timeoutMs).toBe(900_000);
+    expect(ran[0]?.code).toContain(
+      `spawnSync('sh', ['-c', "python3 a.py --json"], { cwd: "2026-09-26-egressmeter"`,
+    );
     expect(result.isError).toBe(false);
     const out = JSON.parse(result.content) as { exit: number; stdout: string; stderr: string };
     expect(out.exit).toBe(1);

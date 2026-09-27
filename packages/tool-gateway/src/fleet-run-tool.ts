@@ -33,6 +33,7 @@ const MAX_TIMEOUT_MS = 1_500_000;
 const STDOUT_KEEP = 6000;
 const STDERR_KEEP = 1500;
 const TREE_MAX_BYTES = 8 * 1024 * 1024;
+const ENVELOPE_MARK = '@@fleet.run_tool@@';
 
 export interface FleetRunToolOptions {
   readonly playgroundUrl: string;
@@ -121,21 +122,39 @@ export function defineFleetRunTool(options: FleetRunToolOptions): ToolGatewayExt
     await runner.writeFiles(
       files.map(([path, content]) => ({ path: `${args.folder}/${path}`, content })),
     );
-    const result = await runner.executeCommand({
-      command: 'sh',
-      args: ['-c', `cd '${args.folder}' && ${args.run}`],
-      timeoutMs: args.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    });
-    const exit = result.timedOut ? 124 : (result.exitCode ?? 2);
+    // The runner's executeCommand admits an allowlist (node, python...) and not
+    // `sh`; a promoted tool's command is arbitrary. Run it the way agent code
+    // already does — a snippet in the same task workspace spawning `sh -c` —
+    // and read one JSON envelope back. Same sandbox, same limits.
+    const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const snippet = [
+      "import { spawnSync } from 'node:child_process';",
+      `const r = spawnSync('sh', ['-c', ${JSON.stringify(args.run)}], { cwd: ${JSON.stringify(args.folder)}, encoding: 'utf8', timeout: ${String(timeoutMs - 5000)}, maxBuffer: 16 * 1024 * 1024 });`,
+      `process.stdout.write('\\n' + ${JSON.stringify(ENVELOPE_MARK)} + JSON.stringify({ status: r.status, signal: r.signal, stdout: (r.stdout || '').slice(0, ${String(STDOUT_KEEP)}), stderr: (r.stderr || '').slice(-${String(STDERR_KEEP)}) }));`,
+    ].join('\n');
+    const result = await runner.executeCode({ language: 'javascript', code: snippet, timeoutMs });
+    const mark = result.stdout.lastIndexOf(ENVELOPE_MARK);
+    if (mark < 0) {
+      return errorResult(
+        `the run produced no result envelope (exit ${String(result.exitCode)}, timedOut ${String(result.timedOut)}): ${result.stderr.slice(-600)}`,
+      );
+    }
+    let envelope: { status: number | null; signal: string | null; stdout: string; stderr: string };
+    try {
+      envelope = JSON.parse(result.stdout.slice(mark + ENVELOPE_MARK.length)) as typeof envelope;
+    } catch {
+      return errorResult('the run produced an unreadable result envelope');
+    }
+    const exit = envelope.status ?? (envelope.signal !== null ? 124 : 2);
     return {
       content: JSON.stringify({
         folder: args.folder,
         sha: args.sha,
         run: args.run,
         exit,
-        timedOut: result.timedOut,
-        stdout: result.stdout.slice(0, STDOUT_KEEP),
-        stderr: result.stderr.slice(-STDERR_KEEP),
+        timedOut: envelope.signal === 'SIGTERM',
+        stdout: envelope.stdout,
+        stderr: envelope.stderr,
       }),
       isError: false,
       metadata: { exit },
