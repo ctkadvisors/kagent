@@ -1258,5 +1258,9 @@ describe('inlineArtifactRef payload', () => {
     expect(Buffer.from(payload, 'base64').toString('utf8')).toBe('spec: {}\n');
     const large = inlineArtifactRef('x'.repeat(64 * 1024 + 1), 'text/plain');
     expect(large.payloadBase64).toBeUndefined();
+    // the candidate media type may be written inline (the review queue reads it there)
+    expect(
+      inlineSafeForArtifact('spec: {}\n', 'application/x-kagent-template-candidate+yaml'),
+    ).toBe(true);
   });
 });
