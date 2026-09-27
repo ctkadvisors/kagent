@@ -95,7 +95,7 @@ export interface AgentSpecEnv {
     readonly stopSequences?: readonly string[];
     /** Provider-specific request fields merged verbatim into the chat body (e.g. `chat_template_kwargs`). */
     readonly extraBody?: Readonly<Record<string, unknown>>;
-    /** One self-check message for a tool-less turn (see RunInput.selfCheck). */
+    /** One self-check message at the first end of turn (see RunInput.selfCheck). */
     readonly selfCheck?: string;
   };
   /**

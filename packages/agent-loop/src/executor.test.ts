@@ -65,6 +65,34 @@ describe('AgentExecutor — loop semantics', () => {
     expect(plain.finalContent).toBe('narrated');
   });
 
+  it('selfCheck: a turn ended after tool calls gets the check once too — narrating "now running it" is not finishing', async () => {
+    const llm = makeStubLLM({
+      scriptedResponses: [
+        { content: '', tool_calls: [{ id: 'c1', name: 'echo', args: { msg: 'x' } }] },
+        { content: 'Files are in place. Now running the promoted command.' },
+        { content: '', tool_calls: [{ id: 'c2', name: 'echo', args: { msg: 'y' } }] },
+        { content: '2130' },
+      ],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'echo', description: '', inputSchema: {} }],
+        onCall: () => ({ content: 'echo: ok', isError: false }),
+      }),
+    ];
+    const exec = new AgentExecutor({ registry, llm, toolProviders: tools });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'run the check' }],
+      selfCheck: 'You ended your turn. If not done, make the next call now.',
+    });
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('2130');
+    expect(result.traces.filter((t) => t.trace_type === 'tool_call')).toHaveLength(2);
+    expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(4);
+  });
+
   it('SC3.2: two-iteration tool-use; trace order: iteration_boundary, llm_call, tool_call, iteration_boundary, llm_call', async () => {
     const llm = makeStubLLM({
       scriptedResponses: [
