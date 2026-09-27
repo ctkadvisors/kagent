@@ -27,10 +27,11 @@ spec:
         {{- include "kagent-operator.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tool-gateway
     spec:
-      {{- if .Values.toolRuntime.code.agentSandbox.enabled }}
+      {{- $needsKube := or .Values.toolRuntime.code.agentSandbox.enabled .Values.toolRuntime.code.sandbox.enabled }}
+      {{- if $needsKube }}
       serviceAccountName: {{ include "kagent-operator.fullname" . }}-tool-gateway
       {{- end }}
-      automountServiceAccountToken: {{ .Values.toolRuntime.code.agentSandbox.enabled }}
+      automountServiceAccountToken: {{ $needsKube }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -86,6 +87,29 @@ spec:
             {{/* Credential-free providers kept in values: concatenated after the Secret's. */}}
             - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_EXTRA_JSON
               value: {{ dict "providers" . | toJson | quote }}
+            {{- end }}
+            {{- with .Values.toolRuntime.code.sandbox }}
+            {{- if .enabled }}
+            {{/* Agent code runs in a per-task sandbox Job from the gateway's own image. */}}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_IMAGE
+              value: {{ include "kagent-operator.toolGateway.image" $ | quote }}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_NAMESPACE
+              value: {{ $.Release.Namespace | quote }}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_IDLE_SECONDS
+              value: {{ .idleSeconds | quote }}
+            {{- with .runtimeClassName }}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_RUNTIME_CLASS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .resources }}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_RESOURCES_JSON
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .nodeSelector }}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_NODE_SELECTOR_JSON
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- if .Values.toolRuntime.gateway.verifyCaller }}
             {{/* Every describe/invoke must carry the calling task's capability JWT,

@@ -110,6 +110,23 @@ toolRuntime:
     # backend can switch to SandboxClaim/SandboxTemplate without
     # changing Agent.spec.tools.
     backend: local
+    # Per-task sandbox Jobs: every task's code_interpreter / fleet.run_tool calls run
+    # in its own short-lived Job (no service-account token, no gateway env, its own
+    # /workspace and /tmp), not as children of the gateway process beside its keys.
+    # The Job runs the gateway image's sandbox worker; only the gateway can reach it.
+    sandbox:
+      enabled: false
+      runtimeClassName: ''
+      # The image's architectures: the published images are linux/amd64.
+      nodeSelector: {}
+      idleSeconds: 1800
+      resources:
+        requests:
+          cpu: '100m'
+          memory: '256Mi'
+        limits:
+          cpu: '2'
+          memory: '2Gi'
     agentSandbox:
       enabled: false
       sandboxTemplateName: kagent-code-runner

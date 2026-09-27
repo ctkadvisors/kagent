@@ -28,6 +28,7 @@
     "@kagent/dto": "workspace:*",
     "@kagent/http-tool-provider": "workspace:*",
     "@kagent/mcp-tool-provider": "workspace:*",
+    "@kubernetes/client-node": "1.4.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "playwright-core": "^1.60.0"
   },

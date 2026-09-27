@@ -5,7 +5,7 @@ Copyright (c) 2026 Chris Knuteson
 RBAC needed only when the tool gateway is configured to broker code
 sessions through kubernetes-sigs/agent-sandbox SandboxClaim objects.
 */}}
-{{- if and .Values.toolRuntime.enabled .Values.toolRuntime.code.agentSandbox.enabled -}}
+{{- if and .Values.toolRuntime.enabled (or .Values.toolRuntime.code.agentSandbox.enabled .Values.toolRuntime.code.sandbox.enabled) -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -24,6 +24,17 @@ metadata:
     {{- include "kagent-operator.labels" . | nindent 4 }}
     app.kubernetes.io/component: tool-gateway
 rules:
+  {{- if .Values.toolRuntime.code.sandbox.enabled }}
+  # Per-task sandbox Jobs (tool-gateway pod-code-runner.ts): create one per task,
+  # remove a task's old ones, find the running pod's IP.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete", "deletecollection", "get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  {{- end }}
+  {{- if .Values.toolRuntime.code.agentSandbox.enabled }}
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -36,6 +47,7 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
