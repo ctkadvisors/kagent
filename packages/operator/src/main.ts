@@ -1321,7 +1321,17 @@ export function buildHandler(
       // exists to act on (and re-firing supervision on relist is the
       // mechanism that closes the loop, not this onUpdate path).
       await maybeEnforceCompletionContract(task, deps);
-      await maybeAnnotateTemplateCandidate(task, deps);
+      try {
+        if ((await maybeAnnotateTemplateCandidate(task, deps)) === 'annotated') {
+          console.log(
+            `[kagent-operator] template candidate: annotated ${task.metadata.namespace ?? 'default'}/${task.metadata.name ?? '(no-name)'} for the review queue`,
+          );
+        }
+      } catch (err) {
+        // A failed annotation must be visible: the candidate otherwise never
+        // reaches the review queue and nothing says why.
+        console.warn('[kagent-operator] template candidate annotation failed:', err);
+      }
       // === Phase 5 P4 — supervision-aware parent re-aggregate
       // ordering ===
       //

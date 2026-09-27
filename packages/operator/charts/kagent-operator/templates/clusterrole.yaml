@@ -60,7 +60,9 @@ rules:
   # for the trigger paths.
   - apiGroups: ['kagent.knuteson.io']
     resources: ['agenttasks']
-    verbs: ['create']
+    # patch: the operator marks a Completed task that produced a template
+    # candidate (kagent.knuteson.io/template-candidate) for the review queue.
+    verbs: ['create', 'patch']
   # Channel gateway creates ChannelSession records for inbound external
   # channel turns. AgentTask creation stays in the existing rule above.
   - apiGroups: ['kagent.knuteson.io']
