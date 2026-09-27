@@ -71,18 +71,23 @@ import { randomUUID } from 'node:crypto';
 // =====================================================================
 
 /**
- * Default retry schedule — exponential 200ms / 800ms / 3200ms.
+ * Default retry schedule — 1s / 2s / 5s / 10s / 20s / 30s, the last reused.
  *
  * Index 0 is the wait BEFORE retry attempt 1; index 1 is the wait BEFORE
- * retry attempt 2; etc. With `maxRetries=2` (the default), only indices
- * 0 and 1 are consulted — index 2+ is reserved for callers that increase
- * the retry budget. The schedule is a `readonly number[]` so it cannot
+ * retry attempt 2; etc. The schedule is a `readonly number[]` so it cannot
  * be mutated through the public type surface.
+ *
+ * Sized for one shared local model, not for a burst: a 429 here means another
+ * agent's turn holds the GPU, and a turn on a 100B-class model runs minutes.
+ * The earlier 200/800/3200ms with two retries gave up inside a second, so
+ * every scheduled run that started while a long run was in flight failed at
+ * its first call. With `maxRetries=40` the wait tops out near twenty minutes,
+ * inside any run's own timeout, and `Retry-After` still wins per attempt.
  */
-const DEFAULT_BACKOFF_SCHEDULE: readonly number[] = [200, 800, 3200];
+const DEFAULT_BACKOFF_SCHEDULE: readonly number[] = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000];
 
-/** Default retry cap — original attempt + 2 retries = 3 round-trips worst-case. */
-const DEFAULT_MAX_RETRIES = 2;
+/** Default retry cap — original attempt + 40 retries, ~20 minutes of waiting worst-case. */
+const DEFAULT_MAX_RETRIES = 40;
 
 /**
  * Upper bound on a per-attempt backoff sleep — covers both
@@ -124,14 +129,14 @@ export interface RetryPolicy {
   /**
    * Maximum retries AFTER the original attempt; original + maxRetries = total round-trips.
    *
-   * Default: `2` (so 1 original + 2 retries = 3 chat() calls in the worst
-   * case). Set to `0` to disable retry entirely (429 and status 0 fail immediately).
+   * Default: `40` (about twenty minutes of waiting on the default schedule).
+   * Set to `0` to disable retry entirely (429 and status 0 fail immediately).
    * MUST be a non-negative integer.
    */
   maxRetries?: number;
   /**
    * Backoff delays in ms BEFORE each retry attempt. `[i]` is the wait before
-   * retry `i+1`. Default: `[200, 800, 3200]`.
+   * retry `i+1`. Default: `[1000, 2000, 5000, 10000, 20000, 30000]`.
    *
    * If the schedule has fewer entries than `maxRetries`, the last entry is
    * reused for any further retry (a defensive fallback rather than throwing
@@ -328,7 +333,7 @@ export interface AgentExecutorOptions<
   /**
    * Optional 429/0-retry policy applied around every `LLMClient.chat()` call.
    *
-   * Defaults: `{ maxRetries: 2, backoffSchedule: [200, 800, 3200] }`. Pass
+   * Defaults: `{ maxRetries: 40, backoffSchedule: [1000, 2000, 5000, 10000, 20000, 30000] }`. Pass
    * `{ maxRetries: 0 }` to disable retry entirely. See `RetryPolicy`.
    */
   retryPolicy?: RetryPolicy;

@@ -299,7 +299,7 @@ describe('AgentExecutor — 429 retry policy', () => {
 
   it('default retry policy (no opts) absorbs a single 429 with the default backoff schedule', async () => {
     // No retryPolicy supplied → executor uses its built-in defaults
-    // (maxRetries=2, [200,800,3200]). Inject sleep through the policy
+    // (maxRetries=40, [1000,2000,5000,10000,20000,30000]). Inject sleep through the policy
     // instead by passing only `sleep` to keep the test deterministic;
     // assert the schedule values via recordedSleeps.
     const recordedSleeps: number[] = [];
@@ -321,7 +321,7 @@ describe('AgentExecutor — 429 retry policy', () => {
       messages: [{ role: 'user', content: 'hi' }],
     });
     expect(result.status).toBe('completed');
-    expect(recordedSleeps).toEqual([200]); // confirms default backoffSchedule[0]
+    expect(recordedSleeps).toEqual([1000]); // confirms default backoffSchedule[0]
   });
 
   it('disabled retry policy (maxRetries=0) → 429 fails immediately', async () => {
