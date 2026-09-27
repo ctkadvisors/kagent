@@ -134,6 +134,9 @@ const INLINE_SAFE_MEDIA_TYPES: ReadonlySet<string> = new Set<string>([
   'text/x-diff',
   'text/x-patch',
   'application/json',
+  // A template candidate is YAML text, and the review queue's accept path reads it
+  // only from an inline ref (payloadBase64; PVC resolution is deferred there).
+  'application/x-kagent-template-candidate+yaml',
 ]);
 
 /* =====================================================================
