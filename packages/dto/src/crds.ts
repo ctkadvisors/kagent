@@ -168,7 +168,16 @@ export interface ArtifactRef {
   readonly checksum?: string;
   readonly name?: string;
   readonly producedAt?: string;
+  /**
+   * The bytes themselves, base64, for small inline artifacts (at most
+   * INLINE_PAYLOAD_MAX_BYTES). The review queue's accept path reads a
+   * template candidate from here; PVC-backed refs never carry it.
+   */
+  readonly payloadBase64?: string;
 }
+
+/** Inline refs at or under this size carry `payloadBase64`. */
+export const INLINE_PAYLOAD_MAX_BYTES = 64 * 1024;
 
 /**
  * Parent/child task-graph projection. Operator-owned state populated

@@ -88,6 +88,8 @@ export interface ToolGatewayHttpHandlerOptions {
   readonly browser?: SteelBrowserAdapter;
   readonly shellRunner?: ToolGatewayShellRunner;
   readonly externalHandlers?: Readonly<Record<string, ToolGatewayExternalHandler>>;
+  /** Descriptors for externalHandlers tools, so profiles can list them. */
+  readonly externalDescriptors?: readonly ToolDescriptor[];
   readonly externalRegistry?: ExternalToolRegistry;
   readonly toolProfiles?: ToolProfileConfig;
   readonly paused?: boolean;
@@ -99,6 +101,7 @@ export class ToolGatewayHttpHandler {
   private readonly browser: SteelBrowserAdapter | undefined;
   private readonly shellRunner: ToolGatewayShellRunner | undefined;
   private readonly externalHandlers: Readonly<Record<string, ToolGatewayExternalHandler>>;
+  private readonly externalDescriptors: readonly ToolDescriptor[];
   private readonly externalRegistry: ExternalToolRegistry | undefined;
   private readonly toolProfiles: ToolProfileConfig;
   private readonly browserSessions = new Map<string, SteelBrowserSession>();
@@ -110,6 +113,7 @@ export class ToolGatewayHttpHandler {
     this.browser = options.browser;
     this.shellRunner = options.shellRunner;
     this.externalHandlers = options.externalHandlers ?? {};
+    this.externalDescriptors = options.externalDescriptors ?? [];
     this.externalRegistry = options.externalRegistry;
     this.toolProfiles = options.toolProfiles ?? { profiles: [] };
     this.paused = options.paused ?? false;
@@ -208,6 +212,9 @@ export class ToolGatewayHttpHandler {
       if (isToolRuntimeTool(name)) {
         descriptors.set(name, runtimeToolDescriptor(name, this.shellRunner?.hostNames?.() ?? []));
       }
+    }
+    for (const tool of this.externalDescriptors) {
+      if (toolNames.includes(tool.name)) descriptors.set(tool.name, tool);
     }
 
     if (this.externalRegistry !== undefined) {

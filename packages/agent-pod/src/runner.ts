@@ -71,6 +71,8 @@ export interface ArtifactRef {
   readonly checksum?: string;
   readonly name?: string;
   readonly producedAt?: string;
+  /** Bytes, base64, for small inline refs (mirror of dto `ArtifactRef.payloadBase64`). */
+  readonly payloadBase64?: string;
 }
 
 /**

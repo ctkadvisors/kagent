@@ -82,7 +82,7 @@ import { detectJobFailure, detectPodFailure } from './failure-detector.js';
 import { jobNameForTask, type BuildJobSpecOptions, type EnvVarSpec } from './job-spec.js';
 import type { ModelClassEntry, ModelClassMap } from './model-class-resolver.js';
 import { createJobPodInformer, parentTaskRef } from './job-watch.js';
-import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi } from './k8s.js';
+import { loadKubeConfig, makeBatchApi, makeCustomObjectsApi, mergePatchOptions } from './k8s.js';
 import { NatsDispatcher } from './nats-dispatcher.js';
 import {
   markAgentTaskFailedFromExternal,
@@ -1321,6 +1321,7 @@ export function buildHandler(
       // exists to act on (and re-firing supervision on relist is the
       // mechanism that closes the loop, not this onUpdate path).
       await maybeEnforceCompletionContract(task, deps);
+      await maybeAnnotateTemplateCandidate(task, deps);
       // === Phase 5 P4 — supervision-aware parent re-aggregate
       // ordering ===
       //
@@ -1511,6 +1512,43 @@ async function maybeRouteSupervision(
  * desirable but not request-critical, and re-firing on the next
  * informer event is safe (merge-patch idempotent).
  */
+export const ANNOTATION_TEMPLATE_CANDIDATE = 'kagent.knuteson.io/template-candidate';
+export const TEMPLATE_CANDIDATE_MEDIA_TYPE = 'application/x-kagent-template-candidate+yaml';
+
+/**
+ * A Completed task that produced a template candidate artifact
+ * (`application/x-kagent-template-candidate+yaml`) is marked for the review
+ * queue: the workbench lists candidate rows by this annotation and its
+ * accept path creates the AgentTemplate from the artifact. Agents may not
+ * patch their own metadata (agent-pod RBAC covers status only), so the
+ * operator, which owns the CR, sets it. Merge-patch, idempotent.
+ */
+export async function maybeAnnotateTemplateCandidate(
+  task: import('./crds/index.js').AgentTask,
+  deps: Pick<ReconcileDeps, 'customApi'>,
+): Promise<'no-op' | 'annotated'> {
+  if (task.status?.phase !== 'Completed') return 'no-op';
+  const annotations = task.metadata.annotations ?? {};
+  if (annotations[ANNOTATION_TEMPLATE_CANDIDATE] !== undefined) return 'no-op';
+  const artifacts = task.status.artifacts ?? [];
+  if (!artifacts.some((a) => a.mediaType === TEMPLATE_CANDIDATE_MEDIA_TYPE)) return 'no-op';
+  const namespace = task.metadata.namespace ?? 'default';
+  const name = task.metadata.name ?? '';
+  if (name.length === 0) return 'no-op';
+  await deps.customApi.patchNamespacedCustomObject(
+    {
+      group: 'kagent.knuteson.io',
+      version: 'v1alpha1',
+      namespace,
+      plural: 'agenttasks',
+      name,
+      body: { metadata: { annotations: { [ANNOTATION_TEMPLATE_CANDIDATE]: 'true' } } },
+    },
+    mergePatchOptions,
+  );
+  return 'annotated';
+}
+
 async function maybeEnforceCompletionContract(
   task: import('./crds/index.js').AgentTask,
   deps: ReconcileDeps,

@@ -3,6 +3,11 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import {
+  FLEET_RUN_TOOL_DESCRIPTOR,
+  FLEET_RUN_TOOL_NAME,
+  defineFleetRunTool,
+} from './fleet-run-tool.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -38,6 +43,8 @@ export interface ToolGatewayServerConfig {
   readonly shellHosts: Readonly<Record<string, string>>;
   readonly externalProviders: ExternalToolProviderConfig;
   readonly toolProfiles: ToolProfileConfig;
+  readonly fleetPlaygroundUrl?: string;
+  readonly fleetSigningKey?: string;
 }
 
 export interface ToolGatewayServerHandlerOptions {
@@ -63,6 +70,8 @@ export function parseToolGatewayServerConfig(
     shellSshKeyPath?: string;
     shellSshUser?: string;
     shellHosts: Readonly<Record<string, string>>;
+    fleetPlaygroundUrl?: string;
+    fleetSigningKey?: string;
   } = {
     shellHosts: parseShellHostsEnv(env.KAGENT_SHELL_HOSTS),
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
@@ -84,6 +93,10 @@ export function parseToolGatewayServerConfig(
     },
     toolProfiles: parseToolProfileConfig(nonEmpty(env.KAGENT_TOOL_GATEWAY_TOOL_PROFILES_JSON)),
   };
+  const fleetPlaygroundUrl = nonEmpty(env.KAGENT_FLEET_PLAYGROUND_URL);
+  const fleetSigningKey = nonEmpty(env.KAGENT_FLEET_SIGNING_KEY);
+  if (fleetPlaygroundUrl !== undefined) config.fleetPlaygroundUrl = fleetPlaygroundUrl;
+  if (fleetSigningKey !== undefined) config.fleetSigningKey = fleetSigningKey;
   const steelBaseUrl = nonEmpty(env.KAGENT_STEEL_BASE_URL);
   const steelApiKey = nonEmpty(env.KAGENT_STEEL_API_KEY);
   const steelConnectBaseUrl = nonEmpty(env.KAGENT_STEEL_CONNECT_BASE_URL);
@@ -127,13 +140,32 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     }
   }
 
+  const codeRunnerFactory = (task: ToolGatewayTaskIdentity) =>
+    buildLocalCodeRunner(config.workspaceRoot, task);
+  // fleet.run_tool: the catalog's executable half. Present only when the
+  // gateway knows the playground and holds the fleet signing key.
+  const fleetTool =
+    config.fleetPlaygroundUrl !== undefined && config.fleetSigningKey !== undefined
+      ? {
+          externalHandlers: {
+            [FLEET_RUN_TOOL_NAME]: defineFleetRunTool({
+              playgroundUrl: config.fleetPlaygroundUrl,
+              signingKey: config.fleetSigningKey,
+              codeRunnerFor: codeRunnerFactory,
+            }),
+          },
+          externalDescriptors: [FLEET_RUN_TOOL_DESCRIPTOR],
+        }
+      : {};
+
   const options: ToolGatewayHttpHandlerOptions = {
     paused: config.paused,
-    codeRunnerFactory: (task) => buildLocalCodeRunner(config.workspaceRoot, task),
+    codeRunnerFactory,
     externalRegistry: buildExternalToolRegistry(config.externalProviders),
     toolProfiles: config.toolProfiles,
     ...(browser !== undefined && { browser }),
     ...(shellRunner !== undefined && { shellRunner }),
+    ...fleetTool,
   };
 
   return new ToolGatewayHttpHandler(options);
