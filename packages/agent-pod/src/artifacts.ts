@@ -38,6 +38,7 @@
  * structural typing.
  */
 
+import { INLINE_PAYLOAD_MAX_BYTES } from '@kagent/dto';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
@@ -78,6 +79,8 @@ export interface ArtifactRef {
    * with zero schema change.
    */
   readonly contentHash?: string;
+  /** Bytes, base64, for small inline refs (mirror of dto `ArtifactRef.payloadBase64`). */
+  readonly payloadBase64?: string;
 }
 
 /* =====================================================================
@@ -549,6 +552,12 @@ export function inlineArtifactRef(
     checksum: `sha256:${hex}`,
     contentHash: hex,
     producedAt: now.toISOString(),
+    // Small inline artifacts travel with their bytes: a template candidate
+    // (application/x-kagent-template-candidate+yaml) is read back from the
+    // ref by the review queue's accept handler, which has no PVC access.
+    ...(bytes.byteLength <= INLINE_PAYLOAD_MAX_BYTES && {
+      payloadBase64: bytes.toString('base64'),
+    }),
   };
 }
 

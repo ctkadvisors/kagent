@@ -87,6 +87,10 @@ spec:
             - name: KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_EXTRA_JSON
               value: {{ dict "providers" . | toJson | quote }}
             {{- end }}
+            {{- with .Values.toolRuntime.gateway.fleetPlaygroundUrl }}
+            - name: KAGENT_FLEET_PLAYGROUND_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- $signing := (.Values.toolRuntime.gateway.fleetSigningKeySecretRef | default dict) -}}
             {{- if $signing.name }}
             {{/* The key an http provider with identity.signingKeyEnv signs the calling

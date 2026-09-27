@@ -16,5 +16,5 @@
  * from there to avoid dual-source `instanceof` ambiguity.
  */
 
-export { HttpToolProvider } from './provider.js';
+export { HttpToolProvider, signedIdentityHeaders } from './provider.js';
 export type { HttpToolProviderOptions, HttpToolDefinition } from './provider.js';

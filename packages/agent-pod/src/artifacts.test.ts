@@ -1250,3 +1250,13 @@ describe('createArtifactRegistry', () => {
 it('resolveWriterEnvOrDisabled is exported and callable', () => {
   expect(typeof resolveWriterEnvOrDisabled).toBe('function');
 });
+
+describe('inlineArtifactRef payload', () => {
+  it('carries the bytes for a small inline artifact and not for a large one', () => {
+    const small = inlineArtifactRef('spec: {}\n', 'application/x-kagent-template-candidate+yaml');
+    const payload: string = small.payloadBase64 ?? '';
+    expect(Buffer.from(payload, 'base64').toString('utf8')).toBe('spec: {}\n');
+    const large = inlineArtifactRef('x'.repeat(64 * 1024 + 1), 'text/plain');
+    expect(large.payloadBase64).toBeUndefined();
+  });
+});

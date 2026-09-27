@@ -189,3 +189,6 @@ export {
   isToolKind,
   isToolRuntimeTool,
 } from './tool-session.js';
+
+/** Inline artifact refs at or under this size carry `payloadBase64` (crds.ts). */
+export { INLINE_PAYLOAD_MAX_BYTES } from './crds.js';

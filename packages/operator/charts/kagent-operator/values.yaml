@@ -78,6 +78,9 @@ toolRuntime:
     fleetSigningKeySecretRef: {}
     # Providers that carry no credential, kept here and concatenated after the Secret's.
     externalProvidersExtra: []
+    # With fleetSigningKeySecretRef, enables fleet.run_tool: run a promoted playground
+    # tool at a pinned commit, fetched from this service and executed in the task's runner.
+    fleetPlaygroundUrl: ''
     # Gateway-owned agent/tool profiles. Agents can set
     # spec.toolProfileRef (or spec.agentType as an alias) to one of
     # these names, then the gateway resolves the concrete browser.*,
