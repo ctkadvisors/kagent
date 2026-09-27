@@ -51,12 +51,18 @@ describe('fleet.run_tool', () => {
         written.push(...files);
         return Promise.resolve();
       },
-      executeCommand: (i: { command: string; args?: readonly string[]; timeoutMs?: number }) => {
+      executeCode: (i: { language: string; code: string; timeoutMs?: number }) => {
         ran.push(i);
-        return Promise.resolve({
+        const envelope = JSON.stringify({
+          status: 1,
+          signal: null,
           stdout: 'FLEET-EGRESS v1\n{"channels": 3}\n',
           stderr: 'warn',
-          exitCode: 1,
+        });
+        return Promise.resolve({
+          stdout: 'noise before\n@@fleet.run_tool@@' + envelope,
+          stderr: '',
+          exitCode: 0,
           signal: null,
           timedOut: false,
         });
@@ -102,7 +108,7 @@ describe('fleet.run_tool', () => {
     let runs = 0;
     const runner = {
       writeFiles: () => Promise.resolve(),
-      executeCommand: () => {
+      executeCode: () => {
         runs += 1;
         return Promise.resolve({
           stdout: '',
