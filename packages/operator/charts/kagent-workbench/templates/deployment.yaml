@@ -143,6 +143,16 @@ spec:
             # absent / empty as "gateway page disabled" and the
             # /api/gateway/* routes 503 — UI degrades to an empty
             # state instead of crashing.
+            {{- with .Values.api.reviewTokenSecret }}
+            {{- if .name }}
+            # Review-queue writes (accept/reject/request) require this bearer token.
+            - name: WORKBENCH_REVIEW_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .key | default "token" | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.api.gatewayAdmin }}
             {{- if .baseUrl }}
             - name: WORKBENCH_GATEWAY_BASE_URL
