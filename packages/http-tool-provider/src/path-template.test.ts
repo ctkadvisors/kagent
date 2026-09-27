@@ -56,3 +56,15 @@ describe('substitutePath', () => {
     expect(substitutePath('/static', {})).toBe('/static');
   });
 });
+
+describe('substitutePath optional query placeholders', () => {
+  it('leaves an absent query-string placeholder empty and still requires path placeholders', () => {
+    expect(
+      substitutePath('/api/forum?author={author}&topic={topic}&limit={limit}', {
+        author: 'fleet-verifier',
+        limit: 1,
+      }),
+    ).toBe('/api/forum?author=fleet-verifier&topic=&limit=1');
+    expect(() => substitutePath('/tree/{folder}?sha={sha}', { sha: 'a' })).toThrow(/folder/);
+  });
+});
