@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { isToolRuntimeTool } from '@kagent/dto';
+import { isExternalGatewayToolName, isToolRuntimeTool } from '@kagent/dto';
 
 export interface ToolProfileSpec {
   readonly name: string;
@@ -91,12 +91,7 @@ function deDupe(values: readonly string[]): readonly string[] {
 }
 
 function isGatewayProfileToolName(name: string): boolean {
-  return (
-    isToolRuntimeTool(name) ||
-    name.startsWith('mcp.') ||
-    name.startsWith('http.') ||
-    name.startsWith('fleet.')
-  );
+  return isToolRuntimeTool(name) || isExternalGatewayToolName(name);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

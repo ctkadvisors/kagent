@@ -114,6 +114,16 @@ export function isShellTool(value: unknown): value is ShellToolName {
   return typeof value === 'string' && (SHELL_TOOL_NAMES as readonly string[]).includes(value);
 }
 
+/**
+ * Tools the gateway serves from its external providers (remote MCP, HTTP, and
+ * the fleet's own `fleet.*` tools). One copy for the pod and the gateway: when
+ * they disagreed, an Agent listing `fleet.run_tool` died at boot in the pod as
+ * an unknown built-in while the gateway would have served it.
+ */
+export function isExternalGatewayToolName(name: string): boolean {
+  return name.startsWith('mcp.') || name.startsWith('http.') || name.startsWith('fleet.');
+}
+
 export function isToolRuntimeTool(value: unknown): value is ToolRuntimeToolName {
   return isCodeInterpreterTool(value) || isBrowserTool(value) || isShellTool(value);
 }

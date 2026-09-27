@@ -9,7 +9,11 @@ import type {
   ToolInvocationContext,
   ToolResult,
 } from '@kagent/agent-loop';
-import { isToolRuntimeTool, type ToolRuntimeToolName } from '@kagent/dto';
+import {
+  isExternalGatewayToolName,
+  isToolRuntimeTool,
+  type ToolRuntimeToolName,
+} from '@kagent/dto';
 
 import {
   SteelBrowserAdapter,
@@ -978,10 +982,6 @@ function runtimeError(err: unknown): ToolResult {
 
 function taskKey(task: ToolGatewayTaskIdentity): string {
   return `${task.tenant}/${task.namespace}/${task.taskUid}`;
-}
-
-function isExternalGatewayToolName(name: string): boolean {
-  return name.startsWith('mcp.') || name.startsWith('http.') || name.startsWith('fleet.');
 }
 
 function deDupe(values: readonly string[]): readonly string[] {

@@ -64,13 +64,14 @@ function parsedRequestBody(call: CapturedRequest | undefined): Record<string, un
 }
 
 describe('ToolGatewayProvider', () => {
-  it('recognizes runtime plus mcp/http gateway tool names', () => {
+  it('recognizes runtime plus mcp/http/fleet gateway tool names', () => {
     expect(
       requestedGatewayToolNames([
         'browser.goto',
         'code_interpreter.execute_code',
         'mcp.project.lookup',
         'http.github.get_issue',
+        'fleet.run_tool',
         'extract_text',
       ]),
     ).toEqual([
@@ -78,6 +79,7 @@ describe('ToolGatewayProvider', () => {
       'code_interpreter.execute_code',
       'mcp.project.lookup',
       'http.github.get_issue',
+      'fleet.run_tool',
     ]);
   });
 

@@ -15,6 +15,7 @@ import {
   BROWSER_TOOL_NAMES,
   CODE_INTERPRETER_TOOL_NAMES,
   SHELL_TOOL_NAMES,
+  isExternalGatewayToolName,
   isToolRuntimeTool,
   type ToolRuntimeToolName,
 } from '@kagent/dto';
@@ -491,8 +492,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function trimTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
-}
-
-function isExternalGatewayToolName(name: string): boolean {
-  return name.startsWith('mcp.') || name.startsWith('http.');
 }

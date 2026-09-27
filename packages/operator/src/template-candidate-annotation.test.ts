@@ -34,7 +34,13 @@ describe('maybeAnnotateTemplateCandidate', () => {
       },
     };
     const t = task({
-      artifacts: [{ uri: 'inline://sha256:ab', mediaType: TEMPLATE_CANDIDATE_MEDIA_TYPE }],
+      artifacts: [
+        {
+          uri: 'inline://sha256:ab',
+          mediaType: TEMPLATE_CANDIDATE_MEDIA_TYPE,
+          name: 'check-egressmeter',
+        },
+      ],
     });
     expect(await maybeAnnotateTemplateCandidate(t, { customApi } as never)).toBe('annotated');
     expect(patches).toHaveLength(1);
@@ -45,6 +51,9 @@ describe('maybeAnnotateTemplateCandidate', () => {
     };
     expect(req.plural).toBe('agenttasks');
     expect(req.body.metadata.annotations[ANNOTATION_TEMPLATE_CANDIDATE]).toBe('true');
+    expect(req.body.metadata.annotations['kagent.knuteson.io/proposed-template-name']).toBe(
+      'check-egressmeter',
+    );
     // already annotated, other media type, not Completed: no-op
     expect(
       await maybeAnnotateTemplateCandidate(

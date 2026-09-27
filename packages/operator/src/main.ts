@@ -1541,7 +1541,15 @@ export async function maybeAnnotateTemplateCandidate(
   const annotations = task.metadata.annotations ?? {};
   if (annotations[ANNOTATION_TEMPLATE_CANDIDATE] !== undefined) return 'no-op';
   const artifacts = task.status.artifacts ?? [];
-  if (!artifacts.some((a) => a.mediaType === TEMPLATE_CANDIDATE_MEDIA_TYPE)) return 'no-op';
+  const candidate = artifacts.find((a) => a.mediaType === TEMPLATE_CANDIDATE_MEDIA_TYPE);
+  if (candidate === undefined) return 'no-op';
+  // The template is named after the candidate artifact (e.g. check-egressmeter),
+  // not after the task that happened to file it.
+  const proposedName =
+    typeof candidate.name === 'string' &&
+    /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/.test(candidate.name)
+      ? candidate.name
+      : undefined;
   const namespace = task.metadata.namespace ?? 'default';
   const name = task.metadata.name ?? '';
   if (name.length === 0) return 'no-op';
@@ -1552,7 +1560,16 @@ export async function maybeAnnotateTemplateCandidate(
       namespace,
       plural: 'agenttasks',
       name,
-      body: { metadata: { annotations: { [ANNOTATION_TEMPLATE_CANDIDATE]: 'true' } } },
+      body: {
+        metadata: {
+          annotations: {
+            [ANNOTATION_TEMPLATE_CANDIDATE]: 'true',
+            ...(proposedName !== undefined && {
+              'kagent.knuteson.io/proposed-template-name': proposedName,
+            }),
+          },
+        },
+      },
     },
     mergePatchOptions,
   );

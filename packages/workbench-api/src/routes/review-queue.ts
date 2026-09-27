@@ -981,6 +981,7 @@ function findCandidateArtifact(task: AgentTask): CandidateArtifactResult | undef
       sizeBytes?: unknown;
       checksum?: unknown;
       producedAt?: unknown;
+      payloadBase64?: unknown;
     };
     if (a.mediaType !== TEMPLATE_CANDIDATE_MEDIA_TYPE) continue;
     if (typeof a.uri !== 'string') continue;
@@ -992,6 +993,8 @@ function findCandidateArtifact(task: AgentTask): CandidateArtifactResult | undef
       ...(typeof a.sizeBytes === 'number' && { sizeBytes: a.sizeBytes }),
       ...(typeof a.checksum === 'string' && { checksum: a.checksum }),
       ...(typeof a.producedAt === 'string' && { producedAt: a.producedAt }),
+      // The accept path reads an inline candidate from here (no PVC resolution yet).
+      ...(typeof a.payloadBase64 === 'string' && { payloadBase64: a.payloadBase64 }),
     };
     return { artifactRef };
   }

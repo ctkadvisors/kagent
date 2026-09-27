@@ -36,6 +36,8 @@ import type { ArtifactRef, AgentTaskPhase } from './crds.js';
  */
 export interface ArtifactRefSummary {
   readonly uri: string;
+  /** Inline bytes (base64) of a small artifact, e.g. a template candidate. */
+  readonly payloadBase64?: string | undefined;
   readonly mediaType?: string | undefined;
   readonly name?: string | undefined;
   readonly sizeBytes?: number | undefined;
