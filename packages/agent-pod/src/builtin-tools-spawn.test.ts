@@ -459,6 +459,47 @@ describe('spawn_child_task — allowedChildTemplates (v0.1.3)', () => {
     ]);
   });
 
+  it('admits a child whose from-template label matches a pattern in allowedChildTemplates', async () => {
+    const k8s = makeFakeK8s({
+      agents: {
+        'check-egressmeter-ab-12345678': {
+          'kagent.knuteson.io/from-template': 'check-egressmeter',
+        },
+      },
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'fleet-auditor',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [], allowedChildTemplates: ['check-*'] }),
+      k8s,
+      generateChildName: () => 'parent-task-001-c-glob1',
+    });
+    const ok = await callSpawn(provider, {
+      agentName: 'check-egressmeter-ab-12345678',
+      originalUserMessage: 'run the check',
+    });
+    expect(ok.isError).not.toBe(true);
+    expect(k8s.creates.length).toBe(1);
+  });
+
+  it('refuses a from-template label the pattern does not match', async () => {
+    const k8s = makeFakeK8s({
+      agents: { 'evil-check-12345678': { 'kagent.knuteson.io/from-template': 'evil-check' } },
+    });
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'fleet-auditor',
+      parentAgentSpec: buildSpec({ allowedChildAgents: [], allowedChildTemplates: ['check-*'] }),
+      k8s,
+    });
+    const denied = await callSpawn(provider, {
+      agentName: 'evil-check-12345678',
+      originalUserMessage: 'hi',
+    });
+    expect(denied.isError).toBe(true);
+    expect(k8s.creates.length).toBe(0);
+  });
+
   it('refuses when the target Agent has no from-template label', async () => {
     const k8s = makeFakeK8s({
       agents: {

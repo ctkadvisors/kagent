@@ -184,6 +184,7 @@ export {
   filterToolSessionEnv,
   isBrowserTool,
   isCodeInterpreterTool,
+  isExternalGatewayToolName,
   isForbiddenToolSessionEnvKey,
   isShellTool,
   isToolKind,

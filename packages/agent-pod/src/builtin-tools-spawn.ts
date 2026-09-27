@@ -320,7 +320,9 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
             );
           }
           const fromTemplate = target.labels[FROM_TEMPLATE_LABEL];
-          if (typeof fromTemplate === 'string' && allowTemplates.has(fromTemplate)) {
+          // Template entries are patterns (`check-*`), as the cap issuer encodes
+          // them; an exact Set lookup refused every child the cap admitted.
+          if (typeof fromTemplate === 'string' && globMatchAny([...allowTemplates], fromTemplate)) {
             admittedByTemplate = true;
           } else {
             const known = describeAllow(allow, allowTemplates);
