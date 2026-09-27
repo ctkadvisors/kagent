@@ -27,6 +27,7 @@ import {
   pickUserMessage,
   resolveToolProviders,
   runAgentTask,
+  mergeArtifactSources,
 } from './runner.js';
 import type { ArtifactRef } from './artifacts.js';
 
@@ -1249,5 +1250,18 @@ describe('parseContextSafetyThreshold WARN coverage (NH3 follow-up)', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('mergeArtifactSources — inline refs that carry their bytes', () => {
+  it('keeps an inline ref with payloadBase64 and still drops a bare inline ref', () => {
+    const carried: ArtifactRef = {
+      uri: 'inline://sha256:c0ffee',
+      mediaType: 'application/x-kagent-template-candidate+yaml',
+      payloadBase64: Buffer.from('spec: {}\n').toString('base64'),
+    };
+    const bare: ArtifactRef = { uri: 'inline://sha256:abc123', mediaType: 'text/markdown' };
+    const out = mergeArtifactSources([carried, bare], []);
+    expect(out.map((a) => a.uri)).toEqual(['inline://sha256:c0ffee']);
   });
 });
