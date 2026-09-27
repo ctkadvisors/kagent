@@ -37,6 +37,7 @@
  * does NOT echo back the bearer token.
  */
 
+import { createHash, createHmac } from 'node:crypto';
 import type {
   JSONSchema,
   ToolCall,
@@ -102,6 +103,15 @@ export interface HttpToolProviderOptions {
   fetch?: typeof globalThis.fetch;
   /** Tool definitions registered up-front; immutable after construction. */
   tools: HttpToolDefinition[];
+  /**
+   * When set, every request carries the calling task's identity from
+   * `ctx.task` plus an HMAC-SHA256 over it and the body, keyed by this
+   * secret: X-Kagent-Agent, X-Kagent-Task-Uid, X-Kagent-Namespace,
+   * X-Kagent-Ts and X-Kagent-Sig. The receiving service derives the author
+   * from these and ignores any identity in the body. A call with no
+   * `ctx.task` is refused rather than sent unsigned.
+   */
+  signIdentityWith?: string;
 }
 
 const HEADER_ALLOWLIST_FOR_METADATA = ['content-type', 'x-request-id'];
@@ -114,6 +124,7 @@ export class HttpToolProvider implements ToolProvider {
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly tools: Map<string, HttpToolDefinition>;
   private readonly descriptors: ToolDescriptor[];
+  private readonly signIdentityWith: string | undefined;
 
   constructor(opts: HttpToolProviderOptions) {
     if (!opts.tools || !Array.isArray(opts.tools)) {
@@ -123,6 +134,7 @@ export class HttpToolProvider implements ToolProvider {
     this.baseUrl = (opts.baseUrl ?? '').replace(/\/+$/, '');
     this.defaultHeaders = opts.defaultHeaders ?? {};
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+    this.signIdentityWith = opts.signIdentityWith;
     this.tools = new Map(opts.tools.map((t) => [t.name, t]));
     this.descriptors = opts.tools.map((t) => ({
       name: t.name,
@@ -168,6 +180,15 @@ export class HttpToolProvider implements ToolProvider {
     if (contentType !== undefined && !hasHeaderCaseInsensitive(headers, 'content-type')) {
       headers['Content-Type'] = contentType;
     }
+    if (this.signIdentityWith !== undefined) {
+      if (ctx?.task === undefined) {
+        throw new InvalidConfigError(
+          'identity',
+          'this provider signs the calling task; the invocation carried none',
+        );
+      }
+      Object.assign(headers, signedIdentityHeaders(this.signIdentityWith, ctx.task, body));
+    }
 
     let response: Response;
     try {
@@ -197,6 +218,43 @@ export class HttpToolProvider implements ToolProvider {
 }
 
 // ─── Pure helpers ─────────────────────────────────────────────────────
+
+/**
+ * The identity headers a receiving service verifies (fleet/identity.py in
+ * new_localai does the same arithmetic): HMAC-SHA256(key, agent\ntaskUid\n
+ * namespace\nts\nsha256(body)). The timestamp bounds replay to five minutes.
+ */
+export function signedIdentityHeaders(
+  key: string,
+  task: { tenant: string; namespace: string; taskUid: string; agentName: string },
+  body: HttpRequestBody | undefined,
+  now: number = Date.now(),
+): Record<string, string> {
+  const ts = String(Math.floor(now / 1000));
+  const bytes =
+    body === undefined
+      ? new Uint8Array()
+      : typeof body === 'string'
+        ? new TextEncoder().encode(body)
+        : bodyBytes(body);
+  const bodyHash = createHash('sha256').update(bytes).digest('hex');
+  const message = [task.agentName, task.taskUid, task.namespace, ts, bodyHash].join('\n');
+  const sig = createHmac('sha256', key).update(message).digest('hex');
+  return {
+    'X-Kagent-Agent': task.agentName,
+    'X-Kagent-Task-Uid': task.taskUid,
+    'X-Kagent-Namespace': task.namespace,
+    'X-Kagent-Ts': ts,
+    'X-Kagent-Sig': sig,
+  };
+}
+
+function bodyBytes(body: HttpRequestBody): Uint8Array {
+  if (body instanceof Uint8Array) return body;
+  if (body instanceof ArrayBuffer) return new Uint8Array(body);
+  // A signed provider sends JSON or text; a stream cannot be hashed up front.
+  throw new InvalidConfigError('identity', 'a signed provider cannot send a streaming body');
+}
 
 function buildBody(
   def: HttpToolDefinition,

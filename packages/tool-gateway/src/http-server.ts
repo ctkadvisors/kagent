@@ -151,7 +151,10 @@ export class ToolGatewayHttpHandler {
       }
       if (isExternalGatewayToolName(invocation.call.name) && this.externalRegistry !== undefined) {
         return jsonResponse(
-          await this.externalRegistry.executeTool(invocation, toolInvocationContext(request)),
+          await this.externalRegistry.executeTool(invocation, {
+            ...toolInvocationContext(request),
+            task: invocation.task,
+          }),
         );
       }
 
@@ -971,7 +974,7 @@ function taskKey(task: ToolGatewayTaskIdentity): string {
 }
 
 function isExternalGatewayToolName(name: string): boolean {
-  return name.startsWith('mcp.') || name.startsWith('http.');
+  return name.startsWith('mcp.') || name.startsWith('http.') || name.startsWith('fleet.');
 }
 
 function deDupe(values: readonly string[]): readonly string[] {

@@ -68,9 +68,20 @@ export function parseToolGatewayServerConfig(
     port: parsePositiveInteger(env.KAGENT_TOOL_GATEWAY_PORT, DEFAULT_PORT),
     workspaceRoot: nonEmpty(env.KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT) ?? DEFAULT_WORKSPACE_ROOT,
     paused: env.KAGENT_TOOL_RUNTIME_PAUSED === 'true',
-    externalProviders: parseExternalToolProviderConfig(
-      nonEmpty(env.KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON),
-    ),
+    // Two sources, concatenated: the Secret-borne JSON (providers that carry
+    // credentials) and a plain values-borne JSON for providers that carry none
+    // (the fleet's own services, whose signing key arrives by env), so those
+    // stay reviewable in git instead of inside a sealed blob.
+    externalProviders: {
+      providers: [
+        ...parseExternalToolProviderConfig(
+          nonEmpty(env.KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_JSON),
+        ).providers,
+        ...parseExternalToolProviderConfig(
+          nonEmpty(env.KAGENT_TOOL_GATEWAY_EXTERNAL_PROVIDERS_EXTRA_JSON),
+        ).providers,
+      ],
+    },
     toolProfiles: parseToolProfileConfig(nonEmpty(env.KAGENT_TOOL_GATEWAY_TOOL_PROFILES_JSON)),
   };
   const steelBaseUrl = nonEmpty(env.KAGENT_STEEL_BASE_URL);
