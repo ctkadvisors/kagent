@@ -1322,6 +1322,16 @@ export function buildHandler(
       // mechanism that closes the loop, not this onUpdate path).
       await maybeEnforceCompletionContract(task, deps);
       try {
+        const reaped = await reapTaskSandboxes(task, deps);
+        if (reaped > 0) {
+          console.log(
+            `[kagent-operator] code sandbox: removed ${String(reaped)} for finished task ${task.metadata.namespace ?? 'default'}/${task.metadata.name ?? '(no-name)'}`,
+          );
+        }
+      } catch (err) {
+        console.warn('[kagent-operator] code sandbox reap failed:', err);
+      }
+      try {
         if ((await maybeAnnotateTemplateCandidate(task, deps)) === 'annotated') {
           console.log(
             `[kagent-operator] template candidate: annotated ${task.metadata.namespace ?? 'default'}/${task.metadata.name ?? '(no-name)'} for the review queue`,
@@ -1533,6 +1543,40 @@ export const TEMPLATE_CANDIDATE_MEDIA_TYPE = 'application/x-kagent-template-cand
  * patch their own metadata (agent-pod RBAC covers status only), so the
  * operator, which owns the CR, sets it. Merge-patch, idempotent.
  */
+/** Label the tool-gateway puts on a task's code sandbox Jobs (pod-code-runner.ts). */
+export const SANDBOX_TASK_LABEL = 'kagent.knuteson.io/sandbox-task';
+
+/**
+ * A finished task's code sandboxes end with it, instead of idling for their
+ * full timeout on a busy node (2026-09-28: seven sandboxes, most for finished
+ * tasks, left a verifier unschedulable). Only tasks that finished in the last
+ * hour are looked at, so informer resyncs over hundreds of old tasks cost
+ * nothing; an older task's sandbox has already exited on its idle timeout.
+ */
+export async function reapTaskSandboxes(
+  task: import('./crds/index.js').AgentTask,
+  deps: Pick<ReconcileDeps, 'batchApi'>,
+  now: number = Date.now(),
+): Promise<number> {
+  const phase = task.status?.phase;
+  if (phase !== 'Completed' && phase !== 'Failed') return 0;
+  const uid = task.metadata.uid;
+  const completedAt = Date.parse(task.status?.completedAt ?? '');
+  if (uid === undefined || Number.isNaN(completedAt) || now - completedAt > 3_600_000) return 0;
+  const jobs = await deps.batchApi.listJobForAllNamespaces({
+    labelSelector: `${SANDBOX_TASK_LABEL}=${uid}`,
+  });
+  let removed = 0;
+  for (const job of jobs.items) {
+    const name = job.metadata?.name;
+    const namespace = job.metadata?.namespace;
+    if (name === undefined || namespace === undefined) continue;
+    await deps.batchApi.deleteNamespacedJob({ name, namespace, propagationPolicy: 'Background' });
+    removed += 1;
+  }
+  return removed;
+}
+
 export async function maybeAnnotateTemplateCandidate(
   task: import('./crds/index.js').AgentTask,
   deps: Pick<ReconcileDeps, 'customApi'>,
