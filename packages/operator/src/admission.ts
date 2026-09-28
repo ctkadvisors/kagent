@@ -320,7 +320,24 @@ export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[
 
   // Sort suspended Jobs FIFO. Defensive: missing creationTimestamp
   // sorts last (so a malformed Job can't starve a normal one).
+  // Children of running parents go first, then FIFO. A parent that spawns a
+  // child lends it its slot; strict FIFO handed that slot to the next queued
+  // parent instead, so on 2026-09-28 all 17 migration inventors ran while every
+  // verifier child waited and the parents burned their turns in 15-minute waits.
+  const runningTaskUids = new Set<string>();
+  for (const job of runningJobs) {
+    if (job.spec?.suspend === true || isTerminalJob(job)) continue;
+    const uid = job.metadata?.ownerReferences?.find((o) => o.kind === 'AgentTask')?.uid;
+    if (uid !== undefined) runningTaskUids.add(uid);
+  }
+  const childOfRunning = (job: V1Job): number => {
+    const parent = job.metadata?.labels?.[PARENT_TASK_UID_LABEL];
+    return typeof parent === 'string' && runningTaskUids.has(parent) ? 0 : 1;
+  };
   const sorted = [...suspendedJobs].sort((a, b) => {
+    const pa = childOfRunning(a);
+    const pb = childOfRunning(b);
+    if (pa !== pb) return pa - pb;
     const ta = creationTime(a);
     const tb = creationTime(b);
     return ta - tb;
