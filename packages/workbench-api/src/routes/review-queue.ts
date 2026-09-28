@@ -959,7 +959,12 @@ export function classifyTask(
   // D-01-A: REQUIRES phase === 'Completed' AND annotation === 'true'
   //         AND a matching artifact exists.
   // If the artifact is missing: OMIT the task (return undefined per RESEARCH.md Q1 step 5).
-  if (annotations[ANNOTATION_TEMPLATE_CANDIDATE] === 'true' && phase === 'Completed') {
+  // A Failed task's candidate counts too: its standing is the verifier's
+  // verdict (the reviewer requires one), not whether its run finished cleanly.
+  if (
+    annotations[ANNOTATION_TEMPLATE_CANDIDATE] === 'true' &&
+    (phase === 'Completed' || phase === 'Failed')
+  ) {
     const candidateArtifact = findCandidateArtifact(task);
     if (candidateArtifact === undefined) {
       // No matching artifact → omit (return undefined, not a queue entry).

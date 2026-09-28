@@ -1581,7 +1581,9 @@ export async function maybeAnnotateTemplateCandidate(
   task: import('./crds/index.js').AgentTask,
   deps: Pick<ReconcileDeps, 'customApi'>,
 ): Promise<'no-op' | 'annotated'> {
-  if (task.status?.phase !== 'Completed') return 'no-op';
+  // A candidate's standing is its verifier verdict, not whether the task that
+  // filed it finished cleanly: a run that ran out of time still filed it.
+  if (task.status?.phase !== 'Completed' && task.status?.phase !== 'Failed') return 'no-op';
   const annotations = task.metadata.annotations ?? {};
   if (annotations[ANNOTATION_TEMPLATE_CANDIDATE] !== undefined) return 'no-op';
   const artifacts = task.status.artifacts ?? [];

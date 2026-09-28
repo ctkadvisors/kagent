@@ -500,6 +500,9 @@ export const CAP_JWT_VOLUME_NAME = 'cap-jwt';
 /** Set by spawn_child_task on a child AgentTask; copied onto its Job. */
 export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
 
+/** How long the Job's hard deadline trails the task's own timeout. */
+export const DEADLINE_GRACE_SECONDS = 300;
+
 export function jobNameForTask(task: AgentTask): string {
   const uid = task.metadata.uid;
   if (typeof uid !== 'string' || uid.length === 0) {
@@ -907,8 +910,15 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   // `runConfig.timeoutSeconds` wins over the deprecated top-level
   // `timeoutSeconds` field when both are present.
   const timeoutSeconds = task.spec.runConfig?.timeoutSeconds ?? task.spec.timeoutSeconds;
+  // The hard deadline trails the task's own timeout: the pod's AbortSignal
+  // fires first, the loop returns, and the pod writes its terminal status with
+  // what it produced. With equal numbers the Job's clock (which starts before
+  // scheduling and boot) won, K8s killed the pod mid-run, and the inventor's
+  // verified repair candidates were lost on every long run (2026-09-28).
   const activeDeadlineSeconds =
-    typeof timeoutSeconds === 'number' && timeoutSeconds > 0 ? timeoutSeconds : undefined;
+    typeof timeoutSeconds === 'number' && timeoutSeconds > 0
+      ? timeoutSeconds + DEADLINE_GRACE_SECONDS
+      : undefined;
 
   const podSpec: V1Job['spec'] = {
     backoffLimit: DEFAULT_BACKOFF_LIMIT,

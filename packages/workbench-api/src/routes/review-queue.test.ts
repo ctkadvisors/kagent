@@ -808,6 +808,54 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     expect((createBody['metadata'] as Record<string, unknown>)['name']).toBe('check-egressmeter');
   });
 
+  it('accepts a candidate filed by a run that ended Failed (out of time): the verdict, not the run, decides', async () => {
+    const customApi = makeMockCustomApi();
+    const inlineTask: AgentTask = {
+      ...candidateTemplateTask,
+      metadata: {
+        ...candidateTemplateTask.metadata,
+        annotations: {
+          'kagent.knuteson.io/template-candidate': 'true',
+          'kagent.knuteson.io/proposed-template-name': 'check-egressmeter',
+        },
+      },
+      status: {
+        ...candidateTemplateTask.status!,
+        phase: 'Failed',
+        artifacts: [
+          {
+            uri: 'inline://sha256:ab',
+            mediaType: 'application/x-kagent-template-candidate+yaml',
+            name: 'check-egressmeter',
+            payloadBase64: Buffer.from(candidateYaml, 'utf8').toString('base64'),
+          },
+        ],
+      },
+    };
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([inlineTask]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher: makeMockAuditPublisher(),
+        now: () => fixedPostNow,
+      }),
+    );
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-User': 'fleet-authority' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const createArgs = customApi.createNamespacedCustomObject.mock.calls[0] as unknown[];
+    const createBody = (createArgs[0] as Record<string, unknown>)['body'] as Record<
+      string,
+      unknown
+    >;
+    expect((createBody['metadata'] as Record<string, unknown>)['name']).toBe('check-egressmeter');
+  });
+
   // ------------------------------------------------------------------
   // W2-Test CR-01 — POST accept (candidate-template) — CR-create success
   //                  + patch failure: template.candidate.promoted IS
