@@ -31,6 +31,7 @@ import {
   parseTaskDepthLabel,
   TASK_DEPTH_LABEL,
   TMP_VOLUME_NAME,
+  DEADLINE_GRACE_SECONDS,
 } from './job-spec.js';
 
 const sampleAgent: Agent = {
@@ -459,10 +460,10 @@ describe('buildJobSpec', () => {
     expect(job.spec?.activeDeadlineSeconds).toBeUndefined();
   });
 
-  it('sets Job.spec.activeDeadlineSeconds from AgentTask.spec.timeoutSeconds', () => {
+  it('sets Job.spec.activeDeadlineSeconds to the task timeout plus the grace, so the pod stops first', () => {
     const t = { ...sampleTask, spec: { ...sampleTask.spec, timeoutSeconds: 60 } };
     const job = buildJobSpec(sampleAgent, t);
-    expect(job.spec?.activeDeadlineSeconds).toBe(60);
+    expect(job.spec?.activeDeadlineSeconds).toBe(60 + DEADLINE_GRACE_SECONDS);
   });
 
   it('omits activeDeadlineSeconds when timeoutSeconds is 0 or negative (defensive)', () => {

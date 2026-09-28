@@ -54,7 +54,7 @@ describe('maybeAnnotateTemplateCandidate', () => {
     expect(req.body.metadata.annotations['kagent.knuteson.io/proposed-template-name']).toBe(
       'check-egressmeter',
     );
-    // already annotated, other media type, not Completed: no-op
+    // already annotated, other media type, still running: no-op
     expect(
       await maybeAnnotateTemplateCandidate(
         task(
@@ -73,12 +73,22 @@ describe('maybeAnnotateTemplateCandidate', () => {
     expect(
       await maybeAnnotateTemplateCandidate(
         task({
-          phase: 'Failed',
+          phase: 'Running',
           artifacts: [{ uri: 'x', mediaType: TEMPLATE_CANDIDATE_MEDIA_TYPE }],
         }),
         { customApi } as never,
       ),
     ).toBe('no-op');
     expect(patches).toHaveLength(1);
+    // a run that ran out of time still filed its candidate: it goes to review
+    expect(
+      await maybeAnnotateTemplateCandidate(
+        task({
+          phase: 'Failed',
+          artifacts: [{ uri: 'x', mediaType: TEMPLATE_CANDIDATE_MEDIA_TYPE, name: 'check-x' }],
+        }),
+        { customApi } as never,
+      ),
+    ).toBe('annotated');
   });
 });
