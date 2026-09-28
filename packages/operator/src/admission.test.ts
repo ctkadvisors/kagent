@@ -756,6 +756,31 @@ describe('selectAdmittable — a parent waiting on its child lends its slot', ()
     expect(admitted.map((r) => r.name)).toEqual(['kat-c']);
   });
 
+  it("admits a running parent's child before an older queued root task", () => {
+    const older = makeJob({
+      name: 'kat-root',
+      agent: 'inventor',
+      model: 'm',
+      suspended: true,
+      creationTimestamp: '2026-09-28T02:00:00Z',
+    });
+    const child = makeJob({
+      name: 'kat-c2',
+      agent: 'verifier',
+      model: 'm',
+      suspended: true,
+      creationTimestamp: '2026-09-28T02:05:00Z',
+    });
+    child.metadata!.labels!['kagent.knuteson.io/parent-task-uid'] = 'uid-p';
+    const admitted = selectAdmittable({
+      suspendedJobs: [older, child],
+      runningJobs: [parent],
+      modelEndpoints: endpoints,
+      agentMaxInFlight: new Map(),
+    });
+    expect(admitted.map((r) => r.name)).toEqual(['kat-c2']);
+  });
+
   it('still counts a running parent against an unrelated queued job', () => {
     const other = makeJob({ name: 'kat-o', agent: 'other', model: 'm', suspended: true });
     const admitted = selectAdmittable({
