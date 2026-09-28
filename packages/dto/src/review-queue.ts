@@ -135,7 +135,7 @@ export interface ReviewQueueRow {
   readonly artifactCount?: number | undefined;
 
   /**
-   * Candidate-template detail. Present only when `reason === 'candidate-template'`.
+   * Candidate-template detail. Present whenever the task carries a candidate, whatever its headline reason (2026-09-28).
    * The accept handler validates the artifact YAML against AgentTemplateSpec
    * before creating the AgentTemplate CR (D-03-A).
    */

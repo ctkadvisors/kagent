@@ -856,6 +856,62 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     expect((createBody['metadata'] as Record<string, unknown>)['name']).toBe('check-egressmeter');
   });
 
+  it('a candidate on a run a detector flagged still reaches the reviewer and is created on accept (2026-09-28)', async () => {
+    // Every long inventor run trips a detector (context_pressure_ignored); its candidate
+    // used to vanish behind the suspicious-detector row and no invention was ever promoted.
+    const customApi = makeMockCustomApi();
+    const flagged: AgentTask = {
+      ...candidateTemplateTask,
+      metadata: {
+        ...candidateTemplateTask.metadata,
+        annotations: {
+          'kagent.knuteson.io/template-candidate': 'true',
+          'kagent.knuteson.io/proposed-template-name': 'check-stickshare',
+        },
+      },
+      status: {
+        ...candidateTemplateTask.status!,
+        phase: 'Completed',
+        structuralVerdict: { suspicious: ['context_pressure_ignored'] },
+        artifacts: [
+          {
+            uri: 'inline://sha256:cd',
+            mediaType: 'application/x-kagent-template-candidate+yaml',
+            name: 'check-stickshare',
+            payloadBase64: Buffer.from(candidateYaml, 'utf8').toString('base64'),
+          },
+        ],
+      },
+    };
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([flagged]),
+        customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
+        auditPublisher: makeMockAuditPublisher(),
+        now: () => fixedPostNow,
+      }),
+    );
+    const listed = (await (await app.request('/')).json()) as { items: ReviewQueueRow[] };
+    expect(listed.items).toHaveLength(1);
+    expect(listed.items[0]?.reason).toBe('suspicious-detector');
+    expect(listed.items[0]?.candidateTemplate?.proposedTemplateName).toBe('check-stickshare');
+    assertIsReviewQueueRow(listed.items[0]);
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-User': 'fleet-authority' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const createArgs = customApi.createNamespacedCustomObject.mock.calls[0] as unknown[];
+    const createBody = (createArgs[0] as Record<string, unknown>)['body'] as Record<
+      string,
+      unknown
+    >;
+    expect((createBody['metadata'] as Record<string, unknown>)['name']).toBe('check-stickshare');
+  });
+
   // ------------------------------------------------------------------
   // W2-Test CR-01 — POST accept (candidate-template) — CR-create success
   //                  + patch failure: template.candidate.promoted IS
