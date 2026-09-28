@@ -167,7 +167,7 @@ describe('schedule controller', () => {
           created.push(m);
         },
         patchScheduleStatus: () => undefined,
-        namespaceIdleSince: () => Promise.resolve(idleSince),
+        assessIdle: () => Promise.resolve({ idleSince, activeSchedules: new Set<string>() }),
       });
     const at = utc(2026, 9, 25, 13, 0);
 
@@ -185,6 +185,27 @@ describe('schedule controller', () => {
         controller.upsert(mkSchedule('invent', '*/5 * * * *', { whenIdle: { quietSeconds: 300 } }));
         expect(await controller.tickOnce(at)).toBe(0);
       }
+    });
+
+    it('a schedule waits for its own live task; another schedule still fires; it fires on the next tick after', async () => {
+      const created: RenderedAgentTask[] = [];
+      let active = new Set<string>(['invent']);
+      const controller = buildScheduleController({
+        createAgentTask: (m) => {
+          created.push(m);
+        },
+        patchScheduleStatus: () => undefined,
+        assessIdle: () =>
+          Promise.resolve({ idleSince: utc(2026, 9, 25, 12, 0), activeSchedules: active }),
+      });
+      controller.upsert(mkSchedule('invent', '*/5 * * * *', { whenIdle: { quietSeconds: 300 } }));
+      controller.upsert(mkSchedule('dispose', '*/5 * * * *', { whenIdle: { quietSeconds: 300 } }));
+      expect(await controller.tickOnce(at)).toBe(1);
+      expect(created.map((m) => m.metadata.labels['kagent.knuteson.io/trigger-name'])).toEqual([
+        'dispose',
+      ]);
+      active = new Set<string>();
+      expect(await controller.tickOnce(utc(2026, 9, 25, 13, 5))).toBe(2);
     });
 
     it('honours minGapSeconds from status.lastTickAt', async () => {

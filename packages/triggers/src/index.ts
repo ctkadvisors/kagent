@@ -17,6 +17,13 @@ export type {
 } from './render-task.js';
 
 export { buildScheduleController } from './schedule-controller.js';
+export {
+  ABANDON_GRACE_SECONDS,
+  assessNamespaceIdle,
+  type JobView,
+  type NamespaceIdleAssessment,
+  type TaskView,
+} from './idle.js';
 export type {
   KagentScheduleResource,
   ScheduleController,
