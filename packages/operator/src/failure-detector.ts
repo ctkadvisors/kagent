@@ -92,14 +92,23 @@ export function detectJobFailure(job: V1Job): FailureVerdict | null {
 /**
  * Classify a Pod. Returns a verdict for any of:
  *   - phase=Failed (container exited non-zero with no retry)
- *   - PodScheduled=False reason=Unschedulable (no node has capacity)
+ *   - PodScheduled=False reason=Unschedulable for UNSCHEDULABLE_GRACE_MS
+ *     (no node has had room for that long; a shorter shortage is the
+ *     scheduler's to wait out, not a task failure)
  *   - container waiting in a terminal reason (image pull failures,
  *     config errors, runtime errors)
  *
  * Returns null for Pending without a terminal waiting reason, and for
  * Running / Succeeded.
  */
-export function detectPodFailure(pod: V1Pod): FailureVerdict | null {
+/**
+ * How long a pod may stay Unschedulable before its task fails. Four verifier
+ * children failed within a minute on 2026-09-28 while elitemini2 sat at 98% CPU
+ * requests from idle sandboxes that were freed minutes later.
+ */
+export const UNSCHEDULABLE_GRACE_MS = 10 * 60 * 1000;
+
+export function detectPodFailure(pod: V1Pod, now: number = Date.now()): FailureVerdict | null {
   const podName = pod.metadata?.name ?? '(unknown)';
 
   if (pod.status?.phase === 'Failed') {
@@ -115,7 +124,8 @@ export function detectPodFailure(pod: V1Pod): FailureVerdict | null {
   if (
     podScheduled !== undefined &&
     podScheduled.status === 'False' &&
-    podScheduled.reason === 'Unschedulable'
+    podScheduled.reason === 'Unschedulable' &&
+    now - unschedulableSince(podScheduled, pod) >= UNSCHEDULABLE_GRACE_MS
   ) {
     return {
       reason: 'Unschedulable',
@@ -152,4 +162,14 @@ export function detectFailure(job: V1Job, pod?: V1Pod): FailureVerdict | null {
     if (podVerdict !== null) return podVerdict;
   }
   return detectJobFailure(job);
+}
+
+/** When the pod became unschedulable: the condition's transition, else the pod's creation. */
+function unschedulableSince(
+  condition: { lastTransitionTime?: Date | string | null },
+  pod: V1Pod,
+): number {
+  const at = condition.lastTransitionTime ?? pod.metadata?.creationTimestamp;
+  const ms = at instanceof Date ? at.getTime() : typeof at === 'string' ? Date.parse(at) : NaN;
+  return Number.isNaN(ms) ? 0 : ms;
 }

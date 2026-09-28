@@ -11,6 +11,7 @@ import {
   detectJobFailure,
   detectPodFailure,
   type FailureVerdict,
+  UNSCHEDULABLE_GRACE_MS,
 } from './failure-detector.js';
 
 function jobWithCondition(
@@ -192,20 +193,22 @@ describe('detectPodFailure', () => {
     expect(v?.reason).toBe(reason);
   });
 
-  it('flags PodScheduled=False with reason=Unschedulable', () => {
-    const v = detectPodFailure(
-      podWithStatus({
-        phase: 'Pending',
-        conditions: [
-          {
-            type: 'PodScheduled',
-            status: 'False',
-            reason: 'Unschedulable',
-            message: '0/4 nodes are available: 4 Insufficient cpu.',
-          },
-        ],
-      }),
-    );
+  it('flags PodScheduled=False reason=Unschedulable only after the grace period', () => {
+    const since = Date.parse('2026-09-28T01:00:00Z');
+    const pod = podWithStatus({
+      phase: 'Pending',
+      conditions: [
+        {
+          type: 'PodScheduled',
+          status: 'False',
+          reason: 'Unschedulable',
+          message: '0/4 nodes are available: 4 Insufficient cpu.',
+          lastTransitionTime: new Date(since),
+        },
+      ],
+    });
+    expect(detectPodFailure(pod, since + 60_000)).toBeNull();
+    const v = detectPodFailure(pod, since + UNSCHEDULABLE_GRACE_MS);
     expect(v?.reason).toBe('Unschedulable');
     expect(v?.message).toContain('Insufficient cpu');
   });
