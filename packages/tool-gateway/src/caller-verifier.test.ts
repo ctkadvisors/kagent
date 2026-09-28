@@ -57,6 +57,35 @@ describe('createCallerVerifier', () => {
     ).toBe('capability token is for another agent');
   });
 
+  it("accepts a tenant's nested issuer and refuses a foreign one", async () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'k1', alg: 'ES256', use: 'sig' };
+    const verify = createCallerVerifier({
+      jwksUrl: 'http://op/jwks',
+      issuer: ISSUER,
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ keys: [jwk] }))),
+    });
+    const mint = (issuer: string, tenant: string) =>
+      buildCapabilityJwt({
+        issuer,
+        subjectTaskUid: 'uid-1',
+        subjectAgent: 'kagent-system/fleet-disposer',
+        jti: 'cap-1',
+        claims: { tenant },
+      })
+        .setProtectedHeader({ alg: 'ES256', kid: 'k1' })
+        .sign(privateKey);
+    expect(
+      await verify(`Bearer ${await mint(`${ISSUER}/tenant/default`, 'default')}`, task),
+    ).toBeNull();
+    expect(await verify(`Bearer ${await mint('someone-else', 'default')}`, task)).toMatch(
+      /not the operator/,
+    );
+    expect(await verify(`Bearer ${await mint(`${ISSUER}/tenant/other`, 'other')}`, task)).toBe(
+      'capability token is for another tenant',
+    );
+  });
+
   it('refuses a token signed by any other key', async () => {
     const { verify } = await setup();
     const other = await setup();

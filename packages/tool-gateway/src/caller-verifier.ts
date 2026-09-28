@@ -12,7 +12,12 @@
  * verified against the operator's published keys.
  */
 
-import { createLocalJWKSet, verifyCapabilityJwt, type VerifierKey } from '@kagent/capability-types';
+import {
+  createLocalJWKSet,
+  decodeCapabilityJwtUnsafe,
+  verifyCapabilityJwt,
+  type VerifierKey,
+} from '@kagent/capability-types';
 
 import type { ToolGatewayTaskIdentity } from './http-server.js';
 
@@ -52,19 +57,26 @@ export function createCallerVerifier(options: CallerVerifierOptions): CallerVeri
     const match = /^Bearer\s+(\S+)$/.exec(authorization ?? '');
     if (match === null) return 'no capability token';
     const jwt = match[1] ?? '';
+    // A Tenant mints under its own issuer (<operator issuer>/tenant/<name>, from
+    // Tenant.spec.capabilityRoot.issuer); the operator's keys sign them all. Accept
+    // the operator's issuer or one nested under it, and verify against that.
+    const claimedIssuer = decodeCapabilityJwtUnsafe(jwt)?.iss ?? '';
+    if (claimedIssuer !== options.issuer && !claimedIssuer.startsWith(`${options.issuer}/`)) {
+      return `capability token issuer ${claimedIssuer || '(none)'} is not the operator's`;
+    }
     let result;
     try {
       result = await verifyCapabilityJwt({
         jwt,
         keyOrJwks: await keySet(false),
-        expectedIssuer: options.issuer,
+        expectedIssuer: claimedIssuer,
       });
       // A key the cached set does not hold may be a rotation: fetch once more.
       if (!result.ok && /no applicable key|kid/i.test(result.error)) {
         result = await verifyCapabilityJwt({
           jwt,
           keyOrJwks: await keySet(true),
-          expectedIssuer: options.issuer,
+          expectedIssuer: claimedIssuer,
         });
       }
     } catch (err) {
@@ -75,6 +87,10 @@ export function createCallerVerifier(options: CallerVerifierOptions): CallerVeri
       return 'capability token is for another task';
     if (result.bundle.agt !== `${task.namespace}/${task.agentName}`) {
       return 'capability token is for another agent';
+    }
+    const tenant = result.bundle.claims.tenant;
+    if (tenant !== undefined && tenant !== task.tenant) {
+      return 'capability token is for another tenant';
     }
     return null;
   };
