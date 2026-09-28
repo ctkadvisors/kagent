@@ -30,6 +30,7 @@
  */
 
 import {
+  BatchV1Api,
   type CustomObjectsApi,
   type Informer,
   type KubeConfig,
@@ -39,8 +40,11 @@ import {
 } from '@kubernetes/client-node';
 
 import {
+  assessNamespaceIdle,
   buildScheduleController,
   startWebhookReceiver,
+  type NamespaceIdleAssessment,
+  type TaskView,
   type RenderedAgentTask,
   type ScheduleController,
   type ScheduleStatusPatch,
@@ -120,34 +124,36 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
     );
   };
 
-  // `whenIdle` schedules ask when their namespace last went quiet: no
-  // AgentTask Pending or Dispatched, measured from the newest completion.
-  const namespaceIdleSince = async (namespace: string): Promise<Date | undefined> => {
-    const res = (await customApi.listNamespacedCustomObject({
+  // `whenIdle` schedules ask whether their namespace is idle (triggers/idle.ts):
+  // busy only while a live task waits for admission (its Job missing or
+  // suspended); a running task is bounded by admission, an abandoned one is
+  // ignored, and a schedule never fires while its own previous task is live.
+  let batchApi: BatchV1Api | undefined;
+  const assessIdle = async (namespace: string): Promise<NamespaceIdleAssessment> => {
+    const tasks = (await customApi.listNamespacedCustomObject({
       group: API_GROUP,
       version: API_VERSION,
       namespace,
       plural: AGENT_TASK_PLURAL,
-    })) as {
-      items?: ReadonlyArray<{
-        metadata?: { creationTimestamp?: string };
-        status?: { phase?: string; completedAt?: string };
-      }>;
-    };
-    let newest = 0;
-    for (const item of res.items ?? []) {
-      const phase = item.status?.phase;
-      if (phase === undefined || phase === 'Pending' || phase === 'Dispatched') return undefined;
-      const done = Date.parse(item.status?.completedAt ?? item.metadata?.creationTimestamp ?? '');
-      if (Number.isFinite(done) && done > newest) newest = done;
+    })) as { items?: readonly TaskView[] };
+    batchApi ??= kc.makeApiClient(BatchV1Api);
+    const jobs = await batchApi.listNamespacedJob({
+      namespace,
+      labelSelector: 'kagent.knuteson.io/managed-by=kagent-operator',
+    });
+    const assessment = assessNamespaceIdle(tasks.items ?? [], jobs.items, new Date());
+    if (assessment.abandoned.length > 0) {
+      console.warn(
+        `[kagent-triggers] ${namespace}: ignoring ${String(assessment.abandoned.length)} abandoned task(s) past their deadline: ${assessment.abandoned.slice(0, 5).join(', ')}`,
+      );
     }
-    return new Date(newest);
+    return assessment;
   };
 
   const scheduleController = buildScheduleController({
     createAgentTask,
     patchScheduleStatus,
-    namespaceIdleSince,
+    assessIdle,
   });
 
   // ---- KagentSchedule informer --------------------------------------

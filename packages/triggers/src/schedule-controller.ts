@@ -32,6 +32,7 @@
  * effect.
  */
 
+import type { NamespaceIdleAssessment } from './idle.js';
 import { cronMatches, nextTickAfter, parseCron, type ParsedSchedule } from './cron.js';
 import {
   renderAgentTaskFromTemplate,
@@ -72,12 +73,15 @@ export interface ScheduleControllerDeps {
   /** Factory that creates the rendered AgentTask in K8s. */
   readonly createAgentTask: (manifest: RenderedAgentTask) => Promise<void> | void;
   /**
-   * For `whenIdle` schedules: when did the namespace last go idle? The
-   * instant the last active AgentTask finished; `undefined` while one is
-   * active. Omitted = every namespace is treated as busy, so `whenIdle`
-   * schedules never fire (fail closed).
+   * For `whenIdle` schedules: the namespace's idle state (idle.ts):
+   * `idleSince` is undefined while a live task waits for admission, and
+   * `activeSchedules` names schedules whose own task is still live.
+   * Omitted = every namespace is treated as busy, so `whenIdle` schedules
+   * never fire (fail closed).
    */
-  readonly namespaceIdleSince?: (namespace: string) => Promise<Date | undefined>;
+  readonly assessIdle?: (
+    namespace: string,
+  ) => Promise<Pick<NamespaceIdleAssessment, 'idleSince' | 'activeSchedules'>>;
   /** PATCH `KagentSchedule.status` (server-side merge). */
   readonly patchScheduleStatus: (
     namespace: string,
@@ -210,14 +214,17 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
    * informer keeps current, so a restart does not forget the gap.
    */
   async function idleGateOpen(resource: KagentScheduleResource, at: Date): Promise<boolean> {
-    if (deps.namespaceIdleSince === undefined) return false;
+    if (deps.assessIdle === undefined) return false;
     const quietMs = (resource.spec.whenIdle?.quietSeconds ?? DEFAULT_QUIET_SECONDS) * 1000;
     const gapMs = (resource.spec.whenIdle?.minGapSeconds ?? 0) * 1000;
     const last = resource.status?.lastTickAt;
     if (last !== undefined && at.getTime() - Date.parse(last) < gapMs) return false;
     let idleSince: Date | undefined;
     try {
-      idleSince = await deps.namespaceIdleSince(resource.metadata.namespace);
+      const idle = await deps.assessIdle(resource.metadata.namespace);
+      // This schedule's own previous task is still live: never a second copy.
+      if (idle.activeSchedules.has(resource.metadata.name)) return false;
+      idleSince = idle.idleSince;
     } catch (err) {
       console.error(
         `[kagent-triggers] idle check failed for schedule ` +
