@@ -267,8 +267,8 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
     const taskRef = row.taskRef;
     let agentTemplateRef: { name?: string; namespace?: string; uid?: string } | undefined;
 
-    // Step 6 — (candidate-template only) parse YAML → create AgentTemplate CR
-    if (row.reason === 'candidate-template') {
+    // Step 6 — (the row carries a candidate, whatever its headline reason) parse YAML → create AgentTemplate CR
+    if (row.candidateTemplate !== undefined) {
       const candidateArtifact = findCandidateArtifact(task);
       if (candidateArtifact === undefined) {
         return c.json({ error: 'candidate-template artifact not found on task' }, 422);
@@ -385,7 +385,7 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
     // subsequent patch step fails (audit consumers can later join to
     // review.accepted once it fires on the patch-success path).
     if (
-      row.reason === 'candidate-template' &&
+      row.candidateTemplate !== undefined &&
       agentTemplateRef !== undefined &&
       deps.auditPublisher !== undefined
     ) {
@@ -880,6 +880,27 @@ export function classifyTask(
     ? (status['artifacts'] as unknown[]).length
     : 0;
 
+  // A template candidate rides on whichever row the task gets. Until 2026-09-28 it
+  // existed only on a `candidate-template` row, the lowest priority, so an inventor
+  // run that also tripped a detector (every long one does: context_pressure_ignored,
+  // synthesis_low_yield) showed as `suspicious-detector` with no candidate, and the
+  // fleet's reviewer never saw a single invention to promote. A detector flag is about
+  // how the run behaved; whether its candidate is sound is the reviewer's call.
+  const candidateArtifact =
+    annotations[ANNOTATION_TEMPLATE_CANDIDATE] === 'true' &&
+    (phase === 'Completed' || phase === 'Failed')
+      ? findCandidateArtifact(task)
+      : undefined;
+  const candidateTemplate =
+    candidateArtifact === undefined
+      ? undefined
+      : {
+          artifactRef: candidateArtifact.artifactRef,
+          proposedTemplateName:
+            annotations[ANNOTATION_PROPOSED_TEMPLATE_NAME] ?? `${name}-template`,
+          proposedNamespace: namespace ?? defaultNamespace ?? 'default',
+        };
+
   // -- Step 2: verifier-failed (priority 1) --
   // D-01-A: if verification.passed === false, this task is in the queue.
   const verification = status['verification'] as
@@ -902,6 +923,7 @@ export function classifyTask(
       ...(verifierError !== undefined && { verifierError }),
       ...(traceLink !== undefined && { traceLink }),
       ...(artifactCount > 0 && { artifactCount }),
+      ...(candidateTemplate !== undefined && { candidateTemplate }),
     };
     return row;
   }
@@ -928,6 +950,7 @@ export function classifyTask(
       ...(model !== undefined && { model }),
       ...(traceLink !== undefined && { traceLink }),
       ...(artifactCount > 0 && { artifactCount }),
+      ...(candidateTemplate !== undefined && { candidateTemplate }),
     };
     return row;
   }
@@ -951,45 +974,25 @@ export function classifyTask(
       ...(model !== undefined && { model }),
       ...(traceLink !== undefined && { traceLink }),
       ...(artifactCount > 0 && { artifactCount }),
+      ...(candidateTemplate !== undefined && { candidateTemplate }),
     };
     return row;
   }
 
   // -- Step 5: candidate-template (priority 4) --
-  // D-01-A: REQUIRES phase === 'Completed' AND annotation === 'true'
-  //         AND a matching artifact exists.
-  // If the artifact is missing: OMIT the task (return undefined per RESEARCH.md Q1 step 5).
-  // A Failed task's candidate counts too: its standing is the verifier's
-  // verdict (the reviewer requires one), not whether its run finished cleanly.
-  if (
-    annotations[ANNOTATION_TEMPLATE_CANDIDATE] === 'true' &&
-    (phase === 'Completed' || phase === 'Failed')
-  ) {
-    const candidateArtifact = findCandidateArtifact(task);
-    if (candidateArtifact === undefined) {
-      // No matching artifact → omit (return undefined, not a queue entry).
-      return undefined;
-    }
-
+  // A Completed or Failed task annotated as a candidate, with the artifact present.
+  // A Failed task's candidate counts too: its standing is the verifier's verdict
+  // (the reviewer requires one), not whether its run finished cleanly.
+  if (candidateTemplate !== undefined) {
     const enqueuedAt = fallbackEnqueuedAt;
-    const proposedTemplateName =
-      annotations[ANNOTATION_PROPOSED_TEMPLATE_NAME] ?? `${name}-template`;
-    const proposedNamespace = namespace ?? defaultNamespace ?? 'default';
-    const reasonDetail = `${proposedTemplateName} (candidate)`;
-    const stalenessSeconds = computeStaleness(nowMs, enqueuedAt);
-
     const row: ReviewQueueRow = {
       taskRef,
       reason: 'candidate-template',
-      reasonDetail,
+      reasonDetail: `${candidateTemplate.proposedTemplateName} (candidate)`,
       enqueuedAt,
-      stalenessSeconds,
+      stalenessSeconds: computeStaleness(nowMs, enqueuedAt),
       phase,
-      candidateTemplate: {
-        artifactRef: candidateArtifact.artifactRef,
-        proposedTemplateName,
-        proposedNamespace,
-      },
+      candidateTemplate,
       ...(targetAgent !== undefined && { targetAgent }),
       ...(model !== undefined && { model }),
       ...(traceLink !== undefined && { traceLink }),
