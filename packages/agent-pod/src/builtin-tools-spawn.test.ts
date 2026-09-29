@@ -10,6 +10,7 @@ import {
   buildSpawnToolProvider,
   defaultGenerateChildName,
   DEFAULT_MAX_CONCURRENT_CHILDREN,
+  defineSpawnChildTask,
 } from './builtin-tools-spawn.js';
 import type {
   ChildSnapshot,
@@ -277,6 +278,87 @@ describe('spawn_child_task', () => {
     });
     expect(k8s.creates[0]?.runConfig?.timeoutSeconds).toBe(30);
   });
+
+  it('exposes and forwards child maxIterations while preserving timeout clamping and traceparent', async () => {
+    const k8s = makeFakeK8s();
+    const tp = '00-0123456789abcdef0123456789abcdef-fedcba9876543210-01';
+    const deps = {
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+      remainingBudgetSeconds: () => 30,
+      getTraceparent: () => tp,
+      generateChildName: () => 'parent-task-001-c-maxiter',
+    };
+    const definition = defineSpawnChildTask(deps);
+    const inputSchema = definition.inputSchema as {
+      readonly properties?: { readonly runConfig?: unknown };
+    };
+    const runConfigSchema = inputSchema.properties?.runConfig;
+    expect(runConfigSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        maxIterations: { type: 'integer', minimum: 1, maximum: 100 },
+      },
+    });
+
+    const provider = buildSpawnToolProvider(deps);
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'verify the candidate',
+      runConfig: { timeoutSeconds: 600, maxIterations: 24 },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(k8s.creates[0]?.runConfig).toEqual({
+      timeoutSeconds: 30,
+      maxIterations: 24,
+      traceparent: tp,
+    });
+  });
+
+  it.each([0, 101, 1.5])('rejects invalid child maxIterations %s', async (maxIterations) => {
+    const k8s = makeFakeK8s();
+    const provider = buildSpawnToolProvider({
+      parent: PARENT,
+      parentAgentName: 'orchestrator',
+      parentAgentSpec: buildSpec(),
+      k8s,
+    });
+
+    const result = await callSpawn(provider, {
+      agentName: 'summarizer',
+      originalUserMessage: 'verify the candidate',
+      runConfig: { maxIterations },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('runConfig.maxIterations');
+    expect(k8s.creates).toHaveLength(0);
+  });
+
+  it.each([1, 100])(
+    'forwards maxIterations boundary %s without a timeout',
+    async (maxIterations) => {
+      const k8s = makeFakeK8s();
+      const provider = buildSpawnToolProvider({
+        parent: PARENT,
+        parentAgentName: 'orchestrator',
+        parentAgentSpec: buildSpec(),
+        k8s,
+      });
+
+      const result = await callSpawn(provider, {
+        agentName: 'summarizer',
+        originalUserMessage: 'verify the candidate',
+        runConfig: { maxIterations },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(k8s.creates[0]?.runConfig).toEqual({ maxIterations });
+    },
+  );
 
   it('rejects missing required args via the JSON schema layer', async () => {
     const k8s = makeFakeK8s();

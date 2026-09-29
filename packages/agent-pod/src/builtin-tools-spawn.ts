@@ -33,6 +33,7 @@
  *   5. originalUserMessage ≤ 32KB
  *   6. runConfig.timeoutSeconds clamped to remaining parent budget
  *      (prevents child-outlives-parent pathology)
+ *   7. runConfig.maxIterations is an integer in [1, 100]
  */
 
 import type { ContentBlock } from '@kagent/agent-loop';
@@ -154,6 +155,7 @@ interface SpawnArgs {
   readonly originalUserMessage: string;
   readonly runConfig?: {
     readonly timeoutSeconds?: number;
+    readonly maxIterations?: number;
   };
   readonly payload?: unknown;
 }
@@ -207,6 +209,7 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
           type: 'object',
           properties: {
             timeoutSeconds: { type: 'integer', minimum: 1, maximum: 86_400 },
+            maxIterations: { type: 'integer', minimum: 1, maximum: 100 },
           },
         },
         payload: {
@@ -464,6 +467,8 @@ function parseSpawnArgs(raw: Record<string, unknown>): SpawnArgs {
       throw new Error('spawn_child_task: runConfig must be an object');
     }
     const rc = raw.runConfig as Record<string, unknown>;
+    let timeoutSeconds: number | undefined;
+    let maxIterations: number | undefined;
     if (rc.timeoutSeconds !== undefined && rc.timeoutSeconds !== null) {
       if (
         typeof rc.timeoutSeconds !== 'number' ||
@@ -475,7 +480,24 @@ function parseSpawnArgs(raw: Record<string, unknown>): SpawnArgs {
           'spawn_child_task: runConfig.timeoutSeconds must be an integer in [1, 86400]',
         );
       }
-      runConfig = { timeoutSeconds: rc.timeoutSeconds };
+      timeoutSeconds = rc.timeoutSeconds;
+    }
+    if (rc.maxIterations !== undefined && rc.maxIterations !== null) {
+      if (
+        typeof rc.maxIterations !== 'number' ||
+        !Number.isInteger(rc.maxIterations) ||
+        rc.maxIterations < 1 ||
+        rc.maxIterations > 100
+      ) {
+        throw new Error('spawn_child_task: runConfig.maxIterations must be an integer in [1, 100]');
+      }
+      maxIterations = rc.maxIterations;
+    }
+    if (timeoutSeconds !== undefined || maxIterations !== undefined) {
+      runConfig = {
+        ...(timeoutSeconds !== undefined && { timeoutSeconds }),
+        ...(maxIterations !== undefined && { maxIterations }),
+      };
     }
   }
   const payload = raw.payload;
