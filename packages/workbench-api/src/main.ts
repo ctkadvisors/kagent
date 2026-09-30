@@ -238,6 +238,10 @@ async function main(): Promise<void> {
     ...(architect !== undefined && { architect, draftNamespace }),
     ...(readCustomApi !== undefined && { readCustomApi }),
     ...(readCoreApi !== undefined && { coreApi: readCoreApi }),
+    workloadNamespaces: (process.env.WORKBENCH_WORKLOAD_NAMESPACES ?? '')
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => n.length > 0),
     writesEnabled,
     ...(auditPublisher !== undefined && { auditPublisher }),
     disposition: {

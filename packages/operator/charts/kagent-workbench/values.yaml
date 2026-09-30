@@ -57,6 +57,9 @@ api:
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
   langfuseBaseUrl: ''
+  # Namespaces GET /api/cluster/workloads may list (pods, owners, images;
+  # never env or secrets). Empty = the endpoint refuses every namespace.
+  workloadNamespaces: []
   # Optional — wires the Gateway page (`#/gateway` in the UI) to the
   # kagent LLM gateway's /admin/* surface. When unset, the page renders
   # an empty "gateway not configured" state.

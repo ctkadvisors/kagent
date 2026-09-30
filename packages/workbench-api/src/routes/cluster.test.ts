@@ -257,3 +257,68 @@ describe('cluster.ts — NEW-M2 single-snapshot pod read', () => {
     expect(body.pods).toHaveLength(1);
   });
 });
+
+describe('cluster.ts — /api/cluster/workloads', () => {
+  const pod = {
+    metadata: {
+      name: 'kagent-operator-abc',
+      ownerReferences: [{ kind: 'ReplicaSet', name: 'kagent-operator-7d9f' }],
+    },
+    spec: {
+      nodeName: 'n1',
+      containers: [
+        {
+          name: 'operator',
+          image: 'ghcr.io/x/operator:v1',
+          env: [{ name: 'SECRET', value: 'hunter2' }],
+        },
+      ],
+    },
+    status: {
+      phase: 'Running',
+      containerStatuses: [
+        { name: 'operator', ready: true, restartCount: 2, imageID: 'ghcr.io/x/operator@sha256:aa' },
+      ],
+    },
+  };
+  const listNamespacedPod = vi.fn(() =>
+    Promise.resolve({ items: [pod, { metadata: { name: 'other' }, spec: { containers: [] } }] }),
+  );
+  const app = clusterRoute({
+    cache: new SnapshotCache(),
+    coreApi: { listNamespacedPod } as unknown as CoreV1Api,
+    workloadNamespaces: ['kagent-system'],
+  });
+
+  it('reports owner, images and readiness for an allowed namespace, and nothing from env', async () => {
+    const res = await app.request(
+      makeReq('/api/cluster/workloads?namespace=kagent-system&name=operator'),
+    );
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain('hunter2');
+    const body = JSON.parse(text) as { count: number; items: unknown[] };
+    expect(body.count).toBe(1);
+    expect(body.items[0]).toMatchObject({
+      name: 'kagent-operator-abc',
+      owner: 'ReplicaSet/kagent-operator-7d9f',
+      phase: 'Running',
+      containers: [
+        {
+          name: 'operator',
+          image: 'ghcr.io/x/operator:v1',
+          imageId: 'ghcr.io/x/operator@sha256:aa',
+          ready: true,
+          restarts: 2,
+        },
+      ],
+    });
+  });
+
+  it('refuses a namespace that is not on the list without calling the apiserver', async () => {
+    listNamespacedPod.mockClear();
+    const res = await app.request(makeReq('/api/cluster/workloads?namespace=kube-system'));
+    expect(res.status).toBe(403);
+    expect(listNamespacedPod).not.toHaveBeenCalled();
+  });
+});

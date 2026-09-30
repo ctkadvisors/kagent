@@ -120,6 +120,8 @@ export interface RouterDeps {
    * mode / KAGENT_NO_INFORMER), `/api/cluster/*` routes 503.
    */
   readonly coreApi?: CoreV1Api;
+  /** Namespaces `/api/cluster/workloads` may list (WORKBENCH_WORKLOAD_NAMESPACES). */
+  readonly workloadNamespaces?: readonly string[];
   /**
    * Phase 1 / DISP-03 — audit-event publisher for `disposition.*`
    * events. When undefined, the dispositions route still computes
@@ -219,6 +221,7 @@ export function buildRouter(deps: RouterDeps): Hono {
     clusterRoute({
       cache: deps.cache,
       ...(deps.coreApi !== undefined && { coreApi: deps.coreApi }),
+      ...(deps.workloadNamespaces !== undefined && { workloadNamespaces: deps.workloadNamespaces }),
     }),
   );
 
