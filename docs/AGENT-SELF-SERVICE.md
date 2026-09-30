@@ -235,7 +235,8 @@ An agent in a pod can call a tool to create a child AgentTask. The operator's WS
       "runConfig": {
         "type": "object",
         "properties": {
-          "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 }
+          "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+          "maxIterations": { "type": "integer", "minimum": 1, "maximum": 100 }
         }
       },
       "payload": {
@@ -271,6 +272,7 @@ These are the non-negotiables. Each fails fast with a `policy_denied:` error mat
 3. **Concurrent-children cap.** Tool refuses when the parent already has ≥ N (default 10, configurable via `Agent.spec.maxConcurrentChildren`) children in non-terminal phases. Reads from the K8s API via label selector, no cache. Prevents an LLM-loop-bug from creating 10⁶ children.
 4. **`runConfig.timeoutSeconds` clamped to ≤ parent's remaining budget**. If parent has 60s left and child requests 300s, child gets 60s. Avoids "child outlives parent" pathology.
 5. **`originalUserMessage` size cap** — 32KB. Anything longer should go through `payload` (which is opaque to the LLM-visible schema but loggable in the trace).
+6. **`runConfig.maxIterations` bounded to 1..100**. This lets the parent allocate enough tool-call turns for a child without creating an unbounded loop.
 
 ### 4.5 Test plan
 
@@ -278,6 +280,7 @@ These are the non-negotiables. Each fails fast with a `policy_denied:` error mat
   - happy path: tool call → K8s API called with correct manifest → returns name/uid
   - `policy_denied` on each guardrail (allowlist miss, self-ref, cap exceeded, oversize message)
   - `runConfig.timeoutSeconds` clamping math
+  - `runConfig.maxIterations` forwards independently at both boundaries and rejects values outside 1..100
   - K8s API error → tool returns `isError: true` with structured reason (matches `policy_denied:` shape)
 - Operator-side integration: `packages/operator/src/reconcile.test.ts` already covers WS-I (parent re-reconcile on child status change); no new operator tests needed for this slice.
 - `helm template packages/operator/charts/kagent-operator` — the new RBAC verb renders cleanly.

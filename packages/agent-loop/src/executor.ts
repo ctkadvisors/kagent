@@ -241,14 +241,10 @@ export interface RunInput<TType extends string = string> {
   /** Override the constructor's `defaultMaxIterations` (which itself defaults to 8 — D-12). */
   maxIterations?: number;
   /**
-   * The first turn the model wants to end gets this text back once, as a
-   * user message, and the model answers again; that second answer is the
-   * reply. The concierge answered "what does that rule mean" from its own
-   * narrative with the rule in front of it and closed with "want me to
-   * confirm?" (2026-09-10): a model that narrates instead of looking gets one
-   * chance to look. A promoted check wrote its files, said "Now running the
-   * promoted command." and ended the turn (2026-09-27): a model that narrates
-   * instead of finishing gets one chance to finish, tools used or not.
+   * A turn the model wants to end without having called any tool gets this
+   * text back once, as a user message, and the model answers again; that
+   * second answer is the reply. This gives a tool-less narrative one chance
+   * to inspect evidence while leaving a tool-using model's answer final.
    * Counts as an iteration.
    */
   selfCheck?: string;
@@ -1033,6 +1029,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
     // ─── Main loop ───────────────────────────────────────────────────
     let selfChecked = false;
+    let toolCallsInRun = 0;
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       // Invariant 2.a — abort check at top of iteration.
       if (signal.aborted) {
@@ -1280,7 +1277,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
 
       // (4) Tool dispatch OR loop exit
       if (!synthesizedToolCalls || synthesizedToolCalls.length === 0) {
-        if (input.selfCheck !== undefined && !selfChecked) {
+        if (input.selfCheck !== undefined && !selfChecked && toolCallsInRun === 0) {
           selfChecked = true;
           currentMessages.push({ role: 'assistant', content: llmResult.content });
           currentMessages.push({ role: 'user', content: input.selfCheck });
@@ -1290,6 +1287,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         completedNaturally = true;
         break;
       }
+      toolCallsInRun += synthesizedToolCalls.length;
 
       // Append assistant message with the synthesized-id tool_calls.
       currentMessages.push({

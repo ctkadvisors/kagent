@@ -194,9 +194,9 @@ jobs:
 
   helm-smoke-kind:
     name: Helm install + smoke (kind)
-    # Hosted minutes are metered (the org hit 90% on 2026-09-08): the kind
-    # smoke runs on main pushes and tags, not on every PR round.
-    if: github.event_name != 'pull_request'
+    # This privileged non-Kata runner is repo-scoped and accepts only trusted
+    # main/tag pushes. Public PRs and workflow_dispatch never request it.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: [verify, crd-drift, helm-smoke]
     # Catches Helm-template + operator-startup regressions BEFORE they
     # reach a live cluster:
@@ -219,9 +219,10 @@ jobs:
     # `agent-pod` is NOT built here because no AgentTasks are spawned;
     # `KAGENT_AGENT_POD_IMAGE` is set on the operator Deployment but
     # the image is never pulled.
-    # kind cannot boot a control plane inside the Kata dind runner (kubeadm
-    # wait-control-plane times out); kagent is public, so hosted is free.
-    runs-on: ubuntu-latest
+    # kind cannot boot a control plane inside the shared Kata dind runner
+    # (kubeadm wait-control-plane times out). homelab-kind is its isolated,
+    # single-slot, repo-scoped non-Kata dind scale set.
+    runs-on: homelab-kind
     timeout-minutes: 15
     steps:
       - name: Checkout
