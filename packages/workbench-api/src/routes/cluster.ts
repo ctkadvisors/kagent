@@ -11,6 +11,10 @@
  *   GET /api/cluster/nodes     — K3s node list + conditions + capacity
  *   GET /api/cluster/snapshot  — one-shot: nodes + active tasks +
  *                                 recent-terminal tasks + pod-by-node map.
+ *   GET /api/cluster/workloads?namespace=&name=
+ *                              — what is deployed in one allowed namespace:
+ *                                 each pod's owner, phase, readiness and
+ *                                 container images. Images only, never env.
  *
  * Why a single `/snapshot` endpoint vs. four separate calls: the UI
  * paints all four panels in one tick. Combining them server-side
@@ -134,6 +138,52 @@ export interface ClusterRouteDeps {
   readonly nodeListTtlMs?: number;
   /** Test-only clock override (ms). Defaults to `Date.now`. */
   readonly now?: () => number;
+  /**
+   * Namespaces `/api/cluster/workloads` may list. Empty or omitted =
+   * the endpoint answers 403 for every namespace.
+   */
+  readonly workloadNamespaces?: readonly string[];
+}
+
+/** One pod as `/api/cluster/workloads` reports it. */
+export interface WorkloadRow {
+  readonly name: string;
+  /** Controller that owns the pod, e.g. `ReplicaSet/kagent-operator-7d9f`. */
+  readonly owner?: string;
+  readonly phase: string;
+  readonly node?: string;
+  readonly startedAt?: string;
+  readonly containers: ReadonlyArray<{
+    readonly name: string;
+    readonly image: string;
+    /** Resolved digest the kubelet is running, when reported. */
+    readonly imageId?: string;
+    readonly ready: boolean;
+    readonly restarts: number;
+  }>;
+}
+
+export function summarizeWorkload(pod: V1Pod): WorkloadRow {
+  const owner = pod.metadata?.ownerReferences?.[0];
+  const statuses = new Map((pod.status?.containerStatuses ?? []).map((s) => [s.name, s]));
+  const startedAt = pod.status?.startTime;
+  return {
+    name: pod.metadata?.name ?? '<unknown>',
+    ...(owner !== undefined && { owner: `${owner.kind}/${owner.name}` }),
+    phase: pod.status?.phase ?? 'Unknown',
+    ...(pod.spec?.nodeName !== undefined && { node: pod.spec.nodeName }),
+    ...(startedAt !== undefined && { startedAt: new Date(startedAt).toISOString() }),
+    containers: (pod.spec?.containers ?? []).map((c) => {
+      const st = statuses.get(c.name);
+      return {
+        name: c.name,
+        image: c.image ?? '<unknown>',
+        ...(st?.imageID !== undefined && st.imageID !== '' && { imageId: st.imageID }),
+        ready: st?.ready ?? false,
+        restarts: st?.restartCount ?? 0,
+      };
+    }),
+  };
 }
 
 /**
@@ -435,6 +485,34 @@ export function clusterRoute(deps: ClusterRouteDeps): Hono {
       },
     };
     return c.json(snapshot);
+  });
+
+  app.get('/api/cluster/workloads', async (c) => {
+    if (deps.coreApi === undefined) {
+      return c.json({ error: 'cluster-api-disabled' }, 503);
+    }
+    const allowed = deps.workloadNamespaces ?? [];
+    const namespace = c.req.query('namespace') ?? '';
+    if (!allowed.includes(namespace)) {
+      return c.json({ error: 'namespace-not-allowed', allowed }, 403);
+    }
+    const name = c.req.query('name') ?? '';
+    try {
+      const list = await deps.coreApi.listNamespacedPod({ namespace });
+      const items = list.items
+        .filter((p) => (p.metadata?.name ?? '').includes(name))
+        .map(summarizeWorkload);
+      return c.json({ namespace, fetchedAt: new Date().toISOString(), count: items.length, items });
+    } catch (err) {
+      console.warn('[workbench-api] /api/cluster/workloads failed:', err);
+      return c.json(
+        {
+          error: 'list-pods-failed',
+          message: scrubSecrets(err instanceof Error ? err.message : String(err)),
+        },
+        502,
+      );
+    }
   });
 
   return app;
