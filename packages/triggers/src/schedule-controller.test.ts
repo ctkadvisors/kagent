@@ -92,6 +92,44 @@ describe('schedule controller', () => {
     expect(created).toHaveLength(0);
   });
 
+  it('recomputes an obsolete next tick after the cron changes without claiming a run', async () => {
+    const created: RenderedAgentTask[] = [];
+    const patches: ScheduleStatusPatch[] = [];
+    const controller = buildScheduleController({
+      createAgentTask: (m) => {
+        created.push(m);
+      },
+      patchScheduleStatus: (_ns, _name, patch) => {
+        patches.push(patch);
+      },
+    });
+    controller.upsert({
+      ...mkSchedule('audit', '0 */2 * * *'),
+      status: { lastTickAt: '2026-10-01T21:00:00.000Z', nextTickAt: '2026-10-01T21:30:00.000Z' },
+    });
+
+    expect(await controller.tickOnce(utc(2026, 10, 1, 21, 7))).toBe(0);
+    expect(created).toHaveLength(0);
+    expect(patches).toEqual([{ nextTickAt: '2026-10-01T22:00:00.000Z' }]);
+  });
+
+  it('keeps an overdue next tick that still matches the cron so failures stay visible', async () => {
+    const patches: ScheduleStatusPatch[] = [];
+    const controller = buildScheduleController({
+      createAgentTask: () => undefined,
+      patchScheduleStatus: (_ns, _name, patch) => {
+        patches.push(patch);
+      },
+    });
+    controller.upsert({
+      ...mkSchedule('audit', '*/30 * * * *'),
+      status: { lastTickAt: '2026-10-01T21:00:00.000Z', nextTickAt: '2026-10-01T21:30:00.000Z' },
+    });
+
+    expect(await controller.tickOnce(utc(2026, 10, 1, 21, 45))).toBe(0);
+    expect(patches).toHaveLength(0);
+  });
+
   it('upsert replaces an existing schedule entry', () => {
     const controller = buildScheduleController({
       createAgentTask: () => {

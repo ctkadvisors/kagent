@@ -59,6 +59,7 @@ export interface KagentScheduleResource {
   };
   readonly status?: {
     readonly lastTickAt?: string;
+    readonly nextTickAt?: string;
   };
 }
 
@@ -163,7 +164,35 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
         continue;
       }
       if (resource.spec.suspend === true) continue;
-      if (!cronMatches(parsed, at)) continue;
+      if (!cronMatches(parsed, at)) {
+        // A spec change can leave nextTickAt from the previous expression
+        // until the new cron first fires. Refresh only when that timestamp
+        // cannot be a tick of the current cron; preserve valid overdue ticks
+        // so a failed task creation remains visible.
+        const recorded = resource.status?.nextTickAt;
+        if (recorded !== undefined) {
+          const recordedAt = new Date(recorded);
+          if (!Number.isFinite(recordedAt.getTime()) || !cronMatches(parsed, recordedAt)) {
+            const next = nextTickAfter(parsed, at);
+            if (next !== undefined) {
+              try {
+                await deps.patchScheduleStatus(
+                  resource.metadata.namespace,
+                  resource.metadata.name,
+                  { nextTickAt: next.toISOString() },
+                );
+              } catch (err) {
+                console.error(
+                  `[kagent-triggers] failed to refresh next tick on schedule ` +
+                    `${resource.metadata.namespace}/${resource.metadata.name}:`,
+                  err,
+                );
+              }
+            }
+          }
+        }
+        continue;
+      }
       if (resource.spec.whenIdle !== undefined) {
         const gate = await idleGateOpen(resource, at);
         if (!gate) continue;
