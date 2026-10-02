@@ -21,7 +21,7 @@
  * Pure: no I/O, no side effects, no external state.
  */
 
-import { HttpToolProviderConfigError } from '@kagent/agent-loop';
+import { HttpToolProviderConfigError } from '@kagent/agent-loop/kernel';
 
 export function substitutePath(path: string, args: Record<string, unknown>): string {
   // A placeholder in the query string is an optional filter: absent means empty

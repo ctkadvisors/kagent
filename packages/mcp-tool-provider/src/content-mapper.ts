@@ -29,7 +29,7 @@
  * over the SDK block type union.
  */
 
-import type { ContentBlock, ToolResult } from '@kagent/agent-loop';
+import type { ContentBlock, ToolResult } from '@kagent/agent-loop/kernel';
 
 interface SdkContentBlock {
   type: 'text' | 'image' | 'audio' | 'resource' | 'resource_link';

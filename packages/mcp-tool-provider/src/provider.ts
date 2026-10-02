@@ -43,13 +43,13 @@ import type {
   ToolInvocationContext,
   ToolProvider,
   ToolResult,
-} from '@kagent/agent-loop';
+} from '@kagent/agent-loop/kernel';
 import {
   InvalidConfigError,
   McpToolProviderAbortError,
   McpToolProviderProtocolError,
   McpToolProviderSubprocessError,
-} from '@kagent/agent-loop';
+} from '@kagent/agent-loop/kernel';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {

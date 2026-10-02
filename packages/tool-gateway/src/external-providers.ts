@@ -9,8 +9,8 @@ import type {
   ToolInvocationContext,
   ToolProvider,
   ToolResult,
-} from '@kagent/agent-loop';
-import { ToolProviderRegistry } from '@kagent/agent-loop';
+} from '@kagent/agent-loop/kernel';
+import { ToolProviderRegistry } from '@kagent/agent-loop/kernel';
 import { HttpToolProvider, type HttpToolDefinition } from '@kagent/http-tool-provider';
 import { McpToolProvider, type McpToolProviderOptions } from '@kagent/mcp-tool-provider';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
