@@ -434,3 +434,28 @@ describe('formatToolCallAttrs — JSON-string contract for input/output', () => 
     expect(JSON.parse(v) as unknown).toEqual({ preview: malformed });
   });
 });
+
+it('exports exact credential-named schema definitions while masking schema literals and arguments', () => {
+  const { attributes } = formatToolCallAttrs(
+    {
+      run_id: 'schema',
+      sequence: 1,
+      trace_type: 'operation_started',
+      latency_ms: 0,
+      tool_name: 'test',
+      tool_input: JSON.stringify({ token: 'actual-private' }),
+      tool_schema: JSON.stringify({
+        type: 'object',
+        required: ['token'],
+        properties: { token: { type: 'string', examples: ['example-private'] } },
+      }),
+    },
+    'preview',
+  );
+  expect(JSON.parse(attributes['kagent.diagnostic.schema'] as string)).toMatchObject({
+    required: ['token'],
+    properties: { token: { type: 'string', examples: ['[REDACTED]'] } },
+  });
+  expect(JSON.stringify(attributes)).not.toContain('example-private');
+  expect(JSON.stringify(attributes)).not.toContain('actual-private');
+});

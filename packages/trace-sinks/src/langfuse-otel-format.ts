@@ -29,7 +29,7 @@
  * break.
  */
 
-import { captureDiagnostic, type TraceEntry } from '@kagent/agent-loop';
+import { captureDiagnostic, captureSchemaDiagnostic, type TraceEntry } from '@kagent/agent-loop';
 
 /**
  * Content-capture policy for input/output bodies attached to spans.
@@ -307,7 +307,7 @@ export function formatToolCallAttrs(
     if (entry.tool_input !== undefined)
       attrs['kagent.diagnostic.input'] = captureDiagnostic(entry.tool_input);
     if (entry.tool_schema !== undefined)
-      attrs['kagent.diagnostic.schema'] = captureDiagnostic(entry.tool_schema);
+      attrs['kagent.diagnostic.schema'] = captureSchemaDiagnostic(entry.tool_schema);
     if (entry.tool_output !== undefined)
       attrs['kagent.diagnostic.output'] = captureDiagnostic(entry.tool_output);
     if (entry.error !== undefined)

@@ -94,3 +94,63 @@ it('redacts credentials embedded in schema/transport error text', async () => {
     'hidden-value',
   );
 });
+
+it('preserves credential-named schema definitions while masking actual values', async () => {
+  const registry = new AgentRegistry();
+  registry.register(chatAgent);
+  const sink = makeRecordingSink();
+  const inputSchema = {
+    type: 'object',
+    required: ['token', 'api_key', 'authorization'],
+    dependentRequired: { token: ['authorization'] },
+    properties: {
+      token: {
+        type: 'string',
+        minLength: 1,
+        default: 'default-private',
+        examples: ['example-private'],
+      },
+      api_key: { type: 'string' },
+      authorization: { type: 'string' },
+      nested: {
+        type: 'object',
+        properties: { password: { type: 'string', default: 'nested-private' } },
+      },
+    },
+  };
+  const provider = makeStubToolProvider({
+    id: 'schema',
+    tools: [{ name: 'schema', description: '', inputSchema }],
+    onCall: () => ({ content: 'ok', isError: false }),
+  });
+  await new AgentExecutor({
+    registry,
+    sinks: [sink],
+    toolProviders: [provider],
+    llm: makeStubLLM({
+      scriptedResponses: [
+        {
+          content: '',
+          tool_calls: [{ id: 's1', name: 'schema', args: { token: 'argument-private' } }],
+        },
+        { content: 'done' },
+      ],
+    }),
+  }).run({ agentType: 'chat', messages: [{ role: 'user', content: 'go' }] });
+  const started = sink.entries.find(
+    (entry) => entry.trace_type === 'operation_started' && entry.tool_name === 'schema',
+  );
+  expect(JSON.parse(started!.tool_schema!)).toMatchObject({
+    required: ['token', 'api_key', 'authorization'],
+    dependentRequired: { token: ['authorization'] },
+    properties: {
+      token: { type: 'string', minLength: 1, examples: ['[REDACTED]'] },
+      api_key: { type: 'string' },
+      authorization: { type: 'string' },
+    },
+  });
+  expect(started?.tool_schema).not.toContain('default-private');
+  expect(started?.tool_schema).not.toContain('example-private');
+  expect(started?.tool_schema).not.toContain('nested-private');
+  expect(started?.tool_input).not.toContain('argument-private');
+});
