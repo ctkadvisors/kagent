@@ -57,6 +57,13 @@ api:
   # links pointing at this Langfuse base URL. Typical homelab value:
   # `https://langfuse.knuteson.io`. Leave blank to hide trace links.
   langfuseBaseUrl: ''
+  # Server-side persisted task diagnostics. Keys stay in Workbench, never in agent tools.
+  langfuseApi:
+    url: ''
+    credentialSecretRef:
+      name: ''
+      publicKeyKey: public
+      secretKeyKey: secret
   # Namespaces GET /api/cluster/workloads may list (pods, owners, images;
   # never env or secrets). Empty = the endpoint refuses every namespace.
   workloadNamespaces: []

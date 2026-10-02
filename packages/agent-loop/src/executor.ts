@@ -54,6 +54,7 @@ import type {
 import { ToolProviderRegistry } from './tool-provider.js';
 import type { TraceEntry, TraceSink } from './trace.js';
 import { estimateTokens, truncateForStorage, truncateMessages } from './trace.js';
+import { captureDiagnostic } from './diagnostic-capture.js';
 
 /** Body prefix of the substrate's terminal context-window refusal (status 0). */
 const CONTEXT_REFUSAL_PREFIX = 'context_window_substrate_refused';
@@ -846,10 +847,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           timestamp_ms: Date.now(),
           latency_ms: Date.now() - bookkeeping.llmStart,
           ...(bookkeeping.model !== undefined && { model: bookkeeping.model }),
-          input_messages: truncateMessages(bookkeeping.currentMessages),
+          input_messages: captureDiagnostic(truncateMessages(bookkeeping.currentMessages)),
           tools_available: JSON.stringify(bookkeeping.toolDescriptors.map((t) => t.name)),
           cost_usd: null,
-          error: errMsg,
+          error: captureDiagnostic(errMsg),
           retry_attempt: attemptIdx,
         };
         bookkeeping.traces.push(errEntry);
@@ -1088,6 +1089,19 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       };
       requestChars = conversationChars(currentMessages);
       let llmStart = Date.now();
+      const llmStarted: TraceEntry = {
+        schema_version: '1',
+        run_id: runId,
+        sequence: seqRef.value++,
+        trace_type: 'operation_started',
+        operation_kind: 'llm_call',
+        operation_id: `llm:${iteration}`,
+        timestamp_ms: llmStart,
+        latency_ms: 0,
+        ...(agentDef.defaultModel !== undefined && { model: agentDef.defaultModel }),
+      };
+      traces.push(llmStarted);
+      await this.emitToSinks(llmStarted);
       let llmResult: ChatResult;
       let retryAttempts = 0;
       let lastBackoffMs: number | undefined;
@@ -1135,13 +1149,14 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           run_id: runId,
           sequence: seqRef.value++,
           trace_type: 'llm_call',
+          operation_id: `llm:${iteration}`,
           timestamp_ms: Date.now(),
           latency_ms: Date.now() - llmStart,
           ...(agentDef.defaultModel !== undefined && { model: agentDef.defaultModel }),
-          input_messages: truncateMessages(currentMessages),
+          input_messages: captureDiagnostic(truncateMessages(currentMessages)),
           tools_available: JSON.stringify(toolDescriptors.map((t) => t.name)),
           cost_usd: null,
-          error: msg,
+          error: captureDiagnostic(msg),
           // When this throw is the FINAL 429 after retries were
           // exhausted, attribute the trace to the last attempt index
           // (maxRetries) so observers see the full ladder. For
@@ -1200,13 +1215,14 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         run_id: runId,
         sequence: seqRef.value++,
         trace_type: 'llm_call',
+        operation_id: `llm:${iteration}`,
         timestamp_ms: Date.now(),
         latency_ms: Date.now() - llmStart,
         ...(agentDef.defaultModel !== undefined && { model: agentDef.defaultModel }),
-        input_messages: truncateMessages(currentMessages),
-        output_content: truncateForStorage(llmResult.content),
+        input_messages: captureDiagnostic(truncateMessages(currentMessages)),
+        output_content: captureDiagnostic(truncateForStorage(llmResult.content)),
         ...(synthesizedToolCalls && {
-          output_tool_calls: truncateForStorage(JSON.stringify(synthesizedToolCalls)),
+          output_tool_calls: captureDiagnostic(synthesizedToolCalls),
         }),
         input_tokens_est:
           llmResult.usage?.inputTokens ??
@@ -1343,13 +1359,14 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             run_id: runId,
             sequence: seqRef.value++,
             trace_type: 'tool_call',
+            operation_id: callId,
             timestamp_ms: Date.now(),
             latency_ms: 0,
             tool_name: toolCall.name,
-            tool_input: truncateForStorage(JSON.stringify(toolCall.args)),
-            tool_output: guardMsg,
+            tool_input: captureDiagnostic(toolCall.args),
+            tool_output: captureDiagnostic(guardMsg),
             is_error: true,
-            error: guardMsg,
+            error: captureDiagnostic(guardMsg),
           };
           traces.push(guardEntry);
           await this.emitToSinks(guardEntry);
@@ -1375,13 +1392,14 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             run_id: runId,
             sequence: seqRef.value++,
             trace_type: 'tool_call',
+            operation_id: callId,
             timestamp_ms: Date.now(),
             latency_ms: 0,
             tool_name: toolCall.name,
-            tool_input: truncateForStorage(JSON.stringify(toolCall.args)),
-            tool_output: errMsg,
+            tool_input: captureDiagnostic(toolCall.args),
+            tool_output: captureDiagnostic(errMsg),
             is_error: true,
-            error: errMsg,
+            error: captureDiagnostic(errMsg),
           };
           traces.push(noProvEntry);
           await this.emitToSinks(noProvEntry);
@@ -1395,6 +1413,24 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         }
 
         const toolStart = Date.now();
+        const toolStarted: TraceEntry = {
+          schema_version: '1',
+          run_id: runId,
+          sequence: seqRef.value++,
+          trace_type: 'operation_started',
+          operation_kind: 'tool_call',
+          operation_id: callId,
+          timestamp_ms: toolStart,
+          latency_ms: 0,
+          tool_name: toolCall.name,
+          tool_provider_id: provider.id,
+          tool_input: captureDiagnostic(toolCall.args),
+          tool_schema: captureDiagnostic(
+            toolDescriptors.find((t) => t.name === toolCall.name)?.inputSchema,
+          ),
+        };
+        traces.push(toolStarted);
+        await this.emitToSinks(toolStarted);
         const toolCtx: ToolInvocationContext = { runId, abortSignal: signal };
         try {
           const toolResult: ToolResult = await provider.executeTool(toolCall, toolCtx);
@@ -1403,12 +1439,13 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             run_id: runId,
             sequence: seqRef.value++,
             trace_type: 'tool_call',
+            operation_id: callId,
             timestamp_ms: Date.now(),
             latency_ms: Date.now() - toolStart,
             tool_name: toolCall.name,
             tool_provider_id: provider.id,
-            tool_input: truncateForStorage(JSON.stringify(toolCall.args)),
-            tool_output: truncateForStorage(stringifyToolContent(toolResult.content)),
+            tool_input: captureDiagnostic(toolCall.args),
+            tool_output: captureDiagnostic(stringifyToolContent(toolResult.content)),
             is_error: toolResult.isError,
           };
           traces.push(toolEntry);
@@ -1436,14 +1473,15 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             run_id: runId,
             sequence: seqRef.value++,
             trace_type: 'tool_call',
+            operation_id: callId,
             timestamp_ms: Date.now(),
             latency_ms: Date.now() - toolStart,
             tool_name: toolCall.name,
             tool_provider_id: provider.id,
-            tool_input: truncateForStorage(JSON.stringify(toolCall.args)),
-            tool_output: `Error: ${msg}`,
+            tool_input: captureDiagnostic(toolCall.args),
+            tool_output: captureDiagnostic(`Error: ${msg}`),
             is_error: true,
-            error: msg,
+            error: captureDiagnostic(msg),
           };
           traces.push(errEntry);
           await this.emitToSinks(errEntry);
@@ -1480,7 +1518,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       trace_type: 'run_complete',
       timestamp_ms: Date.now(),
       latency_ms: 0,
-      final_content: finalContent,
+      final_content: finalContent !== null ? captureDiagnostic(finalContent) : null,
       final_status: status,
       cumulative_input_tokens: budget.cumulativeInputTokens,
       cumulative_output_tokens: budget.cumulativeOutputTokens,

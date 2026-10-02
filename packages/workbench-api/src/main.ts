@@ -58,6 +58,7 @@ import { createInformerSet, type InformerSet } from './informer.js';
 import { buildRouter } from './router.js';
 import { startServer } from './server.js';
 import { SseBroker } from './sse.js';
+import { LangfuseTraceReader } from './langfuse-client.js';
 
 const MANAGED_BY = 'kagent.knuteson.io/managed-by=kagent-operator';
 
@@ -223,7 +224,19 @@ async function main(): Promise<void> {
           .filter((s) => s.length > 0)
       : undefined;
 
+  const langfuseApiUrl = process.env.WORKBENCH_LANGFUSE_API_URL;
+  const langfusePublicKey = process.env.WORKBENCH_LANGFUSE_PUBLIC_KEY;
+  const langfuseSecretKey = process.env.WORKBENCH_LANGFUSE_SECRET_KEY;
+  const taskTraceReader =
+    langfuseApiUrl && langfusePublicKey && langfuseSecretKey
+      ? new LangfuseTraceReader({
+          baseUrl: langfuseApiUrl,
+          publicKey: langfusePublicKey,
+          secretKey: langfuseSecretKey,
+        })
+      : undefined;
   const app = buildRouter({
+    ...(taskTraceReader !== undefined && { taskTraceReader }),
     cache,
     broker,
     ready: () => ready,

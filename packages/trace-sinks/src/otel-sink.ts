@@ -185,6 +185,8 @@ export interface OtelTraceSinkOptions {
    * after the SDK has been registered. Tests pass a stub.
    */
   readonly tracer: Tracer;
+  /** Export closed start markers before dispatch so interrupted operations remain diagnosable. */
+  readonly exporterFlush?: () => Promise<void>;
   /**
    * Service name attribute for emitted spans. Defaults to the agent
    * name when supplied; otherwise OTel's resource detection wins.
@@ -257,12 +259,14 @@ export class OtelTraceSink implements TraceSink {
    * Captured here (instead of read off options each emit) so the call
    * path stays cheap.
    */
+  private readonly exporterFlush: (() => Promise<void>) | undefined;
   private readonly parentSpanContext:
     | { readonly traceId: string; readonly spanId: string }
     | undefined;
 
   constructor(options: OtelTraceSinkOptions) {
     this.tracer = options.tracer;
+    this.exporterFlush = options.exporterFlush;
     this.runContext = options.runContext;
     this.contentMode = options.contentMode ?? DEFAULT_CONTENT_MODE;
     this.parentSpanContext = options.parentSpanContext;
@@ -290,10 +294,30 @@ export class OtelTraceSink implements TraceSink {
     return id;
   }
 
-  emit(entry: TraceEntry): void {
+  emit(entry: TraceEntry): void | Promise<void> {
     const root = this.ensureRootSpan(entry.run_id);
     const ctx = trace.setSpan(context.active(), root);
 
+    if (entry.trace_type === 'operation_started') {
+      const formatted =
+        entry.operation_kind === 'tool_call'
+          ? formatToolCallAttrs(entry, this.contentMode)
+          : { spanName: 'agent.llm.started', attributes: formatLlmCallAttrs(entry, 'none') };
+      const attrs = {
+        ...formatted.attributes,
+        'kagent.trace_type': 'operation_started',
+        'kagent.operation_state': 'started',
+        'kagent.operation_kind': entry.operation_kind ?? 'llm_call',
+        ...(entry.operation_id !== undefined && { 'kagent.operation_id': entry.operation_id }),
+      };
+      const span = this.tracer.startSpan(formatted.spanName, { attributes: attrs }, ctx);
+      span.end();
+      // SDK export is best-effort and bounded; a telemetry outage cannot stall inference.
+      if (this.exporterFlush !== undefined) {
+        return this.exporterFlush().catch(() => undefined);
+      }
+      return;
+    }
     if (entry.trace_type === 'iteration_boundary') {
       // Iteration boundaries are markers, not durations — record as a
       // span event on the root span.
@@ -326,6 +350,11 @@ export class OtelTraceSink implements TraceSink {
     if (entry.trace_type === 'llm_call') {
       const attrs = formatLlmCallAttrs(entry, this.contentMode);
       const span = this.tracer.startSpan('agent.llm.call', { attributes: attrs }, ctx);
+      if (entry.error !== undefined)
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: String(attrs['kagent.diagnostic.error'] ?? 'inference error'),
+        });
       span.end();
       return;
     }
@@ -411,7 +440,7 @@ export class OtelTraceSink implements TraceSink {
  */
 export async function setupOtelExporter(options?: {
   serviceName?: string;
-}): Promise<{ tracer: Tracer; shutdown: () => Promise<void> }> {
+}): Promise<{ tracer: Tracer; shutdown: () => Promise<void>; forceFlush: () => Promise<void> }> {
   const { NodeTracerProvider, BatchSpanProcessor } = await import('@opentelemetry/sdk-trace-node');
   const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http');
   const { resourceFromAttributes } = await import('@opentelemetry/resources');
@@ -423,13 +452,20 @@ export async function setupOtelExporter(options?: {
 
   const provider = new NodeTracerProvider({
     resource,
-    spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter())],
+    spanProcessors: [
+      new BatchSpanProcessor(new OTLPTraceExporter({ timeoutMillis: 2000 }), {
+        exportTimeoutMillis: 2500,
+      }),
+    ],
   });
   provider.register();
   const tracer = trace.getTracer(TRACER_NAME);
 
   return {
     tracer,
+    forceFlush: async (): Promise<void> => {
+      await provider.forceFlush();
+    },
     shutdown: async (): Promise<void> => {
       await provider.shutdown();
     },

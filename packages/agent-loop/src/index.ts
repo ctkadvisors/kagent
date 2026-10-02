@@ -180,3 +180,5 @@ export type {
  * JSDoc and docs/HARNESS-LESSONS.md for the failure modes they catch.
  */
 export { computeQualityFlags, type ContextPressureOpts, detectRefusal } from './detectors/index.js';
+
+export { captureDiagnostic } from './diagnostic-capture.js';

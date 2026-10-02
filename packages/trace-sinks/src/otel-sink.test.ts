@@ -158,8 +158,8 @@ describe('OtelTraceSink — root span', () => {
   it('creates one root span per run on first emit', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
-    sink.emit({ ...llmEntry, sequence: 2 });
+    void sink.emit(llmEntry);
+    void sink.emit({ ...llmEntry, sequence: 2 });
     const roots = tracer.recorded.filter((s) => s.name === 'agent.run');
     expect(roots).toHaveLength(1);
     // langfuse.trace.* attrs land on the root.
@@ -182,7 +182,7 @@ describe('OtelTraceSink — root span', () => {
         sandboxProfile: 'strict',
       },
     });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     expect(root?.attributes['langfuse.trace.name']).toBe('researcher:daily-digest');
     expect(root?.attributes['langfuse.trace.metadata.kagent_agent']).toBe('researcher');
@@ -200,7 +200,7 @@ describe('OtelTraceSink — LLM call (Langfuse generation + GenAI chat semconv)'
   it('renders an llm_call as a Langfuse generation with usage + cost details', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     // Langfuse explicit keys.
     expect(llm?.attributes['langfuse.observation.type']).toBe('generation');
@@ -234,7 +234,7 @@ describe('OtelTraceSink — LLM call (Langfuse generation + GenAI chat semconv)'
   it('attaches input messages + output content as Langfuse JSON-string bodies', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     const input = llm?.attributes['langfuse.observation.input'] as string;
     const output = llm?.attributes['langfuse.observation.output'] as string;
@@ -251,7 +251,7 @@ describe('OtelTraceSink — LLM call (Langfuse generation + GenAI chat semconv)'
   it('omits input/output bodies when contentMode = "none"', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer, contentMode: 'none' });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     expect(llm?.attributes['langfuse.observation.input']).toBeUndefined();
     expect(llm?.attributes['langfuse.observation.output']).toBeUndefined();
@@ -264,7 +264,7 @@ describe('OtelTraceSink — tool call (GenAI execute_tool semconv)', () => {
   it('uses the GenAI-semconv span name `execute_tool <toolName>`', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(toolEntry);
+    void sink.emit(toolEntry);
     expect(tracer.recorded.find((s) => s.name === 'execute_tool fetch_url')).toBeDefined();
     // And the legacy span name is gone.
     expect(tracer.recorded.find((s) => s.name === 'agent.tool.call.fetch_url')).toBeUndefined();
@@ -273,7 +273,7 @@ describe('OtelTraceSink — tool call (GenAI execute_tool semconv)', () => {
   it('attaches gen_ai.tool.* + Langfuse observation attrs', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(toolEntry);
+    void sink.emit(toolEntry);
     const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
     expect(tool?.attributes['langfuse.observation.type']).toBe('span');
     expect(tool?.attributes['langfuse.observation.name']).toBe('execute_tool fetch_url');
@@ -298,7 +298,7 @@ describe('OtelTraceSink — tool call (GenAI execute_tool semconv)', () => {
   it('marks tool spans ERROR + langfuse.observation.level=ERROR when is_error=true', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(errorToolEntry);
+    void sink.emit(errorToolEntry);
     const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
     // SpanStatusCode.ERROR === 2 (from @opentelemetry/api)
     expect(tool?.status?.code).toBe(2);
@@ -311,7 +311,7 @@ describe('OtelTraceSink — iteration boundary', () => {
   it('records iteration_boundary as a span event on the root, not a new span', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit({
+    void sink.emit({
       schema_version: '1',
       run_id: 'r1',
       sequence: 5,
@@ -330,8 +330,8 @@ describe('OtelTraceSink — run_complete finalization', () => {
   it('stamps trace-level totals + final output on the root span and ends it', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
-    sink.emit(runCompleteEntry);
+    void sink.emit(llmEntry);
+    void sink.emit(runCompleteEntry);
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     expect(root?.attributes['langfuse.trace.output']).toBe('final answer');
     expect(root?.attributes['langfuse.trace.metadata.cumulative_input_tokens']).toBe(50);
@@ -344,8 +344,8 @@ describe('OtelTraceSink — run_complete finalization', () => {
   it('marks the root span ERROR for non-completed terminal statuses', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
-    sink.emit({ ...runCompleteEntry, final_status: 'failed' });
+    void sink.emit(llmEntry);
+    void sink.emit({ ...runCompleteEntry, final_status: 'failed' });
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     expect(root?.status?.code).toBe(2); // SpanStatusCode.ERROR
     expect(root?.status?.message).toContain('failed');
@@ -354,8 +354,8 @@ describe('OtelTraceSink — run_complete finalization', () => {
   it('flush() is a safe no-op after run_complete ended the root', async () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
-    sink.emit(runCompleteEntry);
+    void sink.emit(llmEntry);
+    void sink.emit(runCompleteEntry);
     // Already ended.
     expect(tracer.recorded.find((s) => s.name === 'agent.run')?.ended).toBe(true);
     // flush() should not double-end (Span.end() is idempotent in the
@@ -369,8 +369,8 @@ describe('OtelTraceSink — flush + close fallback (no run_complete emitted)', (
   it('flush() ends all open root spans', async () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
-    sink.emit({ ...llmEntry, run_id: 'r2' });
+    void sink.emit(llmEntry);
+    void sink.emit({ ...llmEntry, run_id: 'r2' });
     expect(tracer.recorded.filter((s) => s.name === 'agent.run').every((s) => s.ended)).toBe(false);
     await sink.flush();
     expect(tracer.recorded.filter((s) => s.name === 'agent.run').every((s) => s.ended)).toBe(true);
@@ -379,7 +379,7 @@ describe('OtelTraceSink — flush + close fallback (no run_complete emitted)', (
   it('close() is an alias for flush()', async () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     await sink.close();
     expect(tracer.recorded.find((s) => s.name === 'agent.run')?.ended).toBe(true);
   });
@@ -387,8 +387,8 @@ describe('OtelTraceSink — flush + close fallback (no run_complete emitted)', (
   it('keeps separate root spans for distinct runs', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
-    sink.emit({ ...llmEntry, run_id: 'r2' });
+    void sink.emit(llmEntry);
+    void sink.emit({ ...llmEntry, run_id: 'r2' });
     expect(tracer.recorded.filter((s) => s.name === 'agent.run')).toHaveLength(2);
   });
 });
@@ -428,7 +428,7 @@ describe('OtelTraceSink — deterministic trace ID', () => {
   it('hands the derived trace ID to startSpan via a remote parent context', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry); // run_id='r1'
+    void sink.emit(llmEntry); // run_id='r1'
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     expect(root?.parentTraceId).toBe(traceIdFromRunId('r1'));
     expect(root?.parentSpanId).toMatch(/^[0-9a-f]{16}$/);
@@ -439,8 +439,8 @@ describe('OtelTraceSink — deterministic trace ID', () => {
     const tracerB = makeStubTracer();
     const sinkA = new OtelTraceSink({ tracer: tracerA });
     const sinkB = new OtelTraceSink({ tracer: tracerB });
-    sinkA.emit(llmEntry);
-    sinkB.emit(llmEntry);
+    void sinkA.emit(llmEntry);
+    void sinkB.emit(llmEntry);
     const rootA = tracerA.recorded.find((s) => s.name === 'agent.run');
     const rootB = tracerB.recorded.find((s) => s.name === 'agent.run');
     // Proof line — both sinks adopted the same derived trace ID.
@@ -452,7 +452,7 @@ describe('OtelTraceSink — deterministic trace ID', () => {
   it('traceIdFor() returns the same id used for the root span', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     expect(sink.traceIdFor('r1')).toBe(traceIdFromRunId('r1'));
   });
 
@@ -470,7 +470,7 @@ describe('OtelTraceSink — deterministic trace ID', () => {
     // parent SpanContext IS the root's. We assert the chain end-to-end.
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     expect(root?.parentTraceId).toBe(traceIdFromRunId('r1'));
@@ -487,7 +487,7 @@ describe('OtelTraceSink — Langfuse JSON-string contract', () => {
   it('non-JSON input_messages get wrapped as { preview: "<text>" }', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit({ ...llmEntry, input_messages: 'not actual json {' });
+    void sink.emit({ ...llmEntry, input_messages: 'not actual json {' });
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     const input = llm?.attributes['langfuse.observation.input'] as string;
     // Must parse, must NOT throw — guarantee #1 of point 6.
@@ -502,7 +502,7 @@ describe('OtelTraceSink — Langfuse JSON-string contract', () => {
     const sink = new OtelTraceSink({ tracer, contentMode: 'preview' });
     // Long JSON string that the formatter walks + truncates per-string-leaf.
     const messages = [{ role: 'user', content: 'x'.repeat(5000) }];
-    sink.emit({ ...llmEntry, input_messages: JSON.stringify(messages) });
+    void sink.emit({ ...llmEntry, input_messages: JSON.stringify(messages) });
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     const input = llm?.attributes['langfuse.observation.input'] as string;
     const parsed = JSON.parse(input) as Array<{ role: string; content: string }>;
@@ -513,7 +513,7 @@ describe('OtelTraceSink — Langfuse JSON-string contract', () => {
   it('malformed output_tool_calls fragment is wrapped, not raw-concatenated', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit({
+    void sink.emit({
       ...llmEntry,
       output_content: 'partial',
       output_tool_calls: '[not valid {',
@@ -528,7 +528,7 @@ describe('OtelTraceSink — Langfuse JSON-string contract', () => {
   it('non-JSON tool_input is wrapped as { preview }', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit({ ...toolEntry, tool_input: 'plain raw text' });
+    void sink.emit({ ...toolEntry, tool_input: 'plain raw text' });
     const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
     const input = tool?.attributes['langfuse.observation.input'] as string;
     expect(JSON.parse(input)).toEqual({ preview: 'plain raw text' });
@@ -539,7 +539,7 @@ describe('OtelTraceSink — Langfuse JSON-string contract', () => {
   it('non-JSON tool_output is wrapped as { preview }', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit({ ...toolEntry, tool_output: 'page body' });
+    void sink.emit({ ...toolEntry, tool_output: 'page body' });
     const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
     const output = tool?.attributes['langfuse.observation.output'] as string;
     expect(JSON.parse(output)).toEqual({ preview: 'page body' });
@@ -555,7 +555,7 @@ describe('OtelTraceSink — KAGENT_TRACE_CONTENT_MODE', () => {
   it('mode=none: omits Langfuse input/output bodies but keeps metadata, model, usage, cost', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer, contentMode: 'none' });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const llm = tracer.recorded.find((s) => s.name === 'agent.llm.call');
     expect(llm?.attributes['langfuse.observation.input']).toBeUndefined();
     expect(llm?.attributes['langfuse.observation.output']).toBeUndefined();
@@ -579,7 +579,7 @@ describe('OtelTraceSink — KAGENT_TRACE_CONTENT_MODE', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer }); // default = preview
     const longMessage = 'x'.repeat(10_000);
-    sink.emit({
+    void sink.emit({
       ...llmEntry,
       input_messages: JSON.stringify([{ role: 'user', content: longMessage }]),
     });
@@ -596,7 +596,7 @@ describe('OtelTraceSink — KAGENT_TRACE_CONTENT_MODE', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer, contentMode: 'full' });
     const longMessage = 'x'.repeat(10_000);
-    sink.emit({
+    void sink.emit({
       ...llmEntry,
       input_messages: JSON.stringify([{ role: 'user', content: longMessage }]),
     });
@@ -610,7 +610,7 @@ describe('OtelTraceSink — KAGENT_TRACE_CONTENT_MODE', () => {
   it('mode=none on tool spans: omits input/output but keeps metadata + model + ERROR level', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer, contentMode: 'none' });
-    sink.emit(errorToolEntry);
+    void sink.emit(errorToolEntry);
     const tool = tracer.recorded.find((s) => s.name === 'execute_tool fetch_url');
     expect(tool?.attributes['langfuse.observation.input']).toBeUndefined();
     expect(tool?.attributes['langfuse.observation.output']).toBeUndefined();
@@ -739,7 +739,7 @@ describe('OtelTraceSink — parentSpanContext seeding (env-supplied W3C parent)'
         parentSpanContext: { traceId: parsed.traceId, spanId: parsed.spanId },
       }),
     });
-    sink.emit(llmEntry); // run_id='r1', a CHILD task
+    void sink.emit(llmEntry); // run_id='r1', a CHILD task
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     // Child's agent.run becomes a child of the parent's span — same trace.
     expect(root?.parentTraceId).toBe(parsed?.traceId);
@@ -752,8 +752,41 @@ describe('OtelTraceSink — parentSpanContext seeding (env-supplied W3C parent)'
   it('falls back to runId-derived trace ID when parentSpanContext is absent', () => {
     const tracer = makeStubTracer();
     const sink = new OtelTraceSink({ tracer });
-    sink.emit(llmEntry);
+    void sink.emit(llmEntry);
     const root = tracer.recorded.find((s) => s.name === 'agent.run');
     expect(root?.parentTraceId).toBe(traceIdFromRunId('r1'));
   });
+});
+
+it('exports a bounded redacted operation marker before provider dispatch, independently of run closure', async () => {
+  const tracer = makeStubTracer();
+  const exporterFlush = vi.fn(() => Promise.resolve());
+  const sink = new OtelTraceSink({ tracer, contentMode: 'preview', exporterFlush });
+  await sink.emit({
+    ...toolEntry,
+    trace_type: 'operation_started',
+    operation_kind: 'tool_call',
+    operation_id: 't1',
+    tool_input: JSON.stringify({ code: 'x'.repeat(1400), password: 'private-value' }),
+  });
+  const marker = tracer.recorded.find((s) => s.attributes['kagent.operation_state'] === 'started');
+  expect(marker?.ended).toBe(true);
+  expect(marker?.attributes['kagent.diagnostic.input']).toContain('x'.repeat(1400));
+  expect(JSON.stringify(marker)).not.toContain('private-value');
+  expect(exporterFlush).toHaveBeenCalledOnce();
+});
+
+it('retains inference retry errors as error observations for diagnosis', async () => {
+  const tracer = makeStubTracer();
+  const sink = new OtelTraceSink({ tracer });
+  await sink.emit({
+    ...llmEntry,
+    error: '503 backend unavailable',
+    retry_attempt: 1,
+    retry_backoff_ms: 3000,
+  });
+  const observation = tracer.recorded.find((s) => s.name === 'agent.llm.call');
+  expect(observation?.attributes['kagent.diagnostic.error']).toBe('503 backend unavailable');
+  expect(observation?.attributes['kagent.retry_attempt']).toBe(1);
+  expect(observation?.status?.code).toBe(2);
 });

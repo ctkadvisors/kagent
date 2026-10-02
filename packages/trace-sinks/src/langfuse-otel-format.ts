@@ -29,7 +29,7 @@
  * break.
  */
 
-import type { TraceEntry } from '@kagent/agent-loop';
+import { captureDiagnostic, type TraceEntry } from '@kagent/agent-loop';
 
 /**
  * Content-capture policy for input/output bodies attached to spans.
@@ -219,6 +219,16 @@ export function formatLlmCallAttrs(
     attrs['langfuse.observation.output'] = outputBody;
   }
 
+  attrs['kagent.trace_type'] = entry.trace_type;
+  if (entry.operation_id !== undefined) attrs['kagent.operation_id'] = entry.operation_id;
+  if (entry.retry_attempt !== undefined) attrs['kagent.retry_attempt'] = entry.retry_attempt;
+  if (entry.retry_backoff_ms !== undefined)
+    attrs['kagent.retry_backoff_ms'] = entry.retry_backoff_ms;
+  if (entry.error !== undefined) {
+    attrs['langfuse.observation.level'] = 'ERROR';
+    attrs['kagent.is_error'] = true;
+    attrs['kagent.diagnostic.error'] = captureDiagnostic(entry.error);
+  }
   return attrs;
 }
 
@@ -260,23 +270,49 @@ export function formatToolCallAttrs(
   // ride the raw (content-mode-applied) payload — OTel GenAI semconv
   // doesn't require a JSON string and existing collectors expect the
   // tool's literal arg/result text.
-  const langfuseInput = toLangfuseJsonString(entry.tool_input, contentMode);
+  const langfuseInput = toLangfuseJsonString(
+    entry.tool_input !== undefined ? captureDiagnostic(entry.tool_input) : undefined,
+    contentMode,
+  );
   if (langfuseInput !== undefined) {
     attrs['langfuse.observation.input'] = langfuseInput;
   }
-  const langfuseOutput = toLangfuseJsonString(entry.tool_output, contentMode);
+  const langfuseOutput = toLangfuseJsonString(
+    entry.tool_output !== undefined ? captureDiagnostic(entry.tool_output) : undefined,
+    contentMode,
+  );
   if (langfuseOutput !== undefined) {
     attrs['langfuse.observation.output'] = langfuseOutput;
   }
-  const rawInput = applyContentMode(entry.tool_input, contentMode);
+  const rawInput = applyContentMode(
+    entry.tool_input !== undefined ? captureDiagnostic(entry.tool_input) : undefined,
+    contentMode,
+  );
   if (rawInput !== undefined) {
     attrs['gen_ai.tool.call.arguments'] = rawInput;
   }
-  const rawOutput = applyContentMode(entry.tool_output, contentMode);
+  const rawOutput = applyContentMode(
+    entry.tool_output !== undefined ? captureDiagnostic(entry.tool_output) : undefined,
+    contentMode,
+  );
   if (rawOutput !== undefined) {
     attrs['gen_ai.tool.call.result'] = rawOutput;
   }
 
+  attrs['kagent.trace_type'] = entry.trace_type;
+  attrs['kagent.operation_state'] =
+    entry.trace_type === 'operation_started' ? 'started' : 'completed';
+  if (entry.operation_id !== undefined) attrs['kagent.operation_id'] = entry.operation_id;
+  if (contentMode !== 'none') {
+    if (entry.tool_input !== undefined)
+      attrs['kagent.diagnostic.input'] = captureDiagnostic(entry.tool_input);
+    if (entry.tool_schema !== undefined)
+      attrs['kagent.diagnostic.schema'] = captureDiagnostic(entry.tool_schema);
+    if (entry.tool_output !== undefined)
+      attrs['kagent.diagnostic.output'] = captureDiagnostic(entry.tool_output);
+    if (entry.error !== undefined)
+      attrs['kagent.diagnostic.error'] = captureDiagnostic(entry.error);
+  }
   return { spanName, attributes: attrs };
 }
 
@@ -291,6 +327,8 @@ export function formatRunCompleteAttrs(
 ): Record<string, string | number | boolean> {
   const attrs: Record<string, string | number | boolean> = {
     'kagent.run_id': entry.run_id,
+    'kagent.sequence': entry.sequence,
+    'kagent.trace_type': 'run_complete',
   };
   if (entry.final_status !== undefined) {
     attrs['langfuse.observation.status_message'] = entry.final_status;

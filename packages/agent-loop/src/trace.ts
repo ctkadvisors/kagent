@@ -50,7 +50,15 @@ export interface TraceEntry {
    * don't model a per-run lifecycle ignore it; OtelTraceSink stamps
    * the trace-level Langfuse fields onto the root span and ends it.
    */
-  trace_type: 'llm_call' | 'tool_call' | 'iteration_boundary' | 'run_complete';
+  trace_type:
+    | 'llm_call'
+    | 'tool_call'
+    | 'iteration_boundary'
+    | 'run_complete'
+    | 'operation_started';
+  /** Instant durable marker emitted before invoking a provider. */
+  operation_kind?: 'llm_call' | 'tool_call';
+  operation_id?: string;
   /** Unix milliseconds when the trace was emitted. */
   timestamp_ms: number;
   /** Operation duration in ms; 0 for `iteration_boundary` and `run_complete` (instantaneous). */
@@ -129,6 +137,8 @@ export interface TraceEntry {
   tool_provider_id?: string;
   /** Truncated JSON-stringification of `ToolCall.args`. */
   tool_input?: string;
+  /** The schema actually offered for this invocation. */
+  tool_schema?: string;
   /** Truncated JSON-stringification of `ToolResult.content`. */
   tool_output?: string;
   /** Mirrors `ToolResult.isError`. */
