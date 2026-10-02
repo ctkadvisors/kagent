@@ -117,9 +117,12 @@ describe('AgentExecutor — loop semantics', () => {
     const types = result.traces.map((t) => t.trace_type);
     expect(types).toEqual([
       'iteration_boundary',
+      'operation_started',
       'llm_call',
+      'operation_started',
       'tool_call',
       'iteration_boundary',
+      'operation_started',
       'llm_call',
       'run_complete',
     ]);

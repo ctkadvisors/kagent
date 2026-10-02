@@ -45,3 +45,17 @@ describe('buildRouter — Architect mount', () => {
     expect(res.status).toBe(404);
   });
 });
+
+it('mounts the persisted task diagnostic route in the production router', async () => {
+  const deps = base();
+  deps.cache.upsertTask({
+    apiVersion: 'kagent.knuteson.io/v1alpha1',
+    kind: 'AgentTask',
+    metadata: { namespace: 'kagent-system', name: 'failed', uid: 'uid1' },
+    spec: { targetAgent: 'fleet-auditor' },
+    status: { phase: 'Failed', error: 'maxIterations' },
+  });
+  const response = await buildRouter(deps).request('/api/tasks/kagent-system/failed/diagnostics');
+  expect(response.status).toBe(200);
+  expect(((await response.json()) as { trace: { state: string } }).trace.state).toBe('unavailable');
+});

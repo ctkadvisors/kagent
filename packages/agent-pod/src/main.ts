@@ -342,7 +342,7 @@ async function main(): Promise<void> {
   const sinks: TraceSink[] = [new StdoutSink()];
   let otelShutdown: (() => Promise<void>) | undefined;
   if (isOtelEnabled(process.env)) {
-    const { tracer, shutdown } = await setupOtelExporter({
+    const { tracer, shutdown, forceFlush } = await setupOtelExporter({
       serviceName: `kagent-agent-pod/${config.agentName}`,
     });
     // v0.1.11 — when the operator threaded `OTEL_TRACEPARENT` (which
@@ -356,6 +356,7 @@ async function main(): Promise<void> {
     sinks.push(
       new OtelTraceSink({
         tracer,
+        exporterFlush: forceFlush,
         runContext: {
           agentName: config.agentName,
           taskUid: config.taskId,

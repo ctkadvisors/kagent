@@ -8,7 +8,7 @@ import type {
   ToolDescriptor,
   ToolInvocationContext,
   ToolResult,
-} from '@kagent/agent-loop';
+} from '@kagent/agent-loop/kernel';
 import {
   isExternalGatewayToolName,
   isToolRuntimeTool,

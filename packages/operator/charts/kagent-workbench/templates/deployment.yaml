@@ -111,6 +111,20 @@ spec:
             - name: LANGFUSE_BASE_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- if and .Values.api.langfuseApi.url .Values.api.langfuseApi.credentialSecretRef.name }}
+            - name: WORKBENCH_LANGFUSE_API_URL
+              value: {{ .Values.api.langfuseApi.url | quote }}
+            - name: WORKBENCH_LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.langfuseApi.credentialSecretRef.name | quote }}
+                  key: {{ .Values.api.langfuseApi.credentialSecretRef.publicKeyKey | quote }}
+            - name: WORKBENCH_LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.langfuseApi.credentialSecretRef.name | quote }}
+                  key: {{ .Values.api.langfuseApi.credentialSecretRef.secretKeyKey | quote }}
+            {{- end }}
             {{- with .Values.api.workloadNamespaces }}
             - name: WORKBENCH_WORKLOAD_NAMESPACES
               value: {{ join "," . | quote }}

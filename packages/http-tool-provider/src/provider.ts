@@ -45,8 +45,8 @@ import type {
   ToolInvocationContext,
   ToolProvider,
   ToolResult,
-} from '@kagent/agent-loop';
-import { HttpToolProviderNetworkError, InvalidConfigError } from '@kagent/agent-loop';
+} from '@kagent/agent-loop/kernel';
+import { HttpToolProviderNetworkError, InvalidConfigError } from '@kagent/agent-loop/kernel';
 
 import { substitutePath } from './path-template.js';
 

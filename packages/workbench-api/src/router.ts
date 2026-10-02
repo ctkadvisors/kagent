@@ -38,6 +38,8 @@ import { schedulesRoute } from './routes/schedules.js';
 import { sessionsRoute } from './routes/sessions.js';
 import { streamRoute } from './routes/stream.js';
 import { tasksRoute } from './routes/tasks.js';
+import { taskDiagnosticsRoute } from './routes/task-diagnostics.js';
+import type { TaskTraceReader } from './langfuse-client.js';
 import { uiProxyRoute } from './routes/ui-proxy.js';
 
 export interface RouterDeps {
@@ -72,6 +74,7 @@ export interface RouterDeps {
    * derivation; this field just supplies the base URL.
    */
   readonly langfuseBaseUrl?: string;
+  readonly taskTraceReader?: TaskTraceReader;
   /** Bearer token required on review-queue writes (see ReviewQueueRouteDeps). */
   readonly reviewToken?: string;
   /**
@@ -175,6 +178,14 @@ export function buildRouter(deps: RouterDeps): Hono {
       ...(deps.langfuseBaseUrl !== undefined && { langfuseBaseUrl: deps.langfuseBaseUrl }),
       ...(deps.customApi !== undefined && { customApi: deps.customApi }),
       ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
+    }),
+  );
+  app.route(
+    '/',
+    taskDiagnosticsRoute({
+      cache: deps.cache,
+      ...(deps.taskTraceReader !== undefined && { traceReader: deps.taskTraceReader }),
+      ...(deps.coreApi !== undefined && { coreApi: deps.coreApi }),
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));

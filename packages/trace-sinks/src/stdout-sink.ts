@@ -98,6 +98,8 @@ function formatCompact(entry: TraceEntry, useColor: boolean): string {
   const seq = String(entry.sequence).padStart(3, '0');
   const prefix = `[run-${runIdShort} #${seq}]`;
 
+  if (entry.trace_type === 'operation_started')
+    return `${prefix} START ${entry.operation_kind ?? 'operation'} ${entry.tool_name ?? entry.model ?? ''}`;
   if (entry.trace_type === 'iteration_boundary') {
     const iter = entry.iteration ?? 0;
     const label = colorize('ITER', ANSI.magenta, useColor);

@@ -17,7 +17,7 @@
  */
 
 import { signedIdentityHeaders } from '@kagent/http-tool-provider';
-import type { ToolResult } from '@kagent/agent-loop';
+import type { ToolResult } from '@kagent/agent-loop/kernel';
 import type {
   ToolGatewayCodeRunner,
   ToolGatewayExternalHandler,
