@@ -54,7 +54,7 @@ import type {
 import { ToolProviderRegistry } from './tool-provider.js';
 import type { TraceEntry, TraceSink } from './trace.js';
 import { estimateTokens, truncateForStorage, truncateMessages } from './trace.js';
-import { captureDiagnostic } from './diagnostic-capture.js';
+import { captureDiagnostic, captureSchemaDiagnostic } from './diagnostic-capture.js';
 
 /** Body prefix of the substrate's terminal context-window refusal (status 0). */
 const CONTEXT_REFUSAL_PREFIX = 'context_window_substrate_refused';
@@ -1425,7 +1425,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           tool_name: toolCall.name,
           tool_provider_id: provider.id,
           tool_input: captureDiagnostic(toolCall.args),
-          tool_schema: captureDiagnostic(
+          tool_schema: captureSchemaDiagnostic(
             toolDescriptors.find((t) => t.name === toolCall.name)?.inputSchema,
           ),
         };

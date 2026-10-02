@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { scrubDiagnostic } from './diagnostic-data.js';
+import { scrubDiagnostic, scrubSchemaDiagnostic } from './diagnostic-data.js';
 
 export interface DiagnosticEvent {
   readonly id: string;
@@ -74,7 +74,7 @@ function event(value: unknown, runId: string): DiagnosticEvent | undefined {
     ...(typeof tool === 'string' && { tool }),
     ...(typeof o.model === 'string' && { model: o.model }),
     ...(attrs['kagent.diagnostic.schema'] !== undefined && {
-      inputSchema: scrubDiagnostic(attrs['kagent.diagnostic.schema']),
+      inputSchema: scrubSchemaDiagnostic(attrs['kagent.diagnostic.schema']),
     }),
     ...(input !== undefined && { arguments: scrubDiagnostic(input) }),
     ...(output !== undefined && { result: scrubDiagnostic(output) }),

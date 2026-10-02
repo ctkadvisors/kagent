@@ -143,3 +143,52 @@ describe('task diagnostics', () => {
     expect((await read(response)).trace.events).toHaveLength(3);
   });
 });
+
+it('reads credential-named schema structure without exposing literal secrets or argument values', async () => {
+  const schema = {
+    type: 'object',
+    required: ['token'],
+    properties: {
+      token: {
+        type: 'string',
+        default: 'legacy-default-private',
+        examples: ['legacy-example-private'],
+      },
+    },
+  };
+  const reader = new LangfuseTraceReader({
+    baseUrl: 'http://langfuse',
+    publicKey: 'pk',
+    secretKey: 'secret',
+    fetch: () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            observations: [
+              {
+                ...observations[0],
+                input: { token: 'legacy-argument-private' },
+                metadata: {
+                  attributes: {
+                    ...observations[0].metadata.attributes,
+                    'kagent.diagnostic.schema': JSON.stringify(schema),
+                  },
+                },
+              },
+            ],
+          }),
+        ),
+      ),
+  });
+  const response = await taskDiagnosticsRoute({ cache: cache(), traceReader: reader }).request(
+    '/api/tasks/kagent-system/failed/diagnostics',
+  );
+  const body = (await response.json()) as { trace: { events: { inputSchema: unknown }[] } };
+  expect(body.trace.events[0].inputSchema).toMatchObject({
+    required: ['token'],
+    properties: { token: { type: 'string', examples: ['[REDACTED]'] } },
+  });
+  expect(JSON.stringify(body)).not.toContain('legacy-default-private');
+  expect(JSON.stringify(body)).not.toContain('legacy-example-private');
+  expect(JSON.stringify(body)).not.toContain('legacy-argument-private');
+});

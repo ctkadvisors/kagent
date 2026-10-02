@@ -181,4 +181,4 @@ export type {
  */
 export { computeQualityFlags, type ContextPressureOpts, detectRefusal } from './detectors/index.js';
 
-export { captureDiagnostic } from './diagnostic-capture.js';
+export { captureDiagnostic, captureSchemaDiagnostic } from './diagnostic-capture.js';
