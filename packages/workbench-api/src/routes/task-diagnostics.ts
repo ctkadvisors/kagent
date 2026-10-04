@@ -23,8 +23,12 @@ export function taskDiagnosticsRoute(deps: TaskDiagnosticsDeps): Hono {
     const name = c.req.param('name');
     const task = deps.cache.getTask(namespace, name);
     if (task === undefined) return c.json({ error: 'not-found' }, 404);
-    const afterSequence = Number(c.req.query('afterSequence') ?? '-1');
-    const limit = Number(c.req.query('limit') ?? '20');
+    // Fleet HTTP tools interpolate absent optional args as empty query
+    // values (`?afterSequence=&limit=…`); treat '' as "not supplied".
+    const rawAfter = c.req.query('afterSequence');
+    const rawLimit = c.req.query('limit');
+    const afterSequence = Number(rawAfter === undefined || rawAfter === '' ? '-1' : rawAfter);
+    const limit = Number(rawLimit === undefined || rawLimit === '' ? '20' : rawLimit);
     if (
       !Number.isSafeInteger(afterSequence) ||
       afterSequence < -1 ||

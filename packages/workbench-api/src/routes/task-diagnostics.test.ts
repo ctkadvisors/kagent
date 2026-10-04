@@ -101,6 +101,12 @@ describe('task diagnostics', () => {
     expect(
       (await app.request('/api/tasks/kagent-system/failed/diagnostics?afterSequence=nan')).status,
     ).toBe(400);
+    // Fleet HTTP tools render absent optional args as empty query values;
+    // empty must mean "default", not 400 (and must not drop sequence 0).
+    expect(
+      (await app.request('/api/tasks/kagent-system/failed/diagnostics?afterSequence=&limit='))
+        .status,
+    ).toBe(200);
     expect(
       (await read(await app.request('/api/tasks/kagent-system/failed/diagnostics'))).trace.state,
     ).toBe('unavailable');
