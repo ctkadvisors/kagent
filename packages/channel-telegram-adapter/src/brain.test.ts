@@ -109,7 +109,28 @@ describe('writeBrainEpisode', () => {
       const headers = init?.headers as Record<string, string>;
       calls.push({ body: JSON.parse(init?.body as string), session: headers['mcp-session-id'] });
       return Promise.resolve(
-        new Response('{}', { status: 200, headers: { 'mcp-session-id': 'sess-1' } }),
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: calls.length === 3 ? 2 : 1,
+            result:
+              calls.length === 3
+                ? {
+                    structuredContent: {
+                      durable: true,
+                      status: 'pending',
+                      episode_uuid: (calls[2]?.body as { params: { arguments: { uuid: string } } })
+                        .params.arguments.uuid,
+                      receipt_id:
+                        'graphiti:' +
+                        (calls[2]?.body as { params: { arguments: { uuid: string } } }).params
+                          .arguments.uuid,
+                    },
+                  }
+                : {},
+          }),
+          { status: 200, headers: { 'mcp-session-id': 'sess-1' } },
+        ),
       );
     }) as unknown as typeof fetch;
 
@@ -160,5 +181,152 @@ describe('earlier turns', () => {
       '[earlier in this conversation]\nChris: You steer the fleet, no?\nYou: I am the front desk.\nChris: why not retain over time?\nYou: because authority is bounded\n[current message]\nYeah',
     );
     expect(stripPreviousTurn(text)).toBe('Yeah');
+  });
+});
+
+describe('durable brain acknowledgement', () => {
+  const brain = { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' };
+  const episode = {
+    name: 'n',
+    body: 'exact content',
+    referenceTime: '2026-10-04T12:00:00Z',
+    uuid: '11111111-1111-5111-8111-111111111111',
+  };
+  it.each([
+    { error: { code: -32603, message: 'intake unavailable' } },
+    { result: { isError: true, content: [{ type: 'text', text: 'database unavailable' }] } },
+    { result: { content: [{ type: 'text', text: JSON.stringify({ error: 'queue failed' }) }] } },
+    { result: {} },
+  ])('rejects HTTP-success tool errors or missing durable receipts', async (outcome) => {
+    let count = 0;
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: ++count === 3 ? 2 : 1,
+            ...(count === 3 ? outcome : { result: {} }),
+          }),
+        ),
+      ),
+    ) as unknown as typeof fetch;
+    await expect(writeBrainEpisode(brain, episode, fetchImpl)).rejects.toThrow();
+  });
+  it('accepts a durable SSE receipt and transmits the stable episode UUID', async () => {
+    const calls: unknown[] = [];
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      calls.push(JSON.parse(init?.body as string));
+      const result =
+        calls.length === 3
+          ? {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    durable: true,
+                    episode_uuid: episode.uuid,
+                    receipt_id: 'graphiti:' + episode.uuid,
+                    status: 'pending',
+                  }),
+                },
+              ],
+            }
+          : {};
+      return Promise.resolve(
+        new Response(
+          'event: message\ndata: ' +
+            JSON.stringify({ jsonrpc: '2.0', id: calls.length === 3 ? 2 : 1, result }) +
+            '\n\n',
+          { headers: { 'content-type': 'text/event-stream' } },
+        ),
+      );
+    }) as typeof fetch;
+    await writeBrainEpisode(brain, episode, fetchImpl);
+    expect(calls[2]).toMatchObject({
+      params: { arguments: { uuid: episode.uuid, episode_body: episode.body } },
+    });
+  });
+  it.each(['pending', 'processing', 'completed', 'retrying', 'schema_blocked', 'forgotten'])(
+    'accepts retained acknowledgement status %s',
+    async (status) => {
+      let count = 0;
+      const fetchImpl = vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: ++count === 3 ? 2 : 1,
+              result:
+                count === 3
+                  ? {
+                      structuredContent: {
+                        durable: true,
+                        status,
+                        episode_uuid: episode.uuid,
+                        receipt_id: 'graphiti:' + episode.uuid,
+                      },
+                    }
+                  : {},
+            }),
+          ),
+        ),
+      ) as unknown as typeof fetch;
+      await expect(writeBrainEpisode(brain, episode, fetchImpl)).resolves.toBeUndefined();
+    },
+  );
+  it.each(['wrong_uuid', 'wrong_receipt', 'unknown_status'])(
+    'rejects a foreign or unknown acknowledgement: %s',
+    async (bad) => {
+      let count = 0;
+      const receipt = {
+        durable: true,
+        status: bad === 'unknown_status' ? 'lost' : 'pending',
+        episode_uuid: bad === 'wrong_uuid' ? 'other-episode' : episode.uuid,
+        receipt_id: bad === 'wrong_receipt' ? 'other-receipt' : 'graphiti:' + episode.uuid,
+      };
+      const fetchImpl = vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: ++count === 3 ? 2 : 1,
+              result: count === 3 ? { structuredContent: receipt } : {},
+            }),
+          ),
+        ),
+      ) as unknown as typeof fetch;
+      await expect(writeBrainEpisode(brain, episode, fetchImpl)).rejects.toThrow(/durable intake/);
+    },
+  );
+  it('bounds a stuck fetch and aborts it', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>(() => {});
+      }) as typeof fetch;
+      const pending = writeBrainEpisode(brain, episode, fetchImpl, 20);
+      const rejected = expect(pending).rejects.toThrow(/timeout/i);
+      await vi.advanceTimersByTimeAsync(25);
+      await rejected;
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('keeps the exact delivered message and reply beyond the former episode cap', () => {
+    const message = 'm'.repeat(4000),
+      reply = 'r'.repeat(4000);
+    const result = channelTurnEpisode({
+      operatorName: 'Chris',
+      agentName: 'concierge',
+      message,
+      reply,
+      error: undefined,
+      at: episode.referenceTime,
+    });
+    expect(result.body).toContain(message);
+    expect(result.body).toContain(reply);
   });
 });

@@ -219,6 +219,72 @@ spec:
                       minLength: 1
                     uid:
                       type: string
+                lastRememberedTaskRef:
+                  type: object
+                  required:
+                    - namespace
+                    - name
+                  properties:
+                    namespace:
+                      type: string
+                      minLength: 1
+                    name:
+                      type: string
+                      minLength: 1
+                    uid:
+                      type: string
+                brainOutbox:
+                  description: Exact delivered turns awaiting durable brain intake; retries never resend chat.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - taskRef
+                      - episode
+                      - attempts
+                    properties:
+                      taskRef:
+                        type: object
+                        required:
+                          - namespace
+                          - name
+                        properties:
+                          namespace:
+                            type: string
+                            minLength: 1
+                          name:
+                            type: string
+                            minLength: 1
+                          uid:
+                            type: string
+                      episode:
+                        type: object
+                        required:
+                          - uuid
+                          - name
+                          - body
+                          - referenceTime
+                        properties:
+                          uuid:
+                            type: string
+                            format: uuid
+                          name:
+                            type: string
+                            minLength: 1
+                          body:
+                            type: string
+                          referenceTime:
+                            type: string
+                            format: date-time
+                      attempts:
+                        type: integer
+                        minimum: 0
+                      nextAttemptAt:
+                        type: string
+                        format: date-time
+                      lastError:
+                        type: string
+                        maxLength: 200
                 consecutiveFailures:
                   type: integer
                   minimum: 0

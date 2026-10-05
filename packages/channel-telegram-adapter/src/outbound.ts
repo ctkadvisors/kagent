@@ -5,6 +5,7 @@
 
 import type {
   AdapterLogger,
+  BrainOutboxEntry,
   AgentTask,
   ChannelGateway,
   ChannelOutboxStore,
@@ -13,7 +14,7 @@ import type {
   TelegramAdapterConfig,
   TelegramClient,
 } from './types.js';
-import { channelTurnEpisode, writeBrainEpisode } from './brain.js';
+import { brainEpisodeUuid, channelTurnEpisode, writeBrainEpisode } from './brain.js';
 
 const CHANNEL_MESSAGE_ANNOTATION = 'kagent.knuteson.io/channel-message';
 const CHANNEL_MESSAGE_ID_ANNOTATION = 'kagent.knuteson.io/channel-message-id';
@@ -55,8 +56,15 @@ export async function deliverOutboundTurns(input: {
   let skipped = 0;
   let retried = 0;
 
+  const memoryDeadline = Date.now() + input.config.gatewayTimeoutMs;
   for (const session of sessions) {
-    if (!sessionMatchesConfig(session, input.config) || shouldSkipSession(session, now)) {
+    if (!sessionMatchesConfig(session, input.config)) {
+      skipped += 1;
+      continue;
+    }
+    let brainOutbox = [...(session.status?.brainOutbox ?? [])];
+    brainOutbox = await flushBrainOutbox(input, session, brainOutbox, now, memoryDeadline);
+    if (shouldSkipSession(session, now)) {
       skipped += 1;
       continue;
     }
@@ -122,6 +130,9 @@ export async function deliverOutboundTurns(input: {
       continue;
     }
 
+    const episode =
+      task === undefined ? undefined : retainedTurn(input, taskRef, task, reply, nowIso);
+    if (episode !== undefined) brainOutbox.push(episode);
     try {
       await input.store.patchSessionStatus(sessionNamespace, sessionName, {
         phase: 'Active',
@@ -130,13 +141,14 @@ export async function deliverOutboundTurns(input: {
         consecutiveFailures: 0,
         backoffUntil: null,
         lastFailureReason: null,
+        ...(input.config.brain !== undefined && { brainOutbox }),
       });
       delivered += 1;
       input.logger.info('[channel-telegram] outbound reply delivered', {
         session: sessionName,
         task: taskRef.name,
       });
-      if (task !== undefined) await rememberTurn(input, task, reply);
+      await flushBrainOutbox(input, session, brainOutbox, now, memoryDeadline);
     } catch (err) {
       failed += 1;
       input.logger.error('[channel-telegram] failed to record outbound delivery', {
@@ -175,37 +187,91 @@ function retryEnvelope(config: TelegramAdapterConfig, session: ChannelSession, t
   };
 }
 
-/**
- * One brain episode per exchange. The brain is the conversation memory;
- * this is the write side, done here because delivery is the first moment
- * both halves of the exchange exist. Never blocks or fails delivery.
- */
-async function rememberTurn(
-  input: { readonly config: TelegramAdapterConfig; readonly logger: AdapterLogger },
+/** Seal both delivered halves once; retries never regenerate text or time. */
+function retainedTurn(
+  input: { readonly config: TelegramAdapterConfig },
+  taskRef: ChannelTaskRef,
   task: AgentTask,
   reply: string,
-): Promise<void> {
+  deliveredAt: string,
+): BrainOutboxEntry | undefined {
   const brain = input.config.brain;
-  if (brain === undefined) return;
   const message = task.metadata.annotations?.[CHANNEL_MESSAGE_ANNOTATION];
-  if (message === undefined) return;
+  if (brain === undefined || message === undefined) return undefined;
   const failed = task.status?.phase === 'Failed';
   const episode = channelTurnEpisode({
     operatorName: brain.operatorName,
     agentName: typeof task.spec.targetAgent === 'string' ? task.spec.targetAgent : 'agent',
     message,
     reply: failed ? undefined : reply,
-    error: failed ? (task.status?.error ?? 'task failed') : undefined,
-    at: task.metadata.creationTimestamp ?? new Date().toISOString(),
+    error: failed ? reply : undefined,
+    at: task.metadata.creationTimestamp ?? deliveredAt,
   });
-  try {
-    await writeBrainEpisode(brain, episode);
-  } catch (err) {
-    input.logger.warn('[channel-telegram] brain episode write failed', {
-      task: task.metadata.name,
-      err,
-    });
+  return {
+    taskRef,
+    episode: {
+      ...episode,
+      uuid: brainEpisodeUuid(JSON.stringify([taskRef.namespace, taskRef.name, taskRef.uid ?? ''])),
+    },
+    attempts: 0,
+  };
+}
+
+async function flushBrainOutbox(
+  input: {
+    readonly config: TelegramAdapterConfig;
+    readonly store: ChannelOutboxStore;
+    readonly logger: AdapterLogger;
+  },
+  session: ChannelSession,
+  entries: readonly BrainOutboxEntry[],
+  now: Date,
+  deadline: number,
+): Promise<BrainOutboxEntry[]> {
+  const pending = [...entries];
+  const brain = input.config.brain;
+  const name = session.metadata.name;
+  if (brain === undefined || name === undefined) return pending;
+  const namespace = session.metadata.namespace ?? input.config.namespace;
+  while (pending.length > 0 && Date.now() < deadline) {
+    const entry = pending[0];
+    if (
+      entry === undefined ||
+      (entry.nextAttemptAt !== undefined && Date.parse(entry.nextAttemptAt) > now.getTime())
+    )
+      break;
+    try {
+      await writeBrainEpisode(brain, entry.episode, undefined, Math.max(1, deadline - Date.now()));
+      await input.store.patchSessionStatus(namespace, name, {
+        brainOutbox: pending.slice(1),
+        lastRememberedTaskRef: entry.taskRef,
+      });
+      pending.shift();
+    } catch (err) {
+      // The sealed episode remains durable even if acknowledgement or its local
+      // status patch is lost. Retrying the same UUID is safe; chat is already sent.
+      pending[0] = {
+        ...entry,
+        attempts: entry.attempts + 1,
+        nextAttemptAt: new Date(now.getTime() + input.config.outboundPollMs).toISOString(),
+        lastError: (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR_CHARS),
+      };
+      try {
+        await input.store.patchSessionStatus(namespace, name, { brainOutbox: pending });
+      } catch (statusError) {
+        input.logger.error('[channel-telegram] failed to retain brain retry status', {
+          session: name,
+          err: statusError,
+        });
+      }
+      input.logger.warn(
+        '[channel-telegram] brain intake pending; memory will retry independently',
+        { session: name, task: entry.taskRef.name, err },
+      );
+      break;
+    }
   }
+  return pending;
 }
 
 function sessionMatchesConfig(session: ChannelSession, config: TelegramAdapterConfig): boolean {
