@@ -527,6 +527,8 @@ spec:
             # (b) injects KAGENT_LLM_GATEWAY_BASE_URL into spawned
             # agent-pods so they route LLM calls through the gateway.
             # Default OFF — kagent works without the gateway.
+            - name: KAGENT_INFERENCE_ADMISSION_AT_GATEWAY
+              value: {{ .Values.llmGateway.enabled | ternary "true" "false" | quote }}
             - name: KAGENT_ADMISSION_CONTROL_ENABLED
               value: {{ .Values.llmGateway.enabled | ternary "true" "false" | quote }}
             {{- if .Values.llmGateway.enabled }}

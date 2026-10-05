@@ -63,6 +63,7 @@ interface JobOpts {
   readonly taskName?: string;
   /** v0.1.9 — task-tree depth stamped by buildJobSpec. Default 0 (root). */
   readonly taskDepth?: number;
+  readonly llmBaseUrl?: string;
 }
 
 function makeJob(opts: JobOpts): V1Job {
@@ -75,6 +76,8 @@ function makeJob(opts: JobOpts): V1Job {
     { name: 'KAGENT_AGENT_SPEC', value: JSON.stringify(agentSpec) },
     { name: 'KAGENT_AGENT_NAME', value: opts.agent },
   ];
+  if (opts.llmBaseUrl !== undefined)
+    env.push({ name: 'KAGENT_LITELLM_BASE_URL', value: opts.llmBaseUrl });
   if (opts.taskDepth !== undefined) {
     env.push({ name: 'KAGENT_TASK_DEPTH', value: String(opts.taskDepth) });
   }
@@ -1528,4 +1531,65 @@ describe('checkPodPressure', () => {
     const { DEFAULT_POD_PRESSURE_MAX_PENDING_PODS } = await import('./admission.js');
     expect(DEFAULT_POD_PRESSURE_MAX_PENDING_PODS).toBe(50);
   });
+});
+
+describe('gateway-owned inference admission', () => {
+  it('admits workflow peers despite busy model jobs, preserving Agent and declaration controls', () => {
+    const result = selectAdmittable({
+      inferenceAdmissionAtGateway: true,
+      inferenceGatewayBaseUrl: 'http://gateway/v1',
+      suspendedJobs: [
+        makeJob({
+          name: 'next',
+          agent: 'b',
+          model: 'm',
+          suspended: true,
+          llmBaseUrl: 'http://gateway/v1/',
+        }),
+        makeJob({ name: 'agent-capped', agent: 'a', model: 'm', suspended: true }),
+        makeJob({
+          name: 'old-direct',
+          agent: 'c',
+          model: 'm',
+          suspended: true,
+          llmBaseUrl: 'http://spark/v1',
+        }),
+        makeJob({ name: 'undeclared', agent: 'b', model: 'missing', suspended: true }),
+      ],
+      runningJobs: [makeJob({ name: 'busy', agent: 'a', model: 'm', suspended: false })],
+      modelEndpoints: new Map([
+        ['m', makeModelEndpoint({ name: 'e', model: 'm', seed: 1, max: 1 })],
+      ]),
+      agentMaxInFlight: new Map([['a', 1]]),
+    });
+    expect(result.map((r) => r.name)).toEqual(['next']);
+  });
+});
+
+it('passes gateway ownership through the live admission reconciler', async () => {
+  const admitted: string[] = [];
+  const jobs = [
+    makeJob({ name: 'busy', agent: 'a', model: 'm', suspended: false }),
+    makeJob({
+      name: 'later-memory',
+      agent: 'b',
+      model: 'm',
+      suspended: true,
+      llmBaseUrl: 'http://gateway/v1',
+    }),
+  ];
+  const reconciler = buildAdmissionReconciler({
+    enabled: true,
+    inferenceAdmissionAtGateway: true,
+    inferenceGatewayBaseUrl: 'http://gateway/v1',
+    listJobs: () => jobs,
+    listModelEndpoints: () => [makeModelEndpoint({ name: 'e', model: 'm', seed: 1, max: 1 })],
+    lookupAgent: () => undefined,
+    unsuspendJob: (_namespace, name) => {
+      admitted.push(name);
+      return Promise.resolve();
+    },
+  });
+  expect((await reconciler.evaluate()).admitted).toBe(1);
+  expect(admitted).toEqual(['later-memory']);
 });

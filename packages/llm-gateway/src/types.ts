@@ -196,6 +196,7 @@ export interface ProviderConfig {
 }
 
 export interface ProviderRequest {
+  readonly abortSignal?: AbortSignal;
   readonly config: ProviderConfig;
   readonly request: ChatCompletionRequest;
   readonly requestId: string;

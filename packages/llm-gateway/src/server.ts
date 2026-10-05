@@ -20,6 +20,7 @@
  * land here in v0.2 — non-streaming responses are the v1 wire.
  */
 
+import { DEFAULT_BACKEND_TIMEOUT_MS } from './env.js';
 import { openSse } from './sse-reply.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
@@ -44,7 +45,7 @@ import type { InFlightCounter } from './inflight-counter.js';
 import type { ModelIndex } from './model-index.js';
 import type { ApiKeyRepo } from './db/api-keys.js';
 import type { UsageRepo } from './db/usage.js';
-import { route, type RouterDeps } from './router.js';
+import { route, queuedRequestCount, type RouterDeps } from './router.js';
 import { createOpenAIError, type ChatCompletionRequest, type ModelListResponse } from './types.js';
 
 // 8 MiB. Was 64 KiB, which silently capped every agent at ~16k tokens of
@@ -198,7 +199,13 @@ export function buildHandler(
         });
         return;
       }
-      writeJson(res, 200, buildCapacityResponse(deps.modelIndex, deps.inFlight, deps.aimd));
+      const capacity = buildCapacityResponse(deps.modelIndex, deps.inFlight, deps.aimd);
+      writeJson(res, 200, {
+        rows: capacity.rows.map((row) => ({
+          ...row,
+          queued: queuedRequestCount(deps.routerDeps, row.model, row.endpoint),
+        })),
+      });
       return;
     }
 
@@ -418,6 +425,31 @@ export function buildHandler(
         );
         return;
       }
+      const shorterTimeout = req.headers['x-kagent-request-timeout-ms'];
+      const configuredTimeout = deps.routerDeps.requestTimeoutMs ?? DEFAULT_BACKEND_TIMEOUT_MS;
+      const requestedTimeout =
+        shorterTimeout === undefined ? configuredTimeout : Number(shorterTimeout);
+      if (
+        !Number.isSafeInteger(requestedTimeout) ||
+        requestedTimeout <= 0 ||
+        Array.isArray(shorterTimeout)
+      ) {
+        writeJson(
+          res,
+          400,
+          createOpenAIError(
+            'x-kagent-request-timeout-ms must be a positive integer',
+            'invalid_request_error',
+          ),
+        );
+        return;
+      }
+      const deadlineMs = Date.now() + Math.min(configuredTimeout, requestedTimeout);
+      const caller = new AbortController();
+      const disconnected = (): void => {
+        if (!res.writableEnded) caller.abort();
+      };
+      res.once('close', disconnected);
       const headers = parseKagentHeaders(req);
       const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
       // `stream: true` buys the caller a connection that never goes quiet
@@ -437,22 +469,28 @@ export function buildHandler(
       };
       const result = await route(deps.routerDeps, {
         requestId,
+        abortSignal: caller.signal,
+        deadlineMs,
         request: wantsStream ? { ...body, stream: false } : body,
         apiKeyPrefix: auth.keyPrefix,
         taskUid: headers.taskUid,
         agentName: headers.agentName,
-      }).catch((err: unknown) => {
-        // With the 200 already committed nothing else can end this response:
-        // without this the caller would be pinged forever.
-        if (sse === null) throw err;
-        console.error('[llm-gateway] route threw on a streamed reply:', err);
-        sse.finish(
-          500,
-          createOpenAIError(err instanceof Error ? err.message : String(err), 'server_error'),
-        );
-        return null;
-      });
-      if (result === null) return;
+      })
+        .catch((err: unknown) => {
+          // With the 200 already committed nothing else can end this response:
+          // without this the caller would be pinged forever.
+          if (sse === null) throw err;
+          console.error('[llm-gateway] route threw on a streamed reply:', err);
+          sse.finish(
+            500,
+            createOpenAIError(err instanceof Error ? err.message : String(err), 'server_error'),
+          );
+          return null;
+        })
+        .finally(() => {
+          res.removeListener('close', disconnected);
+        });
+      if (result === null || res.destroyed) return;
 
       switch (result.kind) {
         case 'dispatched': {
@@ -466,6 +504,10 @@ export function buildHandler(
           out(200, result.body);
           return;
         }
+        case 'request_cancelled':
+        case 'request_timeout':
+          out(result.statusCode, createOpenAIError(result.message, 'server_error'));
+          return;
         case 'at_cap':
           out(
             429,

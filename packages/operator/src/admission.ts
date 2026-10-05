@@ -15,13 +15,15 @@
  *
  * ## Cap layers
  *
- * Two layers, ANDed together:
+ * Workflow admission retains endpoint declaration, per-Agent, depth, publication
+ * and pod-pressure controls. When inferenceAdmissionAtGateway is true, the
+ * gateway owns request permits; whole Job lifetimes do not consume them.
+ * Legacy direct-inference installs retain two layers, ANDed together:
  *
  *   1. Per-(model, namespace) cap, declared via the `ModelEndpoint`
  *      CRD. Cap = `status.observedInFlight ?? spec.inFlight.seed`. The
- *      gateway publishes `observedInFlight` as the AIMD self-tuner
- *      converges; the operator reads it so we always queue against
- *      the *actual* sustained capacity, not the static seed. If no
+ *      optional status value is read when available; otherwise the
+ *      static seed is used for legacy workflow admission. If no
  *      ModelEndpoint matches a Job's model, the Job is FAIL-CLOSED
  *      (left suspended) — operators MUST declare a ModelEndpoint per
  *      model the cluster talks to.
@@ -42,9 +44,9 @@
  *
  * ## What this reconciler does NOT do
  *
- *   - Does NOT update `ModelEndpoint.status.observedInFlight`. That's
- *     the gateway's job (AIMD self-tuner). The operator only READS
- *     status.
+ *   - Does NOT update `ModelEndpoint.status.observedInFlight`. The
+ *     operator only READS optional status; current gateway AIMD capacity
+ *     is owned and exposed by the gateway itself.
  *   - Does NOT poll on a timer. Reconciliation is event-driven —
  *     subscribe to Job and ModelEndpoint events, re-evaluate the
  *     full admission queue on any of them. Pending queue is small
@@ -259,6 +261,10 @@ export interface SelectAdmittableInput {
    * KAGENT_AGENT_POD_MAX_DEPTH on the operator deployment).
    */
   readonly maxDepth?: number;
+  /** Gateway queues actual inference requests against live AIMD permits. Whole Jobs are workflows, not inference slots. */
+  readonly inferenceAdmissionAtGateway?: boolean;
+  /** Exact operator-configured gateway route; old direct Jobs retain their legacy model cap. */
+  readonly inferenceGatewayBaseUrl?: string;
 }
 
 /**
@@ -283,6 +289,17 @@ export interface SelectAdmittableInput {
  *      - Otherwise: queue for admission, increment both live counters
  *        (so subsequent decisions account for this admission).
  */
+function jobUsesInferenceGateway(job: V1Job, gatewayBaseUrl: string | undefined): boolean {
+  if (!gatewayBaseUrl?.trim()) return false;
+  const route = job.spec?.template?.spec?.containers?.[0]?.env?.find(
+    (entry) => entry.name === 'KAGENT_LITELLM_BASE_URL',
+  )?.value;
+  return (
+    typeof route === 'string' &&
+    route.trim().replace(/\/+$/, '') === gatewayBaseUrl.trim().replace(/\/+$/, '')
+  );
+}
+
 export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[] {
   const { suspendedJobs, runningJobs, modelEndpoints, agentMaxInFlight, maxDepth } = input;
 
@@ -364,7 +381,10 @@ export function selectAdmittable(input: SelectAdmittableInput): readonly JobRef[
 
     const cap = computeCapacity(endpoint);
     const live = liveByModel.get(model) ?? 0;
-    if (live >= cap) continue;
+    const gatewayOwnsInference =
+      input.inferenceAdmissionAtGateway === true &&
+      jobUsesInferenceGateway(job, input.inferenceGatewayBaseUrl);
+    if (!gatewayOwnsInference && live >= cap) continue;
 
     // Per-Agent cap (opt-in).
     const agentName = job.metadata?.labels?.[AGENT_LABEL];
@@ -493,6 +513,10 @@ export interface AdmissionDeps {
    * no cap (back-compat).
    */
   readonly maxDepth?: number;
+  /** Gateway queues actual inference requests against live AIMD permits. Whole Jobs are workflows, not inference slots. */
+  readonly inferenceAdmissionAtGateway?: boolean;
+  /** Exact operator-configured gateway route; old direct Jobs retain their legacy model cap. */
+  readonly inferenceGatewayBaseUrl?: string;
   /**
    * v0.1.9 — callback that marks an AgentTask Failed when its Job
    * exceeds the cluster depth cap. Wired in main.ts to
@@ -840,6 +864,12 @@ function computeDecision(deps: AdmissionDeps): DecisionPass {
     runningJobs,
     modelEndpoints,
     agentMaxInFlight,
+    ...(deps.inferenceAdmissionAtGateway !== undefined && {
+      inferenceAdmissionAtGateway: deps.inferenceAdmissionAtGateway,
+    }),
+    ...(deps.inferenceGatewayBaseUrl !== undefined && {
+      inferenceGatewayBaseUrl: deps.inferenceGatewayBaseUrl,
+    }),
     ...(deps.maxDepth !== undefined && { maxDepth: deps.maxDepth }),
   });
 

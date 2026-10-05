@@ -360,9 +360,9 @@ export function buildJobSpecOptionsFromEnv(): BuildJobSpecOptions {
   // KAGENT_LLM_GATEWAY_BASE_URL (chart's llmGateway.enabled=true), we
   // route spawned agent-pods through the gateway by overriding their
   // KAGENT_LITELLM_BASE_URL with the gateway service URL. The gateway
-  // then enforces its AIMD-tuned per-(model, backend) cap as last-
-  // resort safety; the operator's admission reconciler (admission.ts)
-  // is the primary queue.
+  // owns FIFO request admission against its live AIMD capacity. The
+  // operator retains workflow controls without holding inference
+  // permits across tool work.
   const gatewayUrl = env.KAGENT_LLM_GATEWAY_BASE_URL;
   const gatewayApiKey = env.KAGENT_LLM_GATEWAY_API_KEY;
   const gatewayActive = typeof gatewayUrl === 'string' && gatewayUrl.length > 0;
@@ -968,6 +968,10 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
   // ---- Build the reconciler against the informer caches -------------
   const reconciler = buildAdmissionReconciler({
     enabled: true,
+    inferenceAdmissionAtGateway: process.env.KAGENT_INFERENCE_ADMISSION_AT_GATEWAY === 'true',
+    ...(process.env.KAGENT_LLM_GATEWAY_BASE_URL !== undefined && {
+      inferenceGatewayBaseUrl: process.env.KAGENT_LLM_GATEWAY_BASE_URL,
+    }),
     listJobs: (namespace) => {
       // Informer cache is namespace-keyed; passing undefined returns
       // the full cluster view. Reconciler does its own namespace

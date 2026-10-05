@@ -74,7 +74,13 @@ export abstract class OpenAICompatProvider extends BaseProvider {
       stream: true,
       stream_options: { include_usage: true },
     });
-    const init: LongFetchInit = { method: 'POST', headers, body, streaming: true };
+    const init: LongFetchInit = {
+      method: 'POST',
+      headers,
+      body,
+      streaming: true,
+      ...(request.abortSignal && { signal: request.abortSignal }),
+    };
     const response = await this.fetchImpl(`${this.baseUrl(request)}${this.chatPath()}`, init);
     if (!response.ok) {
       // H13/H15 — surface a typed error envelope. BackendError carries
@@ -123,6 +129,7 @@ export abstract class OpenAICompatProvider extends BaseProvider {
       method: 'POST',
       headers,
       body,
+      ...(request.abortSignal && { signal: request.abortSignal }),
     });
     if (!response.ok) {
       // H13/H15 — see chatCompletion path above.

@@ -63,6 +63,7 @@ export class OllamaProvider extends BaseProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(ollamaRequest),
+      ...(request.abortSignal && { signal: request.abortSignal }),
     });
     if (!response.ok) {
       // H13/H15 — BackendError carries status + Retry-After (when
@@ -121,6 +122,7 @@ export class OllamaProvider extends BaseProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(ollamaRequest),
+      ...(request.abortSignal && { signal: request.abortSignal }),
     });
     if (!response.ok) {
       // H13/H15 — BackendError carries status + Retry-After (when
