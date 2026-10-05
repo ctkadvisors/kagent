@@ -65,16 +65,22 @@ export async function startTelegramAdapter(
   let stopped = false;
   let offset: number | undefined;
 
+  let outboundRunning = false;
   const deliverOutbound = async (): Promise<void> => {
-    if (deps.outbox === undefined) return;
-    await deliverOutboundTurns({
-      config,
-      store: deps.outbox,
-      client: deps.client,
-      logger,
-      clock,
-      gateway: deps.gateway,
-    });
+    if (deps.outbox === undefined || outboundRunning) return;
+    outboundRunning = true;
+    try {
+      await deliverOutboundTurns({
+        config,
+        store: deps.outbox,
+        client: deps.client,
+        logger,
+        clock,
+        gateway: deps.gateway,
+      });
+    } finally {
+      outboundRunning = false;
+    }
   };
 
   await deps.status.patch({

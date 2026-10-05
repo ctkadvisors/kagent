@@ -303,6 +303,37 @@ describe('startTelegramAdapter', () => {
     running.close();
   });
 
+  it('does not overlap outbound ticks while an intake request is still pending', async () => {
+    vi.useFakeTimers();
+    let release: (() => void) | undefined;
+    const listChannelSessions = vi.fn(
+      () =>
+        new Promise<readonly never[]>((resolve) => {
+          release = () => resolve([]);
+        }),
+    );
+    let running: Awaited<ReturnType<typeof startTelegramAdapter>> | undefined;
+    try {
+      running = await startTelegramAdapter(config, {
+        client: makeClient({ updates: [] }),
+        gateway: { postInbound: vi.fn() },
+        status: { patch: async () => {} },
+        logger: quietLogger,
+        sleep: () => new Promise(() => undefined),
+        outbox: { listChannelSessions, getAgentTask: vi.fn(), patchSessionStatus: vi.fn() },
+      });
+      await vi.advanceTimersByTimeAsync(config.outboundPollMs * 3);
+      expect(listChannelSessions).toHaveBeenCalledTimes(1);
+      release?.();
+      await vi.advanceTimersByTimeAsync(config.outboundPollMs);
+      expect(listChannelSessions).toHaveBeenCalledTimes(2);
+    } finally {
+      release?.();
+      running?.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the poll and outbound timers referenced so the process stays alive', async () => {
     const timeoutUnref = vi.fn();
     const intervalUnref = vi.fn();

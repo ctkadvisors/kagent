@@ -105,12 +105,164 @@ describe('deliverOutboundTurns', () => {
     expect(result.delivered).toBe(1);
     expect(spy).toHaveBeenCalledWith(
       { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
-      {
+      expect.objectContaining({
         name: 'telegram: how much vram is free (2026-09-02)',
         body: 'Chris (telegram): how much vram is free\nconcierge replied: About 20 GB.',
         referenceTime: '2026-09-02T03:00:00Z',
-      },
+      }),
+      undefined,
+      expect.any(Number),
     );
+  });
+
+  it('retries retained brain intake after restart without repeating a Telegram reply', async () => {
+    const { writeBrainEpisode } = await import('./brain.js');
+    const spy = vi
+      .mocked(writeBrainEpisode)
+      .mockRejectedValueOnce(new Error('intake unavailable'))
+      .mockResolvedValue(undefined);
+    let session = makeSession();
+    const task = makeTask({
+      metadata: {
+        ...makeTask().metadata,
+        creationTimestamp: '2026-10-04T12:00:00Z',
+        annotations: { 'kagent.knuteson.io/channel-message': 'remember exactly this' },
+      },
+      status: { phase: 'Completed', result: { content: 'Exact answer' } },
+    });
+    const store = makeStore({ sessions: [session], tasks: [task] });
+    store.listChannelSessions.mockImplementation(() => Promise.resolve([session]));
+    store.patchSessionStatus.mockImplementation((_namespace, _name, patch) => {
+      const { backoffUntil: _backoff, lastFailureReason: _reason, ...updates } = patch;
+      session = { ...session, status: { ...session.status, ...updates } };
+      return Promise.resolve();
+    });
+    const client = makeClient();
+    const configured = {
+      ...config,
+      brain: { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
+    };
+    await deliverOutboundTurns({ config: configured, store, client, logger: quietLogger, clock });
+    const pending = session.status as unknown as {
+      brainOutbox: readonly { episode: { uuid: string; body: string; referenceTime: string } }[];
+    };
+    expect(pending.brainOutbox).toHaveLength(1);
+    const original = structuredClone(pending.brainOutbox[0]?.episode);
+    expect(original?.uuid).toMatch(/^[0-9a-f-]{36}$/);
+    // A separately invoked tick reads only persisted state, not an in-process retry queue.
+    await deliverOutboundTurns({
+      config: configured,
+      store,
+      client,
+      logger: quietLogger,
+      clock: () => new Date(clock().getTime() + config.outboundPollMs),
+    });
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls.at(-1)?.[1]).toEqual(original);
+    expect((session.status as unknown as { brainOutbox: unknown[] }).brainOutbox).toEqual([]);
+    expect(
+      (session.status as unknown as { lastRememberedTaskRef: unknown }).lastRememberedTaskRef,
+    ).toEqual(taskRef);
+  });
+
+  it('replays the same memory identity when durable intake succeeded but its watermark patch failed', async () => {
+    const { writeBrainEpisode } = await import('./brain.js');
+    const spy = vi.mocked(writeBrainEpisode).mockClear().mockResolvedValue(undefined);
+    let session = makeSession();
+    const task = makeTask({
+      metadata: {
+        ...makeTask().metadata,
+        annotations: { 'kagent.knuteson.io/channel-message': 'exact turn' },
+      },
+      status: { phase: 'Completed', result: { content: 'exact reply' } },
+    });
+    const store = makeStore({ sessions: [session], tasks: [task] });
+    store.listChannelSessions.mockImplementation(() => Promise.resolve([session]));
+    let ackPatchFailed = false;
+    store.patchSessionStatus.mockImplementation((_namespace, _name, patch) => {
+      if (patch.lastRememberedTaskRef && !ackPatchFailed) {
+        ackPatchFailed = true;
+        throw new Error('status service unavailable');
+      }
+      const { backoffUntil: _backoff, lastFailureReason: _reason, ...updates } = patch;
+      session = { ...session, status: { ...session.status, ...updates } };
+      return Promise.resolve();
+    });
+    const client = makeClient();
+    const input = {
+      config: {
+        ...config,
+        brain: { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
+      },
+      store,
+      client,
+      logger: quietLogger,
+      clock,
+    };
+    await deliverOutboundTurns(input);
+    await deliverOutboundTurns({
+      ...input,
+      clock: () => new Date(clock().getTime() + config.outboundPollMs),
+    });
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1]?.[1]).toEqual(spy.mock.calls[0]?.[1]);
+    expect(session.status?.brainOutbox).toEqual([]);
+  });
+
+  it('retains earlier pending memory when a newer task is delivered', async () => {
+    const { writeBrainEpisode } = await import('./brain.js');
+    vi.mocked(writeBrainEpisode).mockRejectedValue(new Error('intake unavailable'));
+    let session = makeSession();
+    const first = makeTask({
+      metadata: {
+        ...makeTask().metadata,
+        annotations: { 'kagent.knuteson.io/channel-message': 'first exact turn' },
+      },
+      status: { phase: 'Completed', result: { content: 'first answer' } },
+    });
+    const secondRef = { ...taskRef, name: 'kat-turn-2', uid: 'uid-2' };
+    const second = makeTask({
+      metadata: {
+        ...secondRef,
+        annotations: { 'kagent.knuteson.io/channel-message': 'second exact turn' },
+      },
+      status: { phase: 'Completed', result: { content: 'second answer' } },
+    });
+    const store = makeStore({ sessions: [session], tasks: [first, second] });
+    store.listChannelSessions.mockImplementation(() => Promise.resolve([session]));
+    store.patchSessionStatus.mockImplementation((_namespace, _name, patch) => {
+      const { backoffUntil: _backoff, lastFailureReason: _reason, ...updates } = patch;
+      session = { ...session, status: { ...session.status, ...updates } };
+      return Promise.resolve();
+    });
+    const input = {
+      config: {
+        ...config,
+        brain: { mcpUrl: 'http://brain/mcp', token: 't', operatorName: 'Chris' },
+      },
+      store,
+      client: makeClient(),
+      logger: quietLogger,
+      clock,
+    };
+    await deliverOutboundTurns(input);
+    session = { ...session, status: { ...session.status, lastTaskRef: secondRef } };
+    await deliverOutboundTurns({
+      ...input,
+      clock: () => new Date(clock().getTime() + config.outboundPollMs),
+    });
+    const pending = session.status as unknown as {
+      brainOutbox: readonly { episode: { body: string } }[];
+    };
+    expect(pending.brainOutbox).toHaveLength(2);
+    expect(pending.brainOutbox.map((entry) => entry.episode.body).join(' ')).toContain(
+      'first exact turn',
+    );
+    expect(pending.brainOutbox.map((entry) => entry.episode.body).join(' ')).toContain(
+      'second exact turn',
+    );
+    expect(input.client.sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it('does not resend a task already recorded as delivered', async () => {
@@ -347,7 +499,8 @@ function makeStore(input: {
   readonly sessions: readonly ChannelSession[];
   readonly tasks: readonly AgentTask[];
 }): ChannelOutboxStore & {
-  readonly patchSessionStatus: ReturnType<typeof vi.fn>;
+  readonly listChannelSessions: ReturnType<typeof vi.fn<ChannelOutboxStore['listChannelSessions']>>;
+  readonly patchSessionStatus: ReturnType<typeof vi.fn<ChannelOutboxStore['patchSessionStatus']>>;
 } {
   const tasks = new Map(
     input.tasks.map((task) => [`${task.metadata.namespace}/${task.metadata.name}`, task]),

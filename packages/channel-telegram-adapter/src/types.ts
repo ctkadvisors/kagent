@@ -124,6 +124,20 @@ export interface ChannelSessionSpec {
   readonly paused?: boolean;
 }
 
+/** Exact delivered turn retained until the brain acknowledges durable intake. */
+export interface BrainOutboxEntry {
+  readonly taskRef: ChannelTaskRef;
+  readonly episode: {
+    readonly uuid: string;
+    readonly name: string;
+    readonly body: string;
+    readonly referenceTime: string;
+  };
+  readonly attempts: number;
+  readonly nextAttemptAt?: string;
+  readonly lastError?: string;
+}
+
 export interface ChannelSessionStatus {
   readonly phase?: ChannelSessionPhase;
   readonly observedGeneration?: number;
@@ -132,6 +146,8 @@ export interface ChannelSessionStatus {
   readonly lastOutboundAt?: string;
   readonly lastTaskRef?: ChannelTaskRef;
   readonly lastOutboundTaskRef?: ChannelTaskRef;
+  readonly lastRememberedTaskRef?: ChannelTaskRef;
+  readonly brainOutbox?: readonly BrainOutboxEntry[];
   readonly consecutiveFailures?: number;
   readonly backoffUntil?: string;
   readonly lastFailureReason?: string;
@@ -141,6 +157,8 @@ export interface ChannelSessionStatusPatch {
   readonly phase?: ChannelSessionPhase;
   readonly lastOutboundAt?: string;
   readonly lastOutboundTaskRef?: ChannelTaskRef;
+  readonly lastRememberedTaskRef?: ChannelTaskRef;
+  readonly brainOutbox?: readonly BrainOutboxEntry[];
   readonly consecutiveFailures?: number;
   readonly backoffUntil?: string | null;
   readonly lastFailureReason?: string | null;
