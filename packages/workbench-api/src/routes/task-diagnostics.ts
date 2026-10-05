@@ -14,6 +14,12 @@ export interface TaskDiagnosticsDeps {
   readonly cache: SnapshotCache;
   readonly traceReader?: TaskTraceReader;
   readonly coreApi?: CoreV1Api;
+  /**
+   * When set, only tasks whose targetAgent starts with one of these prefixes are
+   * served (WORKBENCH_DIAGNOSTICS_AGENT_PREFIXES). A task's diagnostics carry its
+   * model inputs, so agents given this read must not reach operator conversations.
+   */
+  readonly agentPrefixes?: readonly string[];
 }
 /** Task identity is the read boundary; callers cannot choose arbitrary trace IDs or pod names. */
 export function taskDiagnosticsRoute(deps: TaskDiagnosticsDeps): Hono {
@@ -23,6 +29,12 @@ export function taskDiagnosticsRoute(deps: TaskDiagnosticsDeps): Hono {
     const name = c.req.param('name');
     const task = deps.cache.getTask(namespace, name);
     if (task === undefined) return c.json({ error: 'not-found' }, 404);
+    const prefixes = deps.agentPrefixes ?? [];
+    const agent = task.spec.targetAgent ?? '';
+    // Out of scope looks exactly like absent: the reader learns nothing about other tasks.
+    if (prefixes.length > 0 && !prefixes.some((prefix) => agent.startsWith(prefix))) {
+      return c.json({ error: 'not-found' }, 404);
+    }
     // Fleet HTTP tools interpolate absent optional args as empty query
     // values (`?afterSequence=&limit=…`); treat '' as "not supplied".
     const rawAfter = c.req.query('afterSequence');

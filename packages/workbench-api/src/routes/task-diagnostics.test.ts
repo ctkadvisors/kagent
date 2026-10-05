@@ -92,6 +92,16 @@ describe('task diagnostics', () => {
       expect(JSON.stringify(body)).not.toContain('private-key');
     }
   });
+  it('serves only tasks whose agent is in scope, and out of scope reads as absent', async () => {
+    // Diagnostics carry a task's model inputs: an agent given this read must not
+    // reach operator conversations (2026-10-05 security review).
+    const outOfScope = taskDiagnosticsRoute({ cache: cache(), agentPrefixes: ['check-'] });
+    const hidden = await outOfScope.request('/api/tasks/kagent-system/failed/diagnostics');
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toEqual({ error: 'not-found' });
+    const inScope = taskDiagnosticsRoute({ cache: cache(), agentPrefixes: ['check-', 'fleet-'] });
+    expect((await inScope.request('/api/tasks/kagent-system/failed/diagnostics')).status).toBe(200);
+  });
   it('rejects unbounded/invalid pagination and unknown tasks before trace access', async () => {
     const app = taskDiagnosticsRoute({ cache: cache() });
     expect((await app.request('/api/tasks/kagent-system/missing/diagnostics')).status).toBe(404);

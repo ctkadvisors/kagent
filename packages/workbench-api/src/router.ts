@@ -125,6 +125,8 @@ export interface RouterDeps {
   readonly coreApi?: CoreV1Api;
   /** Namespaces `/api/cluster/workloads` may list (WORKBENCH_WORKLOAD_NAMESPACES). */
   readonly workloadNamespaces?: readonly string[];
+  /** Agent-name prefixes /api/tasks/:ns/:name/diagnostics may serve (WORKBENCH_DIAGNOSTICS_AGENT_PREFIXES). */
+  readonly diagnosticsAgentPrefixes?: readonly string[];
   /**
    * Phase 1 / DISP-03 — audit-event publisher for `disposition.*`
    * events. When undefined, the dispositions route still computes
@@ -186,6 +188,9 @@ export function buildRouter(deps: RouterDeps): Hono {
       cache: deps.cache,
       ...(deps.taskTraceReader !== undefined && { traceReader: deps.taskTraceReader }),
       ...(deps.coreApi !== undefined && { coreApi: deps.coreApi }),
+      ...(deps.diagnosticsAgentPrefixes !== undefined && {
+        agentPrefixes: deps.diagnosticsAgentPrefixes,
+      }),
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));

@@ -255,6 +255,10 @@ async function main(): Promise<void> {
       .split(',')
       .map((n) => n.trim())
       .filter((n) => n.length > 0),
+    diagnosticsAgentPrefixes: (process.env.WORKBENCH_DIAGNOSTICS_AGENT_PREFIXES ?? '')
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => n.length > 0),
     writesEnabled,
     ...(auditPublisher !== undefined && { auditPublisher }),
     disposition: {

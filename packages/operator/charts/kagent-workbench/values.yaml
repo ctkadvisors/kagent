@@ -67,6 +67,10 @@ api:
   # Namespaces GET /api/cluster/workloads may list (pods, owners, images;
   # never env or secrets). Empty = the endpoint refuses every namespace.
   workloadNamespaces: []
+  # Agent-name prefixes whose tasks GET /api/tasks/:ns/:name/diagnostics serves.
+  # Diagnostics carry a task's model inputs; set this when agents read it so
+  # they cannot reach operator conversations. Empty = every task (UI-only use).
+  diagnosticsAgentPrefixes: []
   # Optional — wires the Gateway page (`#/gateway` in the UI) to the
   # kagent LLM gateway's /admin/* surface. When unset, the page renders
   # an empty "gateway not configured" state.
