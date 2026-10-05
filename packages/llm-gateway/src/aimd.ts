@@ -18,9 +18,8 @@
  *   latency-spike := latency_ms > 2 * rolling_p50(last 5 min)
  *
  * Bounds (`seed`, `max`, `minSafe`) come from the ModelEndpoint CRD;
- * the gateway WRITES `current_cap` back to `status.observedInFlight`
- * so the operator's admission reconciler queues against the live cap,
- * not the static seed.
+ * the gateway uses the current cap for request admission. Capacity is
+ * available through /admin/capacity; no CR status publisher is installed.
  *
  * State is per-Pod and in-memory — single-replica v1 design. On Pod
  * restart the cap reconverges in ~10 minutes via additive increase
@@ -83,6 +82,15 @@ export class AimdController {
   private readonly latencyWindowSize: number;
   private readonly clock: () => number;
   private readonly map = new Map<string, PerKeyState>();
+  private readonly listeners = new Set<(model: string, endpoint: string) => void>();
+
+  onCapacityChange(listener: (model: string, endpoint: string) => void): void {
+    this.listeners.add(listener);
+  }
+
+  private notify(model: string, endpoint: string): void {
+    for (const listener of this.listeners) listener(model, endpoint);
+  }
 
   constructor(opts: AimdOptions) {
     this.defaults = { seed: opts.seed, max: opts.max, minSafe: opts.minSafe };
@@ -109,6 +117,7 @@ export class AimdController {
     }
     if (state.cap > bounds.max) state.cap = bounds.max;
     if (state.cap < bounds.minSafe) state.cap = bounds.minSafe;
+    this.notify(model, endpoint);
   }
 
   /** Current cap for a (model, endpoint). Seeds on first access. */
@@ -138,12 +147,14 @@ export class AimdController {
     ) {
       state.cap = Math.max(state.bounds.minSafe, Math.floor(state.cap / 2));
       state.windowStartedAt = now;
+      this.notify(model, endpoint);
       return;
     }
 
     if (now - state.windowStartedAt >= this.cleanWindowMs && state.cap < state.bounds.max) {
       state.cap += 1;
       state.windowStartedAt = now;
+      this.notify(model, endpoint);
     }
   }
 
@@ -156,6 +167,7 @@ export class AimdController {
     const state = this.ensure(model, endpoint);
     state.cap = Math.max(state.bounds.minSafe, Math.floor(state.cap / 2));
     state.windowStartedAt = this.clock();
+    this.notify(model, endpoint);
   }
 
   snapshot(): readonly AimdSnapshotEntry[] {

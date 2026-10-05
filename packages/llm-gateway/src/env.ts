@@ -152,7 +152,7 @@ const DEFAULT_PORT = 4000;
 // Two hours, not 60 s: until 2026-09-20 this value was parsed and applied nowhere, and the
 // only limit was undici's hidden 300 s. A thinking turn may run 30 min+; the idle timer
 // below, not this cap, is what catches a dead backend.
-const DEFAULT_BACKEND_TIMEOUT_MS = 7_200_000;
+export const DEFAULT_BACKEND_TIMEOUT_MS = 7_200_000;
 const DEFAULT_BACKEND_IDLE_TIMEOUT_MS = 600_000;
 const DEFAULT_NAMESPACE = 'kagent-system';
 const DEFAULT_PROVIDER_FAILURE_BACKOFF_THRESHOLD = 3;

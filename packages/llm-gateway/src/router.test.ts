@@ -330,12 +330,13 @@ describe('route', () => {
     expect(deps.usage.events[0]?.inputTokens).toBe(3);
   });
 
-  it('returns 429 with Retry-After when at cap', async () => {
+  it('returns a visible deadline timeout when an occupied permit never becomes available', async () => {
     // seed=1, max=4 → starting cap=1; pre-bump in-flight to 1.
     const deps = buildDeps(modelEp('m', 4, 1), { capStartingAt: 1 });
     deps.inFlight.acquire('m', 'http://x');
     const result = await route(deps, {
       requestId: 'r-3',
+      deadlineMs: Date.now() + 5,
       request: { model: 'm', messages: [{ role: 'user', content: 'hi' }] },
       apiKeyPrefix: null,
       taskUid: null,
@@ -349,13 +350,14 @@ describe('route', () => {
         }),
       ),
     });
-    expect(result.kind).toBe('at_cap');
-    if (result.kind === 'at_cap') {
-      expect(result.statusCode).toBe(429);
-      expect(result.retryAfterSec).toBeGreaterThan(0);
-      expect(result.currentCap).toBe(1);
-      expect(result.inFlight).toBe(1);
-    }
+    expect(result.kind).toBe('request_timeout');
+    expect(result.statusCode).toBe(504);
+    expect(deps.inFlight.current('m', 'http://x')).toBe(1);
+    expect(deps.usage.events.at(-1)).toMatchObject({
+      statusCode: 504,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
   });
 
   it('decrements in-flight after a successful dispatch', async () => {

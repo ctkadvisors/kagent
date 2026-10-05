@@ -1,0 +1,11 @@
+# Workflow admission and inference admission
+
+A fleet Job includes model calls, tool work, and child-task waits. Holding a model permit for that entire lifetime starves unrelated jobs and does not protect actual inference capacity. On 2026-10-05, three admitted jobs held the operator's static model slots while the gateway's live AIMD cap was two. Competing requests received HTTP 429 every five seconds; one long inference call nearly exhausted another caller's retry budget. The operational-memory acceptance task remained suspended.
+
+The gateway now queues authenticated requests FIFO for each model and endpoint. It acquires an inference permit immediately before provider dispatch and releases it on completion, error, deadline, or disconnect. Waiting requests hold no inference permit. Live AIMD changes wake the queue; a caller that finishes a turn cannot overtake older waiters. JSON and heartbeat SSE use the same queue.
+
+Queue waiting and backend execution share the existing configured `BACKEND_TIMEOUT_MS` deadline. A caller may shorten it with a positive integer `x-kagent-request-timeout-ms` header. Caller disconnect aborts waiting and provider fetch. Timeout/cancellation usage records have zero tokens and explicit error metadata. `/admin/capacity` exposes `queued` alongside actual `inFlight` and `currentCap`. This is process-local admission; the gateway remains a single replica. It does not publish ModelEndpoint status.
+
+The operator retains declared-endpoint, depth, per-Agent, publication/mount, and Kubernetes workflow controls. The chart enables `KAGENT_INFERENCE_ADMISSION_AT_GATEWAY` when the gateway is enabled. Only Jobs whose actual `KAGENT_LITELLM_BASE_URL` matches the configured gateway route bypass the legacy whole-Job model cap. Existing direct-inference Jobs and installs without that route keep legacy admission. No model, provider destination, authorization, or protected-repository policy changes.
+
+Regression coverage exercises FIFO ordering, dynamic capacity, queue and backend cancellation, one shared deadline, already expired/aborted callers, actual HTTP JSON/SSE traffic, queued capacity reporting, and the operator's legacy/direct route controls. Production acceptance additionally requires an actual later fleet task to apply a retained lesson and preserve the new observation; CI alone does not establish that result.

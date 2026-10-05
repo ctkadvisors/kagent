@@ -67,6 +67,7 @@ export class AnthropicProvider extends BaseProvider {
       method: 'POST',
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
+      ...(request.abortSignal && { signal: request.abortSignal }),
     });
     if (!response.ok) {
       // H13/H15 — see ollama provider above.
@@ -100,6 +101,7 @@ export class AnthropicProvider extends BaseProvider {
       method: 'POST',
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
+      ...(request.abortSignal && { signal: request.abortSignal }),
     });
     if (!response.ok) {
       // H13/H15 — see ollama provider above.

@@ -126,6 +126,7 @@ async function main(): Promise<void> {
     ...(cfg.adminApiTokenReadonly !== null && { adminReadToken: cfg.adminApiTokenReadonly }),
     readinessProbe: async () => (await pingPool(pool)) && watch.health.isReady(),
     routerDeps: {
+      requestTimeoutMs: cfg.backendTimeoutMs,
       modelIndex,
       inFlight,
       aimd,
