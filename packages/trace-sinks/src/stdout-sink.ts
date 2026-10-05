@@ -117,7 +117,9 @@ function formatCompact(entry: TraceEntry, useColor: boolean): string {
     const outTokens = entry.output_tokens_est ?? 0;
     const cost = entry.cost_usd != null ? `  $${entry.cost_usd.toFixed(4)}` : '';
     const stop = entry.stop_reason ? `  → ${entry.stop_reason}` : '';
-    const errMark = isError ? `  ${status}` : '';
+    const errMark = isError
+      ? `  ${status}${entry.error != null ? ` ${truncateForStorage(entry.error, 80)}` : ''}`
+      : '';
     return `${prefix} ${label} ${latency}  ${model}   in:${inTokens} out:${outTokens} tokens${cost}${stop}${errMark}`;
   }
 
