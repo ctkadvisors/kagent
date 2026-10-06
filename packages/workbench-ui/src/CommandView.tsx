@@ -18,7 +18,8 @@
  *   Space           recenter on Gateway HQ
  *   F5–F8           save/load camera bookmark (Shift to save)
  *   click           select (Shift = add/remove from selection)
- *   drag            marquee multi-select
+ *   drag empty      pan camera (middle drag anywhere)
+ *   Shift-drag      marquee multi-select
  *   right-click     dispatch task to selection (or quick-select target)
  *   Ctrl+1..9       bind selection as control group
  *   1..9            recall control group
@@ -32,6 +33,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createTask, CreateTaskApiError, useReviewQueue } from './api.js';
+import { currentAgentNodes } from './command/agent-nodes.js';
 import { computeLayout, STATIC_STRUCTURES } from './command/layout.js';
 import type { AgentNode, LayoutResult } from './command/layout.js';
 import {
@@ -66,10 +68,9 @@ import { drawScene, type SelectionRef, type SelectionState } from './command/sce
 import type { HitMap } from './command/scene.js';
 import { sound } from './command/sound.js';
 import { TaskActionMenu } from './command/TaskActionMenu.js';
-import { DRAG_ACTIVATE_PX, makeInputState } from './command/input.js';
+import { makeInputState, movePointerGesture, startPointerGesture } from './command/input.js';
 import type { InputState } from './command/input.js';
 import {
-  assertCanvasOrphan,
   assertSourceField,
   useSourceField,
   useSourceFields,
@@ -140,6 +141,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   // already track but as scalar React state so the overlay re-renders
   // when conditions change. See packages/workbench-ui/src/command/Mission.tsx.
   const [anyPanKeyHeld, setAnyPanKeyHeld] = useState<boolean>(false);
+  const [dragPanned, setDragPanned] = useState<boolean>(false);
   const [lastDragSelectCount, setLastDragSelectCount] = useState<number>(0);
   const [bookmarkSavedSlot5, setBookmarkSavedSlot5] = useState<boolean>(false);
   const [bookmarkRecalledSlot5, setBookmarkRecalledSlot5] = useState<boolean>(false);
@@ -193,39 +195,23 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
   const mountAtRef = useRef<number>(Date.now());
   const initialStaggerDoneRef = useRef<boolean>(false);
 
-  // Stable agent-node list for layout (agents + tasks-targeting-missing-agents).
+  // Current catalog plus nonterminal reconnect fallback; terminal history adds no buildings.
   const agentNodes = useMemo<readonly AgentNode[]>(() => {
-    const map = new Map<string, AgentNode>();
-    for (const a of snapshot.agents.values()) {
-      const key = `${a.namespace}/${a.name}`;
-      map.set(key, {
-        key,
-        namespace: a.namespace,
-        name: a.name,
-        ...(a.model !== undefined && { model: a.model }),
-        ...(a.modelClass !== undefined && { modelClass: a.modelClass }),
-        ...(a.tools !== undefined && { tools: a.tools }),
-      });
-    }
-    for (const t of snapshot.tasks.values()) {
-      if (t.targetAgent === undefined) continue;
-      const key = `${t.namespace}/${t.targetAgent}`;
-      // CC-01: dev-only orphan trap. Throws when a task references
-      // an agent key not in snapshot.agents. No-op in prod — the
-      // synthetic AgentNode fallback below continues unchanged so
-      // homelab SSE-reconnect windows degrade gracefully.
-      assertCanvasOrphan(snapshot, t.namespace, t.name, key);
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          namespace: t.namespace,
-          name: t.targetAgent,
-          ...(t.model !== undefined && { model: t.model }),
-        });
-      }
-    }
-    return Array.from(map.values());
+    return currentAgentNodes(snapshot);
   }, [snapshot.agents, snapshot.tasks]);
+
+  const cancelPointerGesture = useCallback((): void => {
+    const pointer = inputRef.current.pointer;
+    inputRef.current.pointer = null;
+    inputRef.current.drag = null;
+    const canvas = canvasRef.current;
+    if (canvas !== null) {
+      canvas.style.cursor = 'grab';
+      if (pointer !== null && canvas.hasPointerCapture(pointer.id)) canvas.releasePointerCapture(pointer.id);
+    }
+  }, []);
+
+  useEffect(() => () => cancelPointerGesture(), [cancelPointerGesture]);
 
   // ───────────────────────── RAF render loop ─────────────────────────
   useEffect(() => {
@@ -282,7 +268,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       const m = inputRef.current.mouse;
       panFromEdge(
         cameraRef.current,
-        { x: m.x, y: m.y, insideViewport: m.inside },
+        { x: m.x, y: m.y, insideViewport: m.inside && inputRef.current.pointer === null },
         { w, h },
         dt,
       );
@@ -795,6 +781,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       keys.w = keys.a = keys.s = keys.d = false;
       keys.up = keys.left = keys.down = keys.right = false;
       setAnyPanKeyHeld(false);
+      inputRef.current.mouse.inside = false;
+      cancelPointerGesture();
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -805,7 +793,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [popover, selection, muted]);
+  }, [popover, selection, muted, cancelPointerGesture]);
 
   // ───────────────────────── Selection helpers ─────────────────────────
   const cycleSelection = useCallback((): void => {
@@ -922,35 +910,38 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     return null;
   };
 
-  const onCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (e.button !== 0) return; // left only
+  const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    if ((e.button !== 0 && e.button !== 1) || inputRef.current.pointer !== null) return;
+    e.preventDefault();
     sound.unlock();
     if (!audioReady) setAudioReady(true);
     const { sx, sy } = canvasMouse(e);
-    inputRef.current.drag = {
-      startX: sx,
-      startY: sy,
-      curX: sx,
-      curY: sy,
-      activated: false,
-    };
+    const wpt = screenToWorld(cameraRef.current, sx, sy);
+    const gesture = startPointerGesture(inputRef.current, e.pointerId, e.button, e.shiftKey, hitTestWorld(wpt.x, wpt.y) !== null, sx, sy);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.currentTarget.style.cursor = gesture.mode === 'pan' ? 'grabbing' : e.shiftKey ? 'crosshair' : 'pointer';
   };
 
-  const onCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>): void => {
+  const onCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    const pointer = inputRef.current.pointer;
+    if (pointer !== null) {
+      if (pointer.id !== e.pointerId) return;
+      // Chorded mouse releases emit pointermove until the final button is up.
+      const initiatingButtonMask = pointer.button === 1 ? 4 : 1;
+      if ((e.buttons & initiatingButtonMask) === 0) {
+        cancelPointerGesture();
+        return;
+      }
+    }
     const { sx, sy } = canvasMouse(e);
     inputRef.current.mouse.x = sx;
     inputRef.current.mouse.y = sy;
-    inputRef.current.mouse.inside = true;
-    const drag = inputRef.current.drag;
-    if (drag !== null) {
-      drag.curX = sx;
-      drag.curY = sy;
-      if (
-        !drag.activated &&
-        Math.hypot(sx - drag.startX, sy - drag.startY) >= DRAG_ACTIVATE_PX
-      ) {
-        drag.activated = true;
-      }
+    const rect = e.currentTarget.getBoundingClientRect();
+    inputRef.current.mouse.inside = sx >= 0 && sy >= 0 && sx <= rect.width && sy <= rect.height;
+    movePointerGesture(inputRef.current, cameraRef.current, e.pointerId, sx, sy);
+    if (inputRef.current.pointer !== null) {
+      if (hoveredAgentKey !== null) setHoveredAgentKey(null);
+      return;
     }
     // Hover hit-test for the floating preview tooltip. We only update
     // React state when the hovered key actually changes, so this is
@@ -958,24 +949,35 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     const wpt = screenToWorld(cameraRef.current, sx, sy);
     const hit = hitTestWorld(wpt.x, wpt.y);
     const newHover = hit !== null && hit.kind === 'agent' ? hit.key : null;
+    e.currentTarget.style.cursor = e.shiftKey ? 'crosshair' : hit === null ? 'grab' : 'pointer';
     if (newHover !== hoveredAgentKey) setHoveredAgentKey(newHover);
   };
 
-  const onCanvasMouseLeave = (): void => {
+  const onCanvasPointerLeave = (): void => {
     inputRef.current.mouse.inside = false;
     if (hoveredAgentKey !== null) setHoveredAgentKey(null);
   };
 
-  const onCanvasMouseUp = (e: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (e.button !== 0) return;
-    const drag = inputRef.current.drag;
-    inputRef.current.drag = null;
-    if (drag === null) return;
+  const onCanvasPointerCancel = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    if (inputRef.current.pointer?.id === e.pointerId) cancelPointerGesture();
+  };
 
+  const onCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>): void => {
+    const pointer = inputRef.current.pointer;
+    if (pointer === null || pointer.id !== e.pointerId || pointer.button !== e.button) return;
     const { sx, sy } = canvasMouse(e);
+    movePointerGesture(inputRef.current, cameraRef.current, e.pointerId, sx, sy);
+    const drag = inputRef.current.drag;
+    cancelPointerGesture();
     const cam = cameraRef.current;
+    if (pointer.mode === 'pan' && (pointer.activated || pointer.button === 1)) {
+      if (pointer.activated) setDragPanned(true);
+      return;
+    }
+    // Dragging from a unit is neither a pan nor a selection/link click.
+    if (pointer.mode === 'click' && pointer.activated) return;
 
-    if (drag.activated) {
+    if (drag !== null && drag.activated) {
       // Marquee drag → multi-select.
       const x0 = Math.min(drag.startX, drag.curX);
       const x1 = Math.max(drag.startX, drag.curX);
@@ -993,7 +995,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           }
         }
       }
-      const merged = e.shiftKey ? new Set([...selection.keys, ...newKeys]) : newKeys;
+      const merged = pointer.shift ? new Set([...selection.keys, ...newKeys]) : newKeys;
       sound.click();
       setSelection({
         keys: merged,
@@ -1011,7 +1013,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
     const hit = hitTestWorld(wpt.x, wpt.y);
     sound.click();
     if (hit === null) {
-      if (!e.shiftKey) {
+      if (!pointer.shift) {
         setSelection({ keys: new Set(), focus: { kind: null, key: null } });
       }
       return;
@@ -1035,7 +1037,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       }
       return;
     }
-    const next = new Set(e.shiftKey ? selection.keys : new Set<string>());
+    const next = new Set(pointer.shift ? selection.keys : new Set<string>());
     if (next.has(hit.key)) next.delete(hit.key);
     else next.add(hit.key);
     setSelection({
@@ -1043,7 +1045,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
       focus: { kind: hit.kind, key: hit.key },
     });
     // Voice-line on single-agent select. Phrase reflects current state.
-    if (!e.shiftKey && hit.kind === 'agent') {
+    if (!pointer.shift && hit.kind === 'agent') {
       let inFlight = 0;
       let failed = 0;
       const now = Date.now();
@@ -1063,7 +1065,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             ? 'Working.'
             : 'Standing by.';
       sound.speakLine(phrase);
-    } else if (!e.shiftKey && hit.kind === 'gateway') {
+    } else if (!pointer.shift && hit.kind === 'gateway') {
       sound.speakLine('Gateway online.');
     }
   };
@@ -1076,6 +1078,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
 
   const onCanvasContextMenu = (e: React.MouseEvent<HTMLCanvasElement>): void => {
     e.preventDefault();
+    if (inputRef.current.pointer !== null) return;
     sound.unlock();
     const { sx, sy } = canvasMouse(e);
     const cam = cameraRef.current;
@@ -1384,10 +1387,12 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
           <canvas
             ref={canvasRef}
             className={styles.canvas}
-            onMouseDown={onCanvasMouseDown}
-            onMouseMove={onCanvasMouseMove}
-            onMouseLeave={onCanvasMouseLeave}
-            onMouseUp={onCanvasMouseUp}
+            onPointerDown={onCanvasPointerDown}
+            onPointerMove={onCanvasPointerMove}
+            onPointerLeave={onCanvasPointerLeave}
+            onPointerUp={onCanvasPointerUp}
+            onPointerCancel={onCanvasPointerCancel}
+            onLostPointerCapture={onCanvasPointerCancel}
             onWheel={onCanvasWheel}
             onContextMenu={onCanvasContextMenu}
           />
@@ -1411,6 +1416,7 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             signals={{
               selectionCount: Array.from(selection.keys).filter((k) => k !== 'gateway').length,
               anyPanKeyHeld,
+              dragPanned,
               lastDragSelectCount,
               dispatchOpen: popover !== null,
               bookmarkSavedSlot5,
@@ -1459,7 +1465,8 @@ export function CommandView({ onBack }: CommandViewProps): React.JSX.Element {
             <kbd>WASD</kbd>pan
             <kbd>wheel</kbd>zoom
             <kbd>space</kbd>recenter
-            <kbd>drag</kbd>marquee
+            <kbd>drag</kbd>pan
+            <kbd>Shift-drag</kbd>marquee
             <kbd>rclick</kbd>dispatch
             <kbd>N</kbd>idle
             <kbd>?</kbd>more
@@ -1758,7 +1765,7 @@ function SelectionPanel({
         <div className={styles.panelEmpty}>
           <strong>Select a structure</strong>
           <p>
-            Click a building, drag a marquee for multi-select, right-click to dispatch a task.
+            Click a building to select, drag empty canvas to pan, Shift-drag to multi-select, right-click to dispatch a task.
             Press <kbd>?</kbd> for the full hotkey grammar.
           </p>
         </div>
@@ -2397,7 +2404,15 @@ function HotkeyOverlay({ onClose }: { onClose: () => void }): React.JSX.Element 
               <td>select (<kbd>shift</kbd> = toggle)</td>
             </tr>
             <tr>
-              <td>drag</td>
+              <td>drag empty canvas</td>
+              <td>pan camera</td>
+            </tr>
+            <tr>
+              <td>middle drag anywhere</td>
+              <td>pan camera</td>
+            </tr>
+            <tr>
+              <td>Shift-drag</td>
               <td>marquee multi-select</td>
             </tr>
             <tr>
