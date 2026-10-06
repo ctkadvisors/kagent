@@ -44,6 +44,8 @@ export interface MissionSignals {
   readonly selectionCount: number;
   /** True when ANY of WASD / arrow keys is currently held. */
   readonly anyPanKeyHeld: boolean;
+  /** True after a completed primary or middle-button camera pan. */
+  readonly dragPanned: boolean;
   /** Number of agents selected via the most recent marquee drag. */
   readonly lastDragSelectCount: number;
   /** True when the right-click dispatch popover is open. */
@@ -74,15 +76,15 @@ const MISSIONS: readonly MissionDef[] = [
   {
     id: 2,
     title: 'mission 2 of 5',
-    goal: 'Press WASD or arrow keys to pan the camera.',
-    hint: 'WASD / arrows',
-    isComplete: (s) => s.anyPanKeyHeld,
+    goal: 'Drag empty canvas to pan, or middle-drag anywhere. WASD / arrows also pan.',
+    hint: 'drag / middle drag / WASD',
+    isComplete: (s) => s.anyPanKeyHeld || s.dragPanned,
   },
   {
     id: 3,
     title: 'mission 3 of 5',
-    goal: 'Drag a marquee around two or more agents.',
-    hint: 'left-drag',
+    goal: 'Shift-drag a marquee around two or more agents.',
+    hint: 'Shift-drag',
     isComplete: (s) => s.lastDragSelectCount >= 2,
   },
   {

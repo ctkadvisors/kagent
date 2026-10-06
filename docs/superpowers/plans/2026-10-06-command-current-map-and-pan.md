@@ -1,0 +1,8 @@
+# Command Center implementation plan
+
+Use subagent-driven-development and independent code review. Chris's standing authorization supplies the execution/merge/promotion decision; no extra approval gate.
+
+1. In packages/workbench-ui/src/CommandView.tsx and command/input.ts, add pointer drag-pan alongside marquee selection. Test in command/input.test.ts and CommandView interaction tests: blank primary/middle drag changes camera offsets by screen deltas at zoom0.5 and2; selection/dispatch/link callbacks stay untouched; Shift-drag still selects; release outside, pointercancel and lost capture clear drag. Write failing tests before implementation. Use the existing camera functions and input ref; do not create per-frame React state.
+2. Add a tested current-agent node projection under command/. Terminal tasks targeting absent agents never add map nodes; retain the task map. Nonterminal orphan behavior remains explicitly checked. Integrate it into CommandView's node memo and remove the historical-orphan development trap from the omitted branch.
+3. Update CommandView hotkey/help and command/Mission.tsx onboarding to explain drag-to-pan, Shift-drag marquee and middle drag. Run `pnpm --filter @kagent/workbench-ui test`, typecheck, lint and build; inspect all failures. Request independent specification/correctness review, then commit/push a PR.
+4. Require homelab CI green, merge, observe CI-built images and verified kagent promotion through new_localai GitOps/Argo. Recheck live agents/task projections and compiled UI asset, including the signed architecture receipt task. Exercise the live gestures using an enabled browser; if none exists, record that limit and retain integration-test evidence without claiming a browser gesture was observed.
