@@ -27,6 +27,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { CustomObjectsApi } from '@kubernetes/client-node';
 
 import type { AgentTemplate } from './crds/types.js';
+import { mergePatchOptions } from './k8s.js';
 import {
   buildAgentManifest,
   InstantiateError,
@@ -229,6 +230,45 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
       }
     }
 
+    if (reused) {
+      try {
+        await deps.customApi.patchNamespacedCustomObject(
+          {
+            group: KAGENT_GROUP,
+            version: KAGENT_VERSION,
+            namespace: result.manifest.metadata.namespace,
+            plural: AGENT_PLURAL,
+            name: result.agentName,
+            body: {
+              metadata: {
+                annotations: {
+                  'kagent.knuteson.io/last-used-at': (
+                    deps.clock ?? (() => new Date())
+                  )().toISOString(),
+                },
+              },
+            },
+          },
+          mergePatchOptions,
+        );
+      } catch {
+        // Best-effort refresh; never fail instantiation on GC bookkeeping.
+      }
+    }
+
+    // Post-instantiation sweep: retire stale Agents from the same template.
+    // Never fails the instantiation if the sweep itself errors.
+    try {
+      await sweepStaleAgents(
+        deps.customApi,
+        result.manifest.metadata.namespace,
+        templateName,
+        deps.clock,
+      );
+    } catch {
+      // Best-effort cleanup; never fail instantiation on GC bookkeeping.
+    }
+
     const response: InstantiatePostResponse = {
       agentName: result.agentName,
       namespace: result.manifest.metadata.namespace,
@@ -367,4 +407,83 @@ function extractK8sStatus(err: unknown): number | undefined {
   if (typeof e.code === 'number') return e.code;
   if (typeof e.statusCode === 'number') return e.statusCode;
   return undefined;
+}
+
+/* =====================================================================
+ * Post-instantiation GC sweep
+ * ===================================================================== */
+
+/** Idle window: an Agent untouched for longer than this is stale. */
+const STALE_IDLE_MS = 60 * 60 * 1000;
+
+interface K8sObjectList {
+  readonly items?: readonly unknown[];
+}
+
+interface K8sObjectMeta {
+  readonly metadata?: {
+    readonly name?: string;
+    readonly labels?: Readonly<Record<string, string>>;
+    readonly annotations?: Readonly<Record<string, string>>;
+  };
+  readonly spec?: { readonly targetAgent?: string };
+  readonly status?: { readonly phase?: string };
+}
+
+/**
+ * Retire stale Agents materialized from `templateName`: other instances
+ * that no unfinished AgentTask targets and that were not used in the
+ * last hour. Best-effort — the caller swallows any throw so a sweep
+ * failure never fails the instantiation.
+ */
+async function sweepStaleAgents(
+  customApi: CustomObjectsApi,
+  namespace: string,
+  templateName: string,
+  clock: (() => Date) | undefined,
+): Promise<void> {
+  const now = (clock ?? (() => new Date()))().getTime();
+
+  const agentList = (await customApi.listNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: AGENT_PLURAL,
+    labelSelector: `kagent.knuteson.io/from-template=${templateName}`,
+  })) as K8sObjectList;
+
+  const taskList = (await customApi.listNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: 'agenttasks',
+  })) as K8sObjectList;
+
+  // Agent names targeted by a task that hasn't reached a terminal phase.
+  const busy = new Set<string>();
+  for (const raw of taskList.items ?? []) {
+    const obj = raw as K8sObjectMeta;
+    const phase = obj.status?.phase ?? '';
+    if (phase === 'Completed' || phase === 'Failed') continue;
+    const target = obj.spec?.targetAgent;
+    if (typeof target === 'string' && target.length > 0) busy.add(target);
+  }
+
+  for (const raw of agentList.items ?? []) {
+    const obj = raw as K8sObjectMeta;
+    const name = obj.metadata?.name;
+    if (typeof name !== 'string' || name.length === 0) continue;
+    if (busy.has(name)) continue;
+    const lastUsed = obj.metadata?.annotations?.['kagent.knuteson.io/last-used-at'];
+    const ts = typeof lastUsed === 'string' ? Date.parse(lastUsed) : Number.NaN;
+    if (Number.isNaN(ts) || now - ts > STALE_IDLE_MS) {
+      await customApi.deleteNamespacedCustomObject({
+        group: KAGENT_GROUP,
+        version: KAGENT_VERSION,
+        namespace,
+        plural: AGENT_PLURAL,
+        name,
+      });
+    }
+  }
 }
