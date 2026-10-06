@@ -229,6 +229,95 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
       }
     }
 
+    // Post-instantiation sweep: delete stale Agent instances of the same template
+    // (idle >1h, no unfinished AgentTask targeting them) and refresh last-used-at on reuse.
+    // Best-effort: failures are logged but never fail the instantiate response.
+    try {
+      const now = (deps.clock ?? (() => new Date()))();
+      const oneHourMs = 3600_000;
+      const idleThreshold = now.getTime() - oneHourMs;
+
+      // 1. List all Agents from this template
+      const agentsList = await deps.customApi.listNamespacedCustomObject({
+        group: KAGENT_GROUP,
+        version: KAGENT_VERSION,
+        namespace,
+        plural: AGENT_PLURAL,
+        labelSelector: `kagent.knuteson.io/from-template=${templateName}`,
+      });
+      const agents = (agentsList.items ?? []) as Array<{
+        metadata: { name: string; annotations?: Record<string, string> };
+      }>;
+
+      // 2. List all AgentTasks to find which Agents are targeted by unfinished tasks
+      const tasksList = await deps.customApi.listNamespacedCustomObject({
+        group: KAGENT_GROUP,
+        version: KAGENT_VERSION,
+        namespace,
+        plural: 'agenttasks',
+      });
+      const tasks = (tasksList.items ?? []) as Array<{
+        spec?: { targetAgent?: string };
+        status?: { phase?: string };
+      }>;
+
+      const activeTargets = new Set<string>();
+      for (const t of tasks) {
+        const target = t.spec?.targetAgent;
+        const phase = t.status?.phase;
+        // Unfinished phases: anything not Completed or Failed
+        if (target !== undefined && phase !== 'Completed' && phase !== 'Failed') {
+          activeTargets.add(target);
+        }
+      }
+
+      // 3. Delete stale Agents
+      for (const a of agents) {
+        const name = a.metadata.name;
+        if (name === result.agentName) continue; // Don't delete the one we just created/reused
+        if (activeTargets.has(name)) continue; // Don't delete if targeted by unfinished task
+
+        const lastUsedStr = a.metadata.annotations?.['kagent.knuteson.io/last-used-at'];
+        let isStale = false;
+        if (lastUsedStr === undefined) {
+          isStale = true; // No last-used-at means treat as stale if not active
+        } else {
+          const lastUsed = new Date(lastUsedStr).getTime();
+          if (lastUsed < idleThreshold) {
+            isStale = true;
+          }
+        }
+
+        if (isStale) {
+          await deps.customApi.deleteNamespacedCustomObject({
+            group: KAGENT_GROUP,
+            version: KAGENT_VERSION,
+            namespace,
+            plural: AGENT_PLURAL,
+            name,
+          });
+        }
+      }
+
+      // 4. Refresh last-used-at on the current Agent (especially on reuse)
+      await deps.customApi.patchNamespacedCustomObject({
+        group: KAGENT_GROUP,
+        version: KAGENT_VERSION,
+        namespace,
+        plural: AGENT_PLURAL,
+        name: result.agentName,
+        body: {
+          metadata: {
+            annotations: {
+              'kagent.knuteson.io/last-used-at': now.toISOString(),
+            },
+          },
+        },
+      });
+    } catch (err) {
+      console.warn('[template-server] post-instantiate sweep failed (best-effort):', err);
+    }
+
     const response: InstantiatePostResponse = {
       agentName: result.agentName,
       namespace: result.manifest.metadata.namespace,
