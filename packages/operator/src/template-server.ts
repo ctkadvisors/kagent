@@ -163,6 +163,7 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
     }
 
     const namespace = deps.resolveNamespace(req);
+    const now = (deps.clock ?? (() => new Date()))();
     let template: AgentTemplate;
     try {
       template = await fetchTemplate(deps.customApi, namespace, templateName);
@@ -237,8 +238,103 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
       parameterHash: result.parameterHash,
       droppedTools: result.droppedTools,
     };
+    if (reused) {
+      try {
+        await deps.customApi.patchNamespacedCustomObject({
+          group: KAGENT_GROUP,
+          version: KAGENT_VERSION,
+          namespace: result.manifest.metadata.namespace,
+          plural: AGENT_PLURAL,
+          name: result.agentName,
+          body: {
+            metadata: {
+              annotations: { 'kagent.knuteson.io/last-used-at': now.toISOString() },
+            },
+          },
+        });
+      } catch (err: unknown) {
+        console.warn(
+          `[template-server] last-used-at refresh failed for ${result.agentName}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // Best-effort sweep: retire this template's stale instances. A sweep
+    // failure must never fail the instantiate response.
+    try {
+      await sweepStaleInstances(deps.customApi, result.manifest.metadata.namespace, templateName, now);
+    } catch (err: unknown) {
+      console.warn(
+        `[template-server] stale-instance sweep failed for ${templateName}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     writeJson(res, reused ? 200 : 201, response);
   };
+}
+
+const IDLE_THRESHOLD_MS = 3_600_000;
+const TERMINAL_TASK_PHASES = new Set(['Completed', 'Failed']);
+
+async function sweepStaleInstances(
+  customApi: CustomObjectsApi,
+  namespace: string,
+  templateName: string,
+  now: Date,
+): Promise<void> {
+  const agentsResp = (await customApi.listNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: AGENT_PLURAL,
+    labelSelector: `kagent.knuteson.io/from-template=${templateName}`,
+  })) as { items?: unknown[] };
+  const agents = agentsResp.items ?? [];
+  if (agents.length === 0) return;
+
+  const tasksResp = (await customApi.listNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: 'agenttasks',
+  })) as { items?: unknown[] };
+  const tasks = tasksResp.items ?? [];
+
+  const targeted = new Set<string>();
+  for (const t of tasks) {
+    const obj = t as {
+      spec?: { targetAgent?: string };
+      status?: { phase?: string };
+    };
+    const target = obj.spec?.targetAgent;
+    if (typeof target !== 'string' || target.length === 0) continue;
+    const phase = obj.status?.phase;
+    if (phase === undefined || !TERMINAL_TASK_PHASES.has(phase)) {
+      targeted.add(target);
+    }
+  }
+
+  const cutoff = now.getTime() - IDLE_THRESHOLD_MS;
+  for (const a of agents) {
+    const obj = a as {
+      metadata?: { name?: string; annotations?: Record<string, string> };
+    };
+    const name = obj.metadata?.name;
+    if (typeof name !== 'string' || name.length === 0) continue;
+    if (targeted.has(name)) continue;
+    const usedAt = obj.metadata?.annotations?.['kagent.knuteson.io/last-used-at'];
+    if (typeof usedAt !== 'string') continue;
+    const usedMs = Date.parse(usedAt);
+    if (Number.isNaN(usedMs)) continue;
+    if (usedMs >= cutoff) continue;
+    await customApi.deleteNamespacedCustomObject({
+      group: KAGENT_GROUP,
+      version: KAGENT_VERSION,
+      namespace,
+      plural: AGENT_PLURAL,
+      name,
+    });
+  }
 }
 
 /**
