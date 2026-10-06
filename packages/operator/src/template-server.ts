@@ -229,6 +229,14 @@ export function buildInstantiateHandler(deps: TemplateServerDeps) {
       }
     }
 
+    // Post-instantiation sweep: retire stale instances of the same template.
+    // Failures here must never fail the instantiate response.
+    try {
+      await sweepStaleAgents(deps.customApi, namespace, templateName, result.agentName, reused, deps.clock);
+    } catch (err) {
+      console.warn('[template-server] sweep failed:', err);
+    }
+
     const response: InstantiatePostResponse = {
       agentName: result.agentName,
       namespace: result.manifest.metadata.namespace,
@@ -367,4 +375,82 @@ function extractK8sStatus(err: unknown): number | undefined {
   if (typeof e.code === 'number') return e.code;
   if (typeof e.statusCode === 'number') return e.statusCode;
   return undefined;
+}
+
+const IDLE_THRESHOLD_MS = 3600_000;
+const FROM_TEMPLATE_LABEL = 'kagent.knuteson.io/from-template';
+const LAST_USED_AT_ANNOTATION = 'kagent.knuteson.io/last-used-at';
+const UNFINISHED_PHASES = new Set(['Pending', 'Dispatched', 'Running', 'Waiting']);
+
+async function sweepStaleAgents(
+  customApi: CustomObjectsApi,
+  namespace: string,
+  templateName: string,
+  currentAgentName: string,
+  reused: boolean,
+  clock?: () => Date,
+): Promise<void> {
+  const now = (clock ?? (() => new Date()))();
+  const cutoff = now.getTime() - IDLE_THRESHOLD_MS;
+
+  const agentsRes = await customApi.listNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: AGENT_PLURAL,
+    labelSelector: `${FROM_TEMPLATE_LABEL}=${templateName}`,
+  });
+  const agents = (agentsRes as { items?: unknown[] }).items ?? [];
+
+  const tasksRes = await customApi.listNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: 'agenttasks',
+  });
+  const tasks = (tasksRes as { items?: unknown[] }).items ?? [];
+
+  const protectedAgents = new Set<string>();
+  for (const t of tasks) {
+    const target = (t as { spec?: { targetAgent?: string } }).spec?.targetAgent;
+    if (target === undefined) continue;
+    const phase = (t as { status?: { phase?: string } }).status?.phase;
+    if (phase === undefined || UNFINISHED_PHASES.has(phase)) {
+      protectedAgents.add(target);
+    }
+  }
+
+  for (const a of agents) {
+    const name = (a as { metadata?: { name?: string } }).metadata?.name;
+    if (name === undefined || name === currentAgentName) continue;
+    if (protectedAgents.has(name)) continue;
+    const usedAt = (a as { metadata?: { annotations?: Record<string, string> } }).metadata?.annotations?.[LAST_USED_AT_ANNOTATION];
+    if (usedAt === undefined) continue;
+    const usedTime = Date.parse(usedAt);
+    if (Number.isNaN(usedTime) || usedTime >= cutoff) continue;
+    await customApi.deleteNamespacedCustomObject({
+      group: KAGENT_GROUP,
+      version: KAGENT_VERSION,
+      namespace,
+      plural: AGENT_PLURAL,
+      name,
+    });
+  }
+
+  if (reused) {
+    await customApi.patchNamespacedCustomObject({
+      group: KAGENT_GROUP,
+      version: KAGENT_VERSION,
+      namespace,
+      plural: AGENT_PLURAL,
+      name: currentAgentName,
+      body: {
+        metadata: {
+          annotations: {
+            [LAST_USED_AT_ANNOTATION]: now.toISOString(),
+          },
+        },
+      },
+    });
+  }
 }
