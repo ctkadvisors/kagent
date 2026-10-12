@@ -731,6 +731,8 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
        */
       budget: RunBudget;
       contextSafetyThreshold: number;
+      /** Post-compaction pressure; reported last-call usage stays in the budget. */
+      compactedContextTokens?: number;
     },
   ): Promise<{
     result: ChatResult;
@@ -784,7 +786,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           // 2026-09-14: the last call's context, not the cumulative sum —
           // the sum refused every 20-iteration concierge task at
           // "cumulative=265k" while its conversation was ~40k tokens.
-          const used = bookkeeping.budget.contextTokens ?? 0;
+          const used = bookkeeping.compactedContextTokens ?? bookkeeping.budget.contextTokens ?? 0;
           const limit = bookkeeping.contextSafetyThreshold * window;
           if (used >= limit) {
             const reason = `${CONTEXT_REFUSAL_PREFIX}: context=${used} window=${window} threshold=${bookkeeping.contextSafetyThreshold} limit=${limit.toFixed(0)}`;
@@ -1005,6 +1007,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     let tokensPerChar = DEFAULT_TOKENS_PER_CHAR;
     let requestChars = 0;
     let lastInputTokens: number | undefined;
+    let lastOutputTokens = 0;
     if (
       agentDef.systemPrompt &&
       (currentMessages.length === 0 || currentMessages[0]?.role !== 'system')
@@ -1053,7 +1056,9 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       await this.emitToSinks(boundaryEntry);
 
       // (0) Fit the conversation to the model's window before asking.
+      let compactedContextTokens: number | undefined;
       if (budget.contextWindowTokens !== undefined) {
+        const beforeChars = conversationChars(currentMessages);
         const compacted = compactConversation(
           currentMessages,
           budget.contextWindowTokens,
@@ -1061,6 +1066,20 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           lastInputTokens,
         );
         if (compacted > 0) {
+          const afterChars = conversationChars(currentMessages);
+          if (afterChars < beforeChars) {
+            // Compaction invalidates the previous call's pressure. Estimate
+            // the request actually being sent, preserving the output reserve
+            // and the tools that compaction cannot remove. The measured ratio
+            // already includes backend overhead, so counting schemas again is
+            // deliberately conservative; do not scale that overhead away with
+            // the elided messages. Keep reported usage intact for accounting.
+            const schemaChars =
+              toolDescriptors.length > 0 ? JSON.stringify(toolDescriptors).length : 0;
+            compactedContextTokens =
+              Math.ceil((afterChars + schemaChars) * tokensPerChar) +
+              Math.max(lastOutputTokens, agentDef.llmParams?.maxTokens ?? 0);
+          }
           console.warn(
             `[agent-loop] run ${runId}: compacted ${String(compacted)} earlier tool result(s) to fit the context window`,
           );
@@ -1120,6 +1139,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           // chat() calls (token accounting block, `budget.cumulativeInputTokens +=` below).
           budget,
           contextSafetyThreshold,
+          ...(compactedContextTokens !== undefined && { compactedContextTokens }),
         });
         llmResult = outcome.result;
         retryAttempts = outcome.attempts;
@@ -1252,6 +1272,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       budget.cumulativeInputTokens += callInputTokens;
       budget.cumulativeOutputTokens += callOutputTokens;
       budget.contextTokens = callInputTokens + callOutputTokens;
+      lastOutputTokens = callOutputTokens;
       if (llmResult.usage?.inputTokens !== undefined && requestChars > 0) {
         // Never below the chars/4 default: an under-count is what killed runs.
         tokensPerChar = Math.max(
