@@ -872,6 +872,67 @@ function spyLlm(): {
 }
 
 describe('runAgentTask — runConfig precedence (WS-G)', () => {
+  it.each(['runConfig', 'deprecated', 'default'] as const)(
+    'shares the %s timeout origin with tool budget notes',
+    async (kind) => {
+      let now = 1_000_000;
+      const durationSeconds = kind === 'default' ? DEFAULT_TASK_TIMEOUT_SECONDS : 600;
+      const durationMs = durationSeconds * 1000;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      // Time spent after timeout arming but before executor entry must count.
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
+        now += durationMs / 2;
+        return new AbortController().signal;
+      });
+      const cfg: PodConfig = {
+        ...baseConfig,
+        taskSpec: {
+          ...baseConfig.taskSpec,
+          ...(kind === 'runConfig'
+            ? {
+                timeoutSeconds: 1,
+                runConfig: { timeoutSeconds: durationSeconds, maxIterations: 90 },
+              }
+            : kind === 'deprecated'
+              ? { timeoutSeconds: durationSeconds, runConfig: { maxIterations: 90 } }
+              : { runConfig: { maxIterations: 90 } }),
+        },
+      };
+      const requests: ChatRequest[] = [];
+      const llm: LLMClient = {
+        ...scriptedLlm('done'),
+        chat: (req) => {
+          requests.push(req);
+          return Promise.resolve(
+            requests.length === 1
+              ? { content: '', tool_calls: [{ id: 'a', name: 'echo', args: {} }] }
+              : { content: 'done' },
+          );
+        },
+      };
+      const provider: ToolProvider = {
+        id: 'echo',
+        describeTools: () =>
+          Promise.resolve([{ name: 'echo', description: 'echo', inputSchema: { type: 'object' } }]),
+        executeTool: () => {
+          now += durationMs * 0.35;
+          return Promise.resolve({ content: 'data', isError: false });
+        },
+      };
+      try {
+        const result = await runAgentTask(cfg, { llm, sinks: [], toolProviders: [provider] });
+        expect(timeout).toHaveBeenCalledWith(durationMs);
+        const note = requests[1]!.messages.find((m) => m.role === 'tool')!.content;
+        expect(note).toContain(`${String(durationSeconds * 0.15)} seconds remaining`);
+        expect(note).toContain('before reading anything more');
+        expect(result.status).toBe('completed');
+      } finally {
+        timeout.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
   it('honors top-level timeoutSeconds when runConfig is absent', async () => {
     const cfg: PodConfig = {
       ...baseConfig,

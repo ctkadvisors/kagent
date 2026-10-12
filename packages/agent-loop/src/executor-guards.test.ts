@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AgentRegistry } from './registry.js';
 import {
   AgentExecutor,
@@ -380,6 +380,139 @@ describe('AgentExecutor — tool guards', () => {
     expect(loopTurnNote(0, 5)).toBe('\n\n[loop: turn 1 of 5.]');
     expect(loopTurnNote(1, 5)).toContain('3 turns left');
     expect(loopTurnNote(9, 19)).toBe('\n\n[loop: turn 10 of 19.]');
+  });
+
+  it('uses the earlier time checkpoint even while few turns are spent', () => {
+    const time = (elapsedMs: number) => ({ elapsedMs, timeoutMs: 3_600_000 });
+    expect(loopTurnNote(2, 90, time(1_799_000))).not.toContain('save what runs');
+    expect(loopTurnNote(2, 90, time(1_800_000))).toContain('1800 seconds remaining');
+    expect(loopTurnNote(2, 90, time(1_800_000))).toContain('Half the run is spent');
+    expect(loopTurnNote(2, 90, time(3_059_000))).not.toContain('before reading anything more');
+    expect(loopTurnNote(2, 90, time(3_060_000))).toContain('540 seconds remaining');
+    expect(loopTurnNote(2, 90, time(3_060_000))).toContain('before reading anything more');
+    expect(loopTurnNote(2, 90, time(3_700_000))).toContain('0 seconds remaining');
+  });
+
+  it('keeps turn-first finish guidance and legacy no-timeout notes', () => {
+    expect(loopTurnNote(84, 100, { elapsedMs: 100_000, timeoutMs: 3_600_000 })).toContain(
+      '15 turns left in this run',
+    );
+    expect(loopTurnNote(84, 100, { elapsedMs: 100_000, timeoutMs: 3_600_000 })).toContain(
+      'before reading anything more',
+    );
+    expect(loopTurnNote(2, 90)).toBe('\n\n[loop: turn 3 of 90.]');
+  });
+
+  it.each(['success', 'isError', 'throw', 'missing', 'malformed'] as const)(
+    'samples remaining time after a slow %s tool response',
+    async (mode) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+      const provider = echoProvider('data');
+      provider.executeTool = () => {
+        now += 1_560_000;
+        if (mode === 'throw') throw new Error('failed');
+        return Promise.resolve({ content: 'data', isError: mode === 'isError' });
+      };
+      const toolCall: ChatResult = call('c1', 'slow');
+      if (mode === 'malformed') toolCall.tool_calls![0]!.args = { [MALFORMED_TOOL_ARGS]: '{' };
+      const stub = makeStubLLM({ scriptedChat: [toolCall, { content: 'done' }], recordedRequests });
+      const llm = {
+        ...stub,
+        chat: async (...args: Parameters<typeof stub.chat>) => {
+          if (recordedRequests.length === 0)
+            now += mode === 'missing' || mode === 'malformed' ? 3_060_000 : 1_500_000;
+          return stub.chat(...args);
+        },
+      };
+      try {
+        const exec = new AgentExecutor({
+          registry,
+          llm,
+          toolProviders: mode === 'missing' ? [] : [provider],
+        });
+        const result = await exec.run({
+          agentType: 'chat',
+          messages: [{ role: 'user', content: 'hi' }],
+          maxIterations: 90,
+          timeBudget: { startedAtMs: 1_000_000, timeoutMs: 3_600_000 },
+        });
+        const tool = recordedRequests.at(-1)?.messages.find((m) => m.role === 'tool');
+        expect(tool?.content).toContain('turn 1 of 90');
+        expect(tool?.content).toContain('540 seconds remaining');
+        expect(tool?.content).toContain('before reading anything more');
+        expect(result.status).toBe('completed');
+        expect(result.hitIterationCap).toBe(false);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { startedAtMs: Number.NaN, timeoutMs: 1000 },
+    { startedAtMs: 0, timeoutMs: Number.POSITIVE_INFINITY },
+    { startedAtMs: 0, timeoutMs: 0 },
+    { startedAtMs: 0, timeoutMs: -1 },
+  ])('rejects invalid advisory timing inputs: %j', async (timeBudget) => {
+    const exec = new AgentExecutor({ registry, llm: makeStubLLM() });
+    await expect(exec.run({ agentType: 'chat', messages: [], timeBudget })).rejects.toThrow(
+      'timeBudget',
+    );
+  });
+
+  it('retains the exact unknown-tool response without a time budget', async () => {
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [call('a', 'missing'), { content: 'done' }],
+      recordedRequests,
+    });
+    const exec = new AgentExecutor({ registry, llm });
+    await exec.run({ agentType: 'chat', messages: [], maxIterations: 90 });
+    expect(recordedRequests.at(-1)!.messages.find((m) => m.role === 'tool')!.content).toBe(
+      'Tool "echo" has no registered provider',
+    );
+  });
+
+  it('refreshes the deadline note for each tool in a batch', async () => {
+    let now = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const recordedRequests: import('./llm-client.js').ChatRequest[] = [];
+    const provider = echoProvider('data');
+    provider.executeTool = () => {
+      now += 450_000;
+      return Promise.resolve({ content: 'data', isError: false });
+    };
+    const llm = makeStubLLM({
+      scriptedChat: [
+        {
+          content: '',
+          tool_calls: [
+            { id: 'a', name: 'echo', args: { q: 'a' } },
+            { id: 'b', name: 'echo', args: { q: 'b' } },
+          ],
+        },
+        { content: 'done' },
+      ],
+      recordedRequests,
+    });
+    try {
+      const exec = new AgentExecutor({ registry, llm, toolProviders: [provider] });
+      await exec.run({
+        agentType: 'chat',
+        messages: [],
+        maxIterations: 90,
+        timeBudget: { startedAtMs: 0, timeoutMs: 1_000_000 },
+      });
+      const tools = recordedRequests.at(-1)!.messages.filter((m) => m.role === 'tool');
+      expect(tools[0]!.content).toContain('550 seconds remaining');
+      expect(tools[0]!.content).not.toContain('before reading anything more');
+      expect(tools[1]!.content).toContain('100 seconds remaining');
+      expect(tools[1]!.content).toContain('before reading anything more');
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('answers a tool call with malformed arguments with a tool error and lets the run go on', async () => {

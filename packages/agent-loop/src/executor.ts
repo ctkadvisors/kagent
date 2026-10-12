@@ -310,6 +310,12 @@ export interface RunInput<TType extends string = string> {
    * `main.ts`).
    */
   onBudgetReady?: (budget: RunBudget) => void;
+  /**
+   * Advisory wall-clock budget for tool-result notes. The caller supplies the
+   * same origin and duration as its hard timeout; this does not arm a timer
+   * or change cancellation. Omit to retain turn-only guidance.
+   */
+  timeBudget?: { readonly startedAtMs: number; readonly timeoutMs: number };
   /** Caller-owned cancellation signal. */
   signal?: AbortSignal;
 }
@@ -499,34 +505,43 @@ export function compactConversation(
 }
 
 /**
- * Every tool result ends with the turn number ("turn 12 of 100"). With this
- * many turns left, or 15% of the run, whichever is more, it also tells the
- * model to finish. From the halfway turn on a long run it asks for what runs
- * so far to be saved. The model cannot plan around a limit it cannot see:
- * both auditor failures were a model reading until the wall with no turn
- * left to write in, and three inventor runs showed a prompt rule ("commit by
- * turn 45") changes nothing while the loop's own note does: the model ships
- * when the loop says so, so the loop has to say so while there is still time
- * to write, post and commit.
+ * Tool-result guidance uses whichever budget runs out first. Save at halfway
+ * through time or a long run's turns; finish with 15% of time or the existing
+ * turn reserve left. Time is advisory: the caller still owns the hard timeout.
  */
 export const TURNS_LEFT_NOTE_AT = 3;
 export const TURNS_LEFT_NOTE_SHARE = 0.15;
-/** Runs shorter than this get no halfway note: a chat turn is not a build. */
+/** Runs shorter than this get no turn-based halfway note: a chat turn is not a build. */
 export const HALFWAY_NOTE_MIN_ITERATIONS = 20;
 
-export function loopTurnNote(iteration: number, maxIterations: number): string {
+export function loopTurnNote(
+  iteration: number,
+  maxIterations: number,
+  timeBudget?: { readonly elapsedMs: number; readonly timeoutMs: number },
+): string {
   // `iteration` is 0-based and this turn is already spent.
   const turnsLeft = maxIterations - iteration - 1;
-  const turnNo = `turn ${String(iteration + 1)} of ${String(maxIterations)}`;
+  const elapsedMs = Math.max(0, timeBudget?.elapsedMs ?? 0);
+  const timeLeftMs =
+    timeBudget === undefined ? undefined : Math.max(0, timeBudget.timeoutMs - elapsedMs);
+  const timeNote =
+    timeLeftMs === undefined ? '' : `, ${String(Math.floor(timeLeftMs / 1000))} seconds remaining`;
+  const turnNo = `turn ${String(iteration + 1)} of ${String(maxIterations)}${timeNote}`;
   const noteAt = Math.max(TURNS_LEFT_NOTE_AT, Math.ceil(maxIterations * TURNS_LEFT_NOTE_SHARE));
-  if (turnsLeft <= noteAt) {
+  const finishTime =
+    timeBudget !== undefined && elapsedMs >= timeBudget.timeoutMs * (1 - TURNS_LEFT_NOTE_SHARE);
+  if (turnsLeft <= noteAt || finishTime) {
     const left =
       turnsLeft === 0
         ? 'this was the last turn of the run'
         : `${String(turnsLeft)} turn${turnsLeft === 1 ? '' : 's'} left in this run`;
     return `\n\n[loop: ${turnNo}, ${left}. Do what must still be done (write, post, answer, commit) before reading anything more.]`;
   }
-  if (maxIterations >= HALFWAY_NOTE_MIN_ITERATIONS && iteration + 1 >= maxIterations / 2) {
+  const halfTime = timeBudget !== undefined && elapsedMs >= timeBudget.timeoutMs / 2;
+  if (
+    halfTime ||
+    (maxIterations >= HALFWAY_NOTE_MIN_ITERATIONS && iteration + 1 >= maxIterations / 2)
+  ) {
     return `\n\n[loop: ${turnNo}. Half the run is spent: save what runs so far (commit, post) now, then keep improving.]`;
   }
   return `\n\n[loop: ${turnNo}.]`;
@@ -925,6 +940,17 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       (!Number.isInteger(input.maxIterations) || input.maxIterations <= 0)
     ) {
       throw new InvalidConfigError('maxIterations', 'must be a positive integer');
+    }
+    if (
+      input.timeBudget !== undefined &&
+      (!Number.isFinite(input.timeBudget.startedAtMs) ||
+        !Number.isFinite(input.timeBudget.timeoutMs) ||
+        input.timeBudget.timeoutMs <= 0)
+    ) {
+      throw new InvalidConfigError(
+        'timeBudget',
+        'requires a finite start and positive finite timeout',
+      );
     }
     // Piece 3 (CONTEXT-AWARENESS.md §4.5) — validate the safety
     // threshold up front. MUST be in (0, 1]. The contract default
@@ -1376,7 +1402,19 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
                   perTool > this.toolGuards.maxCallsPerTool
                 ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
                 : undefined;
-        const turnsNote = loopTurnNote(iteration, maxIterations);
+        // Sample after execution/trace emission, when the model-visible result
+        // is appended. Slow tools and earlier tools in a batch consume time too.
+        const turnsNote = (): string =>
+          loopTurnNote(
+            iteration,
+            maxIterations,
+            input.timeBudget === undefined
+              ? undefined
+              : {
+                  elapsedMs: Date.now() - input.timeBudget.startedAtMs,
+                  timeoutMs: input.timeBudget.timeoutMs,
+                },
+          );
         if (guardMsg !== undefined) {
           const guardEntry: TraceEntry = {
             schema_version: '1',
@@ -1396,7 +1434,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(guardEntry);
           currentMessages.push({
             role: 'tool',
-            content: guardMsg + turnsNote,
+            content: guardMsg + turnsNote(),
             tool_call_id: callId,
             name: rawToolCall.name,
           });
@@ -1429,7 +1467,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(noProvEntry);
           currentMessages.push({
             role: 'tool',
-            content: errMsg,
+            content: errMsg + (input.timeBudget === undefined ? '' : turnsNote()),
             tool_call_id: callId,
             name: rawToolCall.name,
           });
@@ -1488,7 +1526,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
               capToolResult(
                 stringifyToolContent(toolResult.content),
                 this.toolGuards.maxToolResultChars,
-              ) + turnsNote,
+              ) + turnsNote(),
             tool_call_id: callId,
             name: rawToolCall.name,
           });
@@ -1519,7 +1557,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           await this.emitToSinks(errEntry);
           currentMessages.push({
             role: 'tool',
-            content: `Error: ${msg}${turnsNote}`,
+            content: `Error: ${msg}${turnsNote()}`,
             tool_call_id: callId,
             name: rawToolCall.name,
           });
