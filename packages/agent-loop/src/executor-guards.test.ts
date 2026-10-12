@@ -9,6 +9,8 @@ import {
   AgentExecutor,
   capToolResult,
   compactConversation,
+  conversationChars,
+  FIT_TO,
   KEEP_RECENT_TOOL_RESULTS,
   loopTurnNote,
 } from './executor.js';
@@ -82,9 +84,113 @@ describe('compactConversation', () => {
     expect(compactConversation(msgs, 20_000)).toBe(0);
   });
 
-  it('never stubs the newest results even when that leaves the prompt over the target', () => {
-    const msgs = conversation(4);
-    expect(compactConversation(msgs, 2_000)).toBe(0);
+  it('keeps the newest results over the target while the request fits under the refusal line', () => {
+    const msgs = conversation(4); // ~4k tokens: past 60% of 6k, under 85%
+    expect(compactConversation(msgs, 6_000)).toBe(0);
+  });
+
+  it('past the refusal line, elides older assistant text and protected results too', () => {
+    // An inventor-shaped run: reasoning text every turn, all six results protected.
+    const msgs = conversation(6).map((m) =>
+      m.role === 'assistant' ? { ...m, content: 'r'.repeat(2000) } : m,
+    );
+    const original = structuredClone(msgs);
+    const fits = (window: number, reserve: number) =>
+      Math.ceil(conversationChars(msgs) * 0.25) + reserve <= FIT_TO * window;
+    // ~9k tokens on a 12k window: it fits, and the reserve is what tips it over.
+    expect(compactConversation(msgs, 12_000)).toBe(0);
+    const compacted = compactConversation(msgs, 12_000, 0.25, undefined, { reserveTokens: 2_000 });
+    expect(compacted).toBeGreaterThan(0);
+    expect(fits(12_000, 2_000)).toBe(true);
+    expect(msgs[2]?.content).toContain('[compacted: earlier assistant text (2000 chars)');
+    expect(msgs[3]?.content).toContain('[compacted: an earlier tool result');
+    // System, task and the latest exchange are never touched.
+    expect(msgs.slice(0, 2)).toEqual(original.slice(0, 2));
+    expect(msgs.slice(-2)).toEqual(original.slice(-2));
+  });
+
+  it('leaves results shorter than their stub alone', () => {
+    const msgs = conversation(20).map((m) => (m.role === 'tool' ? { ...m, content: 'ok' } : m));
+    const before = conversationChars(msgs);
+    // The backend says the prompt is over 60%, but no stub would be smaller.
+    expect(compactConversation(msgs, 1_000, 0.25, 900)).toBe(0);
+    expect(conversationChars(msgs)).toBe(before);
+  });
+
+  it('keeps a 300-turn run under the refusal line, each call still with its results', () => {
+    // The shape stubs alone cannot bound: short text and arguments (never stubbed)
+    // and 3k-char results, under a 16k output reserve and 40k chars of schemas.
+    const window = 65_536;
+    const overhead = { schemaChars: 40_000, reserveTokens: 16_000 };
+    const msgs: ChatMessage[] = [
+      { role: 'system', content: 's'.repeat(20_000) },
+      { role: 'user', content: 'invent something' },
+    ];
+    for (let turn = 0; turn < 300; turn += 1) {
+      const id = `c${String(turn)}`;
+      msgs.push({
+        role: 'assistant',
+        content: 't'.repeat(150),
+        tool_calls: [{ id, name: 'code', args: { q: 'a'.repeat(150) } }],
+      });
+      msgs.push({ role: 'tool', content: 'r'.repeat(3_000), tool_call_id: id, name: 'code' });
+      compactConversation(msgs, window, 0.3, undefined, overhead);
+      const used =
+        Math.ceil((conversationChars(msgs) + overhead.schemaChars) * 0.3) + overhead.reserveTokens;
+      expect(used).toBeLessThan(0.95 * window);
+      // Old stubbed exchanges are dropped before the newest results are touched.
+      const recent = msgs.filter((m) => m.role === 'tool').slice(-KEEP_RECENT_TOOL_RESULTS);
+      expect(recent.every((m) => m.content.length === 3_000)).toBe(true);
+    }
+    expect(msgs.slice(0, 2).map((m) => m.content.length)).toEqual([20_000, 16]);
+    expect(msgs.at(-1)?.content).toBe('r'.repeat(3_000));
+    let calls = new Set<string>();
+    for (const m of msgs) {
+      if (m.role === 'assistant') calls = new Set((m.tool_calls ?? []).map((tc) => tc.id));
+      if (m.role === 'tool') expect(calls.has(m.tool_call_id ?? '')).toBe(true);
+    }
+  });
+
+  it('drops nothing before the last user message, so two user turns never meet', () => {
+    const turn = (id: string): ChatMessage[] => [
+      {
+        role: 'assistant',
+        content: 't'.repeat(2_000),
+        tool_calls: [{ id, name: 'echo', args: {} }],
+      },
+      { role: 'tool', content: big, tool_call_id: id, name: 'echo' },
+    ];
+    const msgs: ChatMessage[] = [
+      { role: 'system', content: 'be useful' },
+      { role: 'user', content: 'build it' },
+      ...['a0', 'a1', 'a2', 'a3'].flatMap(turn),
+      { role: 'user', content: 'check your work' },
+      ...['b0', 'b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7'].flatMap(turn),
+    ];
+    // ~18k tokens on a 12k window: stubs alone cannot fit it, so exchanges are dropped.
+    expect(
+      compactConversation(msgs, 12_000, 0.25, undefined, { reserveTokens: 2_000 }),
+    ).toBeGreaterThan(0);
+    const second = msgs.findIndex((m) => m.content === 'check your work');
+    expect(msgs.slice(2, second).map((m) => m.tool_call_id ?? m.tool_calls?.[0]?.id)).toEqual([
+      'a0',
+      'a0',
+      'a1',
+      'a1',
+      'a2',
+      'a2',
+      'a3',
+      'a3',
+    ]);
+    expect(msgs[second + 1]?.role).toBe('assistant');
+    expect(msgs.at(-1)?.tool_call_id).toBe('b7');
+  });
+
+  it('counts the tool schemas every request carries', () => {
+    const msgs = conversation(6); // ~6k tokens: fits a 12k window alone
+    expect(compactConversation(structuredClone(msgs), 12_000)).toBe(0);
+    // 44k chars with the schemas: three protected results go to get under 75%.
+    expect(compactConversation(msgs, 12_000, 0.25, undefined, { schemaChars: 20_000 })).toBe(3);
   });
 
   it('uses the measured tokens-per-char: denser text compacts sooner than chars/4 would', () => {

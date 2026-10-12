@@ -400,15 +400,25 @@ export const DEFAULT_TOOL_GUARDS: {
  * estimated prompt passes `COMPACT_AT` of the window, the oldest tool
  * results are replaced with a one-line stub, oldest first, until the estimate
  * is under `COMPACT_TO`; the newest `KEEP_RECENT_TOOL_RESULTS` tool results,
- * and every system, user and assistant message, are never touched. This is
+ * and every system, user and assistant message, are left alone. This is
  * the "observation stub" policy, the one that kept every task passing in the
  * fleet's own compactproof measurement (2026-09-26-compactproof); the model
- * can re-run a tool it still needs. The substrate's 95% refusal stays as the
- * last line.
+ * can re-run a tool it still needs.
+ *
+ * That pass alone cannot bound a long run: assistant text grows every turn, the
+ * protected results can be large, and the substrate's 95% refusal also counts
+ * the output reserve. 23 inventor runs (2026-10-05..12) died there after hours
+ * of work. So when the request plus its reserve would pass `FIT_AT`, older
+ * assistant text and the protected results go too, then the oldest whole
+ * exchanges, down to `FIT_TO`; system and user messages and the latest
+ * exchange always stay.
  */
 export const COMPACT_AT = 0.6;
 export const COMPACT_TO = 0.45;
 export const KEEP_RECENT_TOOL_RESULTS = 6;
+/** Under the 0.95 refusal line, with room for the estimate to be off. */
+export const FIT_AT = 0.85;
+export const FIT_TO = 0.75;
 
 /**
  * Chars-per-token is not four: the first run with compaction died at 114,948
@@ -444,48 +454,51 @@ const COMPACT_ARGS_OVER_CHARS = 200;
  * backend's count for the previous call, is the truth the estimate is checked
  * against: compaction runs when either says the prompt is past `COMPACT_AT`,
  * and removes at least enough chars to bring that real count under `COMPACT_TO`.
+ * `overhead` is what every request carries besides the conversation: the tool
+ * schemas, and the output tokens it reserves, which the refusal counts.
  */
 export function compactConversation(
   messages: ChatMessage[],
   windowTokens: number,
   tokensPerChar: number = DEFAULT_TOKENS_PER_CHAR,
   lastInputTokens?: number,
+  overhead: { readonly schemaChars?: number; readonly reserveTokens?: number } = {},
 ): number {
-  const estimate = (): number => Math.ceil(conversationChars(messages) * tokensPerChar);
+  const schemaChars = overhead.schemaChars ?? 0;
+  const estimate = (): number =>
+    Math.ceil((conversationChars(messages) + schemaChars) * tokensPerChar);
+  const fits = (share: number): boolean =>
+    estimate() + (overhead.reserveTokens ?? 0) <= share * windowTokens;
   const startChars = conversationChars(messages);
   const over = Math.max(estimate(), lastInputTokens ?? 0);
-  if (over <= COMPACT_AT * windowTokens) return 0;
+  if (over <= COMPACT_AT * windowTokens && fits(FIT_AT)) return 0;
   // Chars that must go so the real count lands under the target.
   const mustRemove = Math.max(0, (over - COMPACT_TO * windowTokens) / tokensPerChar);
   const bigArgs = (tc: ToolCall): boolean =>
     !(COMPACTED_ARGS_KEY in ((tc.args as object) ?? {})) &&
     JSON.stringify(tc.args ?? {}).length > COMPACT_ARGS_OVER_CHARS;
-  const eligible = (m: ChatMessage): boolean =>
-    m.role === 'tool'
-      ? !m.content.startsWith('[compacted')
-      : m.role === 'assistant' && (m.tool_calls ?? []).some(bigArgs);
-  const candidates = messages.map((m, i) => (eligible(m) ? i : -1)).filter((i) => i >= 0);
-  // Protect the newest exchanges: the last KEEP_RECENT tool results and the calls that made them.
-  const recentTools = messages
-    .map((m, i) => (m.role === 'tool' ? i : -1))
-    .filter((i) => i >= 0)
-    .slice(-KEEP_RECENT_TOOL_RESULTS);
-  const protectFrom = recentTools[0] !== undefined ? recentTools[0] - 1 : messages.length;
-  let compacted = 0;
-  for (const i of candidates) {
-    if (i >= protectFrom) break;
+  // Stubs message i in place (its assistant text too when `text`); true if it shrank.
+  const stub = (i: number, text: boolean): boolean => {
     const m = messages[i];
-    if (m === undefined) continue;
-    if (m.role === 'tool') {
-      const chars = m.content.length;
+    if (m?.role === 'tool') {
       const label = m.name !== undefined ? ` of ${m.name}` : '';
-      messages[i] = {
-        ...m,
-        content: `[compacted: an earlier tool result${label} (${String(chars)} chars) was elided to fit the context window. Run the tool again if you still need it.]`,
-      };
-    } else {
-      messages[i] = {
-        ...m,
+      const content = `[compacted: an earlier tool result${label} (${String(m.content.length)} chars) was elided to fit the context window. Run the tool again if you still need it.]`;
+      // A stub would not be smaller than a short result (or an existing stub).
+      if (m.content.startsWith('[compacted') || content.length >= m.content.length) return false;
+      messages[i] = { ...m, content };
+      return true;
+    }
+    if (m?.role !== 'assistant') return false;
+    const args = (m.tool_calls ?? []).some(bigArgs);
+    const prose =
+      text && m.content.length > COMPACT_ARGS_OVER_CHARS && !m.content.startsWith('[compacted');
+    if (!args && !prose) return false;
+    messages[i] = {
+      ...m,
+      ...(prose && {
+        content: `[compacted: earlier assistant text (${String(m.content.length)} chars) was elided to fit the context window.]`,
+      }),
+      ...(args && {
         tool_calls: (m.tool_calls ?? []).map((tc) => {
           const chars = JSON.stringify(tc.args ?? {}).length;
           return chars > COMPACT_ARGS_OVER_CHARS
@@ -495,11 +508,61 @@ export function compactConversation(
               }
             : tc;
         }),
-      };
+      }),
+    };
+    return true;
+  };
+  // Protect the newest exchanges: the last KEEP_RECENT tool results and the calls that made them.
+  const recentTools = messages
+    .map((m, i) => (m.role === 'tool' ? i : -1))
+    .filter((i) => i >= 0)
+    .slice(-KEEP_RECENT_TOOL_RESULTS);
+  const protectFrom = recentTools[0] !== undefined ? recentTools[0] - 1 : messages.length;
+  let compacted = 0;
+  if (over > COMPACT_AT * windowTokens) {
+    for (let i = 0; i < protectFrom; i += 1) {
+      if (!stub(i, false)) continue;
+      compacted += 1;
+      const removed = startChars - conversationChars(messages);
+      if (removed >= mustRemove && estimate() <= COMPACT_TO * windowTokens) break;
     }
-    compacted += 1;
-    const removed = startChars - conversationChars(messages);
-    if (removed >= mustRemove && estimate() <= COMPACT_TO * windowTokens) break;
+  }
+  if (!fits(FIT_AT)) {
+    let latest = 0;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'assistant') {
+        latest = i;
+        break;
+      }
+    }
+    // Stubs still cost a few hundred chars each, so a long enough run outgrows them.
+    // Drop the oldest whole exchanges (a call stays with its results) after the
+    // last user message, so roles still alternate around the gap.
+    let from = 0;
+    for (let i = latest - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'user') {
+        from = i + 1;
+        break;
+      }
+    }
+    const drop = (before: number): void => {
+      while (!fits(FIT_TO)) {
+        let start = from;
+        while (start < before && messages[start]?.role !== 'assistant') start += 1;
+        let end = start + 1;
+        while (messages[end]?.role === 'tool') end += 1;
+        if (start >= before || end > before) return;
+        messages.splice(start, end - start);
+        before -= end - start;
+        latest -= end - start;
+        compacted += end - start;
+      }
+    };
+    // Already-stubbed old exchanges go first, so the newest results stay whole as
+    // long as possible; then their text and results; then anything before the latest.
+    drop(Math.min(protectFrom, latest));
+    for (let i = 0; i < latest && !fits(FIT_TO); i += 1) if (stub(i, true)) compacted += 1;
+    drop(latest);
   }
   return compacted;
 }
@@ -1051,6 +1114,8 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     // pins the loop until the SDK default 60s timeout fires.
     const describeCtx: ToolInvocationContext = { runId, abortSignal: signal };
     const toolDescriptors: ToolDescriptor[] = await this.toolProviders.describeAll(describeCtx);
+    // Sent with every call; compaction cannot remove it.
+    const schemaChars = toolDescriptors.length > 0 ? JSON.stringify(toolDescriptors).length : 0;
 
     let finalContent: string | null = null;
     let status: TerminalStatus = 'completed';
@@ -1088,26 +1153,24 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       let compactedContextTokens: number | undefined;
       if (budget.contextWindowTokens !== undefined) {
         const beforeChars = conversationChars(currentMessages);
+        const reserveTokens = Math.max(lastOutputTokens, agentDef.llmParams?.maxTokens ?? 0);
         const compacted = compactConversation(
           currentMessages,
           budget.contextWindowTokens,
           tokensPerChar,
           lastInputTokens,
+          { schemaChars, reserveTokens },
         );
         if (compacted > 0) {
           const afterChars = conversationChars(currentMessages);
           if (afterChars < beforeChars) {
             // Compaction invalidates the previous call's pressure. Estimate
             // the request actually being sent, preserving the output reserve
-            // and the tools that compaction cannot remove. The measured ratio
-            // already includes backend overhead, so counting schemas again is
-            // deliberately conservative; do not scale that overhead away with
-            // the elided messages. Keep reported usage intact for accounting.
-            const schemaChars =
-              toolDescriptors.length > 0 ? JSON.stringify(toolDescriptors).length : 0;
+            // and the tools that compaction cannot remove; the ratio is
+            // measured over the same messages + schemas, so nothing is counted
+            // twice. Keep reported usage intact for accounting.
             compactedContextTokens =
-              Math.ceil((afterChars + schemaChars) * tokensPerChar) +
-              Math.max(lastOutputTokens, agentDef.llmParams?.maxTokens ?? 0);
+              Math.ceil((afterChars + schemaChars) * tokensPerChar) + reserveTokens;
           }
           console.warn(
             `[agent-loop] run ${runId}: compacted ${String(compacted)} earlier tool result(s) to fit the context window`,
@@ -1135,7 +1198,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           extraBody: agentDef.llmParams.extraBody,
         }),
       };
-      requestChars = conversationChars(currentMessages);
+      requestChars = conversationChars(currentMessages) + schemaChars;
       let llmStart = Date.now();
       const llmStarted: TraceEntry = {
         schema_version: '1',

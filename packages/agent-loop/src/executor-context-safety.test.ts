@@ -23,7 +23,7 @@
  * worktrees.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AgentRegistry } from './registry.js';
 import { AgentExecutor, conversationChars } from './executor.js';
 import { InvalidConfigError, LLMClientHttpError } from './errors.js';
@@ -69,37 +69,66 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       schemaChars: 0,
       maxTokens: 200,
       accepted: true,
+      stubs: 2,
+      calls: 2,
     },
     {
-      scenario: 'retained tool result is too large',
+      // 2026-10-12: 23 inventor runs died here; the newest results give way instead.
+      scenario: 'tool schemas fit once the protected results go too',
+      toolResult: 'ok',
+      schemaChars: 24_000,
+      maxTokens: 200,
+      accepted: true,
+      stubs: undefined,
+      calls: 2,
+    },
+    {
+      scenario: 'output reservation fits once the protected results go too',
+      toolResult: 'ok',
+      schemaChars: 0,
+      maxTokens: 6_000,
+      accepted: true,
+      stubs: undefined,
+      calls: 2,
+    },
+    {
+      scenario: 'latest tool result is too large',
       toolResult: 'x'.repeat(16_000),
       schemaChars: 0,
       maxTokens: 200,
       accepted: false,
+      stubs: undefined,
+      calls: 1,
     },
     {
       scenario: 'tool schemas still occupy the window',
       toolResult: 'ok',
-      schemaChars: 24_000,
+      schemaChars: 40_000,
       maxTokens: 200,
       accepted: false,
+      stubs: undefined,
+      // Nothing compactable is left: refused before the first call is spent.
+      calls: 0,
     },
     {
       scenario: 'output reservation still occupies the window',
       toolResult: 'ok',
       schemaChars: 0,
-      maxTokens: 6_000,
+      maxTokens: 9_500,
       accepted: false,
+      stubs: undefined,
+      calls: 0,
     },
   ])(
     'checks the compacted next request when $scenario',
-    async ({ toolResult, schemaChars, maxTokens, accepted }) => {
+    async ({ toolResult, schemaChars, maxTokens, accepted, stubs, calls }) => {
       registry = new AgentRegistry<MyType, MyPhase>();
       registry.register({ ...chatAgent, llmParams: { maxTokens } });
       // Seven exchanges fit under the initial chars/4 compaction trigger.
       // The backend then reports denser input at 94% of its window, plus
       // output taking the last call over the safety threshold. The next
-      // iteration compacts two old results, keeping the newest six.
+      // iteration compacts two old results, keeping the newest six unless the
+      // request would still pass the refusal line; the latest exchange stays.
       const messages: ChatMessage[] = [{ role: 'user', content: 'continue' }];
       for (let i = 0; i < 7; i++) {
         messages.push({
@@ -146,30 +175,31 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
           }),
         ],
       });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const result = await exec.run({ agentType: 'chat', messages, contextWindowTokens: 10_000 });
 
-      // A compacted marker in the attempted next-call trace proves even the
-      // refusal cases actually compacted, rather than bypassing compaction.
-      expect(
-        result.traces.some(
-          (trace) =>
-            trace.trace_type === 'llm_call' && trace.input_messages?.includes('[compacted'),
-        ),
-      ).toBe(true);
+      // Even the refusal cases compacted first rather than bypassing compaction
+      // (dropped exchanges leave no stub, so the log line is the evidence).
+      expect(warn.mock.calls.some(([line]) => String(line).includes('to fit the context'))).toBe(
+        true,
+      );
+      warn.mockRestore();
       if (accepted) {
         expect(result.status).toBe('completed');
-        expect(requests).toHaveLength(2);
-        expect(conversationChars(requests[1]!.messages)).toBeLessThan(
-          conversationChars(requests[0]!.messages),
-        );
-        expect(
-          requests[1]!.messages.filter((m) => m.content.startsWith('[compacted')),
-        ).toHaveLength(2);
+        expect(requests).toHaveLength(calls);
+        const next = requests[1]!.messages;
+        expect(conversationChars(next)).toBeLessThan(conversationChars(requests[0]!.messages));
+        // The latest exchange always reaches the model whole.
+        expect(next.at(-2)?.tool_calls?.[0]?.id).toBe('next');
+        expect(next.at(-1)?.content.startsWith(toolResult)).toBe(true);
+        if (stubs !== undefined) {
+          expect(next.filter((m) => m.content.startsWith('[compacted'))).toHaveLength(stubs);
+        }
         expect(result.budget.cumulativeInputTokens).toBe(9_500);
       } else {
         expect(result.status).toBe('failed');
         expect(result.error?.message).toContain('context_window_substrate_refused');
-        expect(requests).toHaveLength(1);
+        expect(requests).toHaveLength(calls);
       }
     },
   );

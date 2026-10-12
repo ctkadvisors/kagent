@@ -188,9 +188,12 @@ When automatic conversation compaction actually shrinks the pending prompt,
 the previous call's pressure is stale. For that request only, the safety check
 uses the compacted conversation and tool descriptors at the measured
 input-tokens-per-character ratio (never below chars/4), plus the larger of the
-previous output count and configured `maxTokens`. Descriptor characters are
-counted conservatively in addition to the measured conversation ratio, so
-compaction cannot erase the space occupied by tool schemas. A compaction that
+previous output count and configured `maxTokens`. The ratio is measured over
+the conversation plus descriptor characters, so descriptors are counted once
+and compaction cannot erase the space tool schemas occupy. When that request
+would pass 85% of the window, compaction also stubs older assistant text and
+the newest tool results, then drops the oldest whole exchanges, down to 75%;
+system and user messages and the latest exchange stay. A compaction that
 leaves the pending request over the same threshold still refuses. Without an
 actual size reduction, the last-call check above remains in effect. Reported
 `RunBudget` usage and cumulative accounting are unchanged.
