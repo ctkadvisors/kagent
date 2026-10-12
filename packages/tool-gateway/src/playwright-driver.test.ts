@@ -3,11 +3,13 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { runInNewContext } from 'node:vm';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { createPlaywrightCdpDriver } from './playwright-driver.js';
 
-function makeFixture() {
+function makeFixture(navigationResponse?: { status: () => number } | null) {
   const locator = {
     click: vi.fn(() => Promise.resolve()),
     fill: vi.fn(() => Promise.resolve()),
@@ -18,7 +20,7 @@ function makeFixture() {
     waitFor: vi.fn(() => Promise.resolve()),
   };
   const page = {
-    goto: vi.fn(() => Promise.resolve()),
+    goto: vi.fn(() => Promise.resolve(navigationResponse)),
     title: vi.fn(() => Promise.resolve('Example')),
     url: vi.fn(() => 'https://example.com/report'),
     locator: vi.fn(() => locator),
@@ -45,6 +47,21 @@ function makeFixture() {
 }
 
 describe('createPlaywrightCdpDriver', () => {
+  it.each([200, 404, 503])('reports the actual HTTP navigation status %s', async (status) => {
+    const fixture = makeFixture({ status: () => status });
+    const driver = createPlaywrightCdpDriver({ chromium: fixture.chromium });
+    await expect(
+      driver.goto('ws://steel/session-1', 'https://example.com/report', { timeoutMs: undefined }),
+    ).resolves.toEqual({ url: 'https://example.com/report', title: 'Example', status });
+  });
+  it('allows a null navigation response without inventing an HTTP status', async () => {
+    const fixture = makeFixture(null);
+    const driver = createPlaywrightCdpDriver({ chromium: fixture.chromium });
+    await expect(
+      driver.goto('ws://steel/session-1', 'about:blank', { timeoutMs: undefined }),
+    ).resolves.toEqual({ url: 'https://example.com/report', title: 'Example' });
+  });
+
   it('drives a cached Steel CDP session with Playwright browser actions', async () => {
     const fixture = makeFixture();
     const driver = createPlaywrightCdpDriver({
@@ -149,7 +166,7 @@ describe('createPlaywrightCdpDriver', () => {
       evaluate: vi.fn(),
     };
     const recoveredPage = {
-      goto: vi.fn(() => Promise.resolve()),
+      goto: vi.fn(() => Promise.resolve(undefined)),
       title: vi.fn(() => Promise.resolve('Recovered')),
       url: vi.fn(() => 'https://example.com/recovered'),
       locator: vi.fn(),
@@ -203,5 +220,48 @@ describe('createPlaywrightCdpDriver', () => {
       waitUntil: 'domcontentloaded',
       timeout: 7000,
     });
+  });
+});
+
+describe('browser page capture', () => {
+  it('captures unchanged visible text and resolves actual safe anchor hrefs', async () => {
+    const fixture = makeFixture();
+    const text = ' 13:04 <jan> ACTION-348: café 🧪\r\n\n  Keep this spacing.\n';
+    const anchors = [
+      { href: '../11/13-apa-irc', label: 'Actual minutes' },
+      { href: 'https://other.test/report#action', label: 'Report' },
+      { href: 'javascript:alert(1)', label: 'Unsafe' },
+      { href: 'mailto:someone@example.test', label: 'Mail' },
+      { href: 'data:text/plain,fiction', label: 'Data' },
+    ];
+    fixture.page.evaluate.mockImplementation((expression) =>
+      Promise.resolve(
+        runInNewContext(expression as string, {
+          URL,
+          location: { href: 'https://www.w3.org/2024/11/index.html' },
+          document: {
+            title: 'Minutes',
+            baseURI: 'https://www.w3.org/2024/11/index.html',
+            body: { innerText: text },
+            querySelectorAll: () =>
+              anchors.map((a) => ({ getAttribute: () => a.href, innerText: a.label })),
+          },
+        }) as unknown,
+      ),
+    );
+    const result = await createPlaywrightCdpDriver({ chromium: fixture.chromium }).capturePage(
+      'ws://steel/session-1',
+    );
+    expect(result).toEqual({
+      url: 'https://www.w3.org/2024/11/index.html',
+      title: 'Minutes',
+      text,
+      links: [
+        { label: 'Actual minutes', href: 'https://www.w3.org/2024/11/13-apa-irc' },
+        { label: 'Report', href: 'https://other.test/report#action' },
+      ],
+    });
+    expect(fixture.page.evaluate).toHaveBeenCalledTimes(1);
+    expect(fixture.page.goto).not.toHaveBeenCalled();
   });
 });

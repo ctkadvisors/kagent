@@ -257,6 +257,8 @@ function runtimeToolDescription(name: ToolRuntimeToolName): string {
       return 'Wait for visible text or a selector in the task-scoped browser session.';
     case 'browser.screenshot':
       return 'Capture a screenshot from the task-scoped browser session.';
+    case 'browser.capture_page':
+      return 'Save exact current browser-visible text and HTTP(S) links plus URL/title/time/SHA-256 provenance to unique files in this task code workspace. Returns saved paths/hash/counts; use existing code tools to read or process them. Accepts no output path. Writes workspace files; does not modify the website.';
     case 'browser.extract_text':
       return 'Extract visible text from the current browser page.';
     case 'browser.cdp_url':
@@ -355,6 +357,8 @@ function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unkno
       return objectSchema({
         fullPage: { type: 'boolean' },
       });
+    case 'browser.capture_page':
+      return objectSchema({});
     case 'browser.extract_text':
       return objectSchema({
         maxChars: { type: 'number', minimum: 1 },

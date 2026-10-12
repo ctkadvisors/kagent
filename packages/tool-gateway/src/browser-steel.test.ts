@@ -54,6 +54,9 @@ function makeDriver(): BrowserAutomationDriver {
       }),
     ),
     select: vi.fn(() => Promise.resolve({ ok: true })),
+    capturePage: vi.fn(() =>
+      Promise.resolve({ url: 'https://example.com', title: 'Example', text: 'Exact', links: [] }),
+    ),
     extractText: vi.fn(() => Promise.resolve({ text: 'Visible report text' })),
     typeText: vi.fn(() => Promise.resolve({ ok: true })),
     waitFor: vi.fn(() => Promise.resolve({ ok: true, matched: 'text' })),

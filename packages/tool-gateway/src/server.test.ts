@@ -191,6 +191,25 @@ describe('tool-gateway server', () => {
     expect(result.content as string).toContain('KAGENT_TASK_UID=task-1');
   });
 
+  it('registers workspace commit only when the existing signed playground configuration is present', async () => {
+    for (const enabled of [false, true]) {
+      const config = parseToolGatewayServerConfig({
+        KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT: workspaceRoot,
+        ...(enabled
+          ? { KAGENT_FLEET_PLAYGROUND_URL: 'http://playground', KAGENT_FLEET_SIGNING_KEY: 'dummy' }
+          : {}),
+      });
+      const base = request({ task: TASK, toolNames: ['fleet.playground_commit_files'] });
+      const response = await buildToolGatewayHandler(config).handle(
+        new Request('http://tool-gateway.test/v1/tool-runtime/describe', base),
+      );
+      const result = asRecord(await json(response));
+      expect(result.tools).toEqual(
+        enabled ? [expect.objectContaining({ name: 'fleet.playground_commit_files' })] : [],
+      );
+    }
+  });
+
   it('keeps health live but readiness failed while the kill switch is paused', async () => {
     const config = parseToolGatewayServerConfig({
       KAGENT_TOOL_RUNTIME_WORKSPACE_ROOT: workspaceRoot,

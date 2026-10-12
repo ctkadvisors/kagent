@@ -3,6 +3,8 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { createHash, randomUUID } from 'node:crypto';
+
 import type {
   ToolCall,
   ToolDescriptor,
@@ -289,6 +291,8 @@ export class ToolGatewayHttpHandler {
         return this.browserWaitFor(invocation.task, invocation.call.args);
       case 'browser.screenshot':
         return this.browserScreenshot(invocation.task, invocation.call.args);
+      case 'browser.capture_page':
+        return this.browserCapturePage(invocation.task, invocation.call.args);
       case 'browser.extract_text':
         return this.browserExtractText(invocation.task, invocation.call.args);
       case 'browser.cdp_url':
@@ -415,7 +419,7 @@ export class ToolGatewayHttpHandler {
     const result = await this.requireBrowser().goto(session, args.url, { timeoutMs });
     return {
       content: JSON.stringify(result),
-      isError: false,
+      isError: result.status !== undefined && result.status >= 400,
       metadata: { sessionId: session.id },
     };
   }
@@ -496,6 +500,48 @@ export class ToolGatewayHttpHandler {
     const result = await this.requireBrowser().extractText(session, { maxChars });
     return {
       content: result.text,
+      isError: false,
+      metadata: { sessionId: session.id },
+    };
+  }
+
+  private async browserCapturePage(
+    task: ToolGatewayTaskIdentity,
+    args: unknown,
+  ): Promise<ToolResult> {
+    if (!isRecord(args) || Object.keys(args).length !== 0)
+      return invalidArgs('browser.capture_page');
+    const session = await this.requireBrowserSession(task);
+    const page = await this.requireBrowser().capturePage(session);
+    const capturedAt = new Date().toISOString();
+    const textSha256 = createHash('sha256').update(page.text, 'utf8').digest('hex');
+    const directory = `browser-captures/${randomUUID()}`;
+    const textPath = `${directory}/page.txt`;
+    const provenancePath = `${directory}/provenance.json`;
+    const provenance = {
+      schema: 'browser-capture/v1',
+      representation: 'browser-visible-text',
+      url: page.url,
+      title: page.title,
+      capturedAt,
+      textSha256,
+      links: page.links,
+    };
+    await this.codeRunnerFor(task).writeFiles([
+      { path: textPath, content: page.text },
+      { path: provenancePath, content: JSON.stringify(provenance, null, 2) + '\n' },
+    ]);
+    return {
+      content: JSON.stringify({
+        textPath,
+        provenancePath,
+        url: page.url,
+        title: page.title,
+        capturedAt,
+        textSha256,
+        characters: page.text.length,
+        linkCount: page.links.length,
+      }),
       isError: false,
       metadata: { sessionId: session.id },
     };
@@ -808,6 +854,8 @@ function runtimeToolDescription(
       return 'Wait for visible text or a selector in the task-scoped browser session.';
     case 'browser.screenshot':
       return 'Capture a screenshot from the task-scoped browser session.';
+    case 'browser.capture_page':
+      return 'Save exact current browser-visible text and HTTP(S) links plus URL/title/time/SHA-256 provenance to unique files in this task code workspace. Returns saved paths/hash/counts; use existing code tools to read or process them. Accepts no output path. Writes workspace files; does not modify the website.';
     case 'browser.extract_text':
       return 'Extract visible text from the current browser page.';
     case 'browser.cdp_url':
@@ -905,6 +953,8 @@ function runtimeToolInputSchema(
       });
     case 'browser.screenshot':
       return objectSchema({ fullPage: { type: 'boolean' } });
+    case 'browser.capture_page':
+      return objectSchema({});
     case 'browser.extract_text':
       return objectSchema({ maxChars: { type: 'number', minimum: 1 } });
     case 'code_interpreter.execute_code':

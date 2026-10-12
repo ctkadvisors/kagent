@@ -64,6 +64,22 @@ function parsedRequestBody(call: CapturedRequest | undefined): Record<string, un
 }
 
 describe('ToolGatewayProvider', () => {
+  it('advertises explicitly requested capture with workspace-write semantics', () => {
+    const provider = new ToolGatewayProvider({
+      baseUrl: 'http://gateway',
+      task: { tenant: 't', namespace: 'ns', taskUid: 'uid', agentName: 'inventor' },
+      tools: ['browser.capture_page'],
+    });
+    const tools = syncDescriptors(provider.describeTools());
+    expect(tools.map((t) => t.name)).toEqual(['browser.capture_page']);
+    expect(tools[0]?.tags).not.toContain('read-only');
+    expect(tools[0]?.inputSchema).toEqual({
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+  });
   it('recognizes runtime plus mcp/http/fleet gateway tool names', () => {
     expect(
       requestedGatewayToolNames([

@@ -27,6 +27,7 @@ export type {
   BrowserGotoOptions,
   BrowserGotoResult,
   BrowserInteractionResult,
+  BrowserPageCapture,
   BrowserSelectOptions,
   BrowserScreenshotOptions,
   BrowserScreenshotResult,
