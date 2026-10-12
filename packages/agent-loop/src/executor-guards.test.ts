@@ -9,6 +9,8 @@ import {
   AgentExecutor,
   capToolResult,
   compactConversation,
+  conversationChars,
+  FIT_TO,
   KEEP_RECENT_TOOL_RESULTS,
   loopTurnNote,
 } from './executor.js';
@@ -82,9 +84,36 @@ describe('compactConversation', () => {
     expect(compactConversation(msgs, 20_000)).toBe(0);
   });
 
-  it('never stubs the newest results even when that leaves the prompt over the target', () => {
-    const msgs = conversation(4);
-    expect(compactConversation(msgs, 2_000)).toBe(0);
+  it('keeps the newest results over the target while the request fits under the refusal line', () => {
+    const msgs = conversation(4); // ~4k tokens: past 60% of 6k, under 85%
+    expect(compactConversation(msgs, 6_000)).toBe(0);
+  });
+
+  it('past the refusal line, elides older assistant text and protected results too', () => {
+    // An inventor-shaped run: reasoning text every turn, all six results protected.
+    const msgs = conversation(6).map((m) =>
+      m.role === 'assistant' ? { ...m, content: 'r'.repeat(2000) } : m,
+    );
+    const original = structuredClone(msgs);
+    const fits = (window: number, reserve: number) =>
+      Math.ceil(conversationChars(msgs) * 0.25) + reserve <= FIT_TO * window;
+    // ~9k tokens on a 12k window: it fits, and the reserve is what tips it over.
+    expect(compactConversation(msgs, 12_000)).toBe(0);
+    const compacted = compactConversation(msgs, 12_000, 0.25, undefined, { reserveTokens: 2_000 });
+    expect(compacted).toBeGreaterThan(0);
+    expect(fits(12_000, 2_000)).toBe(true);
+    expect(msgs[2]?.content).toContain('[compacted: earlier assistant text (2000 chars)');
+    expect(msgs[3]?.content).toContain('[compacted: an earlier tool result');
+    // System, task and the latest exchange are never touched.
+    expect(msgs.slice(0, 2)).toEqual(original.slice(0, 2));
+    expect(msgs.slice(-2)).toEqual(original.slice(-2));
+  });
+
+  it('counts the tool schemas every request carries', () => {
+    const msgs = conversation(6); // ~6k tokens: fits a 12k window alone
+    expect(compactConversation(structuredClone(msgs), 12_000)).toBe(0);
+    // 44k chars with the schemas: three protected results go to get under 75%.
+    expect(compactConversation(msgs, 12_000, 0.25, undefined, { schemaChars: 20_000 })).toBe(3);
   });
 
   it('uses the measured tokens-per-char: denser text compacts sooner than chars/4 would', () => {
