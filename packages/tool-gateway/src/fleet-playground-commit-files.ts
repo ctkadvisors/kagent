@@ -19,21 +19,40 @@ const REPO_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 export const FLEET_COMMIT_FILES_DESCRIPTOR = {
   name: FLEET_COMMIT_FILES_NAME,
   description:
-    'Commit exact UTF-8 files from this task code workspace into one fleet-playground folder. Args: folder (YYYY-MM-DD-name), message, files mapping repository-relative destination paths to workspace-relative source paths. 1..60 files, total 512 KiB. No model transcription. Returns the server SHA/URL and SHA-256 for each file. Same signed playground commit authority; no product repository write.',
+    'Commit exact UTF-8 files from this task code workspace into one fleet-playground folder. Args: folder (YYYY-MM-DD-name), message, files mapping destinations relative to folder to sources relative to this task workspace. The repository path is folder/destination: do not include folder again in a destination; keep any existing folder prefix in a workspace source. 1..60 files, total 512 KiB. No model transcription. Returns the server SHA/URL and SHA-256 for each file. Same signed playground commit authority; no product repository write.',
   inputSchema: {
     type: 'object',
     required: ['folder', 'message', 'files'],
     additionalProperties: false,
     properties: {
-      folder: { type: 'string' },
+      folder: {
+        type: 'string',
+        description: 'Repository folder (YYYY-MM-DD-name); prepended to each destination key.',
+      },
       message: { type: 'string' },
       files: {
         type: 'object',
+        description:
+          'Map destination paths relative to folder to task-workspace source paths. For folder 2026-10-12-example, key actionledger.py writes repository path 2026-10-12-example/actionledger.py; its workspace source may be 2026-10-12-example/actionledger.py.',
         minProperties: 1,
         maxProperties: MAX_FILES,
-        additionalProperties: { type: 'string' },
+        additionalProperties: {
+          type: 'string',
+          description:
+            'Existing source path relative to the task workspace root, including its full workspace directory prefix.',
+        },
       },
     },
+    examples: [
+      {
+        folder: '2026-10-12-example',
+        message: 'Save actual workspace files',
+        files: {
+          'actionledger.py': '2026-10-12-example/actionledger.py',
+          'input/page.txt': 'browser-captures/example/page.txt',
+        },
+      },
+    ],
   },
 };
 

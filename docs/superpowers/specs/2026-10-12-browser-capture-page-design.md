@@ -30,8 +30,9 @@ without labeling its workspace write read-only. Tests cover failures; real
 Chromium smoke capture verifies the complete path.
 
 The operator also authorized explicit `fleet.playground_commit_files`: folder,
-message and a mapping from repository-relative destinations to task-workspace
-sources. The gateway reads full UTF-8 strings through the same task code runner,
+message and a mapping from destinations relative to that folder to task-workspace-relative
+sources. The repository path is `folder/destination`; source paths retain their
+existing workspace directory prefixes. The gateway reads full UTF-8 strings through the same task code runner,
 checks every returned path (no missing, duplicate or mismatched results), enforces
 the existing 60-file/512-KiB commit bounds, then signs the exact JSON sent to the
 existing playground /commit endpoint. It returns that endpoint's SHA/URL plus

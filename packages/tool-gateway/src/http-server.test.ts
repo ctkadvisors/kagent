@@ -14,6 +14,7 @@ import { SteelBrowserAdapter, type BrowserAutomationDriver } from './browser-ste
 import { LocalCodeRunner } from './code-runner.js';
 import {
   defineFleetPlaygroundCommitFiles,
+  FLEET_COMMIT_FILES_DESCRIPTOR,
   FLEET_COMMIT_FILES_NAME,
 } from './fleet-playground-commit-files.js';
 import { ToolGatewayHttpHandler } from './http-server.js';
@@ -249,6 +250,76 @@ describe('ToolGatewayHttpHandler', () => {
         await handler.handle(request(invokeBody('browser.capture_page', { path: '../escape' }))),
       ),
     ).toMatchObject({ isError: true });
+  });
+
+  it('executes the advertised commit example with folder-relative destinations and full workspace sources', async () => {
+    const runner = new LocalCodeRunner({ workspaceDir, env: {} });
+    const readFiles = vi.spyOn(runner, 'readFiles');
+    const posted: Array<{ folder: string; files: Record<string, string> }> = [];
+    const sha = 'd'.repeat(40);
+    const commit = defineFleetPlaygroundCommitFiles({
+      playgroundUrl: 'http://playground',
+      signingKey: 'dummy',
+      codeRunnerFor: () => runner,
+      fetch: (_url, init) => {
+        const body = JSON.parse(init!.body as string) as {
+          folder: string;
+          files: Record<string, string>;
+        };
+        posted.push(body);
+        return Promise.resolve(
+          new Response(JSON.stringify({ sha, url: `https://example.com/${sha}/${body.folder}` }), {
+            status: 201,
+          }),
+        );
+      },
+    });
+    const handler = makeHandler({
+      codeRunner: runner,
+      externalHandlers: { [FLEET_COMMIT_FILES_NAME]: commit },
+      externalDescriptors: [FLEET_COMMIT_FILES_DESCRIPTOR],
+    });
+    const described = asRecord(
+      await json(await handler.handle(describeRequest([FLEET_COMMIT_FILES_NAME]))),
+    );
+    const tool = asRecord((described.tools as unknown[])[0]);
+    const examples = asRecord(tool.inputSchema).examples;
+    expect(Array.isArray(examples)).toBe(true);
+    const example = asRecord((examples as unknown[])[0]);
+    const mapping = example.files as Record<string, string>;
+    expect(example.folder).toBe('2026-10-12-example');
+    expect(mapping).toEqual({
+      'actionledger.py': '2026-10-12-example/actionledger.py',
+      'input/page.txt': 'browser-captures/example/page.txt',
+    });
+    const contents = ['print("saved source")\n', '  Primary café 🧪\r\n\n'];
+    await runner.writeFiles(
+      Object.values(mapping).map((path, i) => ({ path, content: contents[i]! })),
+    );
+    const result = asRecord(
+      await json(await handler.handle(request(invokeBody(FLEET_COMMIT_FILES_NAME, example)))),
+    );
+    expect(result.isError).toBe(false);
+    expect(readFiles).toHaveBeenCalledWith(Object.values(mapping));
+    expect(posted).toEqual([
+      {
+        ...example,
+        files: Object.fromEntries(Object.keys(mapping).map((path, i) => [path, contents[i]])),
+      },
+    ]);
+    const receipt = JSON.parse(result.content as string) as {
+      sha: string;
+      fileDigests: Record<string, string>;
+    };
+    expect(receipt.sha).toBe(sha);
+    for (const [destination, source] of Object.entries(mapping)) {
+      expect(Buffer.from(posted[0]!.files[destination]!, 'utf8')).toEqual(
+        await readFile(join(workspaceDir, source)),
+      );
+      expect(receipt.fileDigests[destination]).toBe(
+        createHash('sha256').update(posted[0]!.files[destination]!).digest('hex'),
+      );
+    }
   });
 
   it('commits the complete saved capture directly from the task workspace without transcription', async () => {
