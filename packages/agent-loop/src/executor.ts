@@ -535,10 +535,9 @@ export function compactConversation(
         break;
       }
     }
-    for (let i = 0; i < latest && !fits(FIT_TO); i += 1) if (stub(i, true)) compacted += 1;
-    // Stubs still cost a few hundred chars each, so a long enough run outgrows them:
-    // then drop the oldest whole exchanges (a call stays with its results) after
-    // the last user message, so roles still alternate around the gap.
+    // Stubs still cost a few hundred chars each, so a long enough run outgrows them.
+    // Drop the oldest whole exchanges (a call stays with its results) after the
+    // last user message, so roles still alternate around the gap.
     let from = 0;
     for (let i = latest - 1; i >= 0; i -= 1) {
       if (messages[i]?.role === 'user') {
@@ -546,16 +545,24 @@ export function compactConversation(
         break;
       }
     }
-    while (!fits(FIT_TO)) {
-      let start = from;
-      while (start < latest && messages[start]?.role !== 'assistant') start += 1;
-      if (start >= latest) break;
-      let end = start + 1;
-      while (messages[end]?.role === 'tool') end += 1;
-      messages.splice(start, end - start);
-      latest -= end - start;
-      compacted += end - start;
-    }
+    const drop = (before: number): void => {
+      while (!fits(FIT_TO)) {
+        let start = from;
+        while (start < before && messages[start]?.role !== 'assistant') start += 1;
+        let end = start + 1;
+        while (messages[end]?.role === 'tool') end += 1;
+        if (start >= before || end > before) return;
+        messages.splice(start, end - start);
+        before -= end - start;
+        latest -= end - start;
+        compacted += end - start;
+      }
+    };
+    // Already-stubbed old exchanges go first, so the newest results stay whole as
+    // long as possible; then their text and results; then anything before the latest.
+    drop(Math.min(protectFrom, latest));
+    for (let i = 0; i < latest && !fits(FIT_TO); i += 1) if (stub(i, true)) compacted += 1;
+    drop(latest);
   }
   return compacted;
 }
