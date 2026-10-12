@@ -184,6 +184,17 @@ caller), if `budget.contextWindowTokens !== undefined` AND **the last-call `cont
 - The agent-pod's existing `writeStatus` path (per `packages/agent-pod/src/status.ts`) writes `phase: 'Failed'` with `error: 'context_window_substrate_refused: ...'`.
 - The last successful `RunResult.finalContent` (the LLM's most recent assistant message) and the most recent tool result MUST be preserved on the terminal status so any downstream resume has a starting point. (This is already the executor's behavior on terminal errors; verify the test asserts it.)
 
+When automatic conversation compaction actually shrinks the pending prompt,
+the previous call's pressure is stale. For that request only, the safety check
+uses the compacted conversation and tool descriptors at the measured
+input-tokens-per-character ratio (never below chars/4), plus the larger of the
+previous output count and configured `maxTokens`. Descriptor characters are
+counted conservatively in addition to the measured conversation ratio, so
+compaction cannot erase the space occupied by tool schemas. A compaction that
+leaves the pending request over the same threshold still refuses. Without an
+actual size reduction, the last-call check above remains in effect. Reported
+`RunBudget` usage and cumulative accounting are unchanged.
+
 ### 4.6 Detector trigger (piece 4)
 
 In `packages/agent-loop/src/detectors/quality-flags.ts`, add a sixth flag id alongside the existing five
@@ -265,7 +276,7 @@ The migration story for existing operators: bump chart values to add `contextWin
 - **Per-task `runConfig.contextSafetyThreshold` override.** Possible future addition; v0.1.9 ships with chart-wide setting only. Most consumers won't need per-task variance.
 - **Adaptive thresholds.** No "if last 3 tasks blew context, lower the threshold." That's autopilot; the substrate stays a good copilot.
 - **Cross-model window heuristics.** The chart values are explicit per class; the substrate does not infer windows from model names.
-- **Pre-flight estimation.** The check is `last-call contextTokens + 0` against threshold — we do NOT try to estimate the size of the next prompt. That estimate would be wrong often enough to be misleading. The 95% safety margin absorbs the next call's input budget by convention.
+- **Pre-flight estimation.** The check is `last-call contextTokens + 0` against threshold — we do NOT try to estimate the size of the next prompt. That estimate would be wrong often enough to be misleading. The 95% safety margin absorbs the next call's input budget by convention. The post-compaction exception in §4.5 re-estimates only after the runtime has actually shrunk the prompt, because the prior pressure no longer describes that request.
 - **Compaction-quality detector.** No flag like `compaction_lossy`. If the agent self-managed handoff with a bad summary, the existing F1/F2/F3 detectors will catch downstream symptoms (synthesis vacuity, methodology fabrication).
 
 > **`estimateTokens` fallback caveat (audit-rev2 NM6).** The safety-net (Piece 3) reads the last call's context size off `RunBudget.contextTokens`; the `context_pressure_ignored` detector (Piece 4) reads the same field, falling back to `cumulativeInputTokens + cumulativeOutputTokens` only before the first call. The executor populates that pair from `usage.inputTokens` / `usage.outputTokens` reported by the gateway response. When the upstream gateway/provider does not report `usage.{inputTokens,outputTokens}` (some Workers AI shapes, older vLLM builds, untyped openai-compat backends), the executor falls back to `estimateTokens` — a character-count heuristic in `packages/agent-loop/src/trace.ts`. The estimate can be 20–40% off depending on the model's tokenization (Llama 4 vs Claude vs GPT-4 each tokenize differently). The 5% margin between Piece 3's 95% safety-net and the upstream provider's hard 100% reject (HTTP 400 — context window exceeded) absorbs most of this drift, but operators relying on tight context budgets should ensure their gateway reports usage. Cloudflare AI Gateway DOES report usage on the modern Workers AI endpoints; LiteLLM Proxy DOES when fed a proper provider; bare-metal Ollama via `/v1/chat/completions` DOES. Verify by inspecting an `llm_call` trace entry — when the `*_tokens_est` fallback fired, the trace will show the heuristic count and a `usage_source: 'estimate'` marker (forthcoming).

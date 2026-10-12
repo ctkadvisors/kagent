@@ -7,14 +7,15 @@
  * `AgentExecutor` context-window safety-net tests (Piece 3 of the v0.1.9
  * context-awareness slate; see docs/CONTEXT-AWARENESS.md §4.5).
  *
- * The executor refuses the next LLM call when cumulative token usage
+ * The executor refuses the next LLM call when last-call token usage
  * (input + output) reaches `contextSafetyThreshold * contextWindowTokens`
  * (default `0.95`). The refusal surfaces as
  * `LLMClientHttpError(0, 'context_window_substrate_refused: ...')` so the
  * existing 429-retry path (gated to `status === 429`) does not kick in —
  * refusal is terminal and the loop exits with `status='failed'` carrying
  * the structured reason. Last `finalContent` and last tool result are
- * preserved on the way out (existing terminal-state behavior).
+ * preserved on the way out (existing terminal-state behavior). After actual
+ * compaction, pressure is recomputed for the shrunken pending request.
  *
  * Strict scope: ONLY the safety-net here. Operator-side env projection
  * (Piece 1), in-pod plumbing + `get_my_context` extension (Piece 2), and
@@ -24,9 +25,9 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from './registry.js';
-import { AgentExecutor } from './executor.js';
+import { AgentExecutor, conversationChars } from './executor.js';
 import { InvalidConfigError, LLMClientHttpError } from './errors.js';
-import type { LLMClient } from './llm-client.js';
+import type { ChatMessage, ChatRequest, LLMClient } from './llm-client.js';
 import type { MyType, MyPhase } from './__fixtures__/agents.js';
 import { chatAgent } from './__fixtures__/agents.js';
 import { makeStubLLM } from './__fixtures__/stub-llm.js';
@@ -60,6 +61,118 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
   beforeEach(() => {
     registry = buildRegistry();
   });
+
+  it.each([
+    {
+      scenario: 'fits after compaction',
+      toolResult: 'ok',
+      schemaChars: 0,
+      maxTokens: 200,
+      accepted: true,
+    },
+    {
+      scenario: 'retained tool result is too large',
+      toolResult: 'x'.repeat(16_000),
+      schemaChars: 0,
+      maxTokens: 200,
+      accepted: false,
+    },
+    {
+      scenario: 'tool schemas still occupy the window',
+      toolResult: 'ok',
+      schemaChars: 24_000,
+      maxTokens: 200,
+      accepted: false,
+    },
+    {
+      scenario: 'output reservation still occupies the window',
+      toolResult: 'ok',
+      schemaChars: 0,
+      maxTokens: 6_000,
+      accepted: false,
+    },
+  ])(
+    'checks the compacted next request when $scenario',
+    async ({ toolResult, schemaChars, maxTokens, accepted }) => {
+      registry = new AgentRegistry<MyType, MyPhase>();
+      registry.register({ ...chatAgent, llmParams: { maxTokens } });
+      // Seven exchanges fit under the initial chars/4 compaction trigger.
+      // The backend then reports denser input at 94% of its window, plus
+      // output taking the last call over the safety threshold. The next
+      // iteration compacts two old results, keeping the newest six.
+      const messages: ChatMessage[] = [{ role: 'user', content: 'continue' }];
+      for (let i = 0; i < 7; i++) {
+        messages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: `old-${i}`, name: 'noop', args: {} }],
+        });
+        messages.push({
+          role: 'tool',
+          content: 'x'.repeat(2_000),
+          tool_call_id: `old-${i}`,
+          name: 'noop',
+        });
+      }
+      const requests: ChatRequest[] = [];
+      const inner = makeStubLLM({
+        scriptedResponses: [
+          {
+            content: '',
+            tool_calls: [{ id: 'next', name: 'noop', args: {} }],
+            usage: { inputTokens: 9_400, outputTokens: 200 },
+          },
+          { content: 'done', usage: { inputTokens: 100, outputTokens: 10 } },
+        ],
+      });
+      const llm: LLMClient = {
+        ...inner,
+        chat: (request, ctx) => {
+          // Snapshot now: the executor mutates its conversation on later turns.
+          requests.push(structuredClone(request));
+          return inner.chat(request, ctx);
+        },
+      };
+      const exec = new AgentExecutor({
+        registry,
+        llm,
+        toolProviders: [
+          makeStubToolProvider({
+            id: 'p1',
+            tools: [
+              { name: 'noop', description: 'schema'.padEnd(schemaChars, 'x'), inputSchema: {} },
+            ],
+            onCall: () => ({ content: toolResult, isError: false }),
+          }),
+        ],
+      });
+      const result = await exec.run({ agentType: 'chat', messages, contextWindowTokens: 10_000 });
+
+      // A compacted marker in the attempted next-call trace proves even the
+      // refusal cases actually compacted, rather than bypassing compaction.
+      expect(
+        result.traces.some(
+          (trace) =>
+            trace.trace_type === 'llm_call' && trace.input_messages?.includes('[compacted'),
+        ),
+      ).toBe(true);
+      if (accepted) {
+        expect(result.status).toBe('completed');
+        expect(requests).toHaveLength(2);
+        expect(conversationChars(requests[1]!.messages)).toBeLessThan(
+          conversationChars(requests[0]!.messages),
+        );
+        expect(
+          requests[1]!.messages.filter((m) => m.content.startsWith('[compacted')),
+        ).toHaveLength(2);
+        expect(result.budget.cumulativeInputTokens).toBe(9_500);
+      } else {
+        expect(result.status).toBe('failed');
+        expect(result.error?.message).toContain('context_window_substrate_refused');
+        expect(requests).toHaveLength(1);
+      }
+    },
+  );
 
   it('refuses the next LLM call at the default 95% threshold (cumulative=950, window=1000)', async () => {
     // First call consumes 950 tokens (input=600, output=350) → 95% of
