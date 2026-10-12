@@ -346,7 +346,9 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // caller-supplied `deps.signal` (used by main.ts's SIGTERM
   // controller) via Node 22 native `AbortSignal.any` so EITHER source
   // can cancel the run.
-  const timeoutSignal = AbortSignal.timeout(effectiveTimeoutSeconds * 1000);
+  const timeoutMs = effectiveTimeoutSeconds * 1000;
+  const timeoutStartedAtMs = Date.now();
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = composeSignals(deps.signal, timeoutSignal);
 
   // Piece 3 (CONTEXT-AWARENESS.md §4.5) — substrate-side context-window
@@ -371,6 +373,7 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     agentType: config.agentName,
     messages,
     runId: config.taskId,
+    timeBudget: { startedAtMs: timeoutStartedAtMs, timeoutMs },
     ...(signal !== undefined && { signal }),
     ...(effectiveTokenLimit !== undefined && { tokenLimit: effectiveTokenLimit }),
     ...(effectiveCostLimit !== undefined && { costLimitUsd: effectiveCostLimit }),
