@@ -3,7 +3,8 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SteelBrowserAdapter, type BrowserAutomationDriver } from './browser-steel.js';
 import { LocalCodeRunner } from './code-runner.js';
+import {
+  defineFleetPlaygroundCommitFiles,
+  FLEET_COMMIT_FILES_NAME,
+} from './fleet-playground-commit-files.js';
 import { ToolGatewayHttpHandler } from './http-server.js';
 
 const TASK = {
@@ -105,15 +110,31 @@ function makeJsonResponse(body: unknown): Response {
   });
 }
 
-function makeBrowser(): SteelBrowserAdapter {
+const CAPTURE_TEXT = ' 13:04 <jan> ACTION-348: café 🧪\r\n\n  Keep this spacing.\n';
+
+function makeBrowser(status?: number): SteelBrowserAdapter {
   const driver: BrowserAutomationDriver = {
-    goto: vi.fn(() => Promise.resolve({ url: 'https://example.com/report', title: 'Report' })),
+    goto: vi.fn(() =>
+      Promise.resolve({
+        url: 'https://example.com/report',
+        title: 'Report',
+        ...(status === undefined ? {} : { status }),
+      }),
+    ),
     click: vi.fn(() => Promise.resolve({ ok: true })),
     screenshot: vi.fn(() =>
       Promise.resolve({ mimeType: 'image/png', base64: Buffer.from('png').toString('base64') }),
     ),
     select: vi.fn(() => Promise.resolve({ ok: true })),
     extractText: vi.fn(() => Promise.resolve({ text: 'Visible report text' })),
+    capturePage: vi.fn(() =>
+      Promise.resolve({
+        url: 'https://example.com/report',
+        title: 'Report',
+        text: CAPTURE_TEXT,
+        links: [{ label: 'Minutes', href: 'https://www.w3.org/2024/11/13-apa-irc' }],
+      }),
+    ),
     typeText: vi.fn(() => Promise.resolve({ ok: true })),
     waitFor: vi.fn(() => Promise.resolve({ ok: true, matched: 'text' })),
   };
@@ -166,6 +187,181 @@ describe('ToolGatewayHttpHandler', () => {
       ...options,
     });
   }
+
+  it.each([200, 302, 404, 503, undefined])(
+    'marks HTTP navigation status %s correctly without guessing from title',
+    async (status) => {
+      const handler = makeHandler({ browser: makeBrowser(status) });
+      const result = asRecord(
+        await json(
+          await handler.handle(
+            request(invokeBody('browser.goto', { url: 'https://example.com/report' })),
+          ),
+        ),
+      );
+      expect(result.isError).toBe(status !== undefined && status >= 400);
+      expect(JSON.parse(result.content as string)).toEqual({
+        url: 'https://example.com/report',
+        title: 'Report',
+        ...(status === undefined ? {} : { status }),
+      });
+    },
+  );
+
+  it('saves byte-identical page text and provenance to unique automatic workspace paths', async () => {
+    const handler = makeHandler();
+    const capture = async () => {
+      const result = asRecord(
+        await json(await handler.handle(request(invokeBody('browser.capture_page', {})))),
+      );
+      expect(result.isError).toBe(false);
+      return JSON.parse(result.content as string) as {
+        textPath: string;
+        provenancePath: string;
+        textSha256: string;
+      };
+    };
+    const first = await capture();
+    const second = await capture();
+    expect(first.textPath).toMatch(/^browser-captures\/[0-9a-f-]+\/page.txt$/);
+    expect(second.textPath).not.toBe(first.textPath);
+    const saved = await readFile(join(workspaceDir, first.textPath));
+    expect(saved.equals(Buffer.from(CAPTURE_TEXT, 'utf8'))).toBe(true);
+    const provenance = JSON.parse(
+      await readFile(join(workspaceDir, first.provenancePath), 'utf8'),
+    ) as { capturedAt: string; textSha256: string };
+    expect(provenance).toMatchObject({
+      representation: 'browser-visible-text',
+      url: 'https://example.com/report',
+      title: 'Report',
+      textSha256: createHash('sha256').update(saved).digest('hex'),
+      links: [{ label: 'Minutes', href: 'https://www.w3.org/2024/11/13-apa-irc' }],
+    });
+    expect(new Date(provenance.capturedAt).toISOString()).toBe(provenance.capturedAt);
+    expect(first).toMatchObject({
+      textSha256: provenance.textSha256,
+      characters: CAPTURE_TEXT.length,
+      linkCount: 1,
+    });
+    expect(first).not.toHaveProperty('text');
+    expect(
+      await json(
+        await handler.handle(request(invokeBody('browser.capture_page', { path: '../escape' }))),
+      ),
+    ).toMatchObject({ isError: true });
+  });
+
+  it('commits the complete saved capture directly from the task workspace without transcription', async () => {
+    const runner = new LocalCodeRunner({ workspaceDir });
+    const posted: Array<{ files: Record<string, string> }> = [];
+    const sha = 'c'.repeat(40);
+    const commit = defineFleetPlaygroundCommitFiles({
+      playgroundUrl: 'http://playground',
+      signingKey: 'dummy',
+      codeRunnerFor: () => runner,
+      fetch: (_url, init) => {
+        posted.push(JSON.parse(init!.body as string) as { files: Record<string, string> });
+        return Promise.resolve(
+          new Response(JSON.stringify({ sha, url: `https://example.com/${sha}` }), { status: 201 }),
+        );
+      },
+    });
+    const handler = makeHandler({
+      codeRunner: runner,
+      externalHandlers: { [FLEET_COMMIT_FILES_NAME]: commit },
+    });
+    const captured = asRecord(
+      await json(await handler.handle(request(invokeBody('browser.capture_page', {})))),
+    );
+    const paths = JSON.parse(captured.content as string) as {
+      textPath: string;
+      provenancePath: string;
+      textSha256: string;
+    };
+    const committed = asRecord(
+      await json(
+        await handler.handle(
+          request(
+            invokeBody(FLEET_COMMIT_FILES_NAME, {
+              folder: '2026-10-12-capture',
+              message: 'Capture primary source',
+              files: {
+                'input/page.txt': paths.textPath,
+                'input/provenance.json': paths.provenancePath,
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+    expect(committed.isError).toBe(false);
+    expect(posted).toHaveLength(1);
+    const files = posted[0]!.files;
+    expect(
+      Buffer.from(files['input/page.txt']!, 'utf8').equals(
+        await readFile(join(workspaceDir, paths.textPath)),
+      ),
+    ).toBe(true);
+    expect(files['input/page.txt']).toBe(CAPTURE_TEXT);
+    expect(files['input/provenance.json']).toBe(
+      await readFile(join(workspaceDir, paths.provenancePath), 'utf8'),
+    );
+    const receipt = JSON.parse(committed.content as string) as {
+      sha: string;
+      fileDigests: Record<string, string>;
+    };
+    expect(receipt.sha).toBe(sha);
+    expect(receipt.fileDigests['input/page.txt']).toBe(paths.textSha256);
+  });
+
+  it('uses only the calling task runner and reports failed writes without a receipt', async () => {
+    const writes = new Map<string, unknown[]>();
+    const codeRunnerFactory = vi.fn((task: typeof TASK) => ({
+      writeFiles: (files: unknown[]) => {
+        if (task.taskUid === 'fail') return Promise.reject(new Error('workspace unavailable'));
+        writes.set(task.taskUid, files);
+        return Promise.resolve();
+      },
+    }));
+    const handler = makeHandler({ codeRunnerFactory });
+    for (const taskUid of ['task-1', 'task-2', 'fail']) {
+      const task = { ...TASK, taskUid };
+      const result = asRecord(
+        await json(
+          await handler.handle(requestFor(task, invokeBodyFor(task, 'browser.capture_page', {}))),
+        ),
+      );
+      expect(result.isError).toBe(taskUid === 'fail');
+      if (taskUid === 'fail') expect(result.content).toContain('workspace unavailable');
+    }
+    expect([...writes.keys()]).toEqual(['task-1', 'task-2']);
+    expect(codeRunnerFactory.mock.calls.map(([task]) => task.taskUid)).toEqual([
+      'task-1',
+      'task-2',
+      'fail',
+    ]);
+    expect(writes.get('task-1')).not.toEqual(writes.get('task-2'));
+  });
+
+  it('describes capture separately from read-only extraction with no caller path', async () => {
+    const result = asRecord(
+      await json(
+        await makeHandler().handle(
+          describeRequest(['browser.capture_page', 'browser.extract_text']),
+        ),
+      ),
+    );
+    const tools = result.tools as Array<{ name: string; tags: string[]; inputSchema: unknown }>;
+    expect(tools.map((t) => t.name)).toEqual(['browser.capture_page', 'browser.extract_text']);
+    expect(tools[0]?.tags).not.toContain('read-only');
+    expect(tools[0]?.inputSchema).toEqual({
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(tools[1]?.tags).toContain('read-only');
+  });
 
   it('executes code interpreter tool calls and returns a ToolResult JSON payload', async () => {
     const handler = makeHandler();

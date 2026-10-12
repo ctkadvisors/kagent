@@ -37,6 +37,7 @@ export const BROWSER_TOOL_NAMES = [
   'browser.wait_for',
   'browser.screenshot',
   'browser.extract_text',
+  'browser.capture_page',
   'browser.cdp_url',
   'browser.live_view_url',
   'browser.recording_url',

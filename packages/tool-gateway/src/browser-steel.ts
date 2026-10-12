@@ -25,6 +25,7 @@ export interface SteelBrowserSession {
 }
 
 export interface BrowserGotoResult {
+  readonly status?: number;
   readonly url: string;
   readonly title?: string;
 }
@@ -41,6 +42,13 @@ export interface BrowserScreenshotResult {
 
 export interface BrowserExtractTextResult {
   readonly text: string;
+}
+
+export interface BrowserPageCapture {
+  readonly url: string;
+  readonly title: string;
+  readonly text: string;
+  readonly links: readonly { readonly label: string; readonly href: string }[];
 }
 
 export interface BrowserGotoOptions {
@@ -97,6 +105,7 @@ export interface BrowserAutomationDriver {
     cdpUrl: string,
     options: BrowserSelectOptions,
   ) => Promise<BrowserInteractionResult>;
+  readonly capturePage: (cdpUrl: string) => Promise<BrowserPageCapture>;
   readonly extractText: (
     cdpUrl: string,
     options: BrowserExtractTextOptions,
@@ -199,6 +208,10 @@ export class SteelBrowserAdapter {
     input: BrowserExtractTextOptions = { maxChars: undefined },
   ): Promise<BrowserExtractTextResult> {
     return this.requireDriver().extractText(session.cdpUrl, { maxChars: input.maxChars });
+  }
+
+  async capturePage(session: SteelBrowserSession): Promise<BrowserPageCapture> {
+    return this.requireDriver().capturePage(session.cdpUrl);
   }
 
   async typeText(

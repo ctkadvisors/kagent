@@ -13,6 +13,7 @@ import type {
   BrowserGotoOptions,
   BrowserGotoResult,
   BrowserInteractionResult,
+  BrowserPageCapture,
   BrowserScreenshotOptions,
   BrowserScreenshotResult,
   BrowserSelectOptions,
@@ -44,7 +45,7 @@ interface PlaywrightPageLike {
   readonly goto: (
     url: string,
     options: { readonly waitUntil: 'domcontentloaded'; readonly timeout: number },
-  ) => Promise<unknown>;
+  ) => Promise<{ readonly status: () => number } | null | undefined>;
   readonly title: () => Promise<string>;
   readonly url: () => string;
   readonly locator: (selector: string) => PlaywrightLocatorLike;
@@ -97,7 +98,7 @@ class PlaywrightCdpDriver implements BrowserAutomationDriver {
 
   async goto(cdpUrl: string, url: string, options: BrowserGotoOptions): Promise<BrowserGotoResult> {
     return this.withPage(cdpUrl, async (page) => {
-      await page.goto(url, {
+      const response = await page.goto(url, {
         waitUntil: 'domcontentloaded',
         timeout: this.resolveTimeout(options.timeoutMs),
       });
@@ -105,6 +106,7 @@ class PlaywrightCdpDriver implements BrowserAutomationDriver {
       return {
         url: page.url(),
         title: await page.title(),
+        ...(response == null ? {} : { status: response.status() }),
       };
     });
   }
@@ -166,6 +168,28 @@ class PlaywrightCdpDriver implements BrowserAutomationDriver {
             : text.slice(0, options.maxChars),
       };
     });
+  }
+
+  async capturePage(cdpUrl: string): Promise<BrowserPageCapture> {
+    return this.withPage(cdpUrl, (page) =>
+      page.evaluate<BrowserPageCapture>(`(() => {
+      const links = [];
+      for (const anchor of document.querySelectorAll('a[href]')) {
+        try {
+          const url = new URL(anchor.getAttribute('href'), document.baseURI);
+          if (url.protocol === 'http:' || url.protocol === 'https:') {
+            links.push({ label: (anchor.innerText ?? anchor.textContent ?? '').trim(), href: url.href });
+          }
+        } catch { /* An invalid href is not a navigable source. */ }
+      }
+      return {
+        url: location.href,
+        title: document.title,
+        text: document.body?.innerText ?? '',
+        links,
+      };
+    })()`),
+    );
   }
 
   async typeText(

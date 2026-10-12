@@ -3,6 +3,11 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import {
+  FLEET_COMMIT_FILES_DESCRIPTOR,
+  FLEET_COMMIT_FILES_NAME,
+  defineFleetPlaygroundCommitFiles,
+} from './fleet-playground-commit-files.js';
 import { inClusterSandboxKube } from './kube-jobs.js';
 import { createPodCodeRunnerFactory } from './pod-code-runner.js';
 import { createCallerVerifier } from './caller-verifier.js';
@@ -200,13 +205,18 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     config.fleetPlaygroundUrl !== undefined && config.fleetSigningKey !== undefined
       ? {
           externalHandlers: {
+            [FLEET_COMMIT_FILES_NAME]: defineFleetPlaygroundCommitFiles({
+              playgroundUrl: config.fleetPlaygroundUrl,
+              signingKey: config.fleetSigningKey,
+              codeRunnerFor: codeRunnerFactory,
+            }),
             [FLEET_RUN_TOOL_NAME]: defineFleetRunTool({
               playgroundUrl: config.fleetPlaygroundUrl,
               signingKey: config.fleetSigningKey,
               codeRunnerFor: codeRunnerFactory,
             }),
           },
-          externalDescriptors: [FLEET_RUN_TOOL_DESCRIPTOR],
+          externalDescriptors: [FLEET_RUN_TOOL_DESCRIPTOR, FLEET_COMMIT_FILES_DESCRIPTOR],
         }
       : {};
 
