@@ -17,14 +17,19 @@ import {
   decodeCapabilityJwtUnsafe,
   verifyCapabilityJwt,
   type VerifierKey,
+  type CapabilityBundle,
 } from '@kagent/capability-types';
 
 import type { ToolGatewayTaskIdentity } from './http-server.js';
 
+export interface VerifiedCaller {
+  readonly verifiedBundle: CapabilityBundle;
+}
+
 export type CallerVerifier = (
   authorization: string | null,
   task: ToolGatewayTaskIdentity,
-) => Promise<string | null>;
+) => Promise<string | null | VerifiedCaller>;
 
 export interface CallerVerifierOptions {
   readonly jwksUrl: string;
@@ -35,7 +40,7 @@ export interface CallerVerifierOptions {
   readonly now?: () => number;
 }
 
-/** Returns null when the bearer token proves the task, else why not. */
+/** Returns verified proof when the bearer token proves the task, else why not. */
 export function createCallerVerifier(options: CallerVerifierOptions): CallerVerifier {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const refreshMs = options.refreshMs ?? 300_000;
@@ -92,6 +97,6 @@ export function createCallerVerifier(options: CallerVerifierOptions): CallerVeri
     if (tenant !== undefined && tenant !== task.tenant) {
       return 'capability token is for another tenant';
     }
-    return null;
+    return { verifiedBundle: result.bundle };
   };
 }

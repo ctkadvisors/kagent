@@ -34,7 +34,8 @@ import {
   type ExecuteCommandInput,
   type StartedCommand,
 } from './code-runner.js';
-import type { CallerVerifier } from './caller-verifier.js';
+import type { CallerVerifier, VerifiedCaller } from './caller-verifier.js';
+import type { FleetForumNotices } from './fleet-forum-notices.js';
 import type { ExternalToolRegistry } from './external-providers.js';
 import { resolveToolProfileToolNames, type ToolProfileConfig } from './tool-profiles.js';
 
@@ -105,6 +106,7 @@ export interface ToolGatewayHttpHandlerOptions {
    * every describe and invoke without a valid token is refused 401.
    */
   readonly verifyCaller?: CallerVerifier;
+  readonly forumNotices?: FleetForumNotices;
 }
 
 export class ToolGatewayHttpHandler {
@@ -118,6 +120,7 @@ export class ToolGatewayHttpHandler {
   private readonly toolProfiles: ToolProfileConfig;
   private readonly browserSessions = new Map<string, SteelBrowserSession>();
   private readonly verifyCaller: CallerVerifier | undefined;
+  private readonly forumNotices: FleetForumNotices | undefined;
   private paused: boolean;
 
   constructor(options: ToolGatewayHttpHandlerOptions = {}) {
@@ -131,16 +134,17 @@ export class ToolGatewayHttpHandler {
     this.toolProfiles = options.toolProfiles ?? { profiles: [] };
     this.paused = options.paused ?? false;
     this.verifyCaller = options.verifyCaller;
+    this.forumNotices = options.forumNotices;
   }
 
-  /** 401 unless the bearer token proves the caller is this task; null when it does. */
+  /** Refuse invalid identities; preserve verified proof for optional public notices. */
   private async refuseUnproven(
     request: Request,
     task: ToolGatewayTaskIdentity,
-  ): Promise<Response | null> {
+  ): Promise<Response | null | VerifiedCaller> {
     if (this.verifyCaller === undefined) return null;
     const why = await this.verifyCaller(request.headers.get('authorization'), task);
-    return why === null ? null : jsonResponse({ error: `unauthenticated: ${why}` }, 401);
+    return typeof why === 'string' ? jsonResponse({ error: `unauthenticated: ${why}` }, 401) : why;
   }
 
   setPaused(paused: boolean): void {
@@ -172,26 +176,31 @@ export class ToolGatewayHttpHandler {
       );
     }
     const unproven = await this.refuseUnproven(request, invocation.task);
-    if (unproven !== null) return unproven;
+    if (unproven instanceof Response) return unproven;
 
+    let result: ToolResult;
     try {
       const external = this.externalHandlers[invocation.call.name];
       if (external !== undefined) {
-        return jsonResponse(await external({ ...invocation, request }));
+        result = await external({ ...invocation, request });
+      } else if (
+        isExternalGatewayToolName(invocation.call.name) &&
+        this.externalRegistry !== undefined
+      ) {
+        result = await this.externalRegistry.executeTool(invocation, {
+          ...toolInvocationContext(request),
+          task: invocation.task,
+        });
+      } else {
+        result = await this.invokeRuntimeTool(invocation);
       }
-      if (isExternalGatewayToolName(invocation.call.name) && this.externalRegistry !== undefined) {
-        return jsonResponse(
-          await this.externalRegistry.executeTool(invocation, {
-            ...toolInvocationContext(request),
-            task: invocation.task,
-          }),
-        );
-      }
-
-      return jsonResponse(await this.invokeRuntimeTool(invocation));
     } catch (err) {
-      return jsonResponse(runtimeError(err));
+      result = runtimeError(err);
     }
+    if (this.forumNotices !== undefined && unproven !== null) {
+      result = await this.forumNotices.decorate(result, invocation, unproven, request.signal);
+    }
+    return jsonResponse(result);
   }
 
   private async handleDescribe(request: Request): Promise<Response> {
@@ -210,7 +219,7 @@ export class ToolGatewayHttpHandler {
       );
     }
     const unproven = await this.refuseUnproven(request, parsed.task);
-    if (unproven !== null) return unproven;
+    if (unproven instanceof Response) return unproven;
 
     const profileResolution = resolveToolProfileToolNames(
       this.toolProfiles,

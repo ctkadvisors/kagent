@@ -81,6 +81,9 @@ toolRuntime:
     # With fleetSigningKeySecretRef, enables fleet.run_tool: run a promoted playground
     # tool at a pinned commit, fetched from this service and executed in the task's runner.
     fleetPlaygroundUrl: ''
+    # Optional public mention metadata transport for existing active Tasks.
+    # Requires verifyCaller and exact {url, tenant, namespace}; disabled by default.
+    forumMentions: {}
     # Require every caller to prove its task with the operator-minted capability JWT
     # (agent pods send it since v0.2.95). Needs capabilities.enabled. Turn on once no
     # older agent pods are running: they do not send the token and would get 401.

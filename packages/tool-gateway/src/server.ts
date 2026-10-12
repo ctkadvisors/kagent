@@ -11,6 +11,7 @@ import {
 import { inClusterSandboxKube } from './kube-jobs.js';
 import { createPodCodeRunnerFactory } from './pod-code-runner.js';
 import { createCallerVerifier } from './caller-verifier.js';
+import { FleetForumNotices, type FleetForumNoticeConfig } from './fleet-forum-notices.js';
 import {
   FLEET_RUN_TOOL_DESCRIPTOR,
   FLEET_RUN_TOOL_NAME,
@@ -56,6 +57,7 @@ export interface ToolGatewayServerConfig {
   readonly fleetSigningKey?: string;
   readonly callerJwksUrl?: string;
   readonly callerIssuer?: string;
+  readonly forumMentions?: FleetForumNoticeConfig;
   readonly sandbox?: {
     readonly image: string;
     readonly namespace: string;
@@ -93,6 +95,7 @@ export function parseToolGatewayServerConfig(
     fleetSigningKey?: string;
     callerJwksUrl?: string;
     callerIssuer?: string;
+    forumMentions?: FleetForumNoticeConfig;
     sandbox?: {
       image: string;
       namespace: string;
@@ -162,6 +165,32 @@ export function parseToolGatewayServerConfig(
   const shellSshUser = nonEmpty(env.KAGENT_SHELL_SSH_USER);
   if (shellSshKeyPath !== undefined) config.shellSshKeyPath = shellSshKeyPath;
   if (shellSshUser !== undefined) config.shellSshUser = shellSshUser;
+  const notices = nonEmpty(env.KAGENT_FLEET_FORUM_NOTICES_JSON);
+  if (notices !== undefined) {
+    if (config.callerJwksUrl === undefined)
+      throw new Error('forum notices require caller verification');
+    const value: unknown = JSON.parse(notices);
+    if (typeof value !== 'object' || value === null || Array.isArray(value))
+      throw new Error('invalid forum notice configuration');
+    const item = value as Record<string, unknown>;
+    if (
+      typeof item.url !== 'string' ||
+      typeof item.tenant !== 'string' ||
+      typeof item.namespace !== 'string' ||
+      (item.pollIntervalMs !== undefined && typeof item.pollIntervalMs !== 'number') ||
+      (item.replayIntervalMs !== undefined && typeof item.replayIntervalMs !== 'number')
+    )
+      throw new Error('invalid forum notice configuration');
+    const noticeConfig: FleetForumNoticeConfig = {
+      url: item.url,
+      tenant: item.tenant,
+      namespace: item.namespace,
+      ...(typeof item.pollIntervalMs === 'number' && { pollIntervalMs: item.pollIntervalMs }),
+      ...(typeof item.replayIntervalMs === 'number' && { replayIntervalMs: item.replayIntervalMs }),
+    };
+    new FleetForumNotices(noticeConfig); // Validate before opening the server.
+    config.forumMentions = noticeConfig;
+  }
   return config;
 }
 
@@ -228,6 +257,10 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
     ...(browser !== undefined && { browser }),
     ...(shellRunner !== undefined && { shellRunner }),
     ...fleetTool,
+    ...(config.forumMentions !== undefined &&
+      config.callerJwksUrl !== undefined && {
+        forumNotices: new FleetForumNotices(config.forumMentions),
+      }),
     ...(config.callerJwksUrl !== undefined && {
       verifyCaller: createCallerVerifier({
         jwksUrl: config.callerJwksUrl,
