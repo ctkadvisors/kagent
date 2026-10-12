@@ -10,10 +10,11 @@
  * verification only because an earlier run had left /tmp/em behind). Now the
  * first code call of a task creates a Job running sandbox-worker.ts, and every
  * later call of that task goes to it. The Job carries no service-account
- * token and no env of the gateway's; only the gateway knows its bearer token.
+ * token and no env of the gateway's; the gateway recovers its bearer token internally from the owned Job on restart.
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import type { V1Job } from '@kubernetes/client-node';
 
 import type {
   CodeRunnerFile,
@@ -34,13 +35,14 @@ import type { SandboxOp } from './sandbox-worker.js';
 export const SANDBOX_TASK_LABEL = 'kagent.knuteson.io/sandbox-task';
 const SANDBOX_PORT = 8080;
 
-/** The three Kubernetes calls a sandbox needs; the real one is kube-jobs.ts. */
+/** Kubernetes calls already covered by the sandbox Role; see kube-jobs.ts. */
 export interface SandboxKube {
   createJob(namespace: string, job: Record<string, unknown>): Promise<void>;
-  /** Delete every sandbox Job of this task (a gateway restart forgets their tokens). */
-  deleteTaskJobs(namespace: string, taskUid: string): Promise<void>;
+  listTaskJobs(namespace: string, taskUid: string): Promise<readonly V1Job[]>;
+  /** Delete only the exact terminal Job observed, never a replacement with the same name. */
+  deleteJob(namespace: string, name: string, uid: string): Promise<void>;
   /** The IP of the Job's running pod, or undefined while it is not running yet. */
-  runningPodIp(namespace: string, jobName: string): Promise<string | undefined>;
+  runningPodIp(namespace: string, jobName: string, jobUid: string): Promise<string | undefined>;
 }
 
 export interface PodCodeRunnerOptions {
@@ -61,6 +63,8 @@ export interface PodCodeRunnerOptions {
 interface Sandbox {
   readonly url: string;
   readonly token: string;
+  readonly jobUid: string;
+  readonly workspaceRecreated: boolean;
 }
 
 export function sandboxJob(
@@ -138,33 +142,128 @@ export function createPodCodeRunnerFactory(
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const readyTimeoutMs = options.readyTimeoutMs ?? 180_000;
   const sandboxes = new Map<string, Promise<Sandbox>>();
+  // Retain observed generation even if a later acquisition fails.
+  const lastJobUids = new Map<string, string>();
+
+  // A notice belongs to this acquisition, not a particular operation's return type.
+  const reportedLoss = new WeakSet<Sandbox>();
 
   async function healthy(sandbox: Sandbox): Promise<boolean> {
     try {
-      return (await fetchImpl(`${sandbox.url}/healthz`)).ok;
+      const response = await fetchImpl(`${sandbox.url}/v1/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${sandbox.token}` },
+        body: JSON.stringify({ op: 'readFiles', arg: [] }),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(5000, readyTimeoutMs))),
+      });
+      const body = (await response.json()) as { ok?: boolean; result?: unknown };
+      return response.ok && body.ok === true && Array.isArray(body.result);
     } catch {
       return false;
     }
   }
 
-  async function create(task: ToolGatewayTaskIdentity): Promise<Sandbox> {
-    const token = randomBytes(32).toString('hex');
-    const name = `kagent-sbx-${task.taskUid.slice(0, 36)}-${randomBytes(3).toString('hex')}`
-      .toLowerCase()
-      .slice(0, 63);
-    await options.kube.deleteTaskJobs(options.namespace, task.taskUid);
-    await options.kube.createJob(options.namespace, sandboxJob(options, task, name, token));
+  function owned(job: V1Job, task: ToolGatewayTaskIdentity): boolean {
+    const labels = job.metadata?.labels;
+    const pod = job.spec?.template.spec;
+    const worker = pod?.containers[0];
+    return (
+      job.metadata?.namespace === options.namespace &&
+      typeof job.metadata?.name === 'string' &&
+      typeof job.metadata.uid === 'string' &&
+      labels?.['app.kubernetes.io/component'] === 'code-sandbox' &&
+      labels['app.kubernetes.io/managed-by'] === 'kagent-tool-gateway' &&
+      labels[SANDBOX_TASK_LABEL] === task.taskUid &&
+      labels['kagent.knuteson.io/agent'] === task.agentName &&
+      Object.entries(labels).every(
+        ([key, value]) => job.spec?.template.metadata?.labels?.[key] === value,
+      ) &&
+      pod?.automountServiceAccountToken === false &&
+      pod.containers.length === 1 &&
+      worker?.name === 'sandbox' &&
+      JSON.stringify(worker.command) ===
+        JSON.stringify(['node', '/app/packages/tool-gateway/dist/sandbox-worker.js']) &&
+      worker.env?.filter((entry) => entry.name === 'KAGENT_SANDBOX_TOKEN').length === 1 &&
+      /^[0-9a-f]{64}$/.test(
+        worker.env.find((entry) => entry.name === 'KAGENT_SANDBOX_TOKEN')?.value ?? '',
+      )
+    );
+  }
+
+  function terminal(job: V1Job): boolean {
+    return (
+      job.status?.conditions?.some(
+        (condition) =>
+          (condition.type === 'Complete' || condition.type === 'Failed') &&
+          condition.status === 'True',
+      ) ?? false
+    );
+  }
+
+  async function acquire(task: ToolGatewayTaskIdentity): Promise<Sandbox> {
     const deadline = Date.now() + readyTimeoutMs;
+    const previousJobUid = lastJobUids.get(task.taskUid);
+    let workspaceRecreated = false;
+    // Stable creation identity prevents two rolling gateway instances from creating
+    // separate workspaces. Legacy random names remain discoverable and reusable.
+    const name = `kagent-sbx-${createHash('sha256').update(task.taskUid).digest('hex').slice(0, 40)}`;
     while (Date.now() < deadline) {
-      const ip = await options.kube.runningPodIp(options.namespace, name);
-      if (ip !== undefined) {
-        const sandbox = { url: `http://${ip}:${String(SANDBOX_PORT)}`, token };
-        if (await healthy(sandbox)) return sandbox;
+      const jobs = (await options.kube.listTaskJobs(options.namespace, task.taskUid)).filter(
+        (job) => owned(job, task),
+      );
+      const active = jobs.filter((job) => !terminal(job));
+      if (active.length > 1)
+        throw new Error(
+          `code_sandbox_unavailable: multiple owned sandboxes for task ${task.taskUid}; preserved`,
+        );
+      if (active.length === 1) {
+        const job = active[0]!;
+        if (!job.metadata!.deletionTimestamp) {
+          const ip = await options.kube.runningPodIp(
+            options.namespace,
+            job.metadata!.name!,
+            job.metadata!.uid!,
+          );
+          if (ip !== undefined) {
+            const token = job.spec!.template.spec!.containers[0]!.env!.find(
+              (entry) => entry.name === 'KAGENT_SANDBOX_TOKEN',
+            )!.value!;
+            const sandbox = {
+              url: `http://${ip}:${String(SANDBOX_PORT)}`,
+              token,
+              jobUid: job.metadata!.uid!,
+              workspaceRecreated:
+                workspaceRecreated ||
+                (previousJobUid !== undefined && previousJobUid !== job.metadata!.uid),
+            };
+            if (await healthy(sandbox)) return sandbox;
+          }
+        }
+        // A transient outage does not establish that emptyDir was lost.
+        await sleep(1000);
+        continue;
       }
-      await sleep(1000);
+      for (const job of jobs) {
+        // Keep evidence of terminal loss even if replacement readiness later fails.
+        if (!lastJobUids.has(task.taskUid)) lastJobUids.set(task.taskUid, job.metadata!.uid!);
+        await options.kube.deleteJob(options.namespace, job.metadata!.name!, job.metadata!.uid!);
+        workspaceRecreated = true;
+      }
+      const token = randomBytes(32).toString('hex');
+      try {
+        await options.kube.createJob(options.namespace, sandboxJob(options, task, name, token));
+      } catch (err) {
+        // Another gateway may have won creation; recover its original token.
+        const status =
+          err !== null && typeof err === 'object'
+            ? (err as { code?: number; statusCode?: number })
+            : {};
+        if (status.code !== 409 && status.statusCode !== 409) throw err;
+        await sleep(1000);
+      }
     }
     throw new Error(
-      `code sandbox for task ${task.taskUid} was not ready in ${String(readyTimeoutMs)} ms`,
+      `code_sandbox_unavailable: task ${task.taskUid} sandbox not ready in ${String(readyTimeoutMs)} ms; existing Jobs preserved${workspaceRecreated ? '; previous terminal workspace unavailable' : ''}`,
     );
   }
 
@@ -175,14 +274,25 @@ export function createPodCodeRunnerFactory(
       if (sandbox !== undefined && (await healthy(sandbox))) return sandbox;
       sandboxes.delete(task.taskUid);
     }
-    const created = create(task);
-    sandboxes.set(task.taskUid, created);
-    created.catch(() => sandboxes.delete(task.taskUid));
-    return created;
+    const acquired = acquire(task).then((sandbox) => {
+      lastJobUids.set(task.taskUid, sandbox.jobUid);
+      return sandbox;
+    });
+    sandboxes.set(task.taskUid, acquired);
+    acquired.catch(() => {
+      if (sandboxes.get(task.taskUid) === acquired) sandboxes.delete(task.taskUid);
+    });
+    return acquired;
   }
 
   async function call<T>(task: ToolGatewayTaskIdentity, op: SandboxOp, arg: unknown): Promise<T> {
     const sandbox = await ensure(task);
+    if (sandbox.workspaceRecreated && !reportedLoss.has(sandbox)) {
+      reportedLoss.add(sandbox);
+      throw new Error(
+        'workspace_recreated: previous sandbox workspace is unavailable; its emptyDir files were not preserved. A fresh workspace is ready; restore committed files before continuing.',
+      );
+    }
     const response = await fetchImpl(`${sandbox.url}/v1/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${sandbox.token}` },
