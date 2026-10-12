@@ -23,7 +23,7 @@
  * worktrees.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AgentRegistry } from './registry.js';
 import { AgentExecutor, conversationChars } from './executor.js';
 import { InvalidConfigError, LLMClientHttpError } from './errors.js';
@@ -79,7 +79,7 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       schemaChars: 24_000,
       maxTokens: 200,
       accepted: true,
-      stubs: 7,
+      stubs: undefined,
       calls: 2,
     },
     {
@@ -88,7 +88,7 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       schemaChars: 0,
       maxTokens: 6_000,
       accepted: true,
-      stubs: 7,
+      stubs: undefined,
       calls: 2,
     },
     {
@@ -97,7 +97,7 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       schemaChars: 0,
       maxTokens: 200,
       accepted: false,
-      stubs: 0,
+      stubs: undefined,
       calls: 1,
     },
     {
@@ -106,7 +106,7 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       schemaChars: 40_000,
       maxTokens: 200,
       accepted: false,
-      stubs: 0,
+      stubs: undefined,
       // Nothing compactable is left: refused before the first call is spent.
       calls: 0,
     },
@@ -116,7 +116,7 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
       schemaChars: 0,
       maxTokens: 9_500,
       accepted: false,
-      stubs: 0,
+      stubs: undefined,
       calls: 0,
     },
   ])(
@@ -175,25 +175,26 @@ describe('AgentExecutor — context-window safety-net (Piece 3)', () => {
           }),
         ],
       });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const result = await exec.run({ agentType: 'chat', messages, contextWindowTokens: 10_000 });
 
-      // A compacted marker in the attempted next-call trace proves even the
-      // refusal cases actually compacted, rather than bypassing compaction.
-      expect(
-        result.traces.some(
-          (trace) =>
-            trace.trace_type === 'llm_call' && trace.input_messages?.includes('[compacted'),
-        ),
-      ).toBe(true);
+      // Even the refusal cases compacted first rather than bypassing compaction
+      // (dropped exchanges leave no stub, so the log line is the evidence).
+      expect(warn.mock.calls.some(([line]) => String(line).includes('to fit the context'))).toBe(
+        true,
+      );
+      warn.mockRestore();
       if (accepted) {
         expect(result.status).toBe('completed');
         expect(requests).toHaveLength(calls);
-        expect(conversationChars(requests[1]!.messages)).toBeLessThan(
-          conversationChars(requests[0]!.messages),
-        );
-        expect(
-          requests[1]!.messages.filter((m) => m.content.startsWith('[compacted')),
-        ).toHaveLength(stubs);
+        const next = requests[1]!.messages;
+        expect(conversationChars(next)).toBeLessThan(conversationChars(requests[0]!.messages));
+        // The latest exchange always reaches the model whole.
+        expect(next.at(-2)?.tool_calls?.[0]?.id).toBe('next');
+        expect(next.at(-1)?.content.startsWith(toolResult)).toBe(true);
+        if (stubs !== undefined) {
+          expect(next.filter((m) => m.content.startsWith('[compacted'))).toHaveLength(stubs);
+        }
         expect(result.budget.cumulativeInputTokens).toBe(9_500);
       } else {
         expect(result.status).toBe('failed');

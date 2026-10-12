@@ -409,8 +409,9 @@ export const DEFAULT_TOOL_GUARDS: {
  * protected results can be large, and the substrate's 95% refusal also counts
  * the output reserve. 23 inventor runs (2026-10-05..12) died there after hours
  * of work. So when the request plus its reserve would pass `FIT_AT`, older
- * assistant text and the protected results go too, down to `FIT_TO`; system
- * and user messages and the latest exchange always stay.
+ * assistant text and the protected results go too, then the oldest whole
+ * exchanges, down to `FIT_TO`; system and user messages and the latest
+ * exchange always stay.
  */
 export const COMPACT_AT = 0.6;
 export const COMPACT_TO = 0.45;
@@ -480,12 +481,11 @@ export function compactConversation(
   const stub = (i: number, text: boolean): boolean => {
     const m = messages[i];
     if (m?.role === 'tool') {
-      if (m.content.startsWith('[compacted')) return false;
       const label = m.name !== undefined ? ` of ${m.name}` : '';
-      messages[i] = {
-        ...m,
-        content: `[compacted: an earlier tool result${label} (${String(m.content.length)} chars) was elided to fit the context window. Run the tool again if you still need it.]`,
-      };
+      const content = `[compacted: an earlier tool result${label} (${String(m.content.length)} chars) was elided to fit the context window. Run the tool again if you still need it.]`;
+      // A stub would not be smaller than a short result (or an existing stub).
+      if (m.content.startsWith('[compacted') || content.length >= m.content.length) return false;
+      messages[i] = { ...m, content };
       return true;
     }
     if (m?.role !== 'assistant') return false;
@@ -536,6 +536,26 @@ export function compactConversation(
       }
     }
     for (let i = 0; i < latest && !fits(FIT_TO); i += 1) if (stub(i, true)) compacted += 1;
+    // Stubs still cost a few hundred chars each, so a long enough run outgrows them:
+    // then drop the oldest whole exchanges (a call stays with its results) after
+    // the last user message, so roles still alternate around the gap.
+    let from = 0;
+    for (let i = latest - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'user') {
+        from = i + 1;
+        break;
+      }
+    }
+    while (!fits(FIT_TO)) {
+      let start = from;
+      while (start < latest && messages[start]?.role !== 'assistant') start += 1;
+      if (start >= latest) break;
+      let end = start + 1;
+      while (messages[end]?.role === 'tool') end += 1;
+      messages.splice(start, end - start);
+      latest -= end - start;
+      compacted += end - start;
+    }
   }
   return compacted;
 }

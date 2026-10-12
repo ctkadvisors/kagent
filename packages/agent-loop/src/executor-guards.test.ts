@@ -109,6 +109,45 @@ describe('compactConversation', () => {
     expect(msgs.slice(-2)).toEqual(original.slice(-2));
   });
 
+  it('leaves results shorter than their stub alone', () => {
+    const msgs = conversation(20).map((m) => (m.role === 'tool' ? { ...m, content: 'ok' } : m));
+    const before = conversationChars(msgs);
+    // The backend says the prompt is over 60%, but no stub would be smaller.
+    expect(compactConversation(msgs, 1_000, 0.25, 900)).toBe(0);
+    expect(conversationChars(msgs)).toBe(before);
+  });
+
+  it('keeps a 300-turn run under the refusal line, each call still with its results', () => {
+    // The shape stubs alone cannot bound: short text and arguments (never stubbed)
+    // and 3k-char results, under a 16k output reserve and 40k chars of schemas.
+    const window = 65_536;
+    const overhead = { schemaChars: 40_000, reserveTokens: 16_000 };
+    const msgs: ChatMessage[] = [
+      { role: 'system', content: 's'.repeat(20_000) },
+      { role: 'user', content: 'invent something' },
+    ];
+    for (let turn = 0; turn < 300; turn += 1) {
+      const id = `c${String(turn)}`;
+      msgs.push({
+        role: 'assistant',
+        content: 't'.repeat(150),
+        tool_calls: [{ id, name: 'code', args: { q: 'a'.repeat(150) } }],
+      });
+      msgs.push({ role: 'tool', content: 'r'.repeat(3_000), tool_call_id: id, name: 'code' });
+      compactConversation(msgs, window, 0.3, undefined, overhead);
+      const used =
+        Math.ceil((conversationChars(msgs) + overhead.schemaChars) * 0.3) + overhead.reserveTokens;
+      expect(used).toBeLessThan(0.95 * window);
+    }
+    expect(msgs.slice(0, 2).map((m) => m.content.length)).toEqual([20_000, 16]);
+    expect(msgs.at(-1)?.content).toBe('r'.repeat(3_000));
+    let calls = new Set<string>();
+    for (const m of msgs) {
+      if (m.role === 'assistant') calls = new Set((m.tool_calls ?? []).map((tc) => tc.id));
+      if (m.role === 'tool') expect(calls.has(m.tool_call_id ?? '')).toBe(true);
+    }
+  });
+
   it('counts the tool schemas every request carries', () => {
     const msgs = conversation(6); // ~6k tokens: fits a 12k window alone
     expect(compactConversation(structuredClone(msgs), 12_000)).toBe(0);
