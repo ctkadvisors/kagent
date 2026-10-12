@@ -349,7 +349,10 @@ export interface AgentExecutorOptions<
 }
 
 export interface ToolGuards {
-  /** Same tool name + identical args: calls beyond this count are refused. */
+  /**
+   * Same tool name + identical args: calls beyond this count are refused
+   * until a different call succeeds and may change the observed state.
+   */
   maxIdenticalCalls?: number;
   /**
    * Same tool name, any args: calls beyond this count in one run are refused.
@@ -1027,7 +1030,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     let status: TerminalStatus = 'completed';
     let errorBox: { message: string; cause?: unknown } | undefined;
     let completedNaturally = false;
-    // Tool guards (per run): how often each tool, and each exact call, ran.
+    // Per-tool totals stay run-wide; exact-call counts reset on successful different calls.
     const callsPerTool = new Map<string, number>();
     const identicalCalls = new Map<string, number>();
 
@@ -1368,7 +1371,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
           malformed !== undefined
             ? `guard: the arguments of "${toolCall.name}" were not valid JSON (they began: ${JSON.stringify(malformed.slice(0, 160))}). The call was not run. Send it again with valid JSON arguments.`
             : identical > this.toolGuards.maxIdenticalCalls
-              ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments and the answer has not changed. Do not call it again; answer with what you have, or say what is missing.`
+              ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments without an intervening successful different call. Do not call it again; answer with what you have, or say what is missing.`
               : this.toolGuards.maxCallsPerTool !== undefined &&
                   perTool > this.toolGuards.maxCallsPerTool
                 ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
@@ -1455,6 +1458,14 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         const toolCtx: ToolInvocationContext = { runId, abortSignal: signal };
         try {
           const toolResult: ToolResult = await provider.executeTool(toolCall, toolCtx);
+          if (!toolResult.isError) {
+            // A successful different call can change state (navigate, then
+            // read the same session). Its success invalidates older repeat
+            // counts. Keep this signature's count so immediate repetitions
+            // still stop; failures and refused calls do not signal progress.
+            identicalCalls.clear();
+            identicalCalls.set(signature, identical);
+          }
           const toolEntry: TraceEntry = {
             schema_version: '1',
             run_id: runId,

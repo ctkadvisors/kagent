@@ -13,10 +13,11 @@ import {
   loopTurnNote,
 } from './executor.js';
 import { MALFORMED_TOOL_ARGS } from './llm-client.js';
-import type { ChatMessage } from './llm-client.js';
+import type { ChatMessage, ChatResult, ToolCall } from './llm-client.js';
 import type { MyType, MyPhase } from './__fixtures__/agents.js';
 import { chatAgent } from './__fixtures__/agents.js';
 import { makeStubLLM } from './__fixtures__/stub-llm.js';
+import { makeStubToolProvider } from './__fixtures__/stub-tool-provider.js';
 import type { ToolProvider, ToolResult } from './tool-provider.js';
 
 function echoProvider(reply: string): ToolProvider & { calls: number } {
@@ -169,6 +170,131 @@ describe('AgentExecutor — tool guards', () => {
     expect(guarded).toHaveLength(1);
     expect(guarded[0]?.error).toContain('already called 2 times with these exact arguments');
   });
+
+  it.each([false, true])(
+    'allows extracting each newly navigated page (batched calls: %s)',
+    async (batched) => {
+      const sessionId = 'session-1';
+      const urls = [
+        'https://example.test/one',
+        'https://example.test/two',
+        'https://example.test/three',
+      ];
+      const extracted: string[] = [];
+      let currentUrl = '';
+      const provider = makeStubToolProvider({
+        tools: [
+          { name: 'browser.goto', description: 'Navigate the session', inputSchema: {} },
+          { name: 'browser.extract_text', description: 'Read the current page', inputSchema: {} },
+        ],
+        onCall: (toolCall) => {
+          if (toolCall.name === 'browser.goto') {
+            currentUrl = (toolCall.args as { url: string }).url;
+            return { content: currentUrl, isError: false };
+          }
+          extracted.push(currentUrl);
+          return { content: `Content of ${currentUrl}`, isError: false };
+        },
+      });
+      const responses: ChatResult[] = [];
+      for (const [i, url] of urls.entries()) {
+        const navigate: ToolCall = {
+          id: `navigate-${i}`,
+          name: 'browser.goto',
+          args: { sessionId, url },
+        };
+        const extract: ToolCall = {
+          id: `extract-${i}`,
+          name: 'browser.extract_text',
+          args: { sessionId },
+        };
+        if (batched) responses.push({ content: '', tool_calls: [navigate, extract] });
+        else
+          responses.push(
+            { content: '', tool_calls: [navigate] },
+            { content: '', tool_calls: [extract] },
+          );
+      }
+      responses.push({ content: 'read all three pages' });
+      const exec = new AgentExecutor({
+        registry,
+        llm: makeStubLLM({ scriptedResponses: responses }),
+        toolProviders: [provider],
+      });
+      const result = await exec.run({
+        agentType: 'chat',
+        messages: [{ role: 'user', content: 'read three pages' }],
+        maxIterations: 12,
+      });
+
+      expect(extracted).toEqual(urls);
+      expect(result.status).toBe('completed');
+      expect(result.traces.filter((t) => String(t.error ?? '').startsWith('guard:'))).toHaveLength(
+        0,
+      );
+    },
+  );
+
+  it('allows an old signature after a successful call with different arguments', async () => {
+    const provider = echoProvider('ok');
+    const exec = new AgentExecutor({
+      registry,
+      llm: makeStubLLM({
+        scriptedResponses: [
+          call('a1', 'a'),
+          call('a2', 'a'),
+          call('b', 'b'),
+          call('a3', 'a'),
+          { content: 'done' },
+        ],
+      }),
+      toolProviders: [provider],
+    });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(provider.calls).toBe(4);
+    expect(result.traces.filter((t) => String(t.error ?? '').startsWith('guard:'))).toHaveLength(0);
+  });
+
+  it.each(['isError', 'throws', 'missing-provider', 'malformed'])(
+    'keeps repeat protection when an intervening different call makes no progress (%s)',
+    async (failure) => {
+      const provider = echoProvider('ok');
+      const other = makeStubToolProvider({
+        tools:
+          failure === 'missing-provider'
+            ? []
+            : [{ name: 'other', description: '', inputSchema: {} }],
+        onCall: () => {
+          if (failure === 'throws') throw new Error('no progress');
+          return { content: 'no progress', isError: true };
+        },
+      });
+      const otherArgs = failure === 'malformed' ? { [MALFORMED_TOOL_ARGS]: '{' } : {};
+      const exec = new AgentExecutor({
+        registry,
+        llm: makeStubLLM({
+          scriptedResponses: [
+            call('a1', 'a'),
+            call('a2', 'a'),
+            { content: '', tool_calls: [{ id: 'b', name: 'other', args: otherArgs }] },
+            call('a3', 'a'),
+            { content: 'done' },
+          ],
+        }),
+        toolProviders: [provider, other],
+      });
+      const result = await exec.run({
+        agentType: 'chat',
+        messages: [{ role: 'user', content: 'go' }],
+      });
+      expect(provider.calls).toBe(2);
+      const last = result.traces.filter((t) => t.trace_type === 'tool_call').at(-1);
+      expect(last?.error).toContain('already called 2 times with these exact arguments');
+    },
+  );
 
   it('refuses a tool past maxCallsPerTool even with varying arguments', async () => {
     const provider = echoProvider('meh');
