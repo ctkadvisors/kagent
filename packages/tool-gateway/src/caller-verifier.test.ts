@@ -47,7 +47,9 @@ describe('createCallerVerifier', () => {
     const { mint, verify } = await setup();
     expect(
       await verify(`Bearer ${await mint('uid-1', 'kagent-system/fleet-disposer')}`, task),
-    ).toBeNull();
+    ).toMatchObject({
+      verifiedBundle: { sub: 'task-uid:uid-1', agt: 'kagent-system/fleet-disposer' },
+    });
     expect(await verify(null, task)).toBe('no capability token');
     expect(
       await verify(`Bearer ${await mint('uid-2', 'kagent-system/fleet-disposer')}`, task),
@@ -77,7 +79,9 @@ describe('createCallerVerifier', () => {
         .sign(privateKey);
     expect(
       await verify(`Bearer ${await mint(`${ISSUER}/tenant/default`, 'default')}`, task),
-    ).toBeNull();
+    ).toMatchObject({
+      verifiedBundle: { sub: 'task-uid:uid-1', agt: 'kagent-system/fleet-disposer' },
+    });
     expect(await verify(`Bearer ${await mint('someone-else', 'default')}`, task)).toMatch(
       /not the operator/,
     );

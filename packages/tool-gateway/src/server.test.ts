@@ -228,3 +228,42 @@ describe('tool-gateway server', () => {
     await expect(json(ready)).resolves.toEqual({ ok: false, reason: 'paused' });
   });
 });
+
+describe('public forum notice deployment configuration', () => {
+  it('requires caller verification and an exact public source scope', () => {
+    const forumMentions = {
+      url: 'http://fleet-read/api/forum/mentions',
+      tenant: 'homelab',
+      namespace: 'kagent-system',
+    };
+    const configured = {
+      KAGENT_FLEET_FORUM_NOTICES_JSON: JSON.stringify(forumMentions),
+      KAGENT_TOOL_GATEWAY_CALLER_JWKS_URL: 'http://operator/jwks',
+    };
+    expect(parseToolGatewayServerConfig(configured)).toMatchObject({ forumMentions });
+    expect(() =>
+      parseToolGatewayServerConfig({
+        ...configured,
+        KAGENT_TOOL_GATEWAY_CALLER_JWKS_URL: undefined,
+      }),
+    ).toThrow(/caller verification/);
+    expect(() =>
+      parseToolGatewayServerConfig({
+        ...configured,
+        KAGENT_FLEET_FORUM_NOTICES_JSON: JSON.stringify({ ...forumMentions, tenant: '' }),
+      }),
+    ).toThrow();
+    expect(() =>
+      parseToolGatewayServerConfig({
+        ...configured,
+        KAGENT_FLEET_FORUM_NOTICES_JSON: JSON.stringify({
+          ...forumMentions,
+          url: 'http://user:password@source/',
+        }),
+      }),
+    ).toThrow();
+    expect(() =>
+      parseToolGatewayServerConfig({ ...configured, KAGENT_FLEET_FORUM_NOTICES_JSON: '[]' }),
+    ).toThrow();
+  });
+});
