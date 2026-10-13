@@ -400,8 +400,8 @@ export const DEFAULT_TOOL_GUARDS: {
  * Context compaction. A long run's conversation outgrows the model's window
  * (80 turns of 16k-char tool results is several times a 131k window) and the
  * backend answers 400, which no retry fixes. Before every call, when the
- * estimated prompt passes `COMPACT_AT` of the window, the oldest tool
- * results are replaced with a one-line stub, oldest first, until the estimate
+ * estimated prompt passes `COMPACT_AT` of the window, older tool
+ * results are replaced with a one-line stub, largest first, until the estimate
  * is under `COMPACT_TO`; the newest `KEEP_RECENT_TOOL_RESULTS` tool results,
  * and every system, user and assistant message, are left alone. This is
  * the "observation stub" policy, the one that kept every task passing in the
@@ -448,7 +448,7 @@ const COMPACTED_ARGS_KEY = '__compacted';
 const COMPACT_ARGS_OVER_CHARS = 200;
 
 /**
- * Compacts in place; returns how many items were stubbed. Eligible items, oldest
+ * Compacts in place; returns how many items were stubbed. Eligible items, largest
  * first: tool results, and the arguments of the assistant's own earlier tool
  * calls (the code and files it wrote, which a builder run accumulates by the
  * hundred kilobytes and which the first version never counted: 42 compactions
@@ -523,7 +523,12 @@ export function compactConversation(
   const protectFrom = recentTools[0] !== undefined ? recentTools[0] - 1 : messages.length;
   let compacted = 0;
   if (over > COMPACT_AT * windowTokens) {
-    for (let i = 0; i < protectFrom; i += 1) {
+    // Largest first (ties oldest first): the fewest items lost for the chars freed. Oldest
+    // first stubbed a 291-char memory_health reading to save 120 chars, and the auditor
+    // then posted zeros it never read (fleet post 4191, 2026-10-13).
+    const size = messages.map(messageChars);
+    const order = [...Array(protectFrom).keys()].sort((a, b) => (size[b] ?? 0) - (size[a] ?? 0));
+    for (const i of order) {
       if (!stub(i, false)) continue;
       compacted += 1;
       const removed = startChars - conversationChars(messages);
