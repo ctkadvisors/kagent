@@ -95,6 +95,8 @@ export interface ChatRequest {
   model?: string;
   /** MCP-shape tool descriptors. Empty/omitted = no tools. Impl translates to provider format. */
   tools?: readonly ToolDescriptor[];
+  /** `'none'`: the tools stay defined (so tool history stays valid) but this turn must answer in text. */
+  toolChoice?: 'none';
   /** Conventional 0.0..2.0 range; impl clamps to provider's accepted range. */
   temperature?: number;
   /** Hard cap on output tokens; impl translates to provider's `max_tokens` / `max_completion_tokens` etc. */

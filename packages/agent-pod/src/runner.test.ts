@@ -1034,10 +1034,9 @@ describe('runAgentTask — runConfig precedence (WS-G)', () => {
       },
     };
     const result = await runAgentTask(cfg, { llm, sinks: [], toolProviders: [fake] });
-    // With maxIterations=2 we exit after at most 2 LLM calls; default 8
-    // would have given more. Trace count is a proxy.
+    // maxIterations=2: two turns plus the answer turn; the default 8 would give 9.
     const llmCalls = result.traces.filter((t) => t.trace_type === 'llm_call');
-    expect(llmCalls.length).toBeLessThanOrEqual(2);
+    expect(llmCalls.length).toBe(3);
     expect(result.status).toBe('failed');
     expect(result.hitIterationCap).toBe(true);
     expect(result.error?.message).toMatch(/maxIterations/i);

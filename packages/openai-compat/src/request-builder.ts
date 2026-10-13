@@ -44,6 +44,7 @@ export interface OpenAIRequestBody {
   model: string;
   messages: OpenAIWireMessage[];
   tools?: OpenAITool[];
+  tool_choice?: 'none';
   temperature?: number;
   max_tokens?: number;
   stop?: string[];
@@ -108,6 +109,8 @@ export function buildOpenAIRequestBody(
   // exactOptionalPropertyTypes: never assign undefined to optional fields.
   const tools = toOpenAITools(request.tools);
   if (tools !== undefined) body.tools = tools;
+  if (tools !== undefined && request.toolChoice !== undefined)
+    body.tool_choice = request.toolChoice;
   if (request.temperature !== undefined) body.temperature = request.temperature;
   if (request.maxTokens !== undefined) body.max_tokens = request.maxTokens;
   if (request.stopSequences !== undefined && request.stopSequences.length > 0) {
