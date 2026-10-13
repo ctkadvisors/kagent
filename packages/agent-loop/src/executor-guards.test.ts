@@ -651,6 +651,36 @@ describe('AgentExecutor — tool guards', () => {
     expect(toolResults[1]).toContain('data');
   });
 
+  it('refuses a call whose arguments are a compaction placeholder, naming it', async () => {
+    const provider = echoProvider('data');
+    const recordedRequests: { messages: { role: string; content: unknown }[] }[] = [];
+    const llm = makeStubLLM({
+      scriptedChat: [
+        {
+          content: '',
+          tool_calls: [{ id: 'c1', name: 'echo', args: { __compacted: '1965 chars of arguments elided' } }],
+        },
+        call('c2', 'again'),
+        { content: 'done' },
+      ],
+      recordedRequests: recordedRequests as never,
+    });
+    const exec = new AgentExecutor({ registry, llm, toolProviders: [provider] });
+    const result = await exec.run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxIterations: 5,
+    });
+    expect(result.status).toBe('completed');
+    expect(provider.calls).toBe(1);
+    const toolResults = (recordedRequests.at(-1)?.messages ?? [])
+      .filter((m) => m.role === 'tool')
+      .map((m) => String(m.content));
+    expect(toolResults[0]).toContain('placeholder');
+    expect(toolResults[0]).toContain('Write every argument out in full');
+    expect(toolResults[1]).toContain('data');
+  });
+
   it('caps an oversized tool result before it enters the conversation', async () => {
     const provider = echoProvider('x'.repeat(50_000));
     const recordedRequests: import('./llm-client.js').ChatRequest[] = [];

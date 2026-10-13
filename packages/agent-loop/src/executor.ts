@@ -1473,10 +1473,18 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         const identical = (identicalCalls.get(signature) ?? 0) + 1;
         identicalCalls.set(signature, identical);
         const malformed = malformedToolArgs(toolCall.args);
+        // A model asked to repeat a compacted call copies its stub (2026-10-13: two
+        // forum posts went out with no body and came back only "say something").
+        const placeholder =
+          typeof toolCall.args === 'object' &&
+          toolCall.args !== null &&
+          COMPACTED_ARGS_KEY in toolCall.args;
         const guardMsg =
           malformed !== undefined
             ? `guard: the arguments of "${toolCall.name}" were not valid JSON (they began: ${JSON.stringify(malformed.slice(0, 160))}). The call was not run. Send it again with valid JSON arguments.`
-            : identical > this.toolGuards.maxIdenticalCalls
+            : placeholder
+              ? `guard: the arguments of "${toolCall.name}" are the "${COMPACTED_ARGS_KEY}" placeholder that stands in this conversation for an earlier call's elided arguments, not arguments. The call was not run. Write every argument out in full.`
+              : identical > this.toolGuards.maxIdenticalCalls
               ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments without an intervening successful different call. Do not call it again; answer with what you have, or say what is missing.`
               : this.toolGuards.maxCallsPerTool !== undefined &&
                   perTool > this.toolGuards.maxCallsPerTool
