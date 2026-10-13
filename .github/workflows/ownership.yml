@@ -1,0 +1,36 @@
+name: Ownership
+
+# Chris, 2026-10-13: "ensure this is the LAST time" sessions muck around in the harness.
+# Fleet-owned paths (.github/fleet-owned.json, mirroring the fleet constitution in
+# ctkadvisors/new_localai) change only through the fleet's own pull requests
+# (knuteson-fleet[bot]); everyone else gets this red check. main requires it, admins
+# included: overriding it is a deliberate, visible act.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    runs-on: homelab
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The guard's own tests
+        run: python3 .github/scripts/test_fleet_owned.py
+      - name: Fleet-owned paths change only through the fleet
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -eu
+          # The base's guard and grant judge the PR, so a PR cannot weaken either.
+          git show "$BASE_SHA:.github/scripts/fleet_owned.py" > "$RUNNER_TEMP/fleet_owned.py" 2>/dev/null \
+            || cp .github/scripts/fleet_owned.py "$RUNNER_TEMP/fleet_owned.py"
+          if git cat-file -e "$BASE_SHA:.github/fleet-owned.json" 2>/dev/null; then
+            python3 "$RUNNER_TEMP/fleet_owned.py" --policy .github/fleet-owned.json
+          else
+            echo "ownership: the base has no .github/fleet-owned.json yet (this PR introduces it); nothing to judge"
+          fi
