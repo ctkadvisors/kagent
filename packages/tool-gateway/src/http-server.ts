@@ -506,9 +506,14 @@ export class ToolGatewayHttpHandler {
     const session = await this.requireBrowserSession(task);
     const maxChars =
       isRecord(args) && typeof args.maxChars === 'number' ? args.maxChars : undefined;
-    const result = await this.requireBrowser().extractText(session, { maxChars });
+    const { text } = await this.requireBrowser().extractText(session);
+    const shown =
+      maxChars === undefined || text.length <= maxChars ? text : text.slice(0, maxChars);
+    // The whole text's hash, as browser.capture_page records it: a reader can match a
+    // committed capture to its live source without writing anything.
+    const textSha256 = createHash('sha256').update(text, 'utf8').digest('hex');
     return {
-      content: result.text,
+      content: `${shown}\n[textSha256 ${textSha256} of all ${String(text.length)} characters]`,
       isError: false,
       metadata: { sessionId: session.id },
     };
@@ -866,7 +871,7 @@ function runtimeToolDescription(
     case 'browser.capture_page':
       return 'Save exact current browser-visible text and HTTP(S) links plus URL/title/time/SHA-256 provenance to unique files in this task code workspace. Returns saved paths/hash/counts; use existing code tools to read or process them. Accepts no output path. Writes workspace files; does not modify the website.';
     case 'browser.extract_text':
-      return 'Extract visible text from the current browser page.';
+      return 'Extract visible text from the current browser page (maxChars bounds what is shown), ending with the SHA-256 of the whole text, the same textSha256 browser.capture_page records.';
     case 'browser.cdp_url':
       return 'Return the internal CDP URL for approved automation clients.';
     case 'browser.live_view_url':

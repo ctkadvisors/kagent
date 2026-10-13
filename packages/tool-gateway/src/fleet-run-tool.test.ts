@@ -20,13 +20,17 @@ function input(args: unknown): ToolGatewayHandlerInput {
 
 describe('fleet.run_tool', () => {
   it('refuses malformed args before touching anything', () => {
-    expect(parseFleetRunToolArgs({ folder: '../etc', sha: SHA, run: 'x' })).toBeNull();
+    expect(parseFleetRunToolArgs({ folder: '../etc', sha: SHA, run: 'x' })).toMatch(/^folder /);
+    expect(parseFleetRunToolArgs({ folder: '2026-09-26-egressmeter', run: 'x' })).toBe(
+      "sha must be the folder's 40-hex commit, got null",
+    );
     expect(
-      parseFleetRunToolArgs({ folder: '2026-09-26-egressmeter', sha: 'abc', run: 'x' }),
-    ).toBeNull();
+      parseFleetRunToolArgs({ folder: '2026-09-26-egressmeter', sha: SHA, run: 'x'.repeat(4001) }),
+    ).toBe('run must be a command of 1..4000 chars, got 4001');
+    // a delivery's chained command (219 chars on 2026-10-13) runs verbatim
     expect(
-      parseFleetRunToolArgs({ folder: '2026-09-26-egressmeter', sha: SHA, run: 'x'.repeat(201) }),
-    ).toBeNull();
+      parseFleetRunToolArgs({ folder: '2026-09-26-egressmeter', sha: SHA, run: 'x'.repeat(219) }),
+    ).toMatchObject({ run: 'x'.repeat(219) });
     expect(
       parseFleetRunToolArgs({
         folder: '2026-09-26-egressmeter',

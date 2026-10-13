@@ -34,6 +34,9 @@ const STDOUT_KEEP = 6000;
 const STDERR_KEEP = 1500;
 const TREE_MAX_BYTES = 8 * 1024 * 1024;
 const ENVELOPE_MARK = '@@fleet.run_tool@@';
+// The command reaches sh through a workspace snippet, not argv. 200 rejected the
+// delivery and verifier commands agents write (2026-10-13: 44 of 126 calls refused).
+const RUN_MAX = 4000;
 
 export interface FleetRunToolOptions {
   readonly playgroundUrl: string;
@@ -65,12 +68,17 @@ export const FLEET_RUN_TOOL_DESCRIPTOR = {
   },
 } as const;
 
-export function parseFleetRunToolArgs(args: unknown): FleetRunToolArgs | null {
-  if (typeof args !== 'object' || args === null || Array.isArray(args)) return null;
-  const a = args as Record<string, unknown>;
-  if (typeof a.folder !== 'string' || !FOLDER.test(a.folder)) return null;
-  if (typeof a.sha !== 'string' || !SHA.test(a.sha)) return null;
-  if (typeof a.run !== 'string' || a.run.trim().length === 0 || a.run.length > 200) return null;
+/** The parsed args, or the one-line reason they are refused (naming the bad field). */
+export function parseFleetRunToolArgs(args: unknown): FleetRunToolArgs | string {
+  const a = (
+    typeof args === 'object' && args !== null && !Array.isArray(args) ? args : {}
+  ) as Record<string, unknown>;
+  if (typeof a.folder !== 'string' || !FOLDER.test(a.folder))
+    return `folder must be YYYY-MM-DD-name, got ${JSON.stringify(a.folder ?? null)}`;
+  if (typeof a.sha !== 'string' || !SHA.test(a.sha))
+    return `sha must be the folder's 40-hex commit, got ${JSON.stringify(a.sha ?? null)}`;
+  if (typeof a.run !== 'string' || a.run.trim().length === 0 || a.run.length > RUN_MAX)
+    return `run must be a command of 1..${String(RUN_MAX)} chars, got ${typeof a.run === 'string' ? String(a.run.length) : 'none'}`;
   const out: FleetRunToolArgs = { folder: a.folder, sha: a.sha, run: a.run.trim() };
   if (typeof a.timeoutMs === 'number' && a.timeoutMs >= 1000) {
     return { ...out, timeoutMs: Math.min(a.timeoutMs, MAX_TIMEOUT_MS) };
@@ -87,11 +95,7 @@ export function defineFleetRunTool(options: FleetRunToolOptions): ToolGatewayExt
   const base = options.playgroundUrl.replace(/\/+$/, '');
   return async (input: ToolGatewayHandlerInput): Promise<ToolResult> => {
     const args = parseFleetRunToolArgs(input.call.args);
-    if (args === null) {
-      return errorResult(
-        'invalid_args: fleet.run_tool needs folder (YYYY-MM-DD-name), sha (40 hex) and run (<=200 chars)',
-      );
-    }
+    if (typeof args === 'string') return errorResult(`invalid_args: fleet.run_tool ${args}`);
     const url = `${base}/tree?folder=${encodeURIComponent(args.folder)}&sha=${args.sha}`;
     let tree: { files?: Record<string, unknown>; error?: unknown };
     try {
