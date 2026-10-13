@@ -252,6 +252,16 @@ describe('ToolGatewayHttpHandler', () => {
     ).toMatchObject({ isError: true });
   });
 
+  it('extract_text reports the hash of the whole text, as capture_page records it', async () => {
+    const result = asRecord(
+      await json(
+        await makeHandler().handle(request(invokeBody('browser.extract_text', { maxChars: 7 }))),
+      ),
+    );
+    const sha = createHash('sha256').update('Visible report text', 'utf8').digest('hex');
+    expect(result.content).toBe(`Visible\n[textSha256 ${sha} of all 19 characters]`);
+  });
+
   it('executes the advertised commit example with folder-relative destinations and full workspace sources', async () => {
     const runner = new LocalCodeRunner({ workspaceDir, env: {} });
     const readFiles = vi.spyOn(runner, 'readFiles');
