@@ -24,10 +24,14 @@ def test_owned_matches_the_authority_rule():
 
 def test_only_the_fleet_changes_fleet_owned_paths():
     harness = ["packages/agent-loop/src/executor.ts", "docs/x.md"]
-    ok, message = fleet_owned.decide("chrisknu", harness, GRANT)
+    bot = "knuteson-fleet[bot]"
+    ok, message = fleet_owned.decide("chrisknu", "chrisknu", harness, GRANT)
     assert not ok and "packages/agent-loop/src/executor.ts" in message and "docs/x.md" not in message
-    assert fleet_owned.decide("knuteson-fleet[bot]", harness, GRANT)[0]
-    assert fleet_owned.decide("chrisknu", ["docs/x.md", "packages/agent-loop/src/a.test.ts"], GRANT)[0]
+    assert fleet_owned.decide(bot, bot, harness, GRANT)[0]
+    # a human pushing onto the fleet's branch is judged as a human
+    ok, message = fleet_owned.decide(bot, "chrisknu", harness, GRANT)
+    assert not ok and "chrisknu (pushing to" in message
+    assert fleet_owned.decide("chrisknu", "chrisknu", ["docs/x.md", "packages/agent-loop/src/a.test.ts"], GRANT)[0]
 
 
 def test_grant_of_reads_a_constitution_or_a_mirror():
@@ -49,17 +53,24 @@ def test_main_reads_the_policy_at_the_base_and_fails_closed():
         base = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         # the PR widens its own grant and edits a fleet-owned file: the base grant still decides
         Path(root, "packages/agent-loop/src").mkdir(parents=True)
-        Path(root, "packages/agent-loop/src/executor.ts").write_text("x")
+        Path(root, "packages/agent-loop/src/a b.ts").write_text("x")   # whitespace never splits a path
         Path(root, "policy.json").write_text(json.dumps({"repositories": {"o/r": {"writable_paths": []}}}))
         git("add", ".")
         git("commit", "-q", "-m", "head")
+        head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        git("checkout", "-q", base)   # the guard runs from the base checkout; the head is only data
         cwd = os.getcwd()
         os.chdir(root)
         try:
-            os.environ.update(BASE_SHA=base, PR_AUTHOR="chrisknu")
+            os.environ.update(BASE_SHA=base, HEAD_SHA=head, PR_AUTHOR="chrisknu", ACTOR="chrisknu")
             assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1
-            os.environ["PR_AUTHOR"] = "knuteson-fleet[bot]"
+            os.environ.update(PR_AUTHOR="knuteson-fleet[bot]", ACTOR="knuteson-fleet[bot]")
             assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 0
+            os.environ["ACTOR"] = "chrisknu"
+            assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1
+            os.environ["HEAD_SHA"] = "f" * 40
+            assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1
+            os.environ["HEAD_SHA"] = head
             del os.environ["BASE_SHA"]
             assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1
             os.environ["BASE_SHA"] = "0" * 40

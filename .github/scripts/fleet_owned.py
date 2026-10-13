@@ -12,10 +12,13 @@ belongs instead: a fleet-proposal/v1 on the forum, or a fleet-boss decision. Flo
 mirror, .github/fleet-owned.json, which this repository's run checks against the constitution.
 
     python3 fleet_owned.py --policy <file> [--repository <owner/repo>] [--mirror <url>]
-    env: BASE_SHA (the PR base), PR_AUTHOR (the PR author's login)
+    env: BASE_SHA, HEAD_SHA (the PR's base and head commits), PR_AUTHOR (who opened it),
+         ACTOR (who pushed the commit being judged)
 
-The policy is read at BASE_SHA, so a pull request cannot widen its own grant to pass.
-Stdlib only: the runner has no PyYAML.
+It runs under pull_request_target from the base branch: the workflow, this script and the
+policy (read at BASE_SHA) are the base's, and nothing from the pull request executes; its
+head is fetched only as data to diff. Both the author and the pusher must be the fleet, so
+a human push onto a fleet branch is judged as human. Stdlib only.
 """
 import argparse
 import json
@@ -45,14 +48,15 @@ def grant_of(policy, repository):
     return {key: list(grant.get(key, [])) for key in GRANT_KEYS}
 
 
-def decide(author, changed, grant):
+def decide(author, actor, changed, grant):
     """(ok, message): the fleet may change its own paths; anyone else may change only the floor."""
     hits = sorted(path for path in changed if owned(path, grant))
-    if not hits or author in FLEET:
-        return True, f"ownership: ok ({len(hits)} fleet-owned path(s), author {author})"
+    if not hits or (author in FLEET and actor in FLEET):
+        return True, f"ownership: ok ({len(hits)} fleet-owned path(s), author {author}, pushed by {actor})"
+    who = author if author not in FLEET else f"{actor} (pushing to {author}'s pull request)"
     return False, ("ownership: these paths are fleet-owned (constitution writable_paths):\n  "
                    + "\n  ".join(hits)
-                   + f"\nonly the fleet changes them; {author} is not the fleet. Post a fleet-proposal/v1 on the"
+                   + f"\nonly the fleet changes them; {who} is not the fleet. Post a fleet-proposal/v1 on the"
                    " forum, or leave it to fleet-boss. Floor paths (everything else) stay open to humans.")
 
 
@@ -66,17 +70,23 @@ def main(argv=None):
     args.add_argument("--repository")
     args.add_argument("--mirror", help="URL of the kagent mirror to compare with the constitution")
     options = args.parse_args(argv)
-    base, author = os.environ.get("BASE_SHA"), os.environ.get("PR_AUTHOR")
-    if not base or not author:
-        print("ownership: BASE_SHA and PR_AUTHOR must be set (a pull_request event); refusing to pass")
+    env = {key: os.environ.get(key) for key in ("BASE_SHA", "HEAD_SHA", "PR_AUTHOR", "ACTOR")}
+    if not all(env.values()):
+        print("ownership: BASE_SHA, HEAD_SHA, PR_AUTHOR and ACTOR must all be set; refusing to pass")
         return 1
+    base, head = env["BASE_SHA"], env["HEAD_SHA"]
     try:
         policy = json.loads(git("show", f"{base}:{options.policy}"))
     except (subprocess.CalledProcessError, ValueError) as error:
         print(f"ownership: cannot read {options.policy} at the base {base}: {error}; refusing to pass")
         return 1
-    changed = git("diff", "--name-only", "--no-renames", f"{base}...HEAD").split()
-    ok, message = decide(author, changed, grant_of(policy, options.repository))
+    try:
+        # -z: exact paths, never quoted or split on whitespace; --no-renames: both sides of a move
+        changed = [p for p in git("diff", "-z", "--name-only", "--no-renames", f"{base}...{head}").split("\0") if p]
+    except subprocess.CalledProcessError as error:
+        print(f"ownership: cannot diff {base}...{head}: {error}; refusing to pass")
+        return 1
+    ok, message = decide(env["PR_AUTHOR"], env["ACTOR"], changed, grant_of(policy, options.repository))
     print(message)
     if options.mirror:
         with urllib.request.urlopen(options.mirror, timeout=30) as response:

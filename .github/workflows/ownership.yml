@@ -2,11 +2,15 @@ name: Ownership
 
 # Chris, 2026-10-13: "ensure this is the LAST time" sessions muck around in the harness.
 # Fleet-owned paths (.github/fleet-owned.json, mirroring the fleet constitution in
-# ctkadvisors/new_localai) change only through the fleet's own pull requests
-# (knuteson-fleet[bot]); everyone else gets this red check. main requires it, admins
-# included: overriding it is a deliberate, visible act.
+# ctkadvisors/new_localai) change only through the fleet's own pull requests (opened and
+# pushed by knuteson-fleet[bot]); everyone else gets this red check. main requires it,
+# admins included: overriding it is a deliberate, visible act.
+#
+# pull_request_target: the base branch's workflow, script and grant judge every pull
+# request, so a PR cannot rewrite its own judge, and nothing from the PR executes on the
+# homelab runner (its head is fetched as data to diff). The token is read-only.
 on:
-  pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -18,19 +22,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: The guard's own tests
+      - name: The guard's own tests (the base's)
         run: python3 .github/scripts/test_fleet_owned.py
       - name: Fleet-owned paths change only through the fleet
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -eu
-          # The base's guard and grant judge the PR, so a PR cannot weaken either.
-          git show "$BASE_SHA:.github/scripts/fleet_owned.py" > "$RUNNER_TEMP/fleet_owned.py" 2>/dev/null \
-            || cp .github/scripts/fleet_owned.py "$RUNNER_TEMP/fleet_owned.py"
-          if git cat-file -e "$BASE_SHA:.github/fleet-owned.json" 2>/dev/null; then
-            python3 "$RUNNER_TEMP/fleet_owned.py" --policy .github/fleet-owned.json
-          else
-            echo "ownership: the base has no .github/fleet-owned.json yet (this PR introduces it); nothing to judge"
-          fi
+          git fetch -q --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          python3 .github/scripts/fleet_owned.py --policy .github/fleet-owned.json
