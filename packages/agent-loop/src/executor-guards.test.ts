@@ -658,7 +658,9 @@ describe('AgentExecutor — tool guards', () => {
       scriptedChat: [
         {
           content: '',
-          tool_calls: [{ id: 'c1', name: 'echo', args: { __compacted: '1965 chars of arguments elided' } }],
+          tool_calls: [
+            { id: 'c1', name: 'echo', args: { __compacted: '1965 chars of arguments elided' } },
+          ],
         },
         call('c2', 'again'),
         { content: 'done' },

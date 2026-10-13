@@ -1485,11 +1485,11 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
             : placeholder
               ? `guard: the arguments of "${toolCall.name}" are the "${COMPACTED_ARGS_KEY}" placeholder that stands in this conversation for an earlier call's elided arguments, not arguments. The call was not run. Write every argument out in full.`
               : identical > this.toolGuards.maxIdenticalCalls
-              ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments without an intervening successful different call. Do not call it again; answer with what you have, or say what is missing.`
-              : this.toolGuards.maxCallsPerTool !== undefined &&
-                  perTool > this.toolGuards.maxCallsPerTool
-                ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
-                : undefined;
+                ? `guard: "${toolCall.name}" was already called ${String(identical - 1)} times with these exact arguments without an intervening successful different call. Do not call it again; answer with what you have, or say what is missing.`
+                : this.toolGuards.maxCallsPerTool !== undefined &&
+                    perTool > this.toolGuards.maxCallsPerTool
+                  ? `guard: "${toolCall.name}" has been called ${String(perTool - 1)} times in this run. Answer with what you have, or say what is missing.`
+                  : undefined;
         // Sample after execution/trace emission, when the model-visible result
         // is appended. Slow tools and earlier tools in a batch consume time too.
         const turnsNote = (): string =>
