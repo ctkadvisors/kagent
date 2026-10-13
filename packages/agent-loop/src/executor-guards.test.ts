@@ -84,6 +84,15 @@ describe('compactConversation', () => {
     expect(compactConversation(msgs, 20_000)).toBe(0);
   });
 
+  it('stubs the largest results first, so a short early reading survives', () => {
+    const msgs = conversation(20);
+    const reading = JSON.stringify({ active: 153, measured_success: 8, cited: 217 }).padEnd(291);
+    msgs[3] = { ...msgs[3]!, content: reading }; // the first result, the oldest
+    expect(compactConversation(msgs, 20_000)).toBeGreaterThan(0);
+    expect(msgs[3]?.content).toBe(reading);
+    expect(msgs[5]?.content).toContain('[compacted: an earlier tool result of echo (4000 chars)');
+  });
+
   it('keeps the newest results over the target while the request fits under the refusal line', () => {
     const msgs = conversation(4); // ~4k tokens: past 60% of 6k, under 85%
     expect(compactConversation(msgs, 6_000)).toBe(0);
