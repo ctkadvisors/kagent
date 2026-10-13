@@ -32,6 +32,10 @@ def test_only_the_fleet_changes_fleet_owned_paths():
     ok, message = fleet_owned.decide(bot, "chrisknu", harness, GRANT)
     assert not ok and "chrisknu (pushing to" in message
     assert fleet_owned.decide("chrisknu", "chrisknu", ["docs/x.md", "packages/agent-loop/src/a.test.ts"], GRANT)[0]
+    # a human commit in a fleet PR (pushed before the fleet's last push) is still a human change
+    ok, message = fleet_owned.decide(bot, bot, harness, GRANT, ["authority@fleet.local", "me@x.com"])
+    assert not ok and "commits by me@x.com" in message
+    assert fleet_owned.decide(bot, bot, harness, GRANT, ["authority@fleet.local"])[0]
 
 
 def test_grant_of_reads_a_constitution_or_a_mirror():
@@ -45,7 +49,7 @@ def test_main_reads_the_policy_at_the_base_and_fails_closed():
         def git(*args):
             subprocess.run(["git", "-C", root, *args], check=True, capture_output=True)
         git("init", "-q", "-b", "main")
-        git("config", "user.email", "t@t")
+        git("config", "user.email", "authority@fleet.local")
         git("config", "user.name", "t")
         Path(root, "policy.json").write_text(json.dumps({"repositories": {"o/r": GRANT}}))
         git("add", ".")
@@ -67,6 +71,15 @@ def test_main_reads_the_policy_at_the_base_and_fails_closed():
             os.environ.update(PR_AUTHOR="knuteson-fleet[bot]", ACTOR="knuteson-fleet[bot]")
             assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 0
             os.environ["ACTOR"] = "chrisknu"
+            assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1
+            # a human commit under the fleet's later push: the commit identity still decides
+            git("checkout", "-q", head)
+            Path(root, "packages/agent-loop/src/b.ts").write_text("y")
+            git("add", ".")
+            git("-c", "user.email=me@x.com", "commit", "-q", "-m", "human")
+            mixed = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+            git("checkout", "-q", base)
+            os.environ.update(ACTOR="knuteson-fleet[bot]", HEAD_SHA=mixed)
             assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1
             os.environ["HEAD_SHA"] = "f" * 40
             assert fleet_owned.main(["--policy", "policy.json", "--repository", "o/r"]) == 1

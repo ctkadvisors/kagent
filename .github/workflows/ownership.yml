@@ -11,6 +11,9 @@ name: Ownership
 # homelab runner (its head is fetched as data to diff). The token is read-only.
 on:
   pull_request_target:
+    # edited: a retargeted base re-runs the base's judge (a PR opened against a side branch
+    # and moved to main must not keep a green it earned elsewhere)
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read

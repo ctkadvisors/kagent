@@ -28,6 +28,9 @@ import sys
 import urllib.request
 
 FLEET = frozenset({"knuteson-fleet[bot]"})
+# The commit identity the authority writes fleet patches with (authority/gh.py); a human
+# commit pushed before a later fleet push still carries its own identity.
+FLEET_COMMITS = frozenset({"authority@fleet.local"})
 MIRROR_REPOSITORY = "ctkadvisors/kagent"
 GRANT_KEYS = ("writable_paths", "protected_paths", "protected_suffixes")
 
@@ -48,12 +51,16 @@ def grant_of(policy, repository):
     return {key: list(grant.get(key, [])) for key in GRANT_KEYS}
 
 
-def decide(author, actor, changed, grant):
-    """(ok, message): the fleet may change its own paths; anyone else may change only the floor."""
+def decide(author, actor, changed, grant, committers=()):
+    """(ok, message): the fleet may change its own paths; anyone else may change only the floor.
+
+    `committers` are the author and committer emails of every commit in the pull request."""
     hits = sorted(path for path in changed if owned(path, grant))
-    if not hits or (author in FLEET and actor in FLEET):
+    strangers = sorted(set(committers) - FLEET_COMMITS)
+    if not hits or (author in FLEET and actor in FLEET and not strangers):
         return True, f"ownership: ok ({len(hits)} fleet-owned path(s), author {author}, pushed by {actor})"
-    who = author if author not in FLEET else f"{actor} (pushing to {author}'s pull request)"
+    who = (author if author not in FLEET else f"{actor} (pushing to {author}'s pull request)" if actor not in FLEET
+           else "commits by " + ", ".join(strangers))
     return False, ("ownership: these paths are fleet-owned (constitution writable_paths):\n  "
                    + "\n  ".join(hits)
                    + f"\nonly the fleet changes them; {who} is not the fleet. Post a fleet-proposal/v1 on the"
@@ -83,10 +90,12 @@ def main(argv=None):
     try:
         # -z: exact paths, never quoted or split on whitespace; --no-renames: both sides of a move
         changed = [p for p in git("diff", "-z", "--name-only", "--no-renames", f"{base}...{head}").split("\0") if p]
+        identities = git("log", "-z", "--format=%ae%x00%ce", f"{base}..{head}").split("\0")
     except subprocess.CalledProcessError as error:
-        print(f"ownership: cannot diff {base}...{head}: {error}; refusing to pass")
+        print(f"ownership: cannot read {base}..{head}: {error}; refusing to pass")
         return 1
-    ok, message = decide(env["PR_AUTHOR"], env["ACTOR"], changed, grant_of(policy, options.repository))
+    ok, message = decide(env["PR_AUTHOR"], env["ACTOR"], changed, grant_of(policy, options.repository),
+                         [i.strip() for i in identities if i.strip()])
     print(message)
     if options.mirror:
         with urllib.request.urlopen(options.mirror, timeout=30) as response:
