@@ -1,0 +1,40 @@
+name: Ownership
+
+# Chris, 2026-10-13: "ensure this is the LAST time" sessions muck around in the harness.
+# Fleet-owned paths (.github/fleet-owned.json, mirroring the fleet constitution in
+# ctkadvisors/new_localai) change only through the fleet's own pull requests (opened and
+# pushed by knuteson-fleet[bot]); everyone else gets this red check. main requires it,
+# admins included: overriding it is a deliberate, visible act.
+#
+# pull_request_target: the base branch's workflow, script and grant judge every pull
+# request, so a PR cannot rewrite its own judge, and nothing from the PR executes on the
+# homelab runner (its head is fetched as data to diff). The token is read-only.
+on:
+  pull_request_target:
+    # edited: a retargeted base re-runs the base's judge (a PR opened against a side branch
+    # and moved to main must not keep a green it earned elsewhere)
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    runs-on: homelab
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The guard's own tests (the base's)
+        run: python3 .github/scripts/test_fleet_owned.py
+      - name: Fleet-owned paths change only through the fleet
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -eu
+          git fetch -q --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          python3 .github/scripts/fleet_owned.py --policy .github/fleet-owned.json
