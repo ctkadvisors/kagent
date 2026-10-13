@@ -506,7 +506,7 @@ export class ToolGatewayHttpHandler {
     const session = await this.requireBrowserSession(task);
     const maxChars =
       isRecord(args) && typeof args.maxChars === 'number' ? args.maxChars : undefined;
-    const { text } = await this.requireBrowser().extractText(session, {});
+    const { text } = await this.requireBrowser().extractText(session);
     const shown =
       maxChars === undefined || text.length <= maxChars ? text : text.slice(0, maxChars);
     // The whole text's hash, as browser.capture_page records it: a reader can match a
