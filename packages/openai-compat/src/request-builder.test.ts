@@ -198,6 +198,19 @@ describe('buildOpenAIRequestBody (VALIDATION row 8)', () => {
     ]);
   });
 
+  it('toolChoice none keeps the tools and maps to tool_choice; without tools it is dropped', () => {
+    const tools = [{ name: 't', description: 'd', inputSchema: { type: 'object' } }];
+    const body = buildOpenAIRequestBody({ messages: [], tools, toolChoice: 'none' }, 'm', {
+      stream: false,
+    });
+    expect(body.tools).toHaveLength(1);
+    expect(body.tool_choice).toBe('none');
+    const bare = buildOpenAIRequestBody({ messages: [], toolChoice: 'none' }, 'm', {
+      stream: false,
+    });
+    expect(bare.tool_choice).toBeUndefined();
+  });
+
   it('omits tools when request.tools is undefined or empty', () => {
     const body1 = buildOpenAIRequestBody({ messages: [] }, 'm', { stream: false });
     expect(body1.tools).toBeUndefined();

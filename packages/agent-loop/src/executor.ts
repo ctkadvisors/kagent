@@ -216,7 +216,7 @@ export interface ExecutionResult {
   status: TerminalStatus;
   /** Final assistant content; null when loop exited without a final text response. */
   finalContent: string | null;
-  /** True iff the loop ran the full `maxIterations` without natural exit. Does not imply failure. */
+  /** True iff the loop ran the full `maxIterations` and its answer turn returned no text. */
   hitIterationCap: boolean;
   /** Cumulative budget snapshot at exit. */
   budget: RunBudget;
@@ -239,7 +239,10 @@ export interface RunInput<TType extends string = string> {
   messages: ChatMessage[];
   /** Optional caller-supplied run id. Auto-generated via `randomUUID()` if omitted. */
   runId?: string;
-  /** Override the constructor's `defaultMaxIterations` (which itself defaults to 8 — D-12). */
+  /**
+   * Override the constructor's `defaultMaxIterations` (which itself defaults to 8 — D-12).
+   * A run that uses every iteration gets one more, tool-less call to answer (ANSWER_TURN_NOTE).
+   */
   maxIterations?: number;
   /**
    * A turn the model wants to end without having called any tool gets this
@@ -609,6 +612,15 @@ export function loopTurnNote(
   }
   return `\n\n[loop: ${turnNo}.]`;
 }
+
+/**
+ * Sent as a user message after the last working turn. Without it a run that used
+ * every turn ended on a tool call with no answer and was marked failed: 3 of 5
+ * fleet-verifier children on 2026-10-13 had already posted their verdicts. A note
+ * inside a tool result did not stop the model calling tools; this message did.
+ */
+export const ANSWER_TURN_NOTE =
+  '[loop: this run is out of turns and no more tool calls will run. Reply now with your final answer.]';
 
 /** Middle-elide a tool result so one oversized payload cannot own the context. */
 export function capToolResult(text: string, max: number): string {
@@ -1128,13 +1140,15 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
     // ─── Main loop ───────────────────────────────────────────────────
     let selfChecked = false;
     let toolCallsInRun = 0;
-    for (let iteration = 0; iteration < maxIterations; iteration++) {
+    for (let iteration = 0; iteration <= maxIterations; iteration++) {
       // Invariant 2.a — abort check at top of iteration.
       if (signal.aborted) {
         status = 'cancelled';
         completedNaturally = true;
         break;
       }
+      const answerTurn = iteration === maxIterations;
+      if (answerTurn) currentMessages.push({ role: 'user', content: ANSWER_TURN_NOTE });
 
       // Iteration-boundary trace (RESEARCH §8 Q2 — at start of iteration).
       const boundaryEntry: TraceEntry = {
@@ -1185,6 +1199,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         messages: currentMessages,
         ...(agentDef.defaultModel !== undefined && { model: agentDef.defaultModel }),
         ...(toolDescriptors.length > 0 && { tools: toolDescriptors }),
+        ...(answerTurn && toolDescriptors.length > 0 && { toolChoice: 'none' as const }),
         ...(agentDef.llmParams?.temperature !== undefined && {
           temperature: agentDef.llmParams.temperature,
         }),
@@ -1405,8 +1420,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       }
 
       // (4) Tool dispatch OR loop exit
-      if (!synthesizedToolCalls || synthesizedToolCalls.length === 0) {
-        if (input.selfCheck !== undefined && !selfChecked && toolCallsInRun === 0) {
+      if (answerTurn || !synthesizedToolCalls || synthesizedToolCalls.length === 0) {
+        // A tool call on the answer turn is never run; no text leaves the run capped.
+        if (answerTurn && llmResult.content.trim().length === 0) break;
+        if (!answerTurn && input.selfCheck !== undefined && !selfChecked && toolCallsInRun === 0) {
           selfChecked = true;
           currentMessages.push({ role: 'assistant', content: llmResult.content });
           currentMessages.push({ role: 'user', content: input.selfCheck });

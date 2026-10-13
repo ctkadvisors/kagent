@@ -9,8 +9,8 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AgentRegistry } from './registry.js';
-import { AgentExecutor } from './executor.js';
-import type { ChatResult } from './llm-client.js';
+import { AgentExecutor, ANSWER_TURN_NOTE } from './executor.js';
+import type { ChatRequest, ChatResult } from './llm-client.js';
 import type { MyType, MyPhase } from './__fixtures__/agents.js';
 import { chatAgent } from './__fixtures__/agents.js';
 import { makeStubLLM } from './__fixtures__/stub-llm.js';
@@ -128,7 +128,7 @@ describe('AgentExecutor — loop semantics', () => {
     ]);
   });
 
-  it('SC3.3: iteration cap — 9 scripted tool-use responses, maxIterations=8; exits with hitIterationCap=true, status="completed", 8 llm_call entries', async () => {
+  it('SC3.3: iteration cap — 9 scripted tool-use responses, maxIterations=8; exits with hitIterationCap=true, status="completed", 8 turns + the answer turn', async () => {
     const responses: ChatResult[] = Array.from({ length: 9 }, () => ({
       content: '',
       tool_calls: [{ id: 'c', name: 'noop', args: {} }],
@@ -148,7 +148,41 @@ describe('AgentExecutor — loop semantics', () => {
     });
     expect(result.status).toBe('completed');
     expect(result.hitIterationCap).toBe(true);
-    expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(8);
+    expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(9);
+    // The answer turn's tool call is never run.
+    expect(result.traces.filter((t) => t.trace_type === 'tool_call')).toHaveLength(8);
+  });
+
+  it('a run out of turns answers on one more call, tools off', async () => {
+    const recordedRequests: ChatRequest[] = [];
+    const llm = makeStubLLM({
+      recordedRequests,
+      scriptedResponses: [
+        { content: '', tool_calls: [{ id: 'c', name: 'noop', args: {} }] },
+        { content: '', tool_calls: [{ id: 'd', name: 'noop', args: { n: 1 } }] },
+        { content: 'posted verdict 4060', tool_calls: [{ id: 'e', name: 'noop', args: { n: 2 } }] },
+      ],
+    });
+    const tools = [
+      makeStubToolProvider({
+        id: 'p1',
+        tools: [{ name: 'noop', description: '', inputSchema: {} }],
+      }),
+    ];
+    const result = await new AgentExecutor({ registry, llm, toolProviders: tools }).run({
+      agentType: 'chat',
+      messages: [{ role: 'user', content: 'go' }],
+      maxIterations: 2,
+    });
+    expect(result.status).toBe('completed');
+    expect(result.finalContent).toBe('posted verdict 4060');
+    expect(result.hitIterationCap).toBe(false);
+    expect(recordedRequests.map((r) => r.toolChoice)).toEqual([undefined, undefined, 'none']);
+    expect(recordedRequests[2]?.messages.at(-1)).toEqual({
+      role: 'user',
+      content: ANSWER_TURN_NOTE,
+    });
+    expect(result.traces.filter((t) => t.trace_type === 'tool_call')).toHaveLength(2);
   });
 
   it('SC3.4: token estimation fallback — ChatResult.usage undefined; budget.cumulativeInputTokens > 0 via estimateTokens', async () => {
@@ -261,7 +295,7 @@ describe('AgentExecutor — budget surface', () => {
 
   it('SC4.1: at iteration cap, budget.cumulativeInputTokens > 0 and cumulativeOutputTokens > 0', async () => {
     const responses: ChatResult[] = Array.from({ length: 9 }, () => ({
-      content: 'x',
+      content: '',
       tool_calls: [{ id: 'c', name: 'noop', args: {} }],
       usage: { inputTokens: 5, outputTokens: 3 },
     }));
@@ -279,8 +313,9 @@ describe('AgentExecutor — budget surface', () => {
       maxIterations: 8,
     });
     expect(result.hitIterationCap).toBe(true);
-    expect(result.budget.cumulativeInputTokens).toBe(40);
-    expect(result.budget.cumulativeOutputTokens).toBe(24);
+    // 8 turns + the answer turn.
+    expect(result.budget.cumulativeInputTokens).toBe(45);
+    expect(result.budget.cumulativeOutputTokens).toBe(27);
   });
 
   it('SC4.2: at iteration cap with NO backend reporting costUsd, budget.cumulativeCostUsd === null', async () => {
@@ -417,7 +452,7 @@ describe('AgentExecutor — budget surface', () => {
     });
     expect(result.hitIterationCap).toBe(true);
     expect(result.status).toBe('completed');
-    expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(8);
+    expect(result.traces.filter((t) => t.trace_type === 'llm_call')).toHaveLength(9);
   });
 
   /* =====================================================================
