@@ -55,6 +55,9 @@ export interface PodCodeRunnerOptions {
   readonly resources?: Record<string, unknown>;
   /** Where sandboxes may run: the image's architectures, typically. */
   readonly nodeSelector?: Record<string, string>;
+  /** A resolver for cluster names only: the cluster's own DNS forwards any name to the
+   *  internet, a channel out of a sandbox that dials nothing else (2026-10-15, egressmeter). */
+  readonly dnsConfig?: Record<string, unknown>;
   readonly readyTimeoutMs?: number;
   readonly fetch?: typeof fetch;
   readonly sleep?: (ms: number) => Promise<void>;
@@ -97,6 +100,10 @@ export function sandboxJob(
             runtimeClassName: options.runtimeClassName,
           }),
           ...(options.nodeSelector !== undefined && { nodeSelector: options.nodeSelector }),
+          ...(options.dnsConfig !== undefined && {
+            dnsPolicy: 'None',
+            dnsConfig: options.dnsConfig,
+          }),
           securityContext: {
             runAsNonRoot: true,
             runAsUser: 1000,
