@@ -109,6 +109,10 @@ spec:
             - name: KAGENT_TOOL_GATEWAY_SANDBOX_NODE_SELECTOR_JSON
               value: {{ toJson . | quote }}
             {{- end }}
+            {{- with .dnsConfig }}
+            - name: KAGENT_TOOL_GATEWAY_SANDBOX_DNS_CONFIG_JSON
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.toolRuntime.gateway.verifyCaller }}

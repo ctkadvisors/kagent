@@ -137,6 +137,7 @@ export function parseToolGatewayServerConfig(
     const runtimeClassName = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_RUNTIME_CLASS);
     const resources = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_RESOURCES_JSON);
     const nodeSelector = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_NODE_SELECTOR_JSON);
+    const dnsConfig = nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_DNS_CONFIG_JSON);
     config.sandbox = {
       image: sandboxImage,
       namespace: nonEmpty(env.KAGENT_TOOL_GATEWAY_SANDBOX_NAMESPACE) ?? 'default',
@@ -147,6 +148,9 @@ export function parseToolGatewayServerConfig(
       }),
       ...(nodeSelector !== undefined && {
         nodeSelector: JSON.parse(nodeSelector) as Record<string, string>,
+      }),
+      ...(dnsConfig !== undefined && {
+        dnsConfig: JSON.parse(dnsConfig) as Record<string, unknown>,
       }),
     };
   }

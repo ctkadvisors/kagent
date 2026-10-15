@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { V1Job } from '@kubernetes/client-node';
 
 import { LocalCodeRunner } from './code-runner.js';
-import { createPodCodeRunnerFactory, type SandboxKube } from './pod-code-runner.js';
+import { createPodCodeRunnerFactory, sandboxJob, type SandboxKube } from './pod-code-runner.js';
 import { createSandboxHandler } from './sandbox-worker.js';
 
 const task = (uid: string) => ({
@@ -342,5 +342,29 @@ describe('createPodCodeRunnerFactory', () => {
     await expect(recovered.listFiles()).rejects.toThrow('workspace_recreated');
     expect(await recovered.listFiles()).toEqual([]);
     expect(c.jobs).toHaveLength(2);
+  });
+});
+
+describe('sandboxJob', () => {
+  const pod = (dnsConfig?: Record<string, unknown>) =>
+    (
+      sandboxJob(
+        {
+          kube: {} as SandboxKube,
+          namespace: 'kagent-system',
+          image: 'i',
+          ...(dnsConfig && { dnsConfig }),
+        },
+        task('uid-a'),
+        'kagent-sbx-x',
+        'a'.repeat(64),
+      )['spec'] as never
+    )['template']['spec'] as Record<string, unknown>;
+
+  it('uses only the configured resolver when one is set, the cluster DNS otherwise', () => {
+    const dnsConfig = { nameservers: ['10.43.0.53'], searches: ['svc.cluster.local'] };
+    expect(pod(dnsConfig)).toMatchObject({ dnsPolicy: 'None', dnsConfig });
+    expect(pod()).not.toHaveProperty('dnsPolicy');
+    expect(pod()).not.toHaveProperty('dnsConfig');
   });
 });

@@ -122,6 +122,8 @@ toolRuntime:
       runtimeClassName: ''
       # The image's architectures: the published images are linux/amd64.
       nodeSelector: {}
+      # Pod dnsConfig (dnsPolicy None) for a resolver that answers cluster names only.
+      dnsConfig: {}
       idleSeconds: 1800
       resources:
         requests:
