@@ -43,6 +43,8 @@
  */
 
 /** Minimal Informer surface needed to restart it. */
+import type { Informer, KubernetesObject } from '@kubernetes/client-node';
+
 export interface RestartableInformer {
   start(): Promise<void>;
 }
@@ -97,7 +99,21 @@ export interface RestarterState {
 /** Injected timer shape (so tests don't sit on real time). */
 export interface RestartTimer {
   setTimeout(cb: () => void, delayMs: number): void;
+  /**
+   * Process-level escalation once the consecutive-failure cap is reached.
+   * Production ({@link PROCESS_TIMER}) exits so Kubernetes restarts the
+   * operator with fresh watches. Before this existed, the 2026-10-16 network
+   * outage capped the AgentTask watch and the pod stayed Running and Ready
+   * while dispatching nothing for 33 minutes. Test timers omit it.
+   */
+  exit?(code: number): void;
 }
+
+/** Real timers plus exit-on-cap; the default for every production informer. */
+export const PROCESS_TIMER: RestartTimer = {
+  setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms),
+  exit: (code) => process.exit(code),
+};
 
 const DEFAULT_INITIAL_DELAY_MS = 5_000;
 const DEFAULT_BACKOFF_FACTOR = 2;
@@ -135,7 +151,7 @@ export function createRestarter(
   informer: RestartableInformer,
   logger: InformerRestartLogger,
   opts: RestartOptions = {},
-  timer: RestartTimer = { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
+  timer: RestartTimer = PROCESS_TIMER,
 ): {
   readonly state: RestarterState;
   safeRestart(err: unknown): void;
@@ -164,6 +180,7 @@ export function createRestarter(
     if (state.attempts > max) {
       state.capReached = true;
       logger.onCapReached?.(err, state.attempts);
+      timer.exit?.(1);
       return;
     }
     const delayMs = computeBackoffMs(state.attempts, opts);
@@ -192,4 +209,47 @@ export function createRestarter(
   }
 
   return { state, safeRestart, reset };
+}
+
+/**
+ * The restart policy every operator informer uses: exponential backoff,
+ * reset on any delivered event, and exit at the consecutive-failure cap so
+ * Kubernetes restarts the operator with fresh watches. Replaces the bare
+ * `setTimeout(() => void informer.start(), 5000)`, whose swallowed rejection
+ * left a watch dead with no further error event.
+ */
+export function superviseInformer<T extends KubernetesObject>(
+  label: string,
+  informer: Informer<T>,
+  timer: RestartTimer = PROCESS_TIMER,
+): void {
+  const restarter = createRestarter(
+    informer,
+    {
+      onStartRejected(err, attempt, nextDelayMs) {
+        console.error(
+          `${label} start() rejected (attempt ${attempt.toString()}, next delay ${nextDelayMs.toString()}ms):`,
+          err,
+        );
+      },
+      onCapReached(err, totalAttempts) {
+        console.error(
+          `${label} restart cap reached after ${totalAttempts.toString()} failures; exiting so Kubernetes restarts the operator:`,
+          err,
+        );
+      },
+    },
+    {},
+    timer,
+  );
+  informer.on('add', () => {
+    restarter.reset();
+  });
+  informer.on('update', () => {
+    restarter.reset();
+  });
+  informer.on('error', (err) => {
+    console.error(`${label} error:`, err);
+    restarter.safeRestart(err);
+  });
 }

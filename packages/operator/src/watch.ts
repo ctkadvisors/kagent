@@ -25,6 +25,7 @@ import {
   type RestartTimer,
   type InformerRestartLogger,
   createRestarter,
+  PROCESS_TIMER,
 } from './informer-restart.js';
 
 /**
@@ -127,12 +128,11 @@ export function createAgentTaskInformer(
       );
     },
     onCapReached(err, totalAttempts): void {
-      // Permanent break. M21 will use this to flip the readiness
-      // probe; until then, log loudly so the operator's CrashLoop /
-      // restart cycle eventually surfaces the issue to operators.
+      // Permanent break: the restarter's timer (PROCESS_TIMER in
+      // production) exits next so Kubernetes restarts the operator.
       handler.onError?.(err);
       console.error(
-        `[kagent-operator] AgentTask informer restart cap reached after ${totalAttempts.toString()} consecutive failures; watch is permanently broken:`,
+        `[kagent-operator] AgentTask informer restart cap reached after ${totalAttempts.toString()} consecutive failures; exiting so Kubernetes restarts the operator:`,
         err,
       );
     },
@@ -141,7 +141,7 @@ export function createAgentTaskInformer(
     informer,
     restartLogger,
     opts.restartOpts ?? {},
-    opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
+    opts.restartTimer ?? PROCESS_TIMER,
   );
 
   // C1-NEW-H1 — call `restarter.reset()` from each successful add/update

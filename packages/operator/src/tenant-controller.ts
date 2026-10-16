@@ -58,6 +58,7 @@ import {
   type TenantStatus,
 } from './crds/index.js';
 import { mergePatchOptions } from './k8s.js';
+import { superviseInformer } from './informer-restart.js';
 
 const PLURAL = 'tenants' as const;
 
@@ -474,12 +475,7 @@ export function buildTenantController(input: BuildTenantControllerInput): Tenant
   tenantInformer.on('add', fire);
   tenantInformer.on('update', fire);
   tenantInformer.on('delete', fire);
-  tenantInformer.on('error', (err) => {
-    console.error('[kagent-tenant] Tenant watch error:', err);
-    setTimeout(() => {
-      void tenantInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-tenant] Tenant watch', tenantInformer);
 
   return {
     async start(): Promise<void> {
