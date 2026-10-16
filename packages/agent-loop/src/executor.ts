@@ -58,6 +58,12 @@ import { captureDiagnostic, captureSchemaDiagnostic } from './diagnostic-capture
 
 /** Body prefix of the substrate's terminal context-window refusal (status 0). */
 const CONTEXT_REFUSAL_PREFIX = 'context_window_substrate_refused';
+
+/**
+ * Cap on operator messages entering the conversation per loop iteration.
+ * The remainder of a `pollOperatorInput` drain carries to the next call.
+ */
+const OPERATOR_INPUT_PER_TURN = 4;
 import {
   AgentNotFoundError,
   NoLLMClientError,
@@ -321,6 +327,14 @@ export interface RunInput<TType extends string = string> {
   timeBudget?: { readonly startedAtMs: number; readonly timeoutMs: number };
   /** Caller-owned cancellation signal. */
   signal?: AbortSignal;
+  /**
+   * Optional operator-input source. Drained at the top of each loop iteration
+   * (after the abort check, before the answer-turn note) and appended as user
+   * messages "[operator message] <text>", at most OPERATOR_INPUT_PER_TURN per
+   * turn; the rest carries to the next call. A rejected poll is logged and
+   * skipped; an absent source is a no-op.
+   */
+  pollOperatorInput?: () => Promise<string[]>;
 }
 
 /**
@@ -1092,6 +1106,10 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
       }
     }
     const traces: TraceEntry[] = [];
+    // Run-local operator-input queue: drained from `pollOperatorInput` at the
+    // top of each iteration; at most OPERATOR_INPUT_PER_TURN enter the
+    // conversation per turn, the rest carries to the next call.
+    const operatorQueue: string[] = [];
     // Sequence counter as a mutable ref so `chatWithRetry` can advance it
     // when emitting per-attempt failure traces. The run loop reads the
     // same `seqRef.value` for its own trace appends below.
@@ -1151,6 +1169,26 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
         status = 'cancelled';
         completedNaturally = true;
         break;
+      }
+      // Drain operator input once per turn: at most OPERATOR_INPUT_PER_TURN
+      // messages enter the conversation now; the rest carries to the next
+      // call. A rejected poll is logged and skipped; an absent source is a
+      // no-op. Runs after the abort check and before the answer-turn note.
+      if (input.pollOperatorInput !== undefined) {
+        try {
+          const drained = await input.pollOperatorInput();
+          if (drained.length > 0) {
+            operatorQueue.push(...drained);
+          }
+        } catch (err) {
+          console.warn(
+            `[agent-loop] run ${runId}: pollOperatorInput rejected — skipping: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        const take = operatorQueue.splice(0, OPERATOR_INPUT_PER_TURN);
+        for (const text of take) {
+          currentMessages.push({ role: 'user', content: `[operator message] ${text}` });
+        }
       }
       const answerTurn = iteration === maxIterations;
       if (answerTurn) currentMessages.push({ role: 'user', content: ANSWER_TURN_NOTE });
