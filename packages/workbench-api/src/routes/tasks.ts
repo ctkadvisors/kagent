@@ -34,7 +34,7 @@
  */
 
 import { Hono } from 'hono';
-import type { CustomObjectsApi } from '@kubernetes/client-node';
+import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
 
 import {
   API_GROUP_VERSION,
@@ -87,6 +87,19 @@ export interface TasksRouteDeps {
 const KAGENT_GROUP = 'kagent.knuteson.io';
 const KAGENT_VERSION = 'v1alpha1';
 const AGENTTASK_PLURAL = 'agenttasks';
+
+/**
+ * Operator input for a RUNNING task: an append-only JSON array of
+ * `{id, text, at}` on this annotation. The agent pod reads its own task
+ * once per model turn and hands new entries to the agent loop's
+ * `pollOperatorInput`. Agent pods can patch only `agenttasks/status`,
+ * so an agent cannot forge operator input. Annotations total <=256 KiB:
+ * 20 x 4000 chars stays well inside it.
+ */
+export const OPERATOR_INPUT_ANNOTATION = 'kagent.knuteson.io/operator-input';
+const OPERATOR_INPUT_MAX_CHARS = 4000;
+const OPERATOR_INPUT_MAX_MESSAGES = 20;
+const MERGE_PATCH_OPTIONS = setHeaderOptions('Content-Type', 'application/merge-patch+json');
 
 /**
  * Generate an 8-char URL-safe ID. Crypto-grade not required (collisions
@@ -350,6 +363,126 @@ export function tasksRoute(deps: TasksRouteDeps): Hono {
         error: 'internal error processing task termination; see workbench-api logs',
       };
       return c.json(body, 500);
+    }
+  });
+
+  /**
+   * `POST /api/tasks/:namespace/:name/input` — deliver an operator message
+   * to a running task in place (no new task). Body `{message, id?, uid?}`:
+   * `id` makes retries idempotent; `uid` pins the exact task identity.
+   * Reads the live object (not the cache) and appends with a
+   * resourceVersion precondition so concurrent senders never drop input.
+   */
+  app.post('/api/tasks/:namespace/:name/input', async (c) => {
+    const namespace = c.req.param('namespace');
+    const name = c.req.param('name');
+    if (deps.customApi === undefined) {
+      const body: CreateTaskErrorBody = {
+        error:
+          'write surface disabled (no CustomObjects client configured); set actions.create=true on the chart',
+      };
+      return c.json(body, 503);
+    }
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return c.json({ error: 'request body is not valid JSON' }, 400);
+    }
+    const req = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+    const message = typeof req.message === 'string' ? req.message.trim() : '';
+    if (
+      message.length === 0 ||
+      message.length > OPERATOR_INPUT_MAX_CHARS ||
+      message.includes('\u0000')
+    ) {
+      return c.json(
+        { error: `message must be 1-${String(OPERATOR_INPUT_MAX_CHARS)} characters` },
+        400,
+      );
+    }
+    const id =
+      typeof req.id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(req.id)
+        ? req.id
+        : globalThis.crypto.randomUUID();
+    const target = {
+      group: KAGENT_GROUP,
+      version: KAGENT_VERSION,
+      namespace,
+      plural: AGENTTASK_PLURAL,
+      name,
+    };
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const live = (await deps.customApi.getNamespacedCustomObject(target)) as AgentTask;
+        if (typeof req.uid === 'string' && live.metadata?.uid !== req.uid) {
+          return c.json({ error: 'task identity changed', namespace, name }, 409);
+        }
+        const phase = live.status?.phase ?? 'Pending';
+        if (phase !== 'Pending' && phase !== 'Dispatched') {
+          return c.json(
+            { error: `task is ${phase}; operator input reaches running tasks only`, phase },
+            409,
+          );
+        }
+        let rows: { id?: unknown }[] = [];
+        try {
+          const parsed: unknown = JSON.parse(
+            live.metadata?.annotations?.[OPERATOR_INPUT_ANNOTATION] ?? '[]',
+          );
+          if (Array.isArray(parsed)) rows = parsed as { id?: unknown }[];
+        } catch {
+          // An unreadable value is replaced, never appended to.
+        }
+        const existing = rows.findIndex((row) => row.id === id);
+        if (existing !== -1) {
+          return c.json({ accepted: true, id, index: existing + 1, namespace, name }, 202);
+        }
+        if (rows.length >= OPERATOR_INPUT_MAX_MESSAGES) {
+          return c.json(
+            {
+              error: `task already holds ${String(OPERATOR_INPUT_MAX_MESSAGES)} operator messages`,
+            },
+            429,
+          );
+        }
+        const next = [...rows, { id, text: message, at: new Date().toISOString() }];
+        try {
+          await deps.customApi.patchNamespacedCustomObject(
+            {
+              ...target,
+              body: {
+                metadata: {
+                  resourceVersion: live.metadata?.resourceVersion,
+                  annotations: { [OPERATOR_INPUT_ANNOTATION]: JSON.stringify(next) },
+                },
+              },
+            },
+            MERGE_PATCH_OPTIONS,
+          );
+          return c.json({ accepted: true, id, index: next.length, namespace, name }, 202);
+        } catch (err: unknown) {
+          if (extractK8sStatus(err) !== 409) throw err; // Lost a concurrent append: re-read.
+        }
+      }
+      return c.json({ error: 'task changed concurrently; retry with the same id' }, 409);
+    } catch (err: unknown) {
+      const status = extractK8sStatus(err);
+      if (status === 404) return c.json({ error: 'not-found', namespace, name }, 404);
+      if (status === 403) {
+        return c.json(
+          { error: `RBAC denied: workbench-api cannot patch AgentTask in ${namespace}` },
+          403,
+        );
+      }
+      console.error(
+        '[workbench-api] POST /api/tasks/:namespace/:name/input — unhandled K8s API error',
+        JSON.stringify({ namespace, name, status: status ?? null }),
+      );
+      return c.json(
+        { error: 'internal error delivering operator input; see workbench-api logs' },
+        500,
+      );
     }
   });
 
