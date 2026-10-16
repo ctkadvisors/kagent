@@ -210,6 +210,12 @@ export interface RunDeps {
    */
   readonly onBudgetReady?: (budget: RunBudget) => void;
   /**
+   * Operator input for this running task (see `operator-input.ts`).
+   * Forwarded verbatim onto `executor.run({ pollOperatorInput })`, which
+   * drains it once per model turn; a rejected poll is logged and skipped.
+   */
+  readonly pollOperatorInput?: () => Promise<string[]>;
+  /**
    * Audit-rev2 NM5 — `get_my_context` is `UNIVERSAL` per the substrate
    * tool allowlist (see `runner.ts:UNIVERSAL_TOOLS`), but the
    * production wireup previously only registered it inside main.ts's
@@ -395,6 +401,7 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     // can wire `tokenUtilizationSnapshot` against the actual mutating
     // budget reference. See `RunDeps.onBudgetReady` JSDoc.
     ...(deps.onBudgetReady !== undefined && { onBudgetReady: deps.onBudgetReady }),
+    ...(deps.pollOperatorInput !== undefined && { pollOperatorInput: deps.pollOperatorInput }),
   });
 
   // v0.1.9 context-awareness — Piece 4 detector knob. Read the

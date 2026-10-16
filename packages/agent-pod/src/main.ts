@@ -56,6 +56,7 @@ import { defineWaitForChildTask, defineWaitForChildrenAll } from './builtin-tool
 import { buildBlackboardClientFromEnv } from './blackboard-client.js';
 import { loadCapabilityOptional } from './cap-consumer.js';
 import { createInClusterK8sTaskCreator } from './k8s-task-creator.js';
+import { buildOperatorInputPoller } from './operator-input.js';
 import { runAgentTask } from './runner.js';
 import { buildStatusPatch, makeCustomObjectsApi, writeStatus } from './status.js';
 
@@ -746,11 +747,25 @@ async function main(): Promise<void> {
     );
   }
 
+  // Operator input: the loop reads this task's own annotation once per model
+  // turn (workbench `POST /api/tasks/:ns/:name/input` appends to it).
+  const taskApi = makeCustomObjectsApi();
+  const pollOperatorInput = buildOperatorInputPoller(() =>
+    taskApi.getNamespacedCustomObject({
+      group: 'kagent.knuteson.io',
+      version: 'v1alpha1',
+      namespace: config.taskNamespace,
+      plural: 'agenttasks',
+      name: config.taskName,
+    }),
+  );
+
   let result: RunResult;
   try {
     result = await runAgentTask(config, {
       sinks,
       signal: shutdownController.signal,
+      pollOperatorInput,
       ...(substrateTools !== undefined && { spawnTools: substrateTools }),
       ...(blackboardTools !== undefined && { blackboardTools }),
       ...(eventsTools !== undefined && { eventsTools }),
