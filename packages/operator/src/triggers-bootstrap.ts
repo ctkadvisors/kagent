@@ -54,6 +54,7 @@ import {
 
 import { API_GROUP, API_VERSION, isKagentSchedule, type KagentSchedule } from './crds/index.js';
 import { mergePatchOptions } from './k8s.js';
+import { superviseInformer } from './informer-restart.js';
 
 const KAGENT_SCHEDULE_PLURAL = 'kagentschedules';
 const AGENT_TASK_PLURAL = 'agenttasks';
@@ -206,12 +207,7 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
   informer.on('add', upsertFromCache);
   informer.on('update', upsertFromCache);
   informer.on('delete', removeFromCache);
-  informer.on('error', (err) => {
-    console.error('[kagent-triggers] schedule informer error:', err);
-    setTimeout(() => {
-      void informer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-triggers] schedule informer', informer);
 
   // ---- Webhook receiver ---------------------------------------------
   // Looks up the trigger id against the in-memory schedule cache

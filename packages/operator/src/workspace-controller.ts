@@ -56,6 +56,7 @@ import {
   type WorkspaceStatus,
 } from './crds/index.js';
 import { mergePatchOptions } from './k8s.js';
+import { superviseInformer } from './informer-restart.js';
 
 /* =====================================================================
  * Constants — name + label conventions kept stable so admission and
@@ -842,30 +843,15 @@ export function buildWorkspaceController(
   wsInformer.on('add', fire);
   wsInformer.on('update', fire);
   wsInformer.on('delete', fire);
-  wsInformer.on('error', (err) => {
-    console.error('[kagent-workspace] Workspace watch error:', err);
-    setTimeout(() => {
-      void wsInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-workspace] Workspace watch', wsInformer);
   pvcInformer.on('add', refireAll);
   pvcInformer.on('update', refireAll);
   pvcInformer.on('delete', refireAll);
-  pvcInformer.on('error', (err) => {
-    console.error('[kagent-workspace] PVC watch error:', err);
-    setTimeout(() => {
-      void pvcInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-workspace] PVC watch', pvcInformer);
   jobInformer.on('add', refireAll);
   jobInformer.on('update', refireAll);
   jobInformer.on('delete', refireAll);
-  jobInformer.on('error', (err) => {
-    console.error('[kagent-workspace] clone-Job watch error:', err);
-    setTimeout(() => {
-      void jobInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-workspace] clone-Job watch', jobInformer);
 
   return {
     async start(): Promise<void> {

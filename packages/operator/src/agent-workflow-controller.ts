@@ -82,6 +82,7 @@ import {
 import type { CapCa } from './cap-ca.js';
 import { mintCapabilityForWorkflow, type MintCapForWorkflowResult } from './cap-issuer.js';
 import { mergePatchOptions } from './k8s.js';
+import { superviseInformer } from './informer-restart.js';
 
 /* =====================================================================
  * Constants — name + label conventions kept stable.
@@ -1032,30 +1033,15 @@ export function buildAgentWorkflowController(
   wfInformer.on('add', fire);
   wfInformer.on('update', fire);
   wfInformer.on('delete', fire);
-  wfInformer.on('error', (err) => {
-    console.error('[kagent-agent-workflow] informer error:', err);
-    setTimeout(() => {
-      void wfInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-agent-workflow] informer', wfInformer);
   depInformer.on('add', refireAll);
   depInformer.on('update', refireAll);
   depInformer.on('delete', refireAll);
-  depInformer.on('error', (err) => {
-    console.error('[kagent-agent-workflow] Deployment watch error:', err);
-    setTimeout(() => {
-      void depInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-agent-workflow] Deployment watch', depInformer);
   svcInformer.on('add', refireAll);
   svcInformer.on('update', refireAll);
   svcInformer.on('delete', refireAll);
-  svcInformer.on('error', (err) => {
-    console.error('[kagent-agent-workflow] Service watch error:', err);
-    setTimeout(() => {
-      void svcInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-agent-workflow] Service watch', svcInformer);
 
   return {
     async start(): Promise<void> {

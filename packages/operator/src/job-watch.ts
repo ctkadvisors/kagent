@@ -36,6 +36,7 @@ import {
   type RestartTimer,
   type InformerRestartLogger,
   createRestarter,
+  PROCESS_TIMER,
 } from './informer-restart.js';
 
 const MANAGED_BY_LABEL = 'kagent.knuteson.io/managed-by=kagent-operator';
@@ -151,7 +152,7 @@ export function createJobPodInformer(
     jobInformer,
     jobRestartLogger,
     opts.restartOpts ?? {},
-    opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
+    opts.restartTimer ?? PROCESS_TIMER,
   );
 
   // Wire add + update through the same handler — failure verdicts are
@@ -196,7 +197,7 @@ export function createJobPodInformer(
     podInformer,
     podRestartLogger,
     opts.restartOpts ?? {},
-    opts.restartTimer ?? { setTimeout: (cb, ms) => void globalThis.setTimeout(cb, ms) },
+    opts.restartTimer ?? PROCESS_TIMER,
   );
 
   // C1-NEW-H1 — `podRestarter.reset()` from each successful add/update

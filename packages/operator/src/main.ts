@@ -125,6 +125,7 @@ import {
 import { buildTriggersBootstrap, type TriggersBootstrapHandle } from './triggers-bootstrap.js';
 import type { AgentTaskHandler, AgentTaskInformerWithCache } from './watch.js';
 import { createAgentTaskInformer } from './watch.js';
+import { superviseInformer } from './informer-restart.js';
 
 /**
  * Push a "sensitive env" entry into the spawned-Job's `extraEnv`
@@ -1030,36 +1031,22 @@ function buildAdmissionWiring(input: BuildAdmissionWiringInput): AdmissionWiring
     });
   };
 
+  // Same restart policy as the AgentTask and Job/Pod watches (see superviseInformer).
   jobInformer.on('add', fireOnJobEvent);
   jobInformer.on('update', fireOnJobEvent);
   jobInformer.on('delete', fireOnJobEvent);
-  jobInformer.on('error', (err) => {
-    console.error('[kagent-operator] admission Job watch error:', err);
-    setTimeout(() => {
-      void jobInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-operator] admission Job watch', jobInformer);
 
   meInformer.on('add', fireOnMeEvent);
   meInformer.on('update', fireOnMeEvent);
   meInformer.on('delete', fireOnMeEvent);
-  meInformer.on('error', (err) => {
-    console.error('[kagent-operator] admission ModelEndpoint watch error:', err);
-    setTimeout(() => {
-      void meInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-operator] admission ModelEndpoint watch', meInformer);
 
   // Agent informer is read-on-demand (lookupAgent); we don't need to
   // re-evaluate on Agent events — the next Job or ModelEndpoint event
   // will pick up the new cap. We DO still need the watch open so the
   // cache stays warm.
-  agentInformer.on('error', (err) => {
-    console.error('[kagent-operator] admission Agent watch error:', err);
-    setTimeout(() => {
-      void agentInformer.start();
-    }, 5000);
-  });
+  superviseInformer('[kagent-operator] admission Agent watch', agentInformer);
 
   return {
     async start(): Promise<void> {
@@ -3740,12 +3727,7 @@ async function main(): Promise<void> {
       eventsAgentInformer.on('add', reapply);
       eventsAgentInformer.on('update', reapply);
       eventsAgentInformer.on('delete', reapply);
-      eventsAgentInformer.on('error', (err) => {
-        console.error('[kagent-events] Agent informer error:', err);
-        setTimeout(() => {
-          void eventsAgentInformer.start();
-        }, 5000);
-      });
+      superviseInformer('[kagent-events] Agent informer', eventsAgentInformer);
       await eventsAgentInformer.start();
       reapply();
       const reapplyTimer = setInterval(reapply, reapplyIntervalMs);
@@ -4098,12 +4080,7 @@ async function main(): Promise<void> {
     egressAgentInformer.on('add', reconcileAgentEgress);
     egressAgentInformer.on('update', reconcileAgentEgress);
     egressAgentInformer.on('delete', deleteAgentEgress);
-    egressAgentInformer.on('error', (err) => {
-      console.error('[kagent-egress] Agent watch error:', err);
-      setTimeout(() => {
-        void egressAgentInformer.start();
-      }, 5000);
-    });
+    superviseInformer('[kagent-egress] Agent watch', egressAgentInformer);
     await egressAgentInformer.start();
     console.log('[kagent-operator] Egress Agent informer started');
     void tenantsMod; // silence unused-import lint when tenancy block is off
