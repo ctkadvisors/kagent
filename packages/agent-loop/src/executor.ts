@@ -641,12 +641,20 @@ export function loopTurnNote(
 export const ANSWER_TURN_NOTE =
   '[loop: this run is out of turns and no more tool calls will run. Reply now with your final answer.]';
 
-/** Middle-elide a tool result so one oversized payload cannot own the context. */
-export function capToolResult(text: string, max: number): string {
+/**
+ * Middle-elide a tool result so one oversized payload cannot own the context.
+ *
+ * The notice names the tool and the re-read knobs (maxChars / offset / full)
+ * so an agent whose result was cut can ask for the hidden middle again
+ * (elidegap-forum-read-audit, flagged post 4775: recovery_wired_pct was 0.0
+ * because the notice named neither).
+ */
+export function capToolResult(text: string, max: number, toolName?: string): string {
   if (text.length <= max) return text;
   const head = Math.floor(max * 0.75);
   const tail = max - head;
-  return `${text.slice(0, head)}\n… [tool result truncated: ${String(text.length - max)} of ${String(text.length)} chars elided] …\n${text.slice(text.length - tail)}`;
+  const who = toolName !== undefined ? `${toolName}: ` : '';
+  return `${text.slice(0, head)}\n… [tool result truncated: ${who}maxChars=${String(max)} offset=${String(head)} full=${String(text.length)} chars; ${String(text.length - max)} of ${String(text.length)} chars elided — re-read with maxChars/offset/full] …\n${text.slice(text.length - tail)}`;
 }
 
 /**
@@ -1657,6 +1665,7 @@ export class AgentExecutor<TType extends string = string, TPhase extends string 
               capToolResult(
                 stringifyToolContent(toolResult.content),
                 this.toolGuards.maxToolResultChars,
+                toolCall.name,
               ) + turnsNote(),
             tool_call_id: callId,
             name: rawToolCall.name,
