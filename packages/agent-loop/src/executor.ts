@@ -642,11 +642,12 @@ export const ANSWER_TURN_NOTE =
   '[loop: this run is out of turns and no more tool calls will run. Reply now with your final answer.]';
 
 /** Middle-elide a tool result so one oversized payload cannot own the context. */
-export function capToolResult(text: string, max: number): string {
+export function capToolResult(text: string, max: number, toolName?: string): string {
   if (text.length <= max) return text;
   const head = Math.floor(max * 0.75);
   const tail = max - head;
-  return `${text.slice(0, head)}\n… [tool result truncated: ${String(text.length - max)} of ${String(text.length)} chars elided] …\n${text.slice(text.length - tail)}`;
+  const who = toolName !== undefined ? `${toolName} ` : '';
+  return `${text.slice(0, head)}\n… [tool result truncated: ${String(text.length - max)} of ${String(text.length)} chars elided from ${who}result; re-read with maxChars=${String(max)} or an offset to recover the hidden middle] …\n${text.slice(text.length - tail)}`;
 }
 
 /**
