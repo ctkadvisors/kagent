@@ -183,6 +183,10 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
     const tasks = deps.cache.listTasks();
     const items: ReviewQueueRow[] = [];
     const nowMs = now().getTime();
+    // ?candidates=true keeps only rows carrying a candidate: the fleet's catalog reviewer
+    // wants nothing else, and the never-decided suspicious-detector backlog (1,271 rows,
+    // 591 KB on 2026-10-19) overran its bounded read.
+    const candidatesOnly = c.req.query('candidates') === 'true';
 
     for (const task of tasks) {
       const annotations: Record<string, string> =
@@ -193,7 +197,7 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
 
       // Steps 2–5: run the priority-ordered classifier.
       const row = classifyTask(task, nowMs, deps.langfuseBaseUrl, deps.defaultNamespace);
-      if (row !== undefined) {
+      if (row !== undefined && (!candidatesOnly || row.candidateTemplate !== undefined)) {
         items.push(row);
       }
     }
