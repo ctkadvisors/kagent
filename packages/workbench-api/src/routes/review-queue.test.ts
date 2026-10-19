@@ -260,6 +260,18 @@ describe('GET /api/review-queue', () => {
     );
   });
 
+  it('?candidates=true keeps only rows carrying a candidate', async () => {
+    const { fetch } = mountAndFetch({
+      cache: makeStubCache(allFixtureTasks),
+      now: () => fixedNow,
+    });
+    const all = (await (await fetch()).json()) as { items: ReviewQueueRow[] };
+    const only = (await (await fetch('/?candidates=true')).json()) as { items: ReviewQueueRow[] };
+    expect(only.items.length).toBeGreaterThan(0);
+    expect(only.items.length).toBeLessThan(all.items.length);
+    expect(only.items).toEqual(all.items.filter((row) => row.candidateTemplate !== undefined));
+  });
+
   // ------------------------------------------------------------------
   // Test 7 — candidate-template WITHOUT matching artifact is OMITTED
   // ------------------------------------------------------------------
