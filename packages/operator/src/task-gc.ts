@@ -113,7 +113,10 @@ export async function runOnce(
   return { scanned: tasks.length, eligible: eligible.length, deleted };
 }
 
-export function startTaskGc(config: TaskGcConfig, deps: TaskGcDeps): { stop(): void } {
+export function startTaskGc(
+  config: TaskGcConfig,
+  deps: TaskGcDeps,
+): { stop(): void; sweep(): void } {
   if (config.retentionMs < MIN_RETENTION_MS || config.intervalMs < MIN_RETENTION_MS) {
     throw new Error('task-gc: retention and interval must each be >= 1 minute');
   }
@@ -132,8 +135,10 @@ export function startTaskGc(config: TaskGcConfig, deps: TaskGcDeps): { stop(): v
   };
   const timer = setInterval(tick, config.intervalMs);
   if (typeof timer.unref === 'function') timer.unref();
-  tick(); // the backlog is the reason this exists: clear it at boot, not an interval later
+  // No sweep here: the informer may not have listed yet (an empty list deleted nothing at
+  // boot, 2026-10-20). The caller sweeps once its informer has synced.
   return {
+    sweep: tick,
     stop(): void {
       clearInterval(timer);
     },

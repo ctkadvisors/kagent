@@ -2994,6 +2994,8 @@ async function main(): Promise<void> {
 
   const scope = watchNamespace ?? 'all namespaces';
   let primaryInformersStarted = false;
+  // Work that needs the AgentTask informer's first list (task-gc's backlog sweep).
+  let afterPrimaryInformers: (() => void) | undefined;
   const startPrimaryInformers = async (): Promise<void> => {
     if (primaryInformersStarted) return;
     console.log(`[kagent-operator] starting informers on AgentTask + Job + Pod (${scope})`);
@@ -3018,6 +3020,7 @@ async function main(): Promise<void> {
       );
     }
     primaryInformersStarted = true;
+    afterPrimaryInformers?.();
     console.log('[kagent-operator] informers started');
   };
   if (process.env.KAGENT_TENANCY_ENABLED !== 'true') {
@@ -3298,6 +3301,12 @@ async function main(): Promise<void> {
           },
         },
       );
+      // The backlog is why this exists: sweep as soon as the informer has listed.
+      if (primaryInformersStarted) handle.sweep();
+      else
+        afterPrimaryInformers = () => {
+          handle.sweep();
+        };
       const previous = onShutdownExtra;
       onShutdownExtra = async (): Promise<void> => {
         handle.stop();
