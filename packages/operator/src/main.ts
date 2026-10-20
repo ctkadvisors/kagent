@@ -65,6 +65,7 @@ import {
 import { decideBlackboardAction } from './blackboard-router.js';
 import { StubCapabilityRegistry, type CapabilityRegistry } from './capability-registry.js';
 import * as casGc from './cas-gc.js';
+import * as taskGc from './task-gc.js';
 import {
   API_GROUP,
   API_VERSION,
@@ -3253,6 +3254,51 @@ async function main(): Promise<void> {
     }
   } else {
     console.log('[kagent-operator] CAS GC disabled (set KAGENT_CAS_ENABLED=true to enable)');
+  }
+
+  // === Finished-AgentTask retention (task-gc.ts) ===
+  // Off unless KAGENT_TASK_RETENTION is set (e.g. `7d`). Reads the same informer
+  // snapshot as CAS GC; deletes through the API so ownerReference cascades apply.
+  const taskRetentionRaw = normalizeOptionalEnv(process.env.KAGENT_TASK_RETENTION);
+  if (taskRetentionRaw !== undefined) {
+    const retentionMs = casGc.parseRetention(taskRetentionRaw);
+    const intervalSeconds = Number.parseInt(
+      process.env.KAGENT_TASK_GC_INTERVAL_SECONDS ?? '3600',
+      10,
+    );
+    if (retentionMs === null) {
+      console.error(
+        `[kagent-operator/task-gc] invalid KAGENT_TASK_RETENTION="${taskRetentionRaw}"; task GC disabled`,
+      );
+    } else {
+      const handle = taskGc.startTaskGc(
+        {
+          retentionMs,
+          intervalMs:
+            Number.isFinite(intervalSeconds) && intervalSeconds > 0
+              ? intervalSeconds * 1000
+              : 3_600_000,
+          dryRun: process.env.KAGENT_TASK_GC_DRY_RUN === 'true',
+        },
+        {
+          listAgentTasks: () => informerRef.current?.list() ?? [],
+          deleteAgentTask: async (namespace, name) => {
+            await customApi.deleteNamespacedCustomObject({
+              group: 'kagent.knuteson.io',
+              version: 'v1alpha1',
+              namespace,
+              plural: 'agenttasks',
+              name,
+            });
+          },
+        },
+      );
+      const previous = onShutdownExtra;
+      onShutdownExtra = async (): Promise<void> => {
+        handle.stop();
+        if (previous !== undefined) await previous();
+      };
+    }
   }
 
   // === Wave 3 — Cache ===

@@ -322,6 +322,15 @@ spec:
             - name: KAGENT_CAS_GC_DRY_RUN
               value: {{ .Values.cas.gc.dryRun | quote }}
             {{- end }}
+            {{- if .Values.taskRetention.afterFinished }}
+            # Finished-AgentTask retention (task-gc.ts).
+            - name: KAGENT_TASK_RETENTION
+              value: {{ .Values.taskRetention.afterFinished | quote }}
+            - name: KAGENT_TASK_GC_INTERVAL_SECONDS
+              value: {{ .Values.taskRetention.intervalSeconds | quote }}
+            - name: KAGENT_TASK_GC_DRY_RUN
+              value: {{ .Values.taskRetention.dryRun | quote }}
+            {{- end }}
             {{- if .Values.cache.enabled }}
             # Wave 3 — Cache
             # v0.4.2-cache per-Agent persistent caches. Operator-side

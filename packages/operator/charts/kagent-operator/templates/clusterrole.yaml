@@ -62,7 +62,8 @@ rules:
     resources: ['agenttasks']
     # patch: the operator marks a Completed task that produced a template
     # candidate (kagent.knuteson.io/template-candidate) for the review queue.
-    verbs: ['create', 'patch']
+    # delete: task-gc removes finished tasks past taskRetention.afterFinished.
+    verbs: ['create', 'patch', 'delete']
   # Channel gateway creates ChannelSession records for inbound external
   # channel turns. AgentTask creation stays in the existing rule above.
   - apiGroups: ['kagent.knuteson.io']
