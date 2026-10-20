@@ -879,6 +879,19 @@ agent:
 # pointed at the same volume during the migration window, then drop
 # `agentPod.artifactStorage` once all in-flight v0.1 artifacts have
 # expired.
+# Finished-AgentTask retention (task-gc.ts). Completed/Failed tasks finished
+# longer ago than `afterFinished` are deleted, except candidates awaiting review,
+# children (their parent's deletion cascades them) and undecided tasks the review
+# queue flags (verifier failed, suspicious, review requested): those wait for
+# `flaggedAfterFinished`, or forever when it is empty. `afterFinished` empty = keep all,
+# which grows the operator's informer without bound (3,181 tasks OOMed a 256Mi
+# operator, 2026-10-20). Same duration format as cas.retention.default.
+taskRetention:
+  afterFinished: ''
+  flaggedAfterFinished: ''
+  intervalSeconds: 3600
+  dryRun: false
+
 cas:
   enabled: false
   # PVC claim name in the AgentTask's namespace. Provision separately
