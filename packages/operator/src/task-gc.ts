@@ -13,8 +13,11 @@
  * the retention window ago, except:
  *
  *   - a task whose template candidate still awaits review (the catalog reads
- *     it until a review decision lands), and
- *   - a child task (any ownerReference): its parent's deletion cascades it.
+ *     it until a review decision lands),
+ *   - a child task (any ownerReference): its parent's deletion cascades it, and
+ *   - an undecided task the review queue flags (verifier failed, suspicious
+ *     detector, review requested): it is evidence, kept for the separate
+ *     `flaggedRetentionMs`, or for good when that is unset.
  *
  * CAS blobs are unaffected: cas-gc already roots only non-Completed tasks.
  * Off unless `KAGENT_TASK_RETENTION` is set; dry-run logs what it would delete.
@@ -25,9 +28,12 @@ import { MIN_RETENTION_MS } from './cas-gc.js';
 
 const CANDIDATE = 'kagent.knuteson.io/template-candidate';
 const DECIDED = 'kagent.knuteson.io/review-decision';
+const REQUESTED = 'kagent.knuteson.io/review-requested';
 
 export interface TaskGcConfig {
   readonly retentionMs: number;
+  /** Undecided flagged tasks (see `flagged`); undefined keeps them. */
+  readonly flaggedRetentionMs?: number;
   readonly intervalMs: number;
   readonly dryRun?: boolean;
 }
@@ -49,12 +55,33 @@ export function finishedAtMs(task: AgentTask): number | undefined {
   return Number.isFinite(at) ? at : undefined;
 }
 
-export function shouldDeleteTask(task: AgentTask, nowMs: number, retentionMs: number): boolean {
+/** The review queue's own flags (workbench classifyTask), minus candidates. */
+export function flagged(task: AgentTask): boolean {
+  const status = (task.status ?? {}) as {
+    verification?: { passed?: boolean };
+    structuralVerdict?: { suspicious?: readonly string[] };
+  };
+  return (
+    status.verification?.passed === false ||
+    (status.structuralVerdict?.suspicious ?? []).length > 0 ||
+    task.metadata.annotations?.[REQUESTED] === 'true'
+  );
+}
+
+export function shouldDeleteTask(
+  task: AgentTask,
+  nowMs: number,
+  retentionMs: number,
+  flaggedRetentionMs?: number,
+): boolean {
   const finished = finishedAtMs(task);
   if (finished === undefined || nowMs - finished < retentionMs) return false;
+  if ((task.metadata.ownerReferences ?? []).length > 0) return false;
   const annotations = task.metadata.annotations ?? {};
-  if (annotations[CANDIDATE] !== undefined && annotations[DECIDED] === undefined) return false;
-  return (task.metadata.ownerReferences ?? []).length === 0;
+  if (annotations[DECIDED] !== undefined) return true;
+  if (annotations[CANDIDATE] !== undefined) return false;
+  if (!flagged(task)) return true;
+  return flaggedRetentionMs !== undefined && nowMs - finished >= flaggedRetentionMs;
 }
 
 export async function runOnce(
@@ -64,7 +91,9 @@ export async function runOnce(
   const log = deps.log ?? ((m) => console.log(m));
   const now = (deps.now ?? Date.now)();
   const tasks = deps.listAgentTasks();
-  const eligible = tasks.filter((t) => shouldDeleteTask(t, now, config.retentionMs));
+  const eligible = tasks.filter((t) =>
+    shouldDeleteTask(t, now, config.retentionMs, config.flaggedRetentionMs),
+  );
   let deleted = 0;
   if (config.dryRun !== true) {
     for (const task of eligible) {

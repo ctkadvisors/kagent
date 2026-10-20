@@ -326,6 +326,10 @@ spec:
             # Finished-AgentTask retention (task-gc.ts).
             - name: KAGENT_TASK_RETENTION
               value: {{ .Values.taskRetention.afterFinished | quote }}
+            {{- with .Values.taskRetention.flaggedAfterFinished }}
+            - name: KAGENT_TASK_FLAGGED_RETENTION
+              value: {{ . | quote }}
+            {{- end }}
             - name: KAGENT_TASK_GC_INTERVAL_SECONDS
               value: {{ .Values.taskRetention.intervalSeconds | quote }}
             - name: KAGENT_TASK_GC_DRY_RUN

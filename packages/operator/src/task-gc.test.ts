@@ -72,6 +72,32 @@ describe('task-gc', () => {
     expect(shouldDeleteTask(task('never-ran', 'Failed', undefined), NOW, week)).toBe(true);
   });
 
+  it('keeps undecided flagged tasks unless a separate flagged window has passed', () => {
+    const week = 7 * DAY;
+    const suspicious = {
+      ...task('suspicious', 'Completed', 20),
+      status: {
+        phase: 'Completed' as const,
+        completedAt: new Date(NOW - 20 * DAY).toISOString(),
+        structuralVerdict: { suspicious: ['loop_detected'] },
+      },
+    } as AgentTask;
+    const requested = task('requested', 'Failed', 20, {
+      annotations: { 'kagent.knuteson.io/review-requested': 'true' },
+    });
+    expect(shouldDeleteTask(suspicious, NOW, week)).toBe(false);
+    expect(shouldDeleteTask(requested, NOW, week)).toBe(false);
+    expect(shouldDeleteTask(suspicious, NOW, week, 30 * DAY)).toBe(false);
+    expect(shouldDeleteTask(suspicious, NOW, week, 14 * DAY)).toBe(true);
+    const decided = task('decided', 'Failed', 20, {
+      annotations: {
+        'kagent.knuteson.io/review-requested': 'true',
+        'kagent.knuteson.io/review-decision': 'rejected',
+      },
+    });
+    expect(shouldDeleteTask(decided, NOW, week)).toBe(true);
+  });
+
   it('deletes the eligible tasks, survives a failed delete, and dry-run deletes nothing', async () => {
     const tasks = [task('a', 'Completed', 9), task('b', 'Failed', 9), task('c', 'Completed', 1)];
     const deleted: string[] = [];

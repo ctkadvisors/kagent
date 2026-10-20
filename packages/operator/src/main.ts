@@ -3262,18 +3262,23 @@ async function main(): Promise<void> {
   const taskRetentionRaw = normalizeOptionalEnv(process.env.KAGENT_TASK_RETENTION);
   if (taskRetentionRaw !== undefined) {
     const retentionMs = casGc.parseRetention(taskRetentionRaw);
+    // Undecided review-queue flags are evidence: unset keeps them for good.
+    const flaggedRaw = normalizeOptionalEnv(process.env.KAGENT_TASK_FLAGGED_RETENTION);
+    const flaggedRetentionMs =
+      flaggedRaw === undefined ? undefined : casGc.parseRetention(flaggedRaw);
     const intervalSeconds = Number.parseInt(
       process.env.KAGENT_TASK_GC_INTERVAL_SECONDS ?? '3600',
       10,
     );
-    if (retentionMs === null) {
+    if (retentionMs === null || flaggedRetentionMs === null) {
       console.error(
-        `[kagent-operator/task-gc] invalid KAGENT_TASK_RETENTION="${taskRetentionRaw}"; task GC disabled`,
+        `[kagent-operator/task-gc] invalid KAGENT_TASK_RETENTION="${taskRetentionRaw}" or KAGENT_TASK_FLAGGED_RETENTION="${flaggedRaw ?? ''}"; task GC disabled`,
       );
     } else {
       const handle = taskGc.startTaskGc(
         {
           retentionMs,
+          ...(flaggedRetentionMs !== undefined && { flaggedRetentionMs }),
           intervalMs:
             Number.isFinite(intervalSeconds) && intervalSeconds > 0
               ? intervalSeconds * 1000
