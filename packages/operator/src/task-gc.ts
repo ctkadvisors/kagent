@@ -14,7 +14,10 @@
  *
  *   - a task whose template candidate still awaits review (the catalog reads
  *     it until a review decision lands),
- *   - a child task (any ownerReference): its parent's deletion cascades it, and
+ *   - a child task (any ownerReference): its parent's deletion cascades it,
+ *   - a task applied from a manifest (Argo tracking-id or kubectl's
+ *     last-applied-configuration): its owner re-applies it, so deleting it only
+ *     re-runs it (three GitOps acceptance tasks did, 2026-10-20 03:10Z), and
  *   - an undecided task the review queue flags (verifier failed, suspicious
  *     detector, review requested): it is evidence, kept for the separate
  *     `flaggedRetentionMs`, or for good when that is unset.
@@ -29,6 +32,10 @@ import { MIN_RETENTION_MS } from './cas-gc.js';
 const CANDIDATE = 'kagent.knuteson.io/template-candidate';
 const DECIDED = 'kagent.knuteson.io/review-decision';
 const REQUESTED = 'kagent.knuteson.io/review-requested';
+const APPLIED = [
+  'argocd.argoproj.io/tracking-id',
+  'kubectl.kubernetes.io/last-applied-configuration',
+];
 
 export interface TaskGcConfig {
   readonly retentionMs: number;
@@ -78,6 +85,7 @@ export function shouldDeleteTask(
   if (finished === undefined || nowMs - finished < retentionMs) return false;
   if ((task.metadata.ownerReferences ?? []).length > 0) return false;
   const annotations = task.metadata.annotations ?? {};
+  if (APPLIED.some((key) => annotations[key] !== undefined)) return false;
   if (annotations[DECIDED] !== undefined) return true;
   if (annotations[CANDIDATE] !== undefined) return false;
   if (!flagged(task)) return true;
