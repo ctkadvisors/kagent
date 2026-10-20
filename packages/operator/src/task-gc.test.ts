@@ -70,6 +70,19 @@ describe('task-gc', () => {
     );
     // Failed before it ran: no completedAt, so creation (30 days ago) is the floor.
     expect(shouldDeleteTask(task('never-ran', 'Failed', undefined), NOW, week)).toBe(true);
+    // Applied from a manifest: its owner re-applies it, and deleting it re-runs it.
+    for (const key of [
+      'argocd.argoproj.io/tracking-id',
+      'kubectl.kubernetes.io/last-applied-configuration',
+    ]) {
+      expect(
+        shouldDeleteTask(
+          task('gitops', 'Completed', 30, { annotations: { [key]: 'x' } }),
+          NOW,
+          week,
+        ),
+      ).toBe(false);
+    }
   });
 
   it('keeps undecided flagged tasks unless a separate flagged window has passed', () => {
