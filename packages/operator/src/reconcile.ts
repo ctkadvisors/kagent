@@ -488,9 +488,11 @@ export async function reconcileAgentTask(
   // Job (not the cached `job` we just built) so a 409 retry sees the
   // server's annotations.
   let alreadyPublished = false;
+  let admitted = false;
   try {
     const live = await readJob(deps.batchApi, namespace, jobName);
     alreadyPublished = isDispatchPublished(live);
+    admitted = live?.spec?.suspend === false;
   } catch (err) {
     // A read failure here is non-fatal — we'd rather re-publish (broker
     // dedupe handles it) than leave the Job suspended forever. Log and
@@ -560,19 +562,24 @@ export async function reconcileAgentTask(
   // everything it needs the moment admission un-suspends. Status
   // stays Pending until then so the workbench surfaces "queued for
   // capacity" correctly.
+  //
+  // Once admission has un-suspended the Job, the next reconcile records
+  // the dispatch (step 8): nothing else did, so a running task read
+  // Pending to the end and every relist re-ran steps 1–7 (2026-10-20).
   if (deps.admissionControlEnabled === true) {
-    return { action: 'admission-pending', jobName };
-  }
-  try {
-    await unsuspendJob(deps.batchApi, namespace, jobName);
-  } catch (err) {
-    console.error(
-      `[kagent-operator] failed to unsuspend Job ${namespace}/${jobName}; informer relist will retry:`,
-      err,
-    );
-    // Don't mark Failed — this is recoverable. Don't mark Dispatched
-    // either — the pod hasn't started.
-    return { action: 'failed', reason: 'unsuspend failed' };
+    if (!admitted) return { action: 'admission-pending', jobName };
+  } else {
+    try {
+      await unsuspendJob(deps.batchApi, namespace, jobName);
+    } catch (err) {
+      console.error(
+        `[kagent-operator] failed to unsuspend Job ${namespace}/${jobName}; informer relist will retry:`,
+        err,
+      );
+      // Don't mark Failed — this is recoverable. Don't mark Dispatched
+      // either — the pod hasn't started.
+      return { action: 'failed', reason: 'unsuspend failed' };
+    }
   }
 
   // Step 8 — update AgentTask status to Dispatched. Routed through the
