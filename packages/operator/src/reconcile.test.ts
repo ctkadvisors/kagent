@@ -632,6 +632,38 @@ describe('reconcileAgentTask — admission control (LLM-gateway bundle)', () => 
     }
   });
 
+  it('records Dispatched once admission has un-suspended the Job', async () => {
+    const deps = makeDeps({
+      customApi: {
+        getNamespacedCustomObject: vi.fn().mockResolvedValue(validAgent),
+      },
+      batchApi: {
+        readNamespacedJob: vi.fn().mockResolvedValue({
+          metadata: {
+            name: 'kat-task-uid-1',
+            namespace: 'default',
+            annotations: { 'kagent.knuteson.io/dispatch-published': 'true' },
+          },
+          spec: { suspend: false },
+        }),
+      },
+      now: () => fixedNow,
+      admissionControlEnabled: true,
+    });
+    const result = await reconcileAgentTask(task, deps);
+    expect(result.action).toBe('dispatched');
+    // Admission owns the un-suspend; reconcile only records it.
+    const unsuspendCall = deps.mocks.batchApi.patchNamespacedJob.mock.calls.find(
+      (c: unknown[]) =>
+        (c[0] as { body?: { spec?: { suspend?: boolean } } })?.body?.spec?.suspend === false,
+    );
+    expect(unsuspendCall).toBeUndefined();
+    const phases = deps.mocks.customApi.patchNamespacedCustomObjectStatus.mock.calls.map(
+      (c: unknown[]) => (c[0] as { body: { status?: { phase?: string } } }).body.status?.phase,
+    );
+    expect(phases).toContain('Dispatched');
+  });
+
   it('still publishes the dispatch envelope to the bus', async () => {
     const deps = makeDeps({
       customApi: {
