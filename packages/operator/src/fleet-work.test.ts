@@ -97,3 +97,31 @@ describe('existing idle task real-work binding', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+it('replaces a stale primary message so the pod receives current capability work', async () => {
+  const original = task();
+  const withPrimary = {
+    ...original,
+    spec: { ...original.spec, originalUserMessage: 'Run the old static invention request' },
+  };
+  const value = {
+    ...work('use', 'fleet-auditor'),
+    capability: {
+      template: 'capability-tool',
+      invoke: {
+        tool: 'fleet.run_tool',
+        args: { folder: '2026-10-25-tool', sha: 'a'.repeat(40), run: 'python3 tool.py' },
+      },
+    },
+  };
+  const enriched = await enrichFleetWork(withPrimary, {
+    url: 'http://authority/missions',
+    fetch: respond(value),
+  });
+  expect(enriched.spec.originalUserMessage).toContain(value.goal);
+  expect(enriched.spec.originalUserMessage).toContain('a'.repeat(40));
+  expect(enriched.spec.originalUserMessage).toContain('python3 tool.py');
+  expect(enriched.spec.originalUserMessage).not.toContain('old static invention');
+  expect(enriched.spec.originalUserMessage).toBe((enriched.spec.payload as { text: string }).text);
+  expect(enriched.spec.runConfig).toEqual(original.spec.runConfig);
+});

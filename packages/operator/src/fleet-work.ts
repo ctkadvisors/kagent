@@ -86,6 +86,7 @@ export async function enrichFleetWork(
     !Array.isArray(manifest.spec.payload)
       ? (manifest.spec.payload as Record<string, unknown>)
       : {};
+  const message = `${work.goal}\n\n${work.instructions}\n\nCURRENT WORK AND ORIGINAL REFERENCES:\n${JSON.stringify(work)}`;
   return {
     ...manifest,
     metadata: {
@@ -99,9 +100,12 @@ export async function enrichFleetWork(
     spec: {
       ...manifest.spec,
       targetAgent: work.target_agent,
+      // The agent pod gives this field precedence over payload. Both must carry
+      // the selected work, including when the schedule had a static message.
+      originalUserMessage: message,
       payload: {
         ...original,
-        text: `${work.goal}\n\n${work.instructions}\n\nCURRENT WORK AND ORIGINAL REFERENCES:\n${JSON.stringify(work)}`,
+        text: message,
         capability_work: work,
       },
     },
