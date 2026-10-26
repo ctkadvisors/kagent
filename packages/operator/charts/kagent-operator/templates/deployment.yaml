@@ -594,6 +594,10 @@ spec:
             - name: KAGENT_TRIGGERS_ENABLED
               value: {{ .Values.triggers.enabled | ternary "true" "false" | quote }}
             {{- if .Values.triggers.enabled }}
+            {{- with .Values.triggers.fleetWorkReportUrl }}
+            - name: FLEET_WORK_REPORT_URL
+              value: {{ . | quote }}
+            {{- end }}
             - name: KAGENT_TRIGGERS_WEBHOOK_ENABLED
               value: "true"
             - name: KAGENT_TRIGGERS_WEBHOOK_PORT
