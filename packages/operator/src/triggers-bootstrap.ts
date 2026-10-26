@@ -55,6 +55,7 @@ import {
 import { API_GROUP, API_VERSION, isKagentSchedule, type KagentSchedule } from './crds/index.js';
 import { mergePatchOptions } from './k8s.js';
 import { superviseInformer } from './informer-restart.js';
+import { enrichFleetWork } from './fleet-work.js';
 
 const KAGENT_SCHEDULE_PLURAL = 'kagentschedules';
 const AGENT_TASK_PLURAL = 'agenttasks';
@@ -95,12 +96,14 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
 
   // ---- Schedule controller ------------------------------------------
   const createAgentTask = async (manifest: RenderedAgentTask): Promise<void> => {
+    const workUrl = env.FLEET_WORK_REPORT_URL;
+    const task = await enrichFleetWork(manifest, workUrl ? { url: workUrl } : {});
     await customApi.createNamespacedCustomObject({
       group: API_GROUP,
       version: API_VERSION,
       namespace: manifest.metadata.namespace,
       plural: AGENT_TASK_PLURAL,
-      body: manifest,
+      body: task,
     });
   };
 
