@@ -1,0 +1,28 @@
+name: cold build timing (throwaway)
+on: pull_request
+
+jobs:
+  cold:
+    name: cold build (${{ matrix.name }})
+    runs-on: homelab
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: operator, file: packages/operator/Dockerfile }
+          - { name: agent-pod, file: packages/agent-pod/Dockerfile }
+          - { name: workbench-api, file: packages/workbench-api/Dockerfile }
+          - { name: workbench-ui, file: packages/workbench-ui/Dockerfile }
+          - { name: llm-gateway, file: packages/llm-gateway/Dockerfile }
+          - { name: tool-gateway, file: packages/tool-gateway/Dockerfile }
+          - { name: channel-whatsapp-adapter, file: packages/channel-whatsapp-adapter/Dockerfile }
+          - { name: channel-telegram-adapter, file: packages/channel-telegram-adapter/Dockerfile }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Cold build, no cache, nothing pushed or loaded
+        run: |
+          start=$(date +%s)
+          docker buildx build --no-cache --platform linux/amd64 -f ${{ matrix.file }} --output type=cacheonly .
+          echo "COLD BUILD ${{ matrix.name }}: $(( $(date +%s) - start ))s"
