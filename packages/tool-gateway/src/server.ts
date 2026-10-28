@@ -13,6 +13,8 @@ import { createPodCodeRunnerFactory } from './pod-code-runner.js';
 import { createCallerVerifier } from './caller-verifier.js';
 import { FleetForumNotices, type FleetForumNoticeConfig } from './fleet-forum-notices.js';
 import {
+  FLEET_RUN_CAPABILITY_DESCRIPTOR,
+  FLEET_RUN_CAPABILITY_NAME,
   FLEET_RUN_TOOL_DESCRIPTOR,
   FLEET_RUN_TOOL_NAME,
   defineFleetRunTool,
@@ -243,13 +245,22 @@ export function buildToolGatewayHandler(config: ToolGatewayServerConfig): ToolGa
               signingKey: config.fleetSigningKey,
               codeRunnerFor: codeRunnerFactory,
             }),
+            [FLEET_RUN_CAPABILITY_NAME]: defineFleetRunTool({
+              playgroundUrl: config.fleetPlaygroundUrl,
+              signingKey: config.fleetSigningKey,
+              codeRunnerFor: codeRunnerFactory,
+            }),
             [FLEET_RUN_TOOL_NAME]: defineFleetRunTool({
               playgroundUrl: config.fleetPlaygroundUrl,
               signingKey: config.fleetSigningKey,
               codeRunnerFor: codeRunnerFactory,
             }),
           },
-          externalDescriptors: [FLEET_RUN_TOOL_DESCRIPTOR, FLEET_COMMIT_FILES_DESCRIPTOR],
+          externalDescriptors: [
+            FLEET_RUN_TOOL_DESCRIPTOR,
+            FLEET_RUN_CAPABILITY_DESCRIPTOR,
+            FLEET_COMMIT_FILES_DESCRIPTOR,
+          ],
         }
       : {};
 

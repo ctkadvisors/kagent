@@ -26,6 +26,7 @@ import type {
 } from './http-server.js';
 
 export const FLEET_RUN_TOOL_NAME = 'fleet.run_tool';
+export const FLEET_RUN_CAPABILITY_NAME = 'fleet.run_capability';
 const FOLDER = /^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{1,48}$/;
 const SHA = /^[0-9a-f]{40}$/;
 const DEFAULT_TIMEOUT_MS = 900_000;
@@ -43,6 +44,7 @@ export interface FleetRunToolOptions {
   readonly signingKey: string;
   readonly codeRunnerFor: (task: ToolGatewayTaskIdentity) => ToolGatewayCodeRunner;
   readonly fetch?: typeof globalThis.fetch;
+  readonly catalogUrl?: string;
 }
 
 export interface FleetRunToolArgs {
@@ -67,6 +69,69 @@ export const FLEET_RUN_TOOL_DESCRIPTOR = {
     },
   },
 } as const;
+
+export const FLEET_RUN_CAPABILITY_DESCRIPTOR = {
+  name: FLEET_RUN_CAPABILITY_NAME,
+  description:
+    'Use an accepted fleet capability by catalog template and expected pin. The gateway resolves its exact folder, SHA and command; do not retype or wrap a command. Returns the resolved binding, signed reference exit and actual domain exit/output. Nonzero can be a valid finding. Refresh the catalog if its revision changed.',
+  inputSchema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['template', 'sha'],
+    properties: {
+      template: { type: 'string', pattern: '^capability-[a-z0-9][a-z0-9-]{1,40}$' },
+      sha: { type: 'string', pattern: '^[0-9a-f]{40}$' },
+      revision: { type: 'integer', minimum: 1 },
+    },
+  },
+} as const;
+
+async function resolveCapability(
+  input: ToolGatewayHandlerInput,
+  options: FleetRunToolOptions,
+  fetchImpl: typeof globalThis.fetch,
+): Promise<{ args: FleetRunToolArgs; entry: Record<string, unknown> } | string> {
+  const value = input.call.args;
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return 'send template, sha and revision from the capability catalog';
+  const wanted = value as Record<string, unknown>;
+  if (
+    Object.keys(wanted).some((key) => !['template', 'sha', 'revision'].includes(key)) ||
+    typeof wanted.template !== 'string' ||
+    !/^capability-[a-z0-9][a-z0-9-]{1,40}$/u.test(wanted.template) ||
+    typeof wanted.sha !== 'string' ||
+    !SHA.test(wanted.sha) ||
+    ('revision' in wanted && (!Number.isInteger(wanted.revision) || Number(wanted.revision) < 1))
+  )
+    return 'invalid capability selection; commands and overrides are not accepted';
+  try {
+    const response = await fetchImpl(
+      options.catalogUrl ?? 'http://report.fleet-authority.svc:8080/missions',
+      { signal: AbortSignal.any([input.request.signal, AbortSignal.timeout(20_000)]) },
+    );
+    if (!response.ok) return `capability catalog unavailable: HTTP ${String(response.status)}`;
+    const text = await response.text();
+    if (text.length > 2 * 1024 * 1024) return 'capability catalog exceeds response bound';
+    const report = JSON.parse(text) as { catalog?: unknown };
+    if (!Array.isArray(report.catalog)) return 'capability catalog unavailable';
+    const entry = report.catalog.find(
+      (row: unknown): row is Record<string, unknown> =>
+        typeof row === 'object' &&
+        row !== null &&
+        !Array.isArray(row) &&
+        (row as Record<string, unknown>).template === wanted.template &&
+        (row as Record<string, unknown>).kind === 'capability',
+    );
+    if (entry === undefined) return 'capability is not accepted in the current catalog';
+    if (entry.sha !== wanted.sha || entry.revision !== wanted.revision)
+      return 'capability catalog revision changed; refresh its current invocation before use';
+    const args = parseFleetRunToolArgs(entry);
+    if (typeof args === 'string') return `invalid catalog binding: ${args}`;
+    return { args, entry };
+  } catch {
+    return 'capability catalog unavailable; retain this task and retry with current evidence';
+  }
+}
 
 /** The parsed args, or the one-line reason they are refused (naming the bad field). */
 export function parseFleetRunToolArgs(args: unknown): FleetRunToolArgs | string {
@@ -94,7 +159,12 @@ export function defineFleetRunTool(options: FleetRunToolOptions): ToolGatewayExt
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const base = options.playgroundUrl.replace(/\/+$/, '');
   return async (input: ToolGatewayHandlerInput): Promise<ToolResult> => {
-    const args = parseFleetRunToolArgs(input.call.args);
+    const resolved =
+      input.call.name === FLEET_RUN_CAPABILITY_NAME
+        ? await resolveCapability(input, options, fetchImpl)
+        : undefined;
+    if (typeof resolved === 'string') return errorResult(resolved);
+    const args = resolved?.args ?? parseFleetRunToolArgs(input.call.args);
     if (typeof args === 'string') return errorResult(`invalid_args: fleet.run_tool ${args}`);
     const url = `${base}/tree?folder=${encodeURIComponent(args.folder)}&sha=${args.sha}`;
     let tree: { files?: Record<string, unknown>; error?: unknown };
@@ -155,6 +225,15 @@ export function defineFleetRunTool(options: FleetRunToolOptions): ToolGatewayExt
         folder: args.folder,
         sha: args.sha,
         run: args.run,
+        ...(resolved === undefined
+          ? {}
+          : {
+              template: resolved.entry.template,
+              revision: resolved.entry.revision,
+              accepted_at: resolved.entry.accepted_at,
+              reference_exit: resolved.entry.reference_exit,
+              verdict: resolved.entry.verdict,
+            }),
         exit,
         timedOut: envelope.signal === 'SIGTERM',
         stdout: envelope.stdout,
