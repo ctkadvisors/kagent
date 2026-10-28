@@ -11,3 +11,5 @@ Every `npm`/`pnpm`/corepack install in kagent CI and image builds uses the in-cl
 - **pnpm:** `packageManager` in `package.json` carries a sha512 pin; do not also set `version:` on `pnpm/action-setup`.
 - **Runners:** the homelab runner sets alias `registry.npmjs.org` and `registry.yarnpkg.com` to loopback. That is a
   guardrail, not a sandbox.
+- **Release builds:** `kagent-release.yml` (new_localai) builds the images through Verdaccio and blocks
+  `registry.npmjs.org` / `registry.yarnpkg.com`, so a green release can only have installed via Verdaccio.
