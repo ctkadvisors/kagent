@@ -226,6 +226,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # The runner set pins npm to the homelab Verdaccio; fail here if that routing drifts.
+      - name: Assert npm routing (Verdaccio only)
+        run: |
+          echo "NPM_CONFIG_REGISTRY=$NPM_CONFIG_REGISTRY"
+          case "$NPM_CONFIG_REGISTRY" in http://verdaccio.*) ;; *) echo "registry env not Verdaccio"; exit 1;; esac
+          getent hosts registry.npmjs.org registry.yarnpkg.com
+          curl -fsS -m 20 -o /dev/null "${NPM_CONFIG_REGISTRY%/}/-/ping"
+          if curl -sS -m 10 -o /dev/null https://registry.npmjs.org/; then echo "npmjs reachable"; exit 1; fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
