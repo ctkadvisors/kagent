@@ -77,7 +77,7 @@ export const FLEET_RUN_CAPABILITY_DESCRIPTOR = {
   inputSchema: {
     type: 'object',
     additionalProperties: false,
-    required: ['template', 'sha'],
+    required: ['template', 'sha', 'revision'],
     properties: {
       template: { type: 'string', pattern: '^capability-[a-z0-9][a-z0-9-]{1,40}$' },
       sha: { type: 'string', pattern: '^[0-9a-f]{40}$' },
@@ -101,7 +101,8 @@ async function resolveCapability(
     !/^capability-[a-z0-9][a-z0-9-]{1,40}$/u.test(wanted.template) ||
     typeof wanted.sha !== 'string' ||
     !SHA.test(wanted.sha) ||
-    ('revision' in wanted && (!Number.isInteger(wanted.revision) || Number(wanted.revision) < 1))
+    !Number.isInteger(wanted.revision) ||
+    Number(wanted.revision) < 1
   )
     return 'invalid capability selection; commands and overrides are not accepted';
   try {

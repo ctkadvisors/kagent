@@ -239,6 +239,7 @@ it('refuses command overrides and changed catalog pins before creating a runner'
       )) as unknown as typeof fetch,
   });
   for (const args of [
+    { template: 'capability-intakewatch', sha: SHA },
     { template: 'capability-intakewatch', sha: SHA, revision: 4 },
     {
       template: 'capability-intakewatch',
