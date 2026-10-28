@@ -56,7 +56,6 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
-          version: 9.15.9
           run_install: false
 
       - name: Setup Node.js 22
@@ -100,7 +99,6 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
-          version: 9.15.9
           run_install: false
 
       - name: Setup Node.js 22
@@ -239,6 +237,12 @@ jobs:
         with:
           context: .
           file: packages/operator/Dockerfile
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: false
           load: true
           platforms: linux/amd64
@@ -249,6 +253,12 @@ jobs:
         with:
           context: .
           file: packages/workbench-api/Dockerfile
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: false
           load: true
           platforms: linux/amd64
@@ -259,6 +269,12 @@ jobs:
         with:
           context: .
           file: packages/workbench-ui/Dockerfile
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: false
           load: true
           platforms: linux/amd64
@@ -426,6 +442,12 @@ jobs:
         with:
           context: .
           file: ${{ matrix.file }}
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: true
           # v0.1.6-ga-hardening.4 — arm64 dropped from the matrix.
           # The Wave 4 expanded TS compile (operator + agent-pod
