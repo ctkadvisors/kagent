@@ -18,6 +18,10 @@
 # rewrite, prod-only re-install.
 # ---------------------------------------------------------------------
 FROM node:22-alpine AS build
+# Installs go through the homelab Verdaccio on the CI runners (the workflows pass these as
+# build-args); the defaults keep every other build on the public registries.
+ARG npm_config_registry=https://registry.npmjs.org/
+ARG COREPACK_NPM_REGISTRY=https://registry.npmjs.org
 
 RUN corepack enable
 

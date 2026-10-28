@@ -239,6 +239,12 @@ jobs:
         with:
           context: .
           file: packages/operator/Dockerfile
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: false
           load: true
           platforms: linux/amd64
@@ -249,6 +255,12 @@ jobs:
         with:
           context: .
           file: packages/workbench-api/Dockerfile
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: false
           load: true
           platforms: linux/amd64
@@ -259,6 +271,12 @@ jobs:
         with:
           context: .
           file: packages/workbench-ui/Dockerfile
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: false
           load: true
           platforms: linux/amd64
@@ -426,6 +444,12 @@ jobs:
         with:
           context: .
           file: ${{ matrix.file }}
+          build-args: |
+            npm_config_registry=http://verdaccio.verdaccio.svc.cluster.local:4873/
+            COREPACK_NPM_REGISTRY=http://verdaccio.verdaccio.svc.cluster.local:4873
+          add-hosts: |
+            registry.npmjs.org=127.0.0.1
+            registry.yarnpkg.com=127.0.0.1
           push: true
           # v0.1.6-ga-hardening.4 — arm64 dropped from the matrix.
           # The Wave 4 expanded TS compile (operator + agent-pod

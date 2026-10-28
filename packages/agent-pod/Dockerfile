@@ -24,6 +24,10 @@
 # from the layer that gets copied into the runtime image.
 # ---------------------------------------------------------------------
 FROM node:22-alpine AS build
+# Installs go through the homelab Verdaccio on the CI runners (the workflows pass these as
+# build-args); the defaults keep every other build on the public registries.
+ARG npm_config_registry=https://registry.npmjs.org/
+ARG COREPACK_NPM_REGISTRY=https://registry.npmjs.org
 
 # Enable corepack so the pinned pnpm@9.15.9 from package.json is used.
 RUN corepack enable
