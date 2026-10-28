@@ -220,7 +220,7 @@ it('refuses command overrides and changed catalog pins before creating a runner'
       runs += 1;
       throw new Error('must not execute');
     },
-    fetch: (() =>
+    fetch: () =>
       Promise.resolve(
         new Response(
           JSON.stringify({
@@ -236,7 +236,7 @@ it('refuses command overrides and changed catalog pins before creating a runner'
             ],
           }),
         ),
-      )) as unknown as typeof fetch,
+      ),
   });
   for (const args of [
     { template: 'capability-intakewatch', sha: SHA },
