@@ -137,3 +137,121 @@ describe('fleet.run_tool', () => {
     expect(runs).toBe(0);
   });
 });
+
+describe('fleet.run_capability', () => {
+  it('resolves the catalog command without letting the consumer retype or mask it', async () => {
+    const snippets: string[] = [];
+    const urls: string[] = [];
+    const runner = {
+      writeFiles: () => Promise.resolve(),
+      executeCode: (value: { code: string }) => {
+        snippets.push(value.code);
+        return Promise.resolve({
+          stdout:
+            '@@fleet.run_tool@@' +
+            JSON.stringify({
+              status: 1,
+              signal: null,
+              stdout: 'stuck receipts found',
+              stderr: '',
+            }),
+          stderr: '',
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+        });
+      },
+    } as unknown as ToolGatewayCodeRunner;
+    const tool = defineFleetRunTool({
+      playgroundUrl: 'http://playground/',
+      signingKey: 'k',
+      codeRunnerFor: () => runner,
+      fetch: ((url: string) => {
+        urls.push(url);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              url.includes('/missions')
+                ? {
+                    catalog: [
+                      {
+                        kind: 'capability',
+                        template: 'capability-intakewatch',
+                        revision: 4,
+                        folder: '2026-10-26-intakewatch',
+                        sha: SHA,
+                        run: 'python3 intakewatch.py --capture real.json',
+                        reference_exit: 1,
+                        verdict: 91,
+                      },
+                    ],
+                  }
+                : { files: { 'intakewatch.py': 'print(1)' } },
+            ),
+            { status: 200 },
+          ),
+        );
+      }) as unknown as typeof fetch,
+    });
+    const call = input({ template: 'capability-intakewatch', sha: SHA, revision: 4 });
+    const result = await tool({ ...call, call: { ...call.call, name: 'fleet.run_capability' } });
+    expect(result.isError).toBe(false);
+    expect(urls[0]).toBe('http://report.fleet-authority.svc:8080/missions');
+    expect(snippets[0]).toContain('python3 intakewatch.py --capture real.json');
+    expect(snippets[0]).not.toContain('echo EXIT');
+    expect(JSON.parse(result.content)).toMatchObject({
+      template: 'capability-intakewatch',
+      revision: 4,
+      sha: SHA,
+      exit: 1,
+      run: 'python3 intakewatch.py --capture real.json',
+      reference_exit: 1,
+      verdict: 91,
+    });
+  });
+});
+
+it('refuses command overrides and changed catalog pins before creating a runner', async () => {
+  let runs = 0;
+  const tool = defineFleetRunTool({
+    playgroundUrl: 'http://playground',
+    signingKey: 'k',
+    codeRunnerFor: () => {
+      runs += 1;
+      throw new Error('must not execute');
+    },
+    fetch: () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            catalog: [
+              {
+                kind: 'capability',
+                template: 'capability-intakewatch',
+                revision: 5,
+                folder: '2026-10-26-intakewatch',
+                sha: SHA,
+                run: 'python3 actual.py',
+              },
+            ],
+          }),
+        ),
+      ),
+  });
+  for (const args of [
+    { template: 'capability-intakewatch', sha: SHA },
+    { template: 'capability-intakewatch', sha: SHA, revision: 4 },
+    {
+      template: 'capability-intakewatch',
+      sha: SHA,
+      revision: 5,
+      run: 'python3 actual.py; echo EXIT=$?',
+    },
+    { template: 'capability-intakewatch', sha: 'b'.repeat(40), revision: 5 },
+  ]) {
+    const call = input(args);
+    const result = await tool({ ...call, call: { ...call.call, name: 'fleet.run_capability' } });
+    expect(result.isError).toBe(true);
+  }
+  expect(runs).toBe(0);
+});
