@@ -1480,7 +1480,7 @@ export function buildCacheMounts(opts: BuildCacheMountsOptions): BuildCacheMount
 }
 
 /** Only explicitly deadline-bound tasks opt in; ordinary fleet budgets stay intact. */
-function executionDeadlineEnv(task: AgentTask): RenderedEnv[] {
+function executionDeadlineEnv(task: AgentTask): { name: string; value: string }[] {
   const payload = task.spec.payload;
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return [];
   const text = (payload as Record<string, unknown>)['execution_deadline_at'];
