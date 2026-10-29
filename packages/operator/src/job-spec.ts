@@ -678,6 +678,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
     { name: 'KAGENT_TASK_NAMESPACE', value: namespace },
+    ...executionDeadlineEnv(task),
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     // Always emit the model as a tiny env var — admission consults
     // this without reading the ConfigMap (hot path).
@@ -1476,4 +1477,28 @@ export function buildCacheMounts(opts: BuildCacheMountsOptions): BuildCacheMount
     hitCount: restore.hitCount,
     missCount: restore.missCount,
   };
+}
+
+/** Only explicitly deadline-bound tasks opt in; ordinary fleet budgets stay intact. */
+function executionDeadlineEnv(task: AgentTask): RenderedEnv[] {
+  const payload = task.spec.payload;
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return [];
+  const text = (payload as Record<string, unknown>)['execution_deadline_at'];
+  if (text === undefined) return [];
+  const requested = typeof text === 'string' ? Date.parse(text) : NaN;
+  if (!Number.isFinite(requested))
+    throw new Error('payload.execution_deadline_at must be an ISO timestamp');
+  const created = task.metadata.creationTimestamp;
+  const at =
+    created instanceof Date
+      ? created.getTime()
+      : created === undefined
+        ? Date.now()
+        : Date.parse(String(created));
+  const seconds = task.spec.runConfig?.timeoutSeconds ?? task.spec.timeoutSeconds;
+  const deadline =
+    typeof seconds === 'number' && seconds > 0 && Number.isFinite(at)
+      ? Math.min(requested, at + seconds * 1000)
+      : requested;
+  return [{ name: 'KAGENT_TASK_DEADLINE_AT', value: new Date(deadline).toISOString() }];
 }

@@ -24,6 +24,13 @@ const baseEnv: Record<string, string> = {
 };
 
 describe('parseEnv', () => {
+  it('preserves the operator-propagated absolute deadline', () => {
+    const cfg = parseEnv({ ...baseEnv, KAGENT_TASK_DEADLINE_AT: '2026-10-29T06:30:00Z' });
+    expect((cfg as unknown as { deadlineAtMs: number }).deadlineAtMs).toBe(
+      Date.parse('2026-10-29T06:30:00Z'),
+    );
+  });
+
   it('parses a happy-path env into a PodConfig', () => {
     const cfg = parseEnv(baseEnv);
     expect(cfg.taskId).toBe('task-uid-1');

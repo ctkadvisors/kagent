@@ -1449,3 +1449,22 @@ describe('buildCacheMounts (Wave 3 / Cache)', () => {
     expect(a.perSlot[0]?.key).not.toBe(b.perSlot[0]?.key);
   });
 });
+
+describe('explicit task execution deadline', () => {
+  it('propagates the absolute deadline without extending the task budget', () => {
+    const task: AgentTask = {
+      ...sampleTask,
+      metadata: { ...sampleTask.metadata, creationTimestamp: new Date('2026-10-29T06:00:00Z') },
+      spec: {
+        ...sampleTask.spec,
+        payload: { execution_deadline_at: '2026-10-29T06:45:00Z' },
+        runConfig: { timeoutSeconds: 1800 },
+      },
+    };
+    const job = buildJobSpec(sampleAgent, task);
+    const env = job.spec!.template.spec!.containers[0]!.env!;
+    expect(env.find((e) => e.name === 'KAGENT_TASK_DEADLINE_AT')?.value).toBe(
+      '2026-10-29T06:30:00.000Z',
+    );
+  });
+});

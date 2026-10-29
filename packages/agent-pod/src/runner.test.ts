@@ -872,6 +872,41 @@ function spyLlm(): {
 }
 
 describe('runAgentTask — runConfig precedence (WS-G)', () => {
+  it('counts queue/setup against a propagated absolute deadline', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(new AbortController().signal);
+    try {
+      const config = {
+        ...baseConfig,
+        deadlineAtMs: 1_030_000,
+        taskSpec: { ...baseConfig.taskSpec, runConfig: { timeoutSeconds: 600 } },
+      } as PodConfig;
+      await runAgentTask(config, { llm: scriptedLlm('done'), sinks: [] });
+      expect(timeout).toHaveBeenCalledWith(30_000);
+    } finally {
+      clock.mockRestore();
+      timeout.mockRestore();
+    }
+  });
+
+  it('does not invoke a model when the absolute deadline expired during queue/setup', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const llm = scriptedLlm('late');
+    const chat = vi.spyOn(llm, 'chat');
+    try {
+      const config = {
+        ...baseConfig,
+        deadlineAtMs: 999_999,
+        taskSpec: { ...baseConfig.taskSpec, runConfig: { timeoutSeconds: 600 } },
+      } as PodConfig;
+      const result = await runAgentTask(config, { llm, sinks: [] });
+      expect(chat).not.toHaveBeenCalled();
+      expect(result.status).toBe('cancelled');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each(['runConfig', 'deprecated', 'default'] as const)(
     'shares the %s timeout origin with tool budget notes',
     async (kind) => {
