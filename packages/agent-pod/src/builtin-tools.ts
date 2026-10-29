@@ -41,6 +41,7 @@
  *      `eval`, no shell-out anywhere in this file.
  */
 
+import { parseAgentTemplateSpec } from '@kagent/dto';
 import { promises as dns } from 'node:dns';
 
 import type { ContentBlock, ToolInvocationContext, ToolProvider } from '@kagent/agent-loop';
@@ -801,7 +802,7 @@ export function buildBuiltinToolRegistry(
       'forwards refs into AgentTask.status.artifacts. Names must be ' +
       'relative (no leading "/" or ".." segments) and must not contain ' +
       'control characters. Pass `content` as a UTF-8 string for text ' +
-      'payloads or as `{base64: "..."}` for binary payloads. When ' +
+      'payloads, `{json: object}` for service-serialized JSON, or `{base64: "..."}` for binary payloads. Template candidates are validated before publication. When ' +
       '`inline` is true and the content is small + textual, the tool ' +
       'returns a synthetic ref WITHOUT touching the filesystem so the ' +
       'caller can embed the content directly in status.result.content. ' +
@@ -836,6 +837,14 @@ export function buildBuiltinToolRegistry(
           ? rawMediaType
           : 'application/octet-stream';
       const decoded = decodeWriteArtifactContent(args.content);
+      if (mediaType === 'application/x-kagent-template-candidate+yaml') {
+        const text =
+          decoded.kind === 'text'
+            ? decoded.text
+            : new TextDecoder('utf-8', { fatal: true }).decode(decoded.bytes);
+        const parsed = parseAgentTemplateSpec(text);
+        if (!parsed.ok) throw new Error(`invalid candidate: ${parsed.error}`);
+      }
       const inline = args.inline === true;
 
       // Resolve env strictly: when the operator did not stamp the PVC
@@ -936,6 +945,18 @@ function decodeWriteArtifactContent(raw: unknown): DecodedContent {
   if (typeof raw === 'string') {
     return { kind: 'text', text: raw };
   }
+  if (typeof raw === 'object' && raw !== null && 'json' in raw) {
+    const value = (raw as { json?: unknown }).json;
+    if (
+      Object.keys(raw).length !== 1 ||
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value)
+    ) {
+      throw new Error('tool_error: write_artifact: content.json must be an object');
+    }
+    return { kind: 'text', text: JSON.stringify(value) };
+  }
   if (typeof raw === 'object' && raw !== null && 'base64' in raw) {
     const b64 = (raw as { base64?: unknown }).base64;
     if (typeof b64 !== 'string') {
@@ -960,7 +981,7 @@ function decodeWriteArtifactContent(raw: unknown): DecodedContent {
     return { kind: 'bytes', bytes };
   }
   throw new Error(
-    'missing or wrong-type required argument "content" (must be a string or { base64: string })',
+    'missing or wrong-type required argument "content" (must be a string, { json: object } or { base64: string })',
   );
 }
 

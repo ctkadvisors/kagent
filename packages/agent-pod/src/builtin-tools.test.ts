@@ -679,6 +679,59 @@ describe('write_artifact tool — inline mode', () => {
     return new InProcessToolProvider({ tools: [def] });
   }
 
+  it('refuses malformed candidate YAML before publishing an artifact', async () => {
+    const p = makeProvider();
+    const r = await p.executeTool(
+      call('write_artifact', {
+        name: 'capability-tool',
+        mediaType: 'application/x-kagent-template-candidate+yaml',
+        content:
+          'agentSpec:\n  modelClass: local\n  systemPrompt: |\n    Run it.\n   DONE WHEN complete.\n',
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/YAML parse error/);
+  });
+
+  it('serializes and validates structured candidate fields as the exact published bytes', async () => {
+    const spec = {
+      templateVersion: 1,
+      agentSpec: { modelClass: 'local', systemPrompt: 'Run the pin.' },
+    };
+    const r = await makeProvider().executeTool(
+      call('write_artifact', {
+        name: 'capability-tool',
+        mediaType: 'application/x-kagent-template-candidate+yaml',
+        content: { json: spec },
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    const ref = JSON.parse((r.content as { text: string }[])[0]!.text) as {
+      payloadBase64: string;
+      sizeBytes: number;
+    };
+    expect(Buffer.from(ref.payloadBase64, 'base64').toString('utf8')).toBe(JSON.stringify(spec));
+    expect(ref.sizeBytes).toBe(Buffer.byteLength(JSON.stringify(spec)));
+  });
+
+  it('rejects a structured candidate without its required agent body', async () => {
+    const r = await makeProvider().executeTool(
+      call('write_artifact', {
+        name: 'capability-tool',
+        mediaType: 'application/x-kagent-template-candidate+yaml',
+        content: { json: { templateVersion: 1 } },
+        inline: true,
+      }),
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(contentString(r)).toMatch(/agentSpec is required/);
+  });
+
   it('rejects a traversal-looking name in inline mode (validateArtifactName runs)', async () => {
     const p = makeProvider();
     const r = await p.executeTool(

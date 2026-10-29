@@ -33,6 +33,7 @@
  * @see RESEARCH.md Q3, Q4, Q11
  */
 
+import { createHash } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
@@ -251,7 +252,7 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
     }
 
     // Step 4 — body parse + reviewer-id resolution
-    let body: { reviewerId?: string; reasonText?: string } = {};
+    let body: { reviewerId?: string; reasonText?: string; expectedArtifactChecksum?: unknown } = {};
     try {
       body = await c.req.json();
     } catch {
@@ -310,6 +311,27 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
           { error: 'internal error reading candidate-template artifact; see workbench-api logs' },
           500,
         );
+      }
+
+      const expectedChecksum = body.expectedArtifactChecksum;
+      if (expectedChecksum !== undefined) {
+        if (
+          typeof expectedChecksum !== 'string' ||
+          !/^sha256:[0-9a-f]{64}$/.test(expectedChecksum)
+        ) {
+          return c.json({ error: 'expectedArtifactChecksum must be a sha256 digest' }, 400);
+        }
+        const actualChecksum = 'sha256:' + createHash('sha256').update(yaml, 'utf8').digest('hex');
+        if (actualChecksum !== expectedChecksum) {
+          return c.json(
+            {
+              error: 'candidate artifact changed since validation',
+              expectedArtifactChecksum: expectedChecksum,
+              actualArtifactChecksum: actualChecksum,
+            },
+            409,
+          );
+        }
       }
 
       const parsed = parseAgentTemplateSpec(yaml);
