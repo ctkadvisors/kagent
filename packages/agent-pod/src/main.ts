@@ -446,12 +446,14 @@ async function main(): Promise<void> {
   // start, not the moment the spawn block runs (subtle but matters
   // for the get_my_context tool's first call).
   const remainingBudgetSeconds: (() => number | undefined) | undefined =
-    config.taskSpec.runConfig?.timeoutSeconds !== undefined
-      ? ((startMs: number, totalSec: number) => () => {
-          const elapsedSec = (Date.now() - startMs) / 1000;
-          return Math.max(0, totalSec - elapsedSec);
-        })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
-      : undefined;
+    config.deadlineAtMs !== undefined
+      ? () => Math.max(0, (config.deadlineAtMs! - Date.now()) / 1000)
+      : config.taskSpec.runConfig?.timeoutSeconds !== undefined
+        ? ((startMs: number, totalSec: number) => () => {
+            const elapsedSec = (Date.now() - startMs) / 1000;
+            return Math.max(0, totalSec - elapsedSec);
+          })(Date.now(), config.taskSpec.runConfig.timeoutSeconds)
+        : undefined;
 
   // WS-K + WS-L — wire substrate task-graph tools when the flag is on
   // AND the Agent declares graph intent or explicit substrate tool

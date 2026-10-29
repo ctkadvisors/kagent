@@ -249,6 +249,8 @@ export interface PodConfig {
   readonly taskId: string;
   readonly taskName: string;
   readonly taskNamespace: string;
+  /** Explicit end-to-end deadline stamped by the operator; includes queue/setup. */
+  readonly deadlineAtMs?: number;
   readonly agentName: string;
   readonly agentSpec: AgentSpecEnv;
   readonly taskSpec: TaskSpecEnv;
@@ -408,10 +410,17 @@ export function parseEnv(
   // pod.
   const contextWindowTokens = parseContextWindowTokens(env.KAGENT_AGENT_MODEL_CONTEXT_WINDOW);
 
+  const deadlineText = env.KAGENT_TASK_DEADLINE_AT;
+  const deadlineAtMs = deadlineText === undefined ? undefined : Date.parse(deadlineText);
+  if (deadlineAtMs !== undefined && !Number.isFinite(deadlineAtMs)) {
+    throw new Error('KAGENT_TASK_DEADLINE_AT must be an ISO timestamp');
+  }
+
   const config: PodConfig = {
     taskId,
     taskName,
     taskNamespace,
+    ...(deadlineAtMs !== undefined && { deadlineAtMs }),
     agentName,
     agentSpec,
     taskSpec,

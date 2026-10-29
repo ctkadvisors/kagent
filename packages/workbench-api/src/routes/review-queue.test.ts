@@ -773,6 +773,41 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     expect(events).toEqual(['template.candidate.promoted', 'review.accepted']);
   });
 
+  it('refuses promotion if the exact artifact checksum validated by the reviewer differs', async () => {
+    const customApi = makeMockCustomApi();
+    const task: AgentTask = {
+      ...candidateTemplateTask,
+      status: {
+        ...candidateTemplateTask.status!,
+        artifacts: [
+          {
+            uri: 'inline://sha256:ab',
+            mediaType: 'application/x-kagent-template-candidate+yaml',
+            payloadBase64: Buffer.from(candidateYaml, 'utf8').toString('base64'),
+          },
+        ],
+      },
+    };
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([task]),
+        customApi: customApi as unknown as ReviewQueueRouteDeps['customApi'],
+        auditPublisher: makeMockAuditPublisher(),
+        now: () => fixedPostNow,
+      }),
+    );
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedArtifactChecksum: 'sha256:' + '0'.repeat(64) }),
+    });
+    expect(res.status).toBe(409);
+    expect(customApi.createNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
+  });
+
   it('accepts an inline candidate (payloadBase64 on the status artifact) with no reader wired, as production runs', async () => {
     const customApi = makeMockCustomApi();
     const inlineTask: AgentTask = {

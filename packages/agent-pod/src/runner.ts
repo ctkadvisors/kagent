@@ -353,8 +353,16 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // controller) via Node 22 native `AbortSignal.any` so EITHER source
   // can cancel the run.
   const timeoutMs = effectiveTimeoutSeconds * 1000;
-  const timeoutStartedAtMs = Date.now();
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  // A caller may own an absolute deadline spanning admission, queue and setup.
+  // Never let it extend the ordinary per-run budget. Absence preserves existing tasks.
+  const now = Date.now();
+  const timeoutStartedAtMs =
+    config.deadlineAtMs === undefined ? now : Math.min(now, config.deadlineAtMs - timeoutMs);
+  const remainingMs = Math.max(0, timeoutStartedAtMs + timeoutMs - now);
+  const timeoutSignal =
+    remainingMs === 0
+      ? AbortSignal.abort(new Error('task execution deadline elapsed during queue/setup'))
+      : AbortSignal.timeout(remainingMs);
   const signal = composeSignals(deps.signal, timeoutSignal);
 
   // Piece 3 (CONTEXT-AWARENESS.md §4.5) — substrate-side context-window
