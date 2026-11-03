@@ -21,6 +21,8 @@
  *
  * Tasks with `kagent.knuteson.io/review-decision` annotation already
  * set are SKIPPED — they have been reviewed and are not re-queued.
+ * Explicit acceptedForTemplate discovery and reconcileAccepted repair a queue-owned
+ * template from an already admitted newer final without creating a review decision.
  *
  * REV-03: replay-divergence and eval-failed are reserved for
  * AgentTaskRun + @kagent/eval (Phase 5+). v0.2 producers: zero.
@@ -36,6 +38,7 @@
 import { createHash } from 'node:crypto';
 import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
+import { isDeepStrictEqual } from 'node:util';
 import { setHeaderOptions, type CustomObjectsApi } from '@kubernetes/client-node';
 import {
   assertIsReviewQueueRow,
@@ -88,6 +91,9 @@ const ANNOTATION_REVIEW_REQUESTED_AT = 'kagent.knuteson.io/review-requested-at';
 const ANNOTATION_TEMPLATE_CANDIDATE = 'kagent.knuteson.io/template-candidate';
 const ANNOTATION_PROPOSED_TEMPLATE_NAME = 'kagent.knuteson.io/proposed-template-name';
 const ANNOTATION_PROMOTED_FROM_TASK = 'kagent.knuteson.io/promoted-from-task';
+const ANNOTATION_PROMOTED_ARTIFACT_NAME = 'kagent.knuteson.io/promoted-artifact-name';
+const ANNOTATION_PROMOTED_ARTIFACT_CHECKSUM = 'kagent.knuteson.io/promoted-artifact-checksum';
+const ACCEPTED_DISCOVERY_LIMIT = 100;
 
 /** MediaType that identifies a candidate AgentTemplate artifact. */
 const TEMPLATE_CANDIDATE_MEDIA_TYPE = 'application/x-kagent-template-candidate+yaml';
@@ -180,7 +186,7 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
   // Pure-read: no K8s API calls, no mutations.
   // O(|cache.tasks|) per request (homelab scale; REV-01).
   // ------------------------------------------------------------------
-  app.get('/', (c) => {
+  app.get('/', async (c) => {
     const tasks = deps.cache.listTasks();
     const items: ReviewQueueRow[] = [];
     const nowMs = now().getTime();
@@ -188,6 +194,68 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
     // wants nothing else, and the never-decided suspicious-detector backlog (1,271 rows,
     // 591 KB on 2026-10-19) overran its bounded read.
     const candidatesOnly = c.req.query('candidates') === 'true';
+    const template = c.req.query('acceptedForTemplate');
+    if (template !== undefined) {
+      if (
+        !candidatesOnly ||
+        c.req.queries('acceptedForTemplate')?.length !== 1 ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(template)
+      )
+        return c.json(
+          { error: 'acceptedForTemplate requires candidates=true and a DNS template name' },
+          400,
+        );
+      const matching = tasks.filter((task) => {
+        const annotations = task.metadata.annotations ?? {};
+        return (
+          annotations[ANNOTATION_REVIEW_DECISION] === 'accepted' &&
+          task.status?.phase === 'Completed' &&
+          (annotations[ANNOTATION_PROPOSED_TEMPLATE_NAME] === template ||
+            finalCandidateArtifact(task)?.artifactRef.name === template)
+        );
+      });
+      if (matching.some((task) => completedAt(task) === undefined))
+        return c.json({ error: 'accepted candidate completion unavailable' }, 409);
+      matching.sort(
+        (a, b) =>
+          completedAt(b)! - completedAt(a)! ||
+          (a.metadata.name ?? '').localeCompare(b.metadata.name ?? ''),
+      );
+      if (matching.length > 1 && completedAt(matching[0]!) === completedAt(matching[1]!))
+        return c.json({ error: 'latest accepted candidate completion is ambiguous' }, 409);
+      const acceptedItems: ReviewQueueRow[] = [];
+      for (const [index, task] of matching.slice(0, ACCEPTED_DISCOVERY_LIMIT).entries()) {
+        try {
+          const final = finalCandidateArtifact(task);
+          if (
+            !final ||
+            final.artifactRef.name !== template ||
+            !admittedArtifactTime(task, final.artifactRef)
+          )
+            throw new Error('accepted final unavailable');
+          const yaml = await candidateYaml(deps, final.artifactRef);
+          const checksum = artifactChecksum(yaml);
+          if (final.artifactRef.checksum !== undefined && final.artifactRef.checksum !== checksum)
+            throw new Error('candidate digest mismatch');
+          if (!parseAgentTemplateSpec(yaml).ok) throw new Error('invalid final candidate');
+          const row = classifyTask(task, nowMs, deps.langfuseBaseUrl, deps.defaultNamespace);
+          if (!row?.candidateTemplate || !row.taskRef.name || !row.taskRef.uid)
+            throw new Error('candidate review provenance unavailable');
+          acceptedItems.push({
+            ...row,
+            candidateTemplate: {
+              ...row.candidateTemplate,
+              artifactRef: { ...final.artifactRef, checksum },
+              proposedTemplateName: template,
+            },
+          });
+        } catch {
+          if (index === 0)
+            return c.json({ error: 'latest accepted final candidate unavailable' }, 409);
+        }
+      }
+      return c.json({ items: acceptedItems, hasMore: matching.length > ACCEPTED_DISCOVERY_LIMIT });
+    }
 
     for (const task of tasks) {
       const annotations: Record<string, string> =
@@ -238,38 +306,51 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
       return c.json({ error: `AgentTask ${namespace}/${name} not in cache`, namespace, name }, 404);
     }
 
-    // Step 3 — conflict check → 409 if already decided
-    const annotations: Record<string, string> =
-      (task.metadata?.annotations as Record<string, string> | undefined) ?? {};
-    if (annotations[ANNOTATION_REVIEW_DECISION] !== undefined) {
-      return c.json(
-        {
-          error: `AgentTask ${namespace}/${name} already has a review decision`,
-          existing: annotations[ANNOTATION_REVIEW_DECISION],
-        },
-        409,
-      );
-    }
-
-    // Step 4 — body parse + reviewer-id resolution
     let body: {
       reviewerId?: string;
       reasonText?: string;
       expectedArtifactChecksum?: unknown;
       expectedArtifactName?: unknown;
+      reconcileAccepted?: unknown;
     } = {};
     try {
-      body = await c.req.json();
+      const parsed: unknown = await c.req.json();
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed;
     } catch {
-      // tolerate missing or malformed body — all fields are optional
+      /* Optional ordinary-review body. */
     }
+    if (body.reconcileAccepted !== undefined && typeof body.reconcileAccepted !== 'boolean')
+      return c.json({ error: 'reconcileAccepted must be boolean' }, 400);
+    const reconcileAccepted = body.reconcileAccepted === true;
+    const annotations = task.metadata.annotations ?? {};
+    if (
+      reconcileAccepted
+        ? annotations[ANNOTATION_REVIEW_DECISION] !== 'accepted'
+        : annotations[ANNOTATION_REVIEW_DECISION] !== undefined
+    )
+      return c.json(
+        {
+          error: `AgentTask ${namespace}/${name} already has a review decision or is not an accepted reconciliation source`,
+          existing: annotations[ANNOTATION_REVIEW_DECISION],
+        },
+        409,
+      );
+    if (
+      reconcileAccepted &&
+      (typeof body.expectedArtifactName !== 'string' ||
+        typeof body.expectedArtifactChecksum !== 'string')
+    )
+      return c.json(
+        { error: 'reconciliation requires expectedArtifactName and expectedArtifactChecksum' },
+        400,
+      );
     const reviewerId = extractReviewerId(c, body);
     const reasonText = typeof body.reasonText === 'string' ? body.reasonText : undefined;
 
     // Step 5 — re-classify: verify task is still in queue (atomicity guard)
     const nowMs = now().getTime();
     const row = classifyTask(task, nowMs, deps.langfuseBaseUrl, deps.defaultNamespace);
-    if (row === undefined) {
+    if (row === undefined || (reconcileAccepted && row.candidateTemplate === undefined)) {
       return c.json({ error: 'task is not in review queue' }, 409);
     }
 
@@ -357,6 +438,18 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
         );
       }
 
+      if (reconcileAccepted) {
+        const final = finalCandidateArtifact(task);
+        if (
+          !final ||
+          final.artifactRef.uri !== candidateArtifact.artifactRef.uri ||
+          final.artifactRef.name !== expectedName ||
+          !admittedArtifactTime(task, final.artifactRef) ||
+          artifactChecksum(await candidateYaml(deps, final.artifactRef)) !== artifactChecksum(yaml)
+        )
+          return c.json({ error: 'accepted final candidate provenance unavailable' }, 409);
+      }
+
       const parsed = parseAgentTemplateSpec(yaml);
       if (!parsed.ok) {
         return c.json({ error: 'candidate-template parse failed', detail: parsed.error }, 422);
@@ -376,9 +469,25 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
         taskNamespace: namespace,
         taskName: name,
         taskUid,
+        ...(candidateArtifact.artifactRef.name !== undefined && {
+          artifactName: candidateArtifact.artifactRef.name,
+        }),
+        artifactChecksum: artifactChecksum(yaml),
         // Cast AgentTemplateSpec → Record<string,unknown> via unknown (no index sig on spec type)
         spec: parsed.spec as unknown as Record<string, unknown>,
       });
+
+      if (reconcileAccepted) {
+        const revision = await reviseQueueTemplate(deps, proposedNamespace, manifest, task);
+        if (!revision.ok) return c.json({ error: revision.error }, 409);
+        return c.json({
+          taskRef,
+          agentTemplateRef: revision.ref,
+          reconciled: true,
+          unchanged: revision.unchanged,
+          reconciledAt: nowIso,
+        });
+      }
 
       // Create the AgentTemplate CR (FIRST — D-03 atomicity: CR creation before annotation patch)
       try {
@@ -406,12 +515,13 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
         // later accepted candidate of the same name (a fixed check at a new sha).
         // Anything else by that name (a hand-authored template) is never touched.
         if (status === 409) {
-          const revised = await reviseQueueTemplate(deps.customApi, proposedNamespace, manifest);
-          if (revised !== undefined) {
-            agentTemplateRef = revised;
-          } else {
-            return c.json({ error: 'AgentTemplate creation failed', detail: errBody }, 422);
-          }
+          const revised = await reviseQueueTemplate(deps, proposedNamespace, manifest, task);
+          if (revised.ok) agentTemplateRef = revised.ref;
+          else
+            return c.json(
+              { error: revised.error, detail: errBody },
+              revised.notQueueOwned ? 422 : 409,
+            );
         } else if (status === 422) {
           return c.json({ error: 'AgentTemplate creation failed', detail: errBody }, 422);
         }
@@ -814,33 +924,105 @@ interface AgentTemplateManifestArgs {
   readonly taskNamespace: string;
   readonly taskName: string;
   readonly taskUid: string;
+  readonly artifactName?: string;
+  readonly artifactChecksum: string;
   readonly spec: Record<string, unknown>;
 }
 
 /**
  * Replace an existing AgentTemplate with an accepted candidate's manifest, but
- * only when the review queue created it (it carries the promoted-from-task
- * annotation). Returns the revised template's meta, or undefined when the
- * existing template is not the queue's or the replace fails.
+ * only when the review queue created it and the target source completed strictly
+ * later. Reads the live Template and uses its resourceVersion for CAS; missing
+ * source evidence or a conflict refuses without mutating any Task decision.
  */
+type TemplateRevision =
+  | { ok: true; ref: ReturnType<typeof readCreatedMeta>; unchanged: boolean }
+  | { ok: false; error: string; notQueueOwned?: boolean };
 async function reviseQueueTemplate(
-  customApi: CustomObjectsApi,
+  deps: ReviewQueueRouteDeps,
   namespace: string,
   manifest: Record<string, unknown>,
-): Promise<ReturnType<typeof readCreatedMeta> | undefined> {
+  target: AgentTask,
+): Promise<TemplateRevision> {
   const meta = manifest['metadata'] as { name: string; annotations: Record<string, string> };
   try {
-    const existing = (await customApi.getNamespacedCustomObject({
+    const existing = (await deps.customApi!.getNamespacedCustomObject({
       group: KAGENT_GROUP,
       version: KAGENT_VERSION,
       namespace,
       plural: 'agenttemplates',
       name: meta.name,
-    })) as { metadata?: { resourceVersion?: string; annotations?: Record<string, string> } };
-    if (existing.metadata?.annotations?.[ANNOTATION_PROMOTED_FROM_TASK] === undefined) {
-      return undefined;
+    })) as {
+      metadata?: {
+        resourceVersion?: string;
+        annotations?: Record<string, string>;
+        labels?: Record<string, string>;
+      };
+      spec?: unknown;
+    };
+    const source = existing.metadata?.annotations?.[ANNOTATION_PROMOTED_FROM_TASK];
+    if (typeof source !== 'string' || !source)
+      return { ok: false, error: 'existing template is not queue-owned', notQueueOwned: true };
+    if (
+      typeof existing.metadata?.resourceVersion !== 'string' ||
+      !existing.metadata.resourceVersion
+    )
+      return { ok: false, error: 'existing template resourceVersion unavailable' };
+    const currentSource = meta.annotations[ANNOTATION_PROMOTED_FROM_TASK];
+    const recordedName = existing.metadata.annotations?.[ANNOTATION_PROMOTED_ARTIFACT_NAME];
+    const recordedChecksum = existing.metadata.annotations?.[ANNOTATION_PROMOTED_ARTIFACT_CHECKSUM];
+    if (recordedName !== undefined || recordedChecksum !== undefined) {
+      if (
+        typeof recordedName !== 'string' ||
+        typeof recordedChecksum !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test(recordedChecksum)
+      )
+        return { ok: false, error: 'existing artifact admission metadata unavailable' };
+      if (
+        source === currentSource &&
+        (recordedName !== meta.annotations[ANNOTATION_PROMOTED_ARTIFACT_NAME] ||
+          recordedChecksum !== meta.annotations[ANNOTATION_PROMOTED_ARTIFACT_CHECKSUM])
+      )
+        return { ok: false, error: 'existing artifact admission identity disagrees' };
     }
-    const replaced: unknown = await customApi.replaceNamespacedCustomObject({
+    if (source === currentSource && isDeepStrictEqual(existing.spec, manifest['spec']))
+      return { ok: true, ref: readCreatedMeta(existing), unchanged: true };
+    const [sourceNamespace, sourceName, extra] = source.split('/');
+    if (!sourceNamespace || !sourceName || extra !== undefined)
+      return { ok: false, error: 'existing template source unavailable' };
+    let sourceTask = deps.cache.getTask(sourceNamespace, sourceName);
+    if (!sourceTask)
+      sourceTask = (await deps.customApi!.getNamespacedCustomObject({
+        group: KAGENT_GROUP,
+        version: KAGENT_VERSION,
+        namespace: sourceNamespace,
+        plural: 'agenttasks',
+        name: sourceName,
+      })) as AgentTask;
+    if (recordedName !== undefined && recordedChecksum !== undefined) {
+      let matches = 0;
+      for (const candidate of findCandidateArtifacts(sourceTask)) {
+        if (candidate.artifactRef.name !== recordedName) continue;
+        const yaml = await candidateYaml(deps, candidate.artifactRef);
+        if (artifactChecksum(yaml) === recordedChecksum) {
+          const parsed = parseAgentTemplateSpec(yaml);
+          if (!parsed.ok || !isDeepStrictEqual(existing.spec, parsed.spec))
+            return { ok: false, error: 'existing template admission proof disagrees' };
+          matches++;
+        }
+      }
+      if (matches !== 1)
+        return { ok: false, error: 'existing template admission proof unavailable or ambiguous' };
+    }
+    const previousCompleted = completedAt(sourceTask);
+    const targetCompleted = completedAt(target);
+    if (
+      previousCompleted === undefined ||
+      targetCompleted === undefined ||
+      targetCompleted <= previousCompleted
+    )
+      return { ok: false, error: 'candidate is not strictly newer than current template source' };
+    const replaced: unknown = await deps.customApi!.replaceNamespacedCustomObject({
       group: KAGENT_GROUP,
       version: KAGENT_VERSION,
       namespace,
@@ -848,13 +1030,66 @@ async function reviseQueueTemplate(
       name: meta.name,
       body: {
         ...manifest,
-        metadata: { ...meta, resourceVersion: existing.metadata.resourceVersion },
+        metadata: {
+          ...meta,
+          labels: existing.metadata.labels,
+          annotations: { ...existing.metadata.annotations, ...meta.annotations },
+          resourceVersion: existing.metadata.resourceVersion,
+        },
       },
     });
-    return readCreatedMeta(replaced);
+    return { ok: true, ref: readCreatedMeta(replaced), unchanged: false };
   } catch {
-    return undefined;
+    return { ok: false, error: 'template revision conflict or source evidence unavailable' };
   }
+}
+
+function completedAt(task: AgentTask): number | undefined {
+  if (!['Completed', 'Failed'].includes(task.status?.phase ?? '')) return undefined;
+  const value = task.status?.completedAt;
+  if (typeof value !== 'string') return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+function admittedArtifactTime(task: AgentTask, artifact: ArtifactRefSummary): boolean {
+  const terminal = completedAt(task);
+  const decided = Date.parse(task.metadata.annotations?.[ANNOTATION_REVIEW_DECIDED_AT] ?? '');
+  const produced = Date.parse(artifact.producedAt ?? '');
+  return (
+    task.status?.phase === 'Completed' &&
+    terminal !== undefined &&
+    Number.isFinite(decided) &&
+    Number.isFinite(produced) &&
+    produced <= terminal &&
+    terminal <= decided
+  );
+}
+function finalCandidateArtifact(task: AgentTask): CandidateArtifactResult | undefined {
+  const value: unknown = task.status?.artifacts;
+  if (!Array.isArray(value)) return undefined;
+  const artifacts: readonly unknown[] = value;
+  const raw = [...artifacts]
+    .reverse()
+    .find(
+      (value) =>
+        value !== null &&
+        typeof value === 'object' &&
+        'mediaType' in value &&
+        value.mediaType === TEMPLATE_CANDIDATE_MEDIA_TYPE,
+    );
+  return projectCandidateArtifact(raw);
+}
+
+const artifactChecksum = (yaml: string) =>
+  'sha256:' + createHash('sha256').update(yaml, 'utf8').digest('hex');
+async function candidateYaml(
+  deps: ReviewQueueRouteDeps,
+  artifact: ArtifactRefSummary,
+): Promise<string> {
+  if (deps.readArtifact) return deps.readArtifact(artifact.uri);
+  const encoded = (artifact as ArtifactRefSummary & { payloadBase64?: unknown }).payloadBase64;
+  if (typeof encoded !== 'string') throw new Error('artifact bytes unavailable');
+  return Buffer.from(encoded, 'base64').toString('utf8');
 }
 
 /**
@@ -873,6 +1108,10 @@ function buildAgentTemplateManifest(args: AgentTemplateManifestArgs): Record<str
       // task that happened to file it.
       annotations: {
         [ANNOTATION_PROMOTED_FROM_TASK]: `${args.taskNamespace}/${args.taskName}`,
+        ...(args.artifactName !== undefined && {
+          [ANNOTATION_PROMOTED_ARTIFACT_NAME]: args.artifactName,
+        }),
+        [ANNOTATION_PROMOTED_ARTIFACT_CHECKSUM]: args.artifactChecksum,
       },
     },
     spec: args.spec,
@@ -1076,37 +1315,39 @@ function findCandidateArtifact(task: AgentTask): CandidateArtifactResult | undef
 }
 
 function findCandidateArtifacts(task: AgentTask): CandidateArtifactResult[] {
-  const artifacts = task.status?.artifacts;
-  if (!Array.isArray(artifacts)) return [];
-  const candidates: CandidateArtifactResult[] = [];
-  for (const artifact of artifacts) {
-    if (typeof artifact !== 'object' || artifact === null) continue;
-    const a = artifact as {
-      uri?: unknown;
-      mediaType?: unknown;
-      name?: unknown;
-      sizeBytes?: unknown;
-      checksum?: unknown;
-      producedAt?: unknown;
-      payloadBase64?: unknown;
-    };
-    if (a.mediaType !== TEMPLATE_CANDIDATE_MEDIA_TYPE) continue;
-    if (typeof a.uri !== 'string') continue;
+  const value: unknown = task.status?.artifacts;
+  if (!Array.isArray(value)) return [];
+  const artifacts: readonly unknown[] = value;
+  return artifacts.flatMap((artifact) => {
+    const candidate = projectCandidateArtifact(artifact);
+    return candidate ? [candidate] : [];
+  });
+}
+function projectCandidateArtifact(artifact: unknown): CandidateArtifactResult | undefined {
+  if (typeof artifact !== 'object' || artifact === null) return undefined;
+  const a = artifact as {
+    uri?: unknown;
+    mediaType?: unknown;
+    name?: unknown;
+    sizeBytes?: unknown;
+    checksum?: unknown;
+    producedAt?: unknown;
+    payloadBase64?: unknown;
+  };
+  if (a.mediaType !== TEMPLATE_CANDIDATE_MEDIA_TYPE) return undefined;
+  if (typeof a.uri !== 'string') return undefined;
 
-    const artifactRef: ArtifactRefSummary = {
-      uri: a.uri,
-      ...(typeof a.mediaType === 'string' && { mediaType: a.mediaType }),
-      ...(typeof a.name === 'string' && { name: a.name }),
-      ...(typeof a.sizeBytes === 'number' && { sizeBytes: a.sizeBytes }),
-      ...(typeof a.checksum === 'string' && { checksum: a.checksum }),
-      ...(typeof a.producedAt === 'string' && { producedAt: a.producedAt }),
-      // The accept path reads an inline candidate from here (no PVC resolution yet).
-      ...(typeof a.payloadBase64 === 'string' && { payloadBase64: a.payloadBase64 }),
-    };
-    candidates.push({ artifactRef });
-  }
-
-  return candidates;
+  const artifactRef: ArtifactRefSummary = {
+    uri: a.uri,
+    ...(typeof a.mediaType === 'string' && { mediaType: a.mediaType }),
+    ...(typeof a.name === 'string' && { name: a.name }),
+    ...(typeof a.sizeBytes === 'number' && { sizeBytes: a.sizeBytes }),
+    ...(typeof a.checksum === 'string' && { checksum: a.checksum }),
+    ...(typeof a.producedAt === 'string' && { producedAt: a.producedAt }),
+    // The accept path reads an inline candidate from here (no PVC resolution yet).
+    ...(typeof a.payloadBase64 === 'string' && { payloadBase64: a.payloadBase64 }),
+  };
+  return { artifactRef };
 }
 
 // ---------------------------------------------------------------------------
