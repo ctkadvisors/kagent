@@ -13,6 +13,8 @@ import type {
 } from '@kagent/agent-loop/kernel';
 import {
   isExternalGatewayToolName,
+  DEFAULT_CODE_TIMEOUT_MS,
+  CODE_SANDBOX_MAX_BODY_BYTES,
   isToolRuntimeTool,
   type ToolRuntimeToolName,
 } from '@kagent/dto';
@@ -192,7 +194,7 @@ export class ToolGatewayHttpHandler {
           task: invocation.task,
         });
       } else {
-        result = await this.invokeRuntimeTool(invocation);
+        result = await this.invokeRuntimeTool(invocation, request.signal);
       }
     } catch (err) {
       result = runtimeError(err);
@@ -265,13 +267,16 @@ export class ToolGatewayHttpHandler {
       .filter((tool): tool is ToolDescriptor => tool !== undefined);
   }
 
-  private async invokeRuntimeTool(invocation: ToolGatewayInvocation): Promise<ToolResult> {
+  private async invokeRuntimeTool(
+    invocation: ToolGatewayInvocation,
+    signal: AbortSignal,
+  ): Promise<ToolResult> {
     switch (invocation.call.name) {
       case 'code_interpreter.start_session':
         this.codeRunnerFor(invocation.task);
         return { content: 'code_interpreter session ready', isError: false };
       case 'code_interpreter.execute_code':
-        return this.executeCode(invocation.task, invocation.call.args);
+        return this.executeCode(invocation.task, invocation.call.args, signal);
       case 'code_interpreter.execute_command':
         return this.executeCommand(invocation.task, invocation.call.args);
       case 'code_interpreter.start_command':
@@ -321,11 +326,58 @@ export class ToolGatewayHttpHandler {
     }
   }
 
-  private async executeCode(task: ToolGatewayTaskIdentity, args: unknown): Promise<ToolResult> {
+  private async executeCode(
+    task: ToolGatewayTaskIdentity,
+    args: unknown,
+    signal: AbortSignal,
+  ): Promise<ToolResult> {
     const runner = this.codeRunnerFor(task);
     const input = parseExecuteCodeInput(args);
     if (input === null) return invalidArgs('code_interpreter.execute_code');
 
+    const started = Date.now();
+    signal.throwIfAborted();
+    const fields = args as Record<string, unknown>;
+    if ('inputArtifacts' in fields) return invalidArgs('unresolved tool-result references');
+    if (fields.inputFiles !== undefined) {
+      if (!Array.isArray(fields.inputFiles)) return invalidArgs('code import');
+      const files: CodeRunnerFile[] = [];
+      let size = 0;
+      for (const value of fields.inputFiles as unknown[]) {
+        if (
+          !isRecord(value) ||
+          typeof value.path !== 'string' ||
+          typeof value.content !== 'string' ||
+          value.path.startsWith('/') ||
+          value.path.includes('\\') ||
+          value.path.split('/').some((part) => !part || part === '.' || part === '..') ||
+          [...value.path].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+        )
+          return invalidArgs('code import');
+        size += Buffer.byteLength(value.content);
+        if (size > CODE_SANDBOX_MAX_BODY_BYTES) return invalidArgs('code import size');
+        files.push({ path: value.path, content: value.content });
+      }
+      if (
+        Buffer.byteLength(JSON.stringify({ op: 'writeFiles', arg: files })) >
+        CODE_SANDBOX_MAX_BODY_BYTES
+      )
+        return invalidArgs('code import size');
+      signal.throwIfAborted();
+      await runner.writeFiles(files);
+      signal.throwIfAborted();
+      const remaining = (input.timeoutMs ?? DEFAULT_CODE_TIMEOUT_MS) - (Date.now() - started);
+      if (remaining <= 0)
+        return commandResultToToolResult({
+          stdout: '',
+          stderr: 'code import deadline elapsed',
+          exitCode: null,
+          timedOut: true,
+        });
+      const result = await runner.executeCode({ ...input, timeoutMs: remaining });
+      return commandResultToToolResult(result);
+    }
+    signal.throwIfAborted();
     const result = await runner.executeCode(input);
     return commandResultToToolResult(result);
   }
@@ -883,7 +935,7 @@ function runtimeToolDescription(
     case 'code_interpreter.start_session':
       return 'Start or fetch the task-scoped code interpreter session.';
     case 'code_interpreter.execute_code':
-      return 'Execute inline Python, JavaScript, or TypeScript in the code workspace.';
+      return 'Execute inline Python, JavaScript, or TypeScript in the code workspace. Optional inputArtifacts [{uri,path}] imports same-task ephemeral tool-result references and path.source.json metadata before this explicit call; these references expire with the task.';
     case 'code_interpreter.execute_command':
       return 'Execute an allowlisted command in the code workspace.';
     case 'code_interpreter.start_command':
@@ -976,6 +1028,16 @@ function runtimeToolInputSchema(
         {
           language: { type: 'string', enum: ['python', 'javascript', 'typescript'] },
           code: { type: 'string', minLength: 1 },
+          inputArtifacts: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              required: ['uri', 'path'],
+              additionalProperties: false,
+              properties: { uri: { type: 'string' }, path: { type: 'string' } },
+            },
+          },
           timeoutMs: { type: 'number', minimum: 1 },
         },
         ['language', 'code'],

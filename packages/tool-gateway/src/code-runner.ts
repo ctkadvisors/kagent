@@ -3,6 +3,7 @@
  * Copyright (c) 2026 Chris Knuteson
  */
 
+import { DEFAULT_CODE_TIMEOUT_MS } from '@kagent/dto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -153,14 +154,19 @@ export class LocalCodeRunner {
 
   async executeCommand(input: ExecuteCommandInput): Promise<CommandResult> {
     const command = this.assertCommandAllowed(input.command);
-    return this.spawnCommand(command, input.args ?? [], input.timeoutMs ?? 30_000).result;
+    return this.spawnCommand(command, input.args ?? [], input.timeoutMs ?? DEFAULT_CODE_TIMEOUT_MS)
+      .result;
   }
 
   startCommand(input: ExecuteCommandInput): Promise<StartedCommand> {
     const command = this.assertCommandAllowed(input.command);
     commandCounter += 1;
     const taskId = `cmd-${Date.now()}-${commandCounter}`;
-    const active = this.spawnCommand(command, input.args ?? [], input.timeoutMs ?? 30_000);
+    const active = this.spawnCommand(
+      command,
+      input.args ?? [],
+      input.timeoutMs ?? DEFAULT_CODE_TIMEOUT_MS,
+    );
     this.activeCommands.set(taskId, active);
     void active.result.then(
       (result) => {

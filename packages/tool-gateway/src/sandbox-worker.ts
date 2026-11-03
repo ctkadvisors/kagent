@@ -12,6 +12,8 @@
  * spec, and exits when idle so the Job's TTL can reap it.
  */
 
+import { CODE_SANDBOX_MAX_BODY_BYTES } from '@kagent/dto';
+
 import { timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 
@@ -28,7 +30,7 @@ export const SANDBOX_OPS = [
 ] as const;
 export type SandboxOp = (typeof SANDBOX_OPS)[number];
 
-const MAX_BODY_BYTES = 8 << 20;
+const MAX_BODY_BYTES = CODE_SANDBOX_MAX_BODY_BYTES;
 
 export interface SandboxReply {
   readonly status: number;

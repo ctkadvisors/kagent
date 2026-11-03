@@ -63,7 +63,7 @@ export type {
  * Phase 4+ ship concrete `LLMClient` impls; Phase 5+ ship concrete
  * `ToolProvider` impls; Phase 6+ ship concrete `TraceSink` impls.
  */
-export { AgentExecutor } from './executor.js';
+export { AgentExecutor, DEFAULT_TOOL_GUARDS } from './executor.js';
 export { ToolProviderRegistry } from './tool-provider.js';
 
 /**

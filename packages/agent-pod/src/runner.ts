@@ -26,6 +26,7 @@
 
 import {
   AgentExecutor,
+  DEFAULT_TOOL_GUARDS,
   AgentRegistry,
   computeQualityFlags,
   type ChatMessage,
@@ -37,11 +38,14 @@ import {
   type TraceEntry,
   type TraceSink,
 } from '@kagent/agent-loop';
+import { createHash } from 'node:crypto';
+import { READ_BYTES_DEFAULT_MAX } from './cas-backend.js';
 import { OpenAICompatibleLLMClient } from '@kagent/openai-compat';
 import { StdoutSink } from '@kagent/trace-sinks';
 
 import {
   createArtifactRegistry,
+  DEFAULT_ARTIFACT_MAX_BYTES,
   tryParseArtifactRefFromToolOutput,
   type ArtifactRegistry,
 } from './artifacts.js';
@@ -888,7 +892,30 @@ function buildToolGatewayProvider(
     );
   }
 
+  const declaredTimeout =
+    config.taskSpec.runConfig?.timeoutSeconds ?? config.taskSpec.timeoutSeconds;
+  const timeout =
+    typeof declaredTimeout === 'number' && declaredTimeout > 0
+      ? declaredTimeout
+      : DEFAULT_TASK_TIMEOUT_SECONDS;
+  const taskDeadline = Math.floor(
+    Math.min(Date.now() + timeout * 1000, config.deadlineAtMs ?? Infinity),
+  );
+  const configuredBytes = Number(process.env.KAGENT_ARTIFACT_MAX_BYTES);
+  const totalBytes =
+    Number.isSafeInteger(configuredBytes) && configuredBytes > 0
+      ? configuredBytes
+      : DEFAULT_ARTIFACT_MAX_BYTES;
+  // Task-lifetime cache on the existing private /tmp emptyDir, not the disabled
+  // durable artifact PVC. Never register these references in AgentTask.status.
   return new ToolGatewayProvider({
+    rawResultStorage: {
+      root: '/tmp/kagent-tool-results-' + createHash('sha256').update(config.taskId).digest('hex'),
+      maxContentChars: DEFAULT_TOOL_GUARDS.maxToolResultChars,
+      maxBytes: Math.min(totalBytes, READ_BYTES_DEFAULT_MAX),
+      maxTotalBytes: totalBytes,
+      expiresAt: taskDeadline,
+    },
     baseUrl: config.toolGatewayUrl,
     task: {
       tenant: deps.capabilityBundle?.claims?.tenant ?? 'default',

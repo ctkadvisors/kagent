@@ -15,6 +15,12 @@
 export const TOOL_KINDS = ['browser', 'code_interpreter', 'shell'] as const;
 export type ToolKind = (typeof TOOL_KINDS)[number];
 
+/** Existing code execution default, shared with explicit result imports. */
+export const DEFAULT_CODE_TIMEOUT_MS = 30_000;
+
+/** Existing sandbox HTTP request ceiling, including JSON escaping/envelope. */
+export const CODE_SANDBOX_MAX_BODY_BYTES = 8 << 20;
+
 export const CODE_INTERPRETER_TOOL_NAMES = [
   'code_interpreter.start_session',
   'code_interpreter.execute_code',
