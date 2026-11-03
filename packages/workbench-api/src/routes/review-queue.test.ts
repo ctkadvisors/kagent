@@ -1239,7 +1239,7 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
   // W2-Test 7 — POST accept on candidate-template with K8s 409 collision → 422, no patch
   // ------------------------------------------------------------------
 
-  it('W2-Test 7 — POST accept on candidate-template with K8s 409 collision → 422, annotation patch NOT called', async () => {
+  it('W2-Test 7 — POST accept with an unreadable K8s collision → 409, annotation patch NOT called', async () => {
     const k8sConflictError = { code: 409, body: { message: 'already exists' } };
     const customApi = makeMockCustomApi({ createRejectsWith: k8sConflictError });
     const auditPublisher = makeMockAuditPublisher();
@@ -1261,7 +1261,7 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
       body: JSON.stringify({}),
     });
 
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
     const body = (await res.json()) as Record<string, unknown>;
     expect(typeof body['error']).toBe('string');
 
@@ -1289,7 +1289,14 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     app.route(
       '/',
       reviewQueueRoute({
-        cache: makeStubCache([candidateTemplateTask]),
+        cache: makeStubCache([
+          candidateTemplateTask,
+          {
+            ...candidateTemplateTask,
+            metadata: { ...candidateTemplateTask.metadata, name: 'older-task' },
+            status: { ...candidateTemplateTask.status!, completedAt: '2026-05-10T02:00:00.000Z' },
+          },
+        ]),
         customApi: customApi as unknown as Parameters<typeof reviewQueueRoute>[0]['customApi'],
         auditPublisher: makeMockAuditPublisher(),
         now: () => fixedPostNow,
