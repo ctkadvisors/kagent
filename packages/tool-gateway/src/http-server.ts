@@ -868,6 +868,8 @@ function commandResultToToolResult(result: {
   readonly stderr: string;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
+  readonly stdoutTruncated?: boolean;
+  readonly stderrTruncated?: boolean;
 }): ToolResult {
   // Never hand the model an empty string: it retries the identical call, and
   // the loop's identical-call guard then refuses it (concierge, 2026-09-15:
@@ -885,6 +887,8 @@ function commandResultToToolResult(result: {
     metadata: {
       exitCode: result.exitCode,
       timedOut: result.timedOut,
+      ...(result.stdoutTruncated !== undefined && { stdoutTruncated: result.stdoutTruncated }),
+      ...(result.stderrTruncated !== undefined && { stderrTruncated: result.stderrTruncated }),
     },
   };
 }

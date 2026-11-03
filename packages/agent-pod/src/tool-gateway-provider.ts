@@ -11,6 +11,7 @@ import type {
   ToolProvider,
   ToolResult,
 } from '@kagent/agent-loop';
+import { checkPublication } from './check-publication.js';
 import { TaskToolResultStore, type RawResultStorageOptions } from './tool-result-reference.js';
 
 import {
@@ -105,6 +106,29 @@ export class ToolGatewayProvider implements ToolProvider {
     }
 
     let args = call.args ?? {};
+    let publication: Record<string, unknown> | undefined;
+    if (call.name === 'fleet.forum_post' && isRecord(args) && 'bodyFromToolResult' in args) {
+      try {
+        const request = args.bodyFromToolResult;
+        if (
+          !this.resultStore ||
+          'body' in args ||
+          !isRecord(request) ||
+          Object.keys(request).length !== 1 ||
+          typeof request.uri !== 'string'
+        )
+          throw new Error('invalid publication reference');
+        const canonical = checkPublication(
+          await this.resultStore.resolve(request.uri, ctx.runId, ctx.abortSignal),
+        );
+        const ordinary = { ...args };
+        delete ordinary.bodyFromToolResult;
+        args = { ...ordinary, body: canonical.body };
+        publication = canonical.metadata;
+      } catch {
+        return { content: 'check publication unavailable', isError: true };
+      }
+    }
     if (
       call.name === 'code_interpreter.execute_code' &&
       args &&
@@ -173,15 +197,21 @@ export class ToolGatewayProvider implements ToolProvider {
       };
     }
 
-    const result = parseToolResult(await response.json());
+    const received = parseToolResult(await response.json());
+    const result = publication
+      ? { ...received, metadata: { ...received.metadata, checkPublication: publication } }
+      : received;
     const text =
       typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
+    const publicationSource =
+      this.isGranted('fleet.forum_post') &&
+      ['fleet.run_tool', 'fleet.run_capability'].includes(call.name);
     if (
       !result.isError &&
       this.resultStore &&
       this.maxResultChars !== undefined &&
-      text.length > this.maxResultChars &&
-      this.isGranted('code_interpreter.execute_code')
+      ((text.length > this.maxResultChars && this.isGranted('code_interpreter.execute_code')) ||
+        publicationSource)
     ) {
       try {
         const reference = await this.resultStore.retain(
@@ -238,7 +268,9 @@ export class ToolGatewayProvider implements ToolProvider {
       throw new Error(`Gateway ${response.status}: ${await responseMessage(response)}`);
     }
 
-    const gatewayDescriptors = parseToolDescriptors(await response.json());
+    const gatewayDescriptors = parseToolDescriptors(await response.json()).map(
+      publicationDescriptor,
+    );
     if (this.toolProfileRefs.length === 0) {
       return [...this.descriptors, ...gatewayDescriptors];
     }
@@ -630,4 +662,36 @@ function attachResultNotice(
     /* Opaque text remains the original first text block. */
   }
   return [{ type: 'text', text: content }, block];
+}
+
+function publicationDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
+  if (descriptor.name !== 'fleet.forum_post' || !isRecord(descriptor.inputSchema))
+    return descriptor;
+  const schema = descriptor.inputSchema;
+  const required = Array.isArray(schema.required)
+    ? (schema.required as unknown[]).filter((key) => key !== 'body')
+    : [];
+  return {
+    ...descriptor,
+    description:
+      descriptor.description +
+      ' To publish an exact complete check result without retyping, explicitly use bodyFromToolResult:{uri} from its same-task tool-result reference instead of body. This preserves actual exit/numeric/null values and refuses unavailable or oversized results.',
+    inputSchema: {
+      ...schema,
+      required,
+      properties: {
+        ...(isRecord(schema.properties) ? schema.properties : {}),
+        bodyFromToolResult: {
+          type: 'object',
+          required: ['uri'],
+          additionalProperties: false,
+          properties: { uri: { type: 'string' } },
+        },
+      },
+      oneOf: [
+        { required: ['body'], not: { required: ['bodyFromToolResult'] } },
+        { required: ['bodyFromToolResult'], not: { required: ['body'] } },
+      ],
+    },
+  };
 }

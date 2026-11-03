@@ -31,8 +31,6 @@ const FOLDER = /^\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]{1,48}$/;
 const SHA = /^[0-9a-f]{40}$/;
 const DEFAULT_TIMEOUT_MS = 900_000;
 const MAX_TIMEOUT_MS = 1_500_000;
-const STDOUT_KEEP = 6000;
-const STDERR_KEEP = 1500;
 const TREE_MAX_BYTES = 8 * 1024 * 1024;
 const ENVELOPE_MARK = '@@fleet.run_tool@@';
 // The command reaches sh through a workspace snippet, not argv. 200 rejected the
@@ -205,16 +203,32 @@ export function defineFleetRunTool(options: FleetRunToolOptions): ToolGatewayExt
     const snippet = [
       "import { spawnSync } from 'node:child_process';",
       `const r = spawnSync('sh', ['-c', ${JSON.stringify(args.run)}], { cwd: ${JSON.stringify(args.folder)}, encoding: 'utf8', timeout: ${String(timeoutMs - 5000)}, maxBuffer: 16 * 1024 * 1024 });`,
-      `process.stdout.write('\\n' + ${JSON.stringify(ENVELOPE_MARK)} + JSON.stringify({ status: r.status, signal: r.signal, stdout: (r.stdout || '').slice(0, ${String(STDOUT_KEEP)}), stderr: (r.stderr || '').slice(-${String(STDERR_KEEP)}) }));`,
+      `process.stdout.write('\\n' + ${JSON.stringify(ENVELOPE_MARK)} + JSON.stringify({ status: r.status, signal: r.signal, stdout: r.stdout || '', stderr: r.stderr || '', outputComplete: Number.isInteger(r.status) && !r.error && !r.signal }));`,
     ].join('\n');
     const result = await runner.executeCode({ language: 'javascript', code: snippet, timeoutMs });
+    if (
+      result.stdoutTruncated ||
+      result.stderrTruncated ||
+      result.timedOut ||
+      result.exitCode !== 0 ||
+      result.signal != null
+    )
+      return errorResult(
+        'the bounded code runner failed or truncated output; complete result unavailable',
+      );
     const mark = result.stdout.lastIndexOf(ENVELOPE_MARK);
     if (mark < 0) {
       return errorResult(
         `the run produced no result envelope (exit ${String(result.exitCode)}, timedOut ${String(result.timedOut)}): ${result.stderr.slice(-600)}`,
       );
     }
-    let envelope: { status: number | null; signal: string | null; stdout: string; stderr: string };
+    let envelope: {
+      status: number | null;
+      signal: string | null;
+      stdout: string;
+      stderr: string;
+      outputComplete?: boolean;
+    };
     try {
       envelope = JSON.parse(result.stdout.slice(mark + ENVELOPE_MARK.length)) as typeof envelope;
     } catch {
@@ -236,6 +250,7 @@ export function defineFleetRunTool(options: FleetRunToolOptions): ToolGatewayExt
               verdict: resolved.entry.verdict,
             }),
         exit,
+        outputComplete: envelope.outputComplete === true,
         timedOut: envelope.signal === 'SIGTERM',
         stdout: envelope.stdout,
         stderr: envelope.stderr,

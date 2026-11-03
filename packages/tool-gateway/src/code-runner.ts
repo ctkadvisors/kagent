@@ -4,6 +4,7 @@
  */
 
 import { DEFAULT_CODE_TIMEOUT_MS } from '@kagent/dto';
+import { StringDecoder } from 'node:string_decoder';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -29,6 +30,8 @@ export interface CommandResult {
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly timedOut: boolean;
+  readonly stdoutTruncated?: boolean;
+  readonly stderrTruncated?: boolean;
 }
 
 export interface StartedCommand {
@@ -267,8 +270,12 @@ export class LocalCodeRunner {
   }
 
   private spawnCommand(command: string, args: readonly string[], timeoutMs: number): ActiveCommand {
-    let stdout = '';
-    let stderr = '';
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let timedOut = false;
 
     const child = spawn(command, [...args], {
@@ -287,10 +294,16 @@ export class LocalCodeRunner {
           : null;
 
       child.stdout.on('data', (chunk: Buffer) => {
-        stdout = this.appendBounded(stdout, chunk.toString('utf8'));
+        const keep = Math.max(0, this.outputLimitBytes - stdoutBytes);
+        stdoutTruncated ||= chunk.byteLength > keep;
+        if (keep > 0) stdout.push(chunk.subarray(0, keep));
+        stdoutBytes += Math.min(keep, chunk.byteLength);
       });
       child.stderr.on('data', (chunk: Buffer) => {
-        stderr = this.appendBounded(stderr, chunk.toString('utf8'));
+        const keep = Math.max(0, this.outputLimitBytes - stderrBytes);
+        stderrTruncated ||= chunk.byteLength > keep;
+        if (keep > 0) stderr.push(chunk.subarray(0, keep));
+        stderrBytes += Math.min(keep, chunk.byteLength);
       });
       child.on('error', (err: NodeJS.ErrnoException) => {
         if (timer !== null) clearTimeout(timer);
@@ -307,8 +320,10 @@ export class LocalCodeRunner {
       child.on('close', (exitCode, signal) => {
         if (timer !== null) clearTimeout(timer);
         resolveResult({
-          stdout,
-          stderr,
+          stdout: decodeOutput(stdout, stdoutTruncated),
+          stderr: decodeOutput(stderr, stderrTruncated),
+          stdoutTruncated,
+          stderrTruncated,
           exitCode: timedOut ? null : exitCode,
           signal,
           timedOut,
@@ -344,17 +359,13 @@ export class LocalCodeRunner {
         return '.py';
     }
   }
-
-  private appendBounded(current: string, next: string): string {
-    const combined = current + next;
-    if (Buffer.byteLength(combined, 'utf8') <= this.outputLimitBytes) {
-      return combined;
-    }
-
-    return combined.slice(0, this.outputLimitBytes);
-  }
 }
 
 function dirSeparator(): '/' | '\\' {
   return process.platform === 'win32' ? '\\' : '/';
+}
+
+function decodeOutput(chunks: readonly Buffer[], truncated: boolean): string {
+  const decoder = new StringDecoder('utf8');
+  return decoder.write(Buffer.concat(chunks)) + (truncated ? '' : decoder.end());
 }

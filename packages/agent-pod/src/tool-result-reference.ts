@@ -34,6 +34,11 @@ export interface ToolResultReference {
   readonly encoding: 'utf8-provider-content' | 'json-content-blocks';
   readonly artifact: ArtifactRef;
 }
+export interface StoredToolResult {
+  readonly content: string;
+  readonly reference: ToolResultReference;
+  readonly arguments: unknown;
+}
 interface Manifest {
   readonly owner: ToolGatewayTaskIdentity;
   readonly reference: Omit<ToolResultReference, 'uri'>;
@@ -63,6 +68,8 @@ export class TaskToolResultStore {
   private readonly backend: PvcCasBackend;
   private readonly issued = new Map<string, Manifest>();
   private usedBytes = 0;
+  private readonly issuedOperations = new Set<string>();
+  private readonly ambiguousOperations = new Set<string>();
   private readonly now: () => number;
 
   constructor(
@@ -90,6 +97,11 @@ export class TaskToolResultStore {
     signal: AbortSignal,
   ): Promise<ToolResultReference> {
     this.check(signal);
+    const operation = JSON.stringify([runId, call.id]);
+    if (this.issuedOperations.has(operation)) {
+      this.ambiguousOperations.add(operation);
+      throw unavailable();
+    }
     const text = typeof content === 'string' ? content : JSON.stringify(content);
     const bytes = Buffer.from(text, 'utf8');
     if (bytes.byteLength > this.options.maxBytes) throw unavailable();
@@ -134,7 +146,8 @@ export class TaskToolResultStore {
       this.usedBytes + total > this.options.maxTotalBytes
     )
       throw unavailable();
-    // Reserve before I/O, including failed writes: retries cannot bypass the run's bound.
+    // Reserve identity and bytes before I/O: concurrent duplicate IDs and failed retries cannot bypass ownership or bounds.
+    this.issuedOperations.add(operation);
     this.usedBytes += total;
     await this.backend.write(bytes, name);
     this.check(signal);
@@ -173,23 +186,9 @@ export class TaskToolResultStore {
       if (paths.has(path) || paths.has(sourcePath)) throw unavailable();
       paths.add(path);
       paths.add(sourcePath);
-      const manifest = this.issued.get(request.uri);
-      if (
-        !manifest ||
-        manifest.reference.runId !== runId ||
-        manifest.owner.taskUid !== this.task.taskUid
-      )
-        throw unavailable();
-      const stored = await this.backend.read(request.uri);
-      this.check(signal);
-      if (Buffer.from(stored).toString('utf8') !== JSON.stringify(manifest)) throw unavailable();
-      const data = await this.backend.read(manifest.reference.artifact.uri);
-      this.check(signal);
-      if (
-        data.byteLength !== manifest.reference.artifact.sizeBytes ||
-        'sha256:' + hash(data) !== manifest.reference.artifact.checksum
-      )
-        throw unavailable();
+      const resolved = await this.resolve(request.uri, runId, signal);
+      const manifest = this.issued.get(request.uri)!;
+      const data = Buffer.from(resolved.content, 'utf8');
       const metadata = importMetadata(manifest);
       size += data.byteLength + Buffer.byteLength(metadata);
       if (size > this.options.maxBytes) throw unavailable();
@@ -201,6 +200,33 @@ export class TaskToolResultStore {
     if (wireBytes(files) > Math.min(this.options.maxBytes, CODE_SANDBOX_MAX_BODY_BYTES))
       throw unavailable();
     return files;
+  }
+
+  async resolve(uri: string, runId: string, signal: AbortSignal): Promise<StoredToolResult> {
+    this.check(signal);
+    const manifest = this.issued.get(uri);
+    if (
+      !manifest ||
+      this.ambiguousOperations.has(JSON.stringify([runId, manifest.reference.operationId])) ||
+      manifest.reference.runId !== runId ||
+      manifest.owner.taskUid !== this.task.taskUid
+    )
+      throw unavailable();
+    const stored = await this.backend.read(uri);
+    this.check(signal);
+    if (Buffer.from(stored).toString('utf8') !== JSON.stringify(manifest)) throw unavailable();
+    const data = await this.backend.read(manifest.reference.artifact.uri);
+    this.check(signal);
+    if (
+      data.byteLength !== manifest.reference.artifact.sizeBytes ||
+      'sha256:' + hash(data) !== manifest.reference.artifact.checksum
+    )
+      throw unavailable();
+    return {
+      content: Buffer.from(data).toString('utf8'),
+      reference: { ...manifest.reference, uri },
+      arguments: structuredClone(manifest.arguments),
+    };
   }
 
   remainingMs(): number {

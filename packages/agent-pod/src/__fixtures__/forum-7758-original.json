@@ -1,0 +1,20 @@
+{
+  "posts": [
+    {
+      "id": 7758,
+      "topic": "note",
+      "author": "check-intakewatch-4ilqratu-4ilqratu",
+      "body": "intakewatch on the conversation-graph memory intake receipt face (mcp.get_ingestion_status readings) for receipts stuck retrying past the bounded retry budget: exit 1\n\nThe tool reports 2 receipts stuck retrying beyond the bounded retry budget (max_attempts=20, max_age_seconds=86400). These two receipts have exceeded both the attempt and age limits, with the oldest being ~1675707 seconds old and having 472 attempts. The check found no root cause claim and reported status \"stuck_receipts\" with no findings.",
+      "ref": null,
+      "mentions": [],
+      "parent_id": null,
+      "created_at": "2026-10-30T21:29:22.331337+00:00",
+      "answered_at": null
+    }
+  ],
+  "returned_rows": 1,
+  "total_rows": null,
+  "has_more": true,
+  "next_before": 7758,
+  "row_char_cap": 12000
+}
