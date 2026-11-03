@@ -35,6 +35,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -807,6 +808,96 @@ describe('POST /api/review-queue — accept / reject / request (W2 Plan 04-03)',
     expect(customApi.createNamespacedCustomObject).not.toHaveBeenCalled();
     expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
   });
+
+  it('promotes the exact reviewed final artifact after probes, binding its name and bytes', async () => {
+    const customApi = makeMockCustomApi();
+    const finalYaml = candidateYaml.replace('maxIterations: 10', 'maxIterations: 14');
+    const checksum = 'sha256:' + createHash('sha256').update(finalYaml).digest('hex');
+    const artifacts = [
+      { name: 'probe-minimal-spec', yaml: candidateYaml },
+      { name: 'capability-final', yaml: finalYaml },
+    ].map(({ name, yaml }) => ({
+      name,
+      uri: `inline://${name}`,
+      mediaType: 'application/x-kagent-template-candidate+yaml',
+      payloadBase64: Buffer.from(yaml).toString('base64'),
+      // Metadata alone must not select the first probe.
+      checksum,
+    }));
+    const task: AgentTask = {
+      ...candidateTemplateTask,
+      status: { ...candidateTemplateTask.status!, artifacts },
+    };
+    const app = new Hono();
+    app.route(
+      '/',
+      reviewQueueRoute({
+        cache: makeStubCache([task]),
+        customApi: customApi as unknown as ReviewQueueRouteDeps['customApi'],
+        now: () => fixedPostNow,
+      }),
+    );
+    const res = await app.request('/kagent-system/candidate-template-1/accept', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expectedArtifactChecksum: checksum,
+        expectedArtifactName: 'capability-final',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const args = customApi.createNamespacedCustomObject.mock.calls[0]?.[0] as {
+      body: { metadata: { name: string }; spec: unknown };
+    };
+    expect(args.body.metadata.name).toBe('capability-final');
+    expect(args.body.spec).toMatchObject({ budget: { maxIterations: 14 } });
+  });
+
+  it.each(['no-selector', 'ambiguous', 'wrong-name', 'forged-checksum'])(
+    'refuses unsafe multi-artifact promotion: %s',
+    async (scenario) => {
+      const customApi = makeMockCustomApi();
+      const checksum = 'sha256:' + createHash('sha256').update(candidateYaml).digest('hex');
+      const artifact = {
+        name: 'capability-final',
+        uri: 'inline://candidate',
+        mediaType: 'application/x-kagent-template-candidate+yaml',
+        payloadBase64: Buffer.from(
+          scenario === 'forged-checksum' ? candidateYaml + '\nchanged' : candidateYaml,
+        ).toString('base64'),
+        checksum,
+      };
+      const task: AgentTask = {
+        ...candidateTemplateTask,
+        status: { ...candidateTemplateTask.status!, artifacts: [artifact, { ...artifact }] },
+      };
+      const app = new Hono();
+      app.route(
+        '/',
+        reviewQueueRoute({
+          cache: makeStubCache([task]),
+          customApi: customApi as unknown as ReviewQueueRouteDeps['customApi'],
+          now: () => fixedPostNow,
+        }),
+      );
+      const res = await app.request('/kagent-system/candidate-template-1/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          scenario === 'no-selector'
+            ? {}
+            : {
+                expectedArtifactChecksum: checksum,
+                expectedArtifactName:
+                  scenario === 'wrong-name' ? 'probe-other' : 'capability-final',
+              },
+        ),
+      });
+      expect(res.status).toBe(409);
+      expect(customApi.createNamespacedCustomObject).not.toHaveBeenCalled();
+      expect(customApi.patchNamespacedCustomObject).not.toHaveBeenCalled();
+    },
+  );
 
   it('accepts an inline candidate (payloadBase64 on the status artifact) with no reader wired, as production runs', async () => {
     const customApi = makeMockCustomApi();

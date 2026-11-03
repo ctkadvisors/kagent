@@ -252,7 +252,12 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
     }
 
     // Step 4 — body parse + reviewer-id resolution
-    let body: { reviewerId?: string; reasonText?: string; expectedArtifactChecksum?: unknown } = {};
+    let body: {
+      reviewerId?: string;
+      reasonText?: string;
+      expectedArtifactChecksum?: unknown;
+      expectedArtifactName?: unknown;
+    } = {};
     try {
       body = await c.req.json();
     } catch {
@@ -274,64 +279,82 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
 
     // Step 6 — (the row carries a candidate, whatever its headline reason) parse YAML → create AgentTemplate CR
     if (row.candidateTemplate !== undefined) {
-      const candidateArtifact = findCandidateArtifact(task);
-      if (candidateArtifact === undefined) {
+      const candidates = findCandidateArtifacts(task);
+      if (candidates.length === 0) {
         return c.json({ error: 'candidate-template artifact not found on task' }, 422);
       }
-
-      // Read the artifact YAML payload via injectable seam or inline base64.
-      let yaml: string;
-      try {
-        if (deps.readArtifact !== undefined) {
-          yaml = await deps.readArtifact(candidateArtifact.artifactRef.uri);
-        } else {
-          // v0.2 production fallback: inline payloadBase64 field (if present).
-          // PVC resolution is deferred to v0.3. See JSDoc on readArtifact dep.
-          const artifactObj = candidateArtifact.artifactRef as unknown as Record<string, unknown>;
-          const b64 = artifactObj['payloadBase64'];
-          if (typeof b64 === 'string') {
-            yaml = Buffer.from(b64, 'base64').toString('utf8');
-          } else {
-            return c.json(
-              {
-                error:
-                  'candidate-template artifact YAML not available (no readArtifact dep and no payloadBase64 field); PVC resolution deferred to v0.3',
-              },
-              422,
-            );
-          }
-        }
-      } catch (readErr) {
-        logError(
-          `[workbench-api] accept: artifact read error — ${
-            readErr instanceof Error ? readErr.message : String(readErr)
-          }`,
-        );
+      const expectedChecksum = body.expectedArtifactChecksum;
+      const expectedName = body.expectedArtifactName;
+      if (
+        expectedChecksum !== undefined &&
+        (typeof expectedChecksum !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(expectedChecksum))
+      ) {
+        return c.json({ error: 'expectedArtifactChecksum must be a sha256 digest' }, 400);
+      }
+      if (
+        expectedName !== undefined &&
+        (typeof expectedName !== 'string' || !expectedName || expectedChecksum === undefined)
+      ) {
         return c.json(
-          { error: 'internal error reading candidate-template artifact; see workbench-api logs' },
-          500,
+          { error: 'expectedArtifactName requires a name and expectedArtifactChecksum' },
+          400,
         );
       }
-
-      const expectedChecksum = body.expectedArtifactChecksum;
-      if (expectedChecksum !== undefined) {
-        if (
-          typeof expectedChecksum !== 'string' ||
-          !/^sha256:[0-9a-f]{64}$/.test(expectedChecksum)
-        ) {
-          return c.json({ error: 'expectedArtifactChecksum must be a sha256 digest' }, 400);
-        }
-        const actualChecksum = 'sha256:' + createHash('sha256').update(yaml, 'utf8').digest('hex');
-        if (actualChecksum !== expectedChecksum) {
+      if (candidates.length > 1 && expectedChecksum === undefined) {
+        return c.json(
+          { error: 'multiple candidate artifacts require an explicit validated artifact checksum' },
+          409,
+        );
+      }
+      let candidateArtifact: CandidateArtifactResult | undefined;
+      let yaml = '';
+      for (const candidate of candidates) {
+        if (expectedName !== undefined && candidate.artifactRef.name !== expectedName) continue;
+        let candidateYaml: string;
+        try {
+          if (deps.readArtifact !== undefined) {
+            candidateYaml = await deps.readArtifact(candidate.artifactRef.uri);
+          } else {
+            const artifactObj = candidate.artifactRef as unknown as Record<string, unknown>;
+            const b64 = artifactObj['payloadBase64'];
+            if (typeof b64 !== 'string') {
+              return c.json(
+                {
+                  error:
+                    'candidate-template artifact YAML not available (no readArtifact dep and no payloadBase64 field); PVC resolution deferred to v0.3',
+                },
+                422,
+              );
+            }
+            candidateYaml = Buffer.from(b64, 'base64').toString('utf8');
+          }
+        } catch (readErr) {
+          logError(
+            `[workbench-api] accept: artifact read error — ${readErr instanceof Error ? readErr.message : String(readErr)}`,
+          );
           return c.json(
-            {
-              error: 'candidate artifact changed since validation',
-              expectedArtifactChecksum: expectedChecksum,
-              actualArtifactChecksum: actualChecksum,
-            },
-            409,
+            { error: 'internal error reading candidate-template artifact; see workbench-api logs' },
+            500,
           );
         }
+        // Artifact metadata is a claim. Match the bytes that will actually be promoted.
+        const actualChecksum =
+          'sha256:' + createHash('sha256').update(candidateYaml, 'utf8').digest('hex');
+        if (expectedChecksum !== undefined && actualChecksum !== expectedChecksum) continue;
+        if (candidateArtifact !== undefined) {
+          return c.json({ error: 'validated candidate artifact is ambiguous' }, 409);
+        }
+        candidateArtifact = candidate;
+        yaml = candidateYaml;
+      }
+      if (candidateArtifact === undefined) {
+        return c.json(
+          {
+            error: 'candidate artifact changed since validation',
+            expectedArtifactChecksum: expectedChecksum,
+          },
+          409,
+        );
       }
 
       const parsed = parseAgentTemplateSpec(yaml);
@@ -342,7 +365,9 @@ export function reviewQueueRoute(deps: ReviewQueueRouteDeps): Hono {
       // Build AgentTemplate CR manifest (PATTERNS.md W2.1 manifest shape)
       const taskUid = typeof task.metadata?.uid === 'string' ? task.metadata.uid : '';
       const proposedTemplateName =
-        row.candidateTemplate?.proposedTemplateName ?? `${name}-template`;
+        (expectedChecksum !== undefined ? candidateArtifact.artifactRef.name : undefined) ??
+        row.candidateTemplate?.proposedTemplateName ??
+        `${name}-template`;
       const proposedNamespace = row.candidateTemplate?.proposedNamespace ?? namespace;
 
       const manifest = buildAgentTemplateManifest({
@@ -1034,8 +1059,7 @@ export function classifyTask(
 }
 
 // ---------------------------------------------------------------------------
-// Helper: find the first artifact with the candidate-template mediaType.
-// D-03-A "Claude's Discretion" default: first matching artifact.
+// Helpers: project candidate artifacts; accept binds the reviewed identity.
 // ---------------------------------------------------------------------------
 
 interface CandidateArtifactResult {
@@ -1048,9 +1072,13 @@ interface CandidateArtifactResult {
  * Returns undefined if no matching artifact exists.
  */
 function findCandidateArtifact(task: AgentTask): CandidateArtifactResult | undefined {
-  const artifacts = task.status?.artifacts;
-  if (!Array.isArray(artifacts)) return undefined;
+  return findCandidateArtifacts(task)[0];
+}
 
+function findCandidateArtifacts(task: AgentTask): CandidateArtifactResult[] {
+  const artifacts = task.status?.artifacts;
+  if (!Array.isArray(artifacts)) return [];
+  const candidates: CandidateArtifactResult[] = [];
   for (const artifact of artifacts) {
     if (typeof artifact !== 'object' || artifact === null) continue;
     const a = artifact as {
@@ -1075,10 +1103,10 @@ function findCandidateArtifact(task: AgentTask): CandidateArtifactResult | undef
       // The accept path reads an inline candidate from here (no PVC resolution yet).
       ...(typeof a.payloadBase64 === 'string' && { payloadBase64: a.payloadBase64 }),
     };
-    return { artifactRef };
+    candidates.push({ artifactRef });
   }
 
-  return undefined;
+  return candidates;
 }
 
 // ---------------------------------------------------------------------------
