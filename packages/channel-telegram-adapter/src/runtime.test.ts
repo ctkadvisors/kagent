@@ -275,7 +275,50 @@ describe('processTelegramUpdates', () => {
 });
 
 describe('startTelegramAdapter', () => {
-  it('marks the Telegram channel ready and starts from an unacknowledged offset', async () => {
+  it('reports failed polling and then replaces the stale condition on recovery', async () => {
+    const client = makeClient({ updates: [] });
+    client.getUpdates.mockRejectedValueOnce(new Error('HTTP 502')).mockResolvedValue([]);
+    const patches: ChannelStatusPatch[] = [];
+    let resume: (() => void) | undefined;
+    let now = new Date('2026-11-03T03:00:00.000Z');
+    const running = await startTelegramAdapter(config, {
+      client,
+      gateway: { postInbound: vi.fn() },
+      status: {
+        patch: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+      },
+      logger: quietLogger,
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          resume = resolve;
+        }),
+      clock: () => now,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(patches[0]?.phase).toBe('Pending');
+    expect(patches[1]).toMatchObject({
+      phase: 'Failed',
+      conditions: [{ type: 'TelegramPolling', status: 'False', reason: 'PollFailed' }],
+    });
+    now = new Date('2026-11-03T03:01:00.000Z');
+    resume?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(patches[2]).toMatchObject({
+      phase: 'Ready',
+      conditions: [{ type: 'TelegramPolling', status: 'True', reason: 'PollSucceeded' }],
+    });
+    now = new Date('2026-11-03T03:02:00.000Z');
+    resume?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(patches[3]?.conditions?.[0]?.lastTransitionTime).toBe('2026-11-03T03:01:00.000Z');
+    expect(patches[3]?.lastHeartbeatAt).toBe('2026-11-03T03:02:00.000Z');
+    running.close();
+  });
+
+  it('marks the Telegram channel pending until a successful poll and starts from an unacknowledged offset', async () => {
     const client = makeClient({ updates: [] });
     const statusPatches: ChannelStatusPatch[] = [];
     const running = await startTelegramAdapter(config, {
@@ -294,7 +337,7 @@ describe('startTelegramAdapter', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(statusPatches[0]).toEqual({
-      phase: 'Ready',
+      phase: 'Pending',
       pairing: { state: 'paired', message: 'Telegram bot token configured' },
       lastHeartbeatAt: '2026-06-12T12:00:00.000Z',
     });

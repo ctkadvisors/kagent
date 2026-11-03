@@ -64,6 +64,20 @@ export async function startTelegramAdapter(
   const sleep = deps.sleep ?? timeoutSleep;
   let stopped = false;
   let offset: number | undefined;
+  let pollingCondition: ReturnType<typeof adapterCondition> | undefined;
+  const polling = (status: 'True' | 'False', reason: string, message: string) => {
+    const now = clock();
+    const condition = adapterCondition({ type: 'TelegramPolling', status, reason, message, now });
+    const next = {
+      ...condition,
+      lastTransitionTime:
+        pollingCondition?.status === status
+          ? (pollingCondition.lastTransitionTime ?? now.toISOString())
+          : now.toISOString(),
+    };
+    pollingCondition = next;
+    return next;
+  };
 
   let outboundRunning = false;
   const deliverOutbound = async (): Promise<void> => {
@@ -84,7 +98,7 @@ export async function startTelegramAdapter(
   };
 
   await deps.status.patch({
-    phase: 'Ready',
+    phase: 'Pending',
     pairing: { state: 'paired', message: 'Telegram bot token configured' },
     lastHeartbeatAt: clock().toISOString(),
   });
@@ -117,21 +131,16 @@ export async function startTelegramAdapter(
         await deps.status.patch({
           phase: 'Ready',
           pairing: { state: 'paired' },
+          conditions: [polling('True', 'PollSucceeded', 'Telegram updates polled successfully')],
           lastHeartbeatAt: clock().toISOString(),
         });
       } catch (err) {
         logger.error('[channel-telegram] failed to poll Telegram updates', err);
         await deps.status.patch({
-          phase: 'Ready',
+          phase: 'Failed',
           pairing: { state: 'paired' },
           conditions: [
-            adapterCondition({
-              type: 'TelegramPolling',
-              status: 'False',
-              reason: 'PollFailed',
-              message: String(err instanceof Error ? err.message : err),
-              now: clock(),
-            }),
+            polling('False', 'PollFailed', String(err instanceof Error ? err.message : err)),
           ],
           lastHeartbeatAt: clock().toISOString(),
         });

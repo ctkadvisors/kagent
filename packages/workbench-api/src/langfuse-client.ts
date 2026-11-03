@@ -98,7 +98,11 @@ function event(value: unknown, runId: string): DiagnosticEvent | undefined {
     ...(o.usage !== undefined && { usage: o.usage }),
   };
 }
-/** The installed self-hosted Langfuse v3 uses trace GET; v4 uses observations v2. */
+/**
+ * The installed Langfuse v3 observations API supports traceId + page/limit.
+ * Page upstream before selecting the requested run/sequence window: a trace
+ * GET duplicates every input/output and grows beyond the transport byte bound.
+ */
 export class LangfuseTraceReader implements TaskTraceReader {
   private readonly fetch: typeof globalThis.fetch;
   private readonly baseUrl: string;
@@ -130,47 +134,85 @@ export class LangfuseTraceReader implements TaskTraceReader {
       hasMore: false,
     };
     try {
-      const response = await this.fetch(
-        `${this.baseUrl}/api/public/traces/${encodeURIComponent(input.traceId)}`,
-        {
-          headers: { Authorization: this.authorization, Accept: 'application/json' },
-          signal: AbortSignal.timeout(10_000),
-          redirect: 'error',
-        },
-      );
-      if (response.status === 404)
-        return { ...empty, state: 'pending', reason: 'trace-not-ingested' };
-      if (!response.ok)
-        return { ...empty, state: 'unavailable', reason: `trace-http-${response.status}` };
-      const reader: ReadableStreamDefaultReader<Uint8Array> | undefined =
-        response.body?.getReader();
-      if (reader === undefined)
-        return { ...empty, state: 'pending', reason: 'empty-trace-response' };
-      const chunks: Uint8Array[] = [];
-      let size = 0;
+      const signal = AbortSignal.timeout(10_000);
+      let pageSize = 50;
+      let page = 1;
+      let observed = false;
+      let matching: DiagnosticEvent[] = [];
       while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        size += chunk.value.byteLength;
-        if (size > 8 * 1024 * 1024) {
-          await reader.cancel();
-          return { ...empty, state: 'unavailable', reason: 'trace-response-too-large' };
+        signal.throwIfAborted();
+        const url = new URL(`${this.baseUrl}/api/public/observations`);
+        url.searchParams.set('traceId', input.traceId);
+        url.searchParams.set('page', String(page));
+        url.searchParams.set('limit', String(pageSize));
+        const response = await this.fetch(url.href, {
+          headers: { Authorization: this.authorization, Accept: 'application/json' },
+          signal,
+          redirect: 'error',
+        });
+        if (response.status === 404)
+          return { ...empty, state: 'pending', reason: 'trace-not-ingested' };
+        if (!response.ok)
+          return { ...empty, state: 'unavailable', reason: `trace-http-${response.status}` };
+        const reader: ReadableStreamDefaultReader<Uint8Array> | undefined =
+          response.body?.getReader();
+        if (reader === undefined)
+          return { ...empty, state: 'pending', reason: 'empty-trace-response' };
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            size += chunk.value.byteLength;
+            if (size > 8 * 1024 * 1024) {
+              await reader.cancel();
+              break;
+            }
+            chunks.push(chunk.value);
+          }
+        } finally {
+          reader.releaseLock();
         }
-        chunks.push(chunk.value);
+        if (size > 8 * 1024 * 1024) {
+          if (pageSize === 1)
+            return { ...empty, state: 'unavailable', reason: 'trace-response-too-large' };
+          // Offset pages depend on the page size. Restart to avoid skipping rows.
+          pageSize = Math.max(1, Math.floor(pageSize / 2));
+          page = 1;
+          observed = false;
+          matching = [];
+          continue;
+        }
+        const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown);
+        const meta = record(body.meta);
+        if (
+          !Array.isArray(body.data) ||
+          meta.page !== page ||
+          meta.limit !== pageSize ||
+          !Number.isSafeInteger(meta.totalPages) ||
+          Number(meta.totalPages) < 0
+        )
+          return { ...empty, state: 'unavailable', reason: 'invalid-trace-response' };
+        // Langfuse orders by start time, not kagent.sequence. Scan every upstream
+        // page, retaining only the smallest limit+1 events after the cursor.
+        for (const observation of body.data) {
+          const e = event(observation, input.runId);
+          if (e === undefined) continue;
+          observed = true;
+          if (e.sequence <= input.afterSequence) continue;
+          if (matching.some((retained) => retained.id === e.id)) continue;
+          matching.push(e);
+          matching.sort((a, b) => a.sequence - b.sequence);
+          if (matching.length > input.limit + 1) matching.pop();
+        }
+        if (page >= Number(meta.totalPages)) break;
+        page += 1;
       }
-      const body = record(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown);
-      if (!Array.isArray(body.observations))
-        return { ...empty, state: 'unavailable', reason: 'invalid-trace-response' };
-      const taskEvents = body.observations
-        .map((o) => event(o, input.runId))
-        .filter((e): e is DiagnosticEvent => e !== undefined);
-      const matching = taskEvents
-        .filter((e) => e.sequence > input.afterSequence)
-        .sort((a, b) => a.sequence - b.sequence);
       const events = matching.slice(0, input.limit);
       return {
         ...empty,
-        state: taskEvents.length === 0 ? 'pending' : 'observed',
+        state: observed ? 'observed' : 'pending',
         events,
         nextSequence: events.at(-1)?.sequence ?? input.afterSequence,
         hasMore: matching.length > events.length,
