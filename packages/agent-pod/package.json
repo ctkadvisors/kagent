@@ -33,6 +33,7 @@
     "@kagent/openai-compat": "workspace:*",
     "@kagent/trace-sinks": "workspace:*",
     "@kubernetes/client-node": "1.4.0",
+    "ajv": "8.20.0",
     "jose": "6.2.3",
     "nats": "2.29.3"
   },

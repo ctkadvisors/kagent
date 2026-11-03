@@ -83,6 +83,9 @@ importers:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       jose:
         specifier: 6.2.3
         version: 6.2.3
