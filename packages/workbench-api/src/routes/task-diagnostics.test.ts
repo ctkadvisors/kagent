@@ -55,7 +55,13 @@ describe('task diagnostics', () => {
       baseUrl: 'http://langfuse',
       publicKey: 'pk',
       secretKey: 'secret',
-      fetch: () => Promise.resolve(new Response(JSON.stringify({ observations }), { status: 200 })),
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ data: observations, meta: { page: 1, limit: 50, totalPages: 1 } }),
+            { status: 200 },
+          ),
+        ),
     });
     const app = taskDiagnosticsRoute({ cache: cache(), traceReader: reader });
     const first = await app.request('/api/tasks/kagent-system/failed/diagnostics?limit=2');
@@ -141,13 +147,14 @@ describe('task diagnostics', () => {
         requested = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
         return new Response(
           JSON.stringify({
-            observations: [
+            data: [
               ...observations,
               {
                 ...observations[0],
                 metadata: { attributes: { 'kagent.run_id': 'other', 'kagent.sequence': 0 } },
               },
             ],
+            meta: { page: 1, limit: 50, totalPages: 1 },
           }),
         );
       },
@@ -180,7 +187,7 @@ it('reads credential-named schema structure without exposing literal secrets or 
       Promise.resolve(
         new Response(
           JSON.stringify({
-            observations: [
+            data: [
               {
                 ...observations[0],
                 input: { token: 'legacy-argument-private' },
@@ -192,6 +199,7 @@ it('reads credential-named schema structure without exposing literal secrets or 
                 },
               },
             ],
+            meta: { page: 1, limit: 50, totalPages: 1 },
           }),
         ),
       ),
