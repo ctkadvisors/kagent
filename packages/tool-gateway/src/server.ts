@@ -352,19 +352,29 @@ function buildLocalCodeRunner(
   });
 }
 
-async function handleNodeRequest(
+export async function handleNodeRequest(
   handler: (request: Request) => Promise<Response>,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(new Error('HTTP client disconnected'));
+  const close = () => {
+    if (!res.writableEnded) abort();
+  };
+  req.once('aborted', abort);
+  res.once('close', close);
+  if (req.aborted) abort();
   try {
-    const response = await handler(await toWebRequest(req));
+    const response = await handler(await toWebRequest(req, controller.signal));
+    if (controller.signal.aborted || res.destroyed) return;
     res.statusCode = response.status;
     response.headers.forEach((value, key) => {
       res.setHeader(key, value);
     });
     res.end(Buffer.from(await response.arrayBuffer()));
   } catch (err) {
+    if (res.destroyed) return;
     res.statusCode = 500;
     res.setHeader('content-type', 'application/json');
     res.end(
@@ -372,10 +382,13 @@ async function handleNodeRequest(
         error: err instanceof Error ? err.message : String(err),
       }),
     );
+  } finally {
+    req.removeListener('aborted', abort);
+    res.removeListener('close', close);
   }
 }
 
-async function toWebRequest(req: IncomingMessage): Promise<Request> {
+async function toWebRequest(req: IncomingMessage, signal: AbortSignal): Promise<Request> {
   const headers = new Headers();
   for (const [key, value] of Object.entries(req.headers)) {
     if (value === undefined) continue;
@@ -393,7 +406,7 @@ async function toWebRequest(req: IncomingMessage): Promise<Request> {
 
   const method = req.method ?? 'GET';
   const host = headers.get('host') ?? 'localhost';
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers, signal };
   if (method !== 'GET' && method !== 'HEAD') {
     init.body = concatUint8Arrays(chunks);
   }

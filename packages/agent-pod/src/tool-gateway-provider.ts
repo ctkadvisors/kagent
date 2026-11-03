@@ -11,9 +11,13 @@ import type {
   ToolProvider,
   ToolResult,
 } from '@kagent/agent-loop';
+import { checkPublication } from './check-publication.js';
+import { TaskToolResultStore, type RawResultStorageOptions } from './tool-result-reference.js';
+
 import {
   BROWSER_TOOL_NAMES,
   CODE_INTERPRETER_TOOL_NAMES,
+  DEFAULT_CODE_TIMEOUT_MS,
   SHELL_TOOL_NAMES,
   isExternalGatewayToolName,
   isToolRuntimeTool,
@@ -39,6 +43,7 @@ export interface ToolGatewayProviderOptions {
    */
   readonly capabilityJwt?: string;
   readonly fetch?: typeof fetch;
+  readonly rawResultStorage?: RawResultStorageOptions;
 }
 
 const DEFAULT_PROVIDER_ID = 'kagent-tool-gateway';
@@ -56,11 +61,17 @@ export class ToolGatewayProvider implements ToolProvider {
   private readonly externalToolNames: readonly string[];
   private readonly descriptors: ToolDescriptor[];
   private profileResolvedDescriptors: ToolDescriptor[] | undefined;
+  private readonly resultStore: TaskToolResultStore | undefined;
+  private readonly maxResultChars: number | undefined;
 
   constructor(options: ToolGatewayProviderOptions) {
     this.id = options.id ?? DEFAULT_PROVIDER_ID;
+    this.resultStore = options.rawResultStorage
+      ? new TaskToolResultStore(options.task, options.rawResultStorage)
+      : undefined;
+    this.maxResultChars = options.rawResultStorage?.maxContentChars;
     this.baseUrl = trimTrailingSlash(options.baseUrl);
-    this.task = options.task;
+    this.task = Object.freeze({ ...options.task });
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.capabilityJwt = options.capabilityJwt;
     const gatewayToolNames = requestedGatewayToolNames(options.tools);
@@ -94,6 +105,67 @@ export class ToolGatewayProvider implements ToolProvider {
       };
     }
 
+    let args = call.args ?? {};
+    let publication: Record<string, unknown> | undefined;
+    if (call.name === 'fleet.forum_post' && isRecord(args) && 'bodyFromToolResult' in args) {
+      try {
+        const request = args.bodyFromToolResult;
+        if (
+          !this.resultStore ||
+          'body' in args ||
+          !isRecord(request) ||
+          Object.keys(request).length !== 1 ||
+          typeof request.uri !== 'string'
+        )
+          throw new Error('invalid publication reference');
+        const canonical = checkPublication(
+          await this.resultStore.resolve(request.uri, ctx.runId, ctx.abortSignal),
+        );
+        const ordinary = { ...args };
+        delete ordinary.bodyFromToolResult;
+        args = { ...ordinary, body: canonical.body };
+        publication = canonical.metadata;
+      } catch {
+        return { content: 'check publication unavailable', isError: true };
+      }
+    }
+    if (
+      call.name === 'code_interpreter.execute_code' &&
+      args &&
+      typeof args === 'object' &&
+      !Array.isArray(args)
+    ) {
+      const input = args as Record<string, unknown>;
+      if ('inputFiles' in input)
+        return {
+          content: 'tool-result reference unavailable: reserved import field',
+          isError: true,
+        };
+      if ('inputArtifacts' in input) {
+        try {
+          if (!this.resultStore) throw new Error('capture disabled');
+          const started = Date.now();
+          const requested =
+            typeof input.timeoutMs === 'number' && input.timeoutMs > 0
+              ? input.timeoutMs
+              : DEFAULT_CODE_TIMEOUT_MS;
+          const budget = Math.min(requested, this.resultStore.remainingMs());
+          const files = await this.resultStore.importFiles(
+            input.inputArtifacts,
+            ctx.runId,
+            ctx.abortSignal,
+          );
+          const ordinary = { ...input };
+          delete ordinary.inputArtifacts;
+          ordinary.timeoutMs = budget - (Date.now() - started);
+          if ((ordinary.timeoutMs as number) <= 0) throw new Error('import deadline elapsed');
+          args = { ...ordinary, inputFiles: files };
+        } catch {
+          return { content: 'tool-result reference unavailable', isError: true };
+        }
+      }
+    }
+    ctx.abortSignal.throwIfAborted();
     const response = await this.fetchImpl(`${this.baseUrl}/v1/tool-runtime/invoke`, {
       method: 'POST',
       headers: {
@@ -111,7 +183,7 @@ export class ToolGatewayProvider implements ToolProvider {
         call: {
           id: call.id,
           name: call.name,
-          args: call.args ?? {},
+          args,
         },
       }),
       signal: ctx.abortSignal,
@@ -125,7 +197,43 @@ export class ToolGatewayProvider implements ToolProvider {
       };
     }
 
-    return parseToolResult(await response.json());
+    const received = parseToolResult(await response.json());
+    const result = publication
+      ? { ...received, metadata: { ...received.metadata, checkPublication: publication } }
+      : received;
+    const text =
+      typeof result.content === 'string' ? result.content : JSON.stringify(result.content);
+    const publicationSource =
+      this.isGranted('fleet.forum_post') &&
+      ['fleet.run_tool', 'fleet.run_capability'].includes(call.name);
+    if (
+      !result.isError &&
+      this.resultStore &&
+      this.maxResultChars !== undefined &&
+      ((text.length > this.maxResultChars && this.isGranted('code_interpreter.execute_code')) ||
+        publicationSource)
+    ) {
+      try {
+        const reference = await this.resultStore.retain(
+          call,
+          ctx.runId,
+          result.content,
+          ctx.abortSignal,
+        );
+        return {
+          ...result,
+          content: attachResultNotice(result.content, { _kagent_tool_result_ref: reference }),
+        };
+      } catch {
+        return {
+          ...result,
+          content: attachResultNotice(result.content, {
+            _kagent_tool_result_ref_unavailable: true,
+          }),
+        };
+      }
+    }
+    return result;
   }
 
   private async describeGatewayTools(ctx?: ToolInvocationContext): Promise<ToolDescriptor[]> {
@@ -160,7 +268,9 @@ export class ToolGatewayProvider implements ToolProvider {
       throw new Error(`Gateway ${response.status}: ${await responseMessage(response)}`);
     }
 
-    const gatewayDescriptors = parseToolDescriptors(await response.json());
+    const gatewayDescriptors = parseToolDescriptors(await response.json()).map(
+      publicationDescriptor,
+    );
     if (this.toolProfileRefs.length === 0) {
       return [...this.descriptors, ...gatewayDescriptors];
     }
@@ -272,7 +382,7 @@ function runtimeToolDescription(name: ToolRuntimeToolName): string {
     case 'code_interpreter.start_session':
       return 'Start or fetch the task-scoped code interpreter session.';
     case 'code_interpreter.execute_code':
-      return 'Execute inline Python, JavaScript, or TypeScript in the code workspace.';
+      return 'Execute inline Python, JavaScript, or TypeScript in the code workspace. Optional inputArtifacts [{uri,path}] imports same-task ephemeral tool-result references and path.source.json metadata before this explicit call; these references expire with the task.';
     case 'code_interpreter.execute_command':
       return 'Execute an allowlisted command in the code workspace.';
     case 'code_interpreter.start_command':
@@ -368,6 +478,16 @@ function runtimeToolInputSchema(name: ToolRuntimeToolName): Record<string, unkno
         {
           language: { type: 'string', enum: ['python', 'javascript', 'typescript'] },
           code: { type: 'string', minLength: 1 },
+          inputArtifacts: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              required: ['uri', 'path'],
+              additionalProperties: false,
+              properties: { uri: { type: 'string' }, path: { type: 'string' } },
+            },
+          },
           timeoutMs: { type: 'number', minimum: 1 },
         },
         ['language', 'code'],
@@ -509,4 +629,69 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function trimTrailingSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
+/** Preserve JSON-envelope and first-content-block parser contracts. */
+function attachResultNotice(
+  content: ToolResult['content'],
+  notice: Record<string, unknown>,
+): ToolResult['content'] {
+  const block: ContentBlock = { type: 'text', text: JSON.stringify(notice) };
+  if (typeof content !== 'string') return [...content, block];
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const object = parsed as Record<string, unknown>;
+      if ('_kagent_tool_result_ref' in object || '_kagent_tool_result_ref_unavailable' in object)
+        return content;
+      return JSON.stringify({ ...notice, ...object });
+    }
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.every(
+        (value) =>
+          value &&
+          typeof value === 'object' &&
+          ['text', 'image', 'resource'].includes(String((value as Record<string, unknown>).type)),
+      )
+    ) {
+      return JSON.stringify([...(parsed as unknown[]), block]);
+    }
+  } catch {
+    /* Opaque text remains the original first text block. */
+  }
+  return [{ type: 'text', text: content }, block];
+}
+
+function publicationDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
+  if (descriptor.name !== 'fleet.forum_post' || !isRecord(descriptor.inputSchema))
+    return descriptor;
+  const schema = descriptor.inputSchema;
+  const required = Array.isArray(schema.required)
+    ? (schema.required as unknown[]).filter((key) => key !== 'body')
+    : [];
+  return {
+    ...descriptor,
+    description:
+      descriptor.description +
+      ' To publish an exact complete check result without retyping, explicitly use bodyFromToolResult:{uri} from its same-task tool-result reference instead of body. This preserves actual exit/numeric/null values and refuses unavailable or oversized results.',
+    inputSchema: {
+      ...schema,
+      required,
+      properties: {
+        ...(isRecord(schema.properties) ? schema.properties : {}),
+        bodyFromToolResult: {
+          type: 'object',
+          required: ['uri'],
+          additionalProperties: false,
+          properties: { uri: { type: 'string' } },
+        },
+      },
+      oneOf: [
+        { required: ['body'], not: { required: ['bodyFromToolResult'] } },
+        { required: ['bodyFromToolResult'], not: { required: ['body'] } },
+      ],
+    },
+  };
 }
