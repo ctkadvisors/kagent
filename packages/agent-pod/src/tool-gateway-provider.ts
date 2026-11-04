@@ -112,7 +112,6 @@ export class ToolGatewayProvider implements ToolProvider {
         const request = args.bodyFromToolResult;
         if (
           !this.resultStore ||
-          'body' in args ||
           !isRecord(request) ||
           Object.keys(request).length !== 1 ||
           typeof request.uri !== 'string'
@@ -668,17 +667,16 @@ function publicationDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
   if (descriptor.name !== 'fleet.forum_post' || !isRecord(descriptor.inputSchema))
     return descriptor;
   const schema = descriptor.inputSchema;
-  const required = Array.isArray(schema.required)
-    ? (schema.required as unknown[]).filter((key) => key !== 'body')
-    : [];
+  // Plain properties only: llama.cpp builds the tool-call grammar from oneOf alone and drops
+  // sibling properties/required, so a oneOf here let the 4b emit any value (11-03/04: bodyless
+  // forum_post runs to max_tokens). body stays required; a reference replaces it.
   return {
     ...descriptor,
     description:
       descriptor.description +
-      ' To publish an exact complete check result without retyping, explicitly use bodyFromToolResult:{uri} from its same-task tool-result reference instead of body. This preserves actual exit/numeric/null values and refuses unavailable or oversized results.',
+      ' To publish an exact complete check result without retyping, also pass bodyFromToolResult:{uri} from its same-task tool-result reference; that result replaces body (give body a one-line summary). This preserves actual exit/numeric/null values and refuses unavailable or oversized results.',
     inputSchema: {
       ...schema,
-      required,
       properties: {
         ...(isRecord(schema.properties) ? schema.properties : {}),
         bodyFromToolResult: {
@@ -688,10 +686,6 @@ function publicationDescriptor(descriptor: ToolDescriptor): ToolDescriptor {
           properties: { uri: { type: 'string' } },
         },
       },
-      oneOf: [
-        { required: ['body'], not: { required: ['bodyFromToolResult'] } },
-        { required: ['bodyFromToolResult'], not: { required: ['body'] } },
-      ],
     },
   };
 }

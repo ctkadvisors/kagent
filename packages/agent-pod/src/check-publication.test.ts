@@ -208,15 +208,28 @@ it('preserves unknown numeric results and historical post7758 instead of inventi
   });
 });
 
-it('advertises an explicit alternative to body without changing the existing signed tool', async () => {
+it('advertises the reference as an optional property while body stays required', async () => {
   const s = await setup();
   const descriptors = await s.provider.describeTools(ctx());
   const descriptor = descriptors.find((value) => value.name === 'fleet.forum_post');
   expect(descriptor?.description).toContain('bodyFromToolResult');
   expect(descriptor?.inputSchema).toMatchObject({
-    required: ['topic'],
+    required: ['topic', 'body'],
     properties: { body: { type: 'string' }, bodyFromToolResult: { required: ['uri'] } },
   });
+  // llama.cpp turns a top-level combinator into the whole grammar and drops properties.
+  for (const key of ['oneOf', 'anyOf', 'allOf', 'not'])
+    expect(descriptor?.inputSchema).not.toHaveProperty(key);
+});
+
+it('replaces a model-written body with the referenced result', async () => {
+  const s = await setup();
+  const result = await source(s);
+  const published = await publish(s, result._kagent_tool_result_ref.uri, { body: 'model prose' });
+  expect(published.isError).toBe(false);
+  const body = (JSON.parse(s.seen[0]!.body) as { body: string }).body;
+  expect(body.startsWith(result.stdout)).toBe(true);
+  expect(body).not.toContain('model prose');
 });
 
 it('refuses unknown, foreign, other-run, expired, and ambiguous references before signed publication', async () => {
@@ -250,7 +263,6 @@ it('refuses unknown, foreign, other-run, expired, and ambiguous references befor
       )
     ).isError,
   ).toBe(true);
-  expect((await publish(s, uri, { body: 'model prose' })).isError).toBe(true);
   const repeated = await source(s);
   expect(repeated._kagent_tool_result_ref).toBeUndefined();
   expect((await publish(s, uri)).isError).toBe(true);
