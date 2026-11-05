@@ -317,6 +317,30 @@ it('bounds discovery to 100 latest sources and rejects conflicting query identit
   ).toBe(400);
 });
 
+it('revises a template whose recorded admission the API server normalized on write', async () => {
+  // Live 2026-11-05: capability-shapecapture-probe's fixed version was refused (409) because the
+  // stored spec carried the CRD default revisionHistoryLimit that the admitted YAML omits.
+  const normalize = (value: unknown) => ({ revisionHistoryLimit: 20, ...(value as object) });
+  const s = setup(undefined, old());
+  const annotations = s.template.metadata.annotations as Record<string, string>;
+  annotations['kagent.knuteson.io/promoted-artifact-name'] = NAME;
+  annotations['kagent.knuteson.io/promoted-artifact-checksum'] = final(old()).checksum;
+  const stored = s.template as { spec: unknown };
+  stored.spec = normalize(spec(old()));
+  s.customApi.createNamespacedCustomObject.mockImplementation(
+    (args: { dryRun?: string; body: { spec: unknown } }) =>
+      args.dryRun === 'All'
+        ? Promise.resolve({ ...args.body, spec: normalize(args.body.spec) })
+        : Promise.reject(Object.assign(new Error('already exists'), { code: 409 })),
+  );
+  expect((await s.post(accepted(), { reconcileAccepted: true })).status).toBe(200);
+  expect(s.customApi.replaceNamespacedCustomObject).toHaveBeenCalledOnce();
+  // A stored spec changed after admission still refuses.
+  stored.spec = { ...normalize(spec(old())), revisionHistoryLimit: 7 };
+  expect((await s.post(accepted(), { reconcileAccepted: true })).status).toBe(409);
+  expect(s.customApi.replaceNamespacedCustomObject).toHaveBeenCalledOnce();
+});
+
 it('reads a current source missing from cache through Kubernetes and preserves CAS', async () => {
   const candidate = accepted();
   const s = setup([candidate]);
