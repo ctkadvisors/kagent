@@ -938,6 +938,33 @@ interface AgentTemplateManifestArgs {
 type TemplateRevision =
   | { ok: true; ref: ReturnType<typeof readCreatedMeta>; unchanged: boolean }
   | { ok: false; error: string; notQueueOwned?: boolean };
+/**
+ * The admitted spec as the API server stores it. On write the CRD prunes unknown fields and
+ * applies defaults (2026-11-05: `spec.name` pruned, `revisionHistoryLimit: 20` added), so the
+ * raw parsed artifact never equals the stored template. A server-side dry run normalizes it
+ * with the live schema instead of a copy of it.
+ */
+async function storedSpec(
+  deps: ReviewQueueRouteDeps,
+  namespace: string,
+  spec: unknown,
+): Promise<unknown> {
+  const stored = (await deps.customApi!.createNamespacedCustomObject({
+    group: KAGENT_GROUP,
+    version: KAGENT_VERSION,
+    namespace,
+    plural: 'agenttemplates',
+    body: {
+      apiVersion: `${KAGENT_GROUP}/${KAGENT_VERSION}`,
+      kind: 'AgentTemplate',
+      metadata: { generateName: 'admission-proof-' },
+      spec,
+    },
+    dryRun: 'All',
+  })) as { spec?: unknown };
+  return stored.spec;
+}
+
 async function reviseQueueTemplate(
   deps: ReviewQueueRouteDeps,
   namespace: string,
@@ -1006,7 +1033,10 @@ async function reviseQueueTemplate(
         const yaml = await candidateYaml(deps, candidate.artifactRef);
         if (artifactChecksum(yaml) === recordedChecksum) {
           const parsed = parseAgentTemplateSpec(yaml);
-          if (!parsed.ok || !isDeepStrictEqual(existing.spec, parsed.spec))
+          if (
+            !parsed.ok ||
+            !isDeepStrictEqual(existing.spec, await storedSpec(deps, namespace, parsed.spec))
+          )
             return { ok: false, error: 'existing template admission proof disagrees' };
           matches++;
         }
