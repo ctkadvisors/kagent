@@ -145,6 +145,10 @@ export async function assembleChatCompletion(
   if (finishReason === null) {
     throw new LLMClientProtocolError('stream ended without a finish_reason (cut short)', null);
   }
+  // Kept in step with llm-gateway: vLLM marks answers its engine did not finish "abort" or "error".
+  if (finishReason === 'abort' || finishReason === 'error') {
+    throw new LLMClientProtocolError(`answer ended early: finish_reason ${finishReason}`, null);
+  }
   const toolCalls: OpenAIToolCallWire[] = calls
     .filter((c): c is NonNullable<typeof c> => c !== undefined)
     .map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.args } }));
