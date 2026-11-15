@@ -131,6 +131,13 @@ export async function assembleChatCompletion(
   if (finishReason === null) {
     throw new IncompleteStreamError('backend stream ended without a finish_reason');
   }
+  // vLLM closes answers its engine did not finish with "abort" (engine stopping) or "error".
+  // 2026-11-15: a stopped engine aborted 3 in-flight calls; each cut-off text became a Completed task.
+  if (finishReason === 'abort' || finishReason === 'error') {
+    throw new IncompleteStreamError(
+      `backend ended the answer early: finish_reason ${finishReason}`,
+    );
+  }
   const toolCalls = calls
     .filter((c): c is NonNullable<typeof c> => c !== undefined)
     .map((c) => ({

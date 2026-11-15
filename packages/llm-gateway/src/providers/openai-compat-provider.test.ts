@@ -136,6 +136,21 @@ describe('OpenAICompatProvider via OpenAIProvider', () => {
     );
   });
 
+  it('an answer the engine aborted is an error, never a short answer', async () => {
+    const sse =
+      'data: {"id":"c1","choices":[{"index":0,"delta":{"content":"half an ans"}}]}\n\n' +
+      'data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"abort"}]}\n\n';
+    const fakeFetch = vi.fn(() =>
+      Promise.resolve(
+        new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+      ),
+    );
+    const provider = new OpenAIProvider('https://x/v1', fakeFetch);
+    await expect(provider.chatCompletion(chatBody('gpt-4o', 'sk-x'))).rejects.toThrow(
+      /finish_reason abort/,
+    );
+  });
+
   it('LocalAI does not require apiKey and skips Authorization header', async () => {
     let captured: CapturedCall | null = null;
     const fakeFetch = vi.fn((_url: string, init?: RequestInit) => {

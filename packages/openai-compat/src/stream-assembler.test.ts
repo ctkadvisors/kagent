@@ -93,6 +93,17 @@ describe('chat() over a streamed reply', () => {
     ).rejects.toBeInstanceOf(LLMClientProtocolError);
   });
 
+  it('an answer the engine aborted is a protocol error, never a short answer', async () => {
+    await expect(
+      client(
+        sse([
+          'data: {"choices":[{"index":0,"delta":{"content":"half an ans"}}]}',
+          'data: {"choices":[{"index":0,"delta":{},"finish_reason":"abort"}]}',
+        ]),
+      ).chat(ask),
+    ).rejects.toBeInstanceOf(LLMClientProtocolError);
+  });
+
   it('a connection that dies mid-turn is a status-0 HTTP error, so the retry gate sees it', async () => {
     const dying = (() =>
       Promise.resolve(
