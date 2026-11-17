@@ -482,7 +482,11 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
         }
       : result.error !== undefined
         ? { message: result.error.message }
-        : undefined;
+        : // The time limit ends a run as `cancelled`. Name it, or the task and its parent read only
+          // "loop ended with status=cancelled" (48 tasks between 2026-10-20 and 11-17).
+          result.status === 'cancelled' && timeoutSignal.aborted
+          ? { message: `task time limit reached (timeoutSeconds ${effectiveTimeoutSeconds})` }
+          : undefined;
 
   return {
     runId: result.runId,

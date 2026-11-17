@@ -902,9 +902,20 @@ describe('runAgentTask — runConfig precedence (WS-G)', () => {
       const result = await runAgentTask(config, { llm, sinks: [] });
       expect(chat).not.toHaveBeenCalled();
       expect(result.status).toBe('cancelled');
+      expect(result.error?.message).toBe('task time limit reached (timeoutSeconds 600)');
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it('does not blame the time limit when the caller cancels the run', async () => {
+    const result = await runAgentTask(baseConfig, {
+      llm: scriptedLlm('late'),
+      sinks: [],
+      signal: AbortSignal.abort(),
+    });
+    expect(result.status).toBe('cancelled');
+    expect(result.error).toBeUndefined();
   });
 
   it.each(['runConfig', 'deprecated', 'default'] as const)(
