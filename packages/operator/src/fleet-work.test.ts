@@ -60,6 +60,22 @@ describe('existing idle task real-work binding', () => {
     expect(enriched.spec.targetAgent).toBe('fleet-auditor');
     expect(enriched.spec.runConfig).toEqual(task().spec.runConfig);
   });
+  it('runs operator-request work on the configured class, and nothing else', async () => {
+    const request = {
+      ...work(),
+      sources: [{ kind: 'operator_request', ref: 'forum:11008', summary: 'x' }],
+    };
+    const opts = { url: 'http://authority/missions', requestModelClass: 'reasoner-cloud' };
+    const routed = await enrichFleetWork(task(), { ...opts, fetch: respond(request) });
+    expect(routed.spec.runConfig).toEqual({
+      ...task().spec.runConfig,
+      modelClass: 'reasoner-cloud',
+    });
+    const self = await enrichFleetWork(task(), { ...opts, fetch: respond(work()) });
+    expect(self.spec.runConfig).toEqual(task().spec.runConfig);
+    const unset = await enrichFleetWork(task(), { url: opts.url, fetch: respond(request) });
+    expect(unset.spec.runConfig).toEqual(task().spec.runConfig);
+  });
   it('never widens grants or bounds from the report', async () => {
     const value = { ...work(), runConfig: { maxIterations: 99999 }, toolProfileRef: 'admin' };
     const enriched = await enrichFleetWork(task(), {

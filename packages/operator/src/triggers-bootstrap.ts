@@ -97,7 +97,11 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
   // ---- Schedule controller ------------------------------------------
   const createAgentTask = async (manifest: RenderedAgentTask): Promise<void> => {
     const workUrl = env.FLEET_WORK_REPORT_URL;
-    const task = await enrichFleetWork(manifest, workUrl ? { url: workUrl } : {});
+    const requestModelClass = env.FLEET_REQUEST_MODEL_CLASS;
+    const task = await enrichFleetWork(
+      manifest,
+      workUrl ? { url: workUrl, ...(requestModelClass && { requestModelClass }) } : {},
+    );
     await customApi.createNamespacedCustomObject({
       group: API_GROUP,
       version: API_VERSION,

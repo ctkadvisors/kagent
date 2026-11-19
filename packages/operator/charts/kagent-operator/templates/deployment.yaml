@@ -598,6 +598,10 @@ spec:
             - name: FLEET_WORK_REPORT_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.triggers.fleetRequestModelClass }}
+            - name: FLEET_REQUEST_MODEL_CLASS
+              value: {{ . | quote }}
+            {{- end }}
             - name: KAGENT_TRIGGERS_WEBHOOK_ENABLED
               value: "true"
             - name: KAGENT_TRIGGERS_WEBHOOK_PORT

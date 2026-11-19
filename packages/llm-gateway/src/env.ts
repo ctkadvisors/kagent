@@ -173,6 +173,7 @@ const BACKEND_API_KEY_ENV_VARS: ReadonlyArray<readonly [BackendKind, string]> = 
   ['bedrock', 'BACKEND_API_KEY_BEDROCK'],
   ['groq', 'BACKEND_API_KEY_GROQ'],
   ['exo', 'BACKEND_API_KEY_EXO'],
+  ['opencode', 'BACKEND_API_KEY_OPENCODE'],
   ['mock', 'BACKEND_API_KEY_MOCK'],
 ] as const;
 

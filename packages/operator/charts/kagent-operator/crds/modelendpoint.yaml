@@ -70,6 +70,7 @@ spec:
                     - localai
                     - groq
                     - exo
+                    - opencode
                   description: |
                     Backend kind drives which signal-reader the gateway
                     uses (e.g. Ollama `/api/ps` vs. Cloudflare
@@ -114,6 +115,16 @@ spec:
                     the live cap below this. Useful for cloud APIs with
                     known concurrency budgets (e.g. Bedrock per-key)
                     where halving on a transient 429 would over-correct.
+                fallbackModel:
+                  type: string
+                  minLength: 1
+                  description: |
+                    Another ModelEndpoint's `spec.model`. When this
+                    backend throttles, refuses or fails a request, the
+                    gateway serves it from that model instead (one hop).
+                    A metered cloud endpoint names a local one here so
+                    an exhausted allowance degrades to local speed
+                    rather than failing the task.
             status:
               type: object
               description: |

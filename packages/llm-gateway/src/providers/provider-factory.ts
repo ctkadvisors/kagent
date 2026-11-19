@@ -27,6 +27,7 @@ import { LocalAIProvider } from './localai-provider.js';
 import { MockProvider } from './mock-provider.js';
 import { OllamaProvider } from './ollama-provider.js';
 import { OpenAIProvider } from './openai-provider.js';
+import { OpenCodeGoProvider } from './opencode-provider.js';
 
 export interface ProviderFactoryOptions {
   /** Optional fetch impl injection — tests pass a stub here. */
@@ -54,6 +55,8 @@ export function buildProvider(
       return new GroqProvider(baseUrl, f);
     case 'exo':
       return new ExoProvider(baseUrl, f);
+    case 'opencode':
+      return new OpenCodeGoProvider(baseUrl, f);
     case 'cloudflare':
       return new CloudflareProvider(baseUrl, f);
     case 'bedrock':
