@@ -183,7 +183,23 @@ const DEFAULT_BACKEND_RETRY_AFTER_SECONDS = 5;
  * — agent-pod consumes non-streaming today; SSE plumbing is wired in
  * the server layer when needed).
  */
+/** Upstream refusals or failures that a ModelEndpoint's `fallbackModel` serves instead. */
+const FALLS_BACK: ReadonlySet<RouteResult['kind']> = new Set([
+  'backend_throttled',
+  'provider_failure_backoff',
+  'provider_config_error',
+  'dispatch_error',
+]);
+
 export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteResult> {
+  const result = await routeOnce(deps, ctx);
+  const fallback = deps.modelIndex.lookup(ctx.request.model)?.endpoint.spec.fallbackModel;
+  if (!fallback || fallback === ctx.request.model || !FALLS_BACK.has(result.kind)) return result;
+  // One hop: the fallback's own fallbackModel is not followed, so two endpoints naming each other cannot loop.
+  return routeOnce(deps, { ...ctx, request: { ...ctx.request, model: fallback } });
+}
+
+async function routeOnce(deps: RouterDeps, ctx: RouteContext): Promise<RouteResult> {
   const lookup = deps.modelIndex.lookup(ctx.request.model);
   if (lookup === null) {
     return { kind: 'unknown_model', statusCode: 400, model: ctx.request.model };
@@ -337,6 +353,7 @@ async function dispatch(
     },
     request: ctx.request,
     requestId: ctx.requestId,
+    ...(ctx.taskUid !== null && { sessionId: ctx.taskUid }),
   };
 
   const startedAt = Date.now();

@@ -1111,6 +1111,9 @@ triggers:
   enabled: false
   # Optional protected work projection for the fleet's existing idle schedule.
   fleetWorkReportUrl: ''
+  # Optional agent.modelClasses key for work that answers an operator request (e.g. a faster
+  # metered class); empty keeps every task on its Agent's own model.
+  fleetRequestModelClass: ''
   webhook:
     # TCP port the operator binds the receiver on. The Service forwards
     # to the same `webhook` named port on the operator container.

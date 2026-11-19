@@ -26,6 +26,8 @@ interface FleetWork extends Record<string, unknown> {
 export interface FleetWorkOptions {
   readonly url?: string;
   readonly fetch?: typeof globalThis.fetch;
+  /** Model class for work that answers an operator request; the report marks the source, never the class. */
+  readonly requestModelClass?: string;
 }
 function parseWork(value: unknown): FleetWork {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -86,6 +88,14 @@ export async function enrichFleetWork(
     !Array.isArray(manifest.spec.payload)
       ? (manifest.spec.payload as Record<string, unknown>)
       : {};
+  const forOperator =
+    options.requestModelClass !== undefined &&
+    (work.sources as unknown[]).some(
+      (source) =>
+        typeof source === 'object' &&
+        source !== null &&
+        (source as Record<string, unknown>).kind === 'operator_request',
+    );
   const message = `${work.goal}\n\n${work.instructions}\n\nCURRENT WORK AND ORIGINAL REFERENCES:\n${JSON.stringify(work)}`;
   return {
     ...manifest,
@@ -100,6 +110,9 @@ export async function enrichFleetWork(
     spec: {
       ...manifest.spec,
       targetAgent: work.target_agent,
+      ...(forOperator && {
+        runConfig: { ...manifest.spec.runConfig, modelClass: options.requestModelClass },
+      }),
       // The agent pod gives this field precedence over payload. Both must carry
       // the selected work, including when the schedule had a static message.
       originalUserMessage: message,

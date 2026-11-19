@@ -184,6 +184,7 @@ export type BackendKind =
   | 'bedrock'
   | 'groq'
   | 'exo'
+  | 'opencode'
   | 'mock';
 
 export interface ProviderConfig {
@@ -200,6 +201,8 @@ export interface ProviderRequest {
   readonly config: ProviderConfig;
   readonly request: ChatCompletionRequest;
   readonly requestId: string;
+  /** Stable per-caller session (the AgentTask UID); a backend that groups calls by session sends it. */
+  readonly sessionId?: string;
 }
 
 export interface ProviderResponse {
@@ -247,6 +250,8 @@ export interface ModelEndpointSpec {
     readonly max: number;
   };
   readonly minSafe?: number;
+  /** Another ModelEndpoint's `spec.model` that serves this request when this backend refuses or fails it. */
+  readonly fallbackModel?: string;
 }
 
 export interface ModelEndpointStatus {

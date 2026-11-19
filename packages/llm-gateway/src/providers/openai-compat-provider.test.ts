@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { OpenAIProvider } from './openai-provider.js';
 import { CloudflareProvider } from './cloudflare-provider.js';
 import { LocalAIProvider } from './localai-provider.js';
+import { OpenCodeGoProvider } from './opencode-provider.js';
 import type { ProviderRequest } from '../types.js';
 
 function chatBody(model = 'gpt-4o', apiKey?: string): ProviderRequest {
@@ -241,5 +242,27 @@ describe('OpenAICompatProvider via OpenAIProvider', () => {
     await expect(provider.chatCompletion(chatBody('gpt-4o', 'sk-x'))).rejects.toThrow(
       /openai error 502/,
     );
+  });
+});
+
+describe('OpenCodeGoProvider', () => {
+  it('names its client and sends the task as the opencode session', async () => {
+    const calls: Record<string, string>[] = [];
+    const fakeFetch = vi.fn((_url: string, init?: RequestInit) => {
+      calls.push((init?.headers ?? {}) as Record<string, string>);
+      return Promise.resolve(jsonResponse({ error: 'stop here' }, 500));
+    });
+    const provider = new OpenCodeGoProvider(
+      'https://opencode.ai/zen/go/v1',
+      fakeFetch as unknown as typeof fetch,
+    );
+    await expect(
+      provider.chatCompletion({ ...chatBody('deepseek-v4.1-flash', 'k'), sessionId: 'task-uid' }),
+    ).rejects.toThrow();
+    await expect(provider.chatCompletion(chatBody('deepseek-v4.1-flash', 'k'))).rejects.toThrow();
+    expect(calls.map((h) => [h['x-opencode-session'], h['User-Agent'], h.Authorization])).toEqual([
+      ['task-uid', 'kagent-llm-gateway', 'Bearer k'],
+      ['req-1', 'kagent-llm-gateway', 'Bearer k'],
+    ]);
   });
 });

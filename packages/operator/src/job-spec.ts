@@ -96,9 +96,17 @@ export function configMapNameForTask(task: AgentTask): string {
  * structured error onto AgentTask `status.error` per
  * docs/MODEL-ROUTING.md §3.1.
  */
-function resolveModelOrThrow(agent: Agent, classMap: ModelClassMap): string {
+/** A task's `runConfig.modelClass` routes that task to another class; it wins over the Agent's model. */
+function modelSpecForTask(agent: Agent, task: AgentTask): Agent['spec'] {
+  const modelClass = task.spec.runConfig?.modelClass;
+  if (!modelClass) return agent.spec;
+  const { model: _agentModel, ...spec } = agent.spec;
+  return { ...spec, modelClass };
+}
+
+function resolveModelOrThrow(agent: Agent, task: AgentTask, classMap: ModelClassMap): string {
   const modelResolution = resolveAgentModel({
-    agentSpec: agent.spec,
+    agentSpec: modelSpecForTask(agent, task),
     classMap,
   });
   if (modelResolution.kind === 'unresolvable') {
@@ -139,7 +147,7 @@ export function buildAgentTaskConfigMap(
   classMap: ModelClassMap = {},
 ): V1ConfigMap {
   const namespace = task.metadata.namespace ?? 'default';
-  const resolvedModel = resolveModelOrThrow(agent, classMap);
+  const resolvedModel = resolveModelOrThrow(agent, task, classMap);
   const resolvedSpec = applyResolvedModel(agent.spec, resolvedModel);
   return {
     apiVersion: 'v1',
@@ -630,7 +638,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
   // `status.error` per docs/MODEL-ROUTING.md §3.1.
   const classMap: ModelClassMap = opts.modelClassMap ?? {};
   const modelResolution = resolveAgentModel({
-    agentSpec: agent.spec,
+    agentSpec: modelSpecForTask(agent, task),
     classMap,
   });
   if (modelResolution.kind === 'unresolvable') {
@@ -662,7 +670,7 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
         ? ` contextWindowTokens=${resolvedContextWindowTokens}`
         : '';
     console.log(
-      `[operator/job-spec] resolved modelClass='${agent.spec.modelClass ?? ''}' → model='${resolvedModel}'${windowSuffix} for Agent ${ns}/${name}`,
+      `[operator/job-spec] resolved modelClass='${modelSpecForTask(agent, task).modelClass ?? ''}' → model='${resolvedModel}'${windowSuffix} for Agent ${ns}/${name}`,
     );
   }
   // v0.1.8-modelclass.1 — rewrite spec.model with the resolved id so

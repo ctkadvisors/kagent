@@ -679,6 +679,11 @@ export type AgentTaskPhase = 'Pending' | 'Dispatched' | 'Completed' | 'Failed';
  * `spec.properties.runConfig`. Keep both in sync.
  */
 export interface AgentTaskRunConfig {
+  /**
+   * Run this one task on another cluster model class (the operator's `agent.modelClasses` key).
+   * The Agent's harness (prompt, tools, budgets) is unchanged; only the model it calls differs.
+   */
+  readonly modelClass?: string;
   /** Hard cap on cumulative input+output tokens; exit with `budget_exceeded`. */
   readonly tokenLimit?: number;
   /** Hard cap on cumulative backend-reported cost (USD); exit with `budget_exceeded`. */
@@ -1168,7 +1173,8 @@ export type ModelEndpointBackendKind =
   | 'anthropic'
   | 'localai'
   | 'groq'
-  | 'exo';
+  | 'exo'
+  | 'opencode';
 
 /**
  * AIMD bounds. `seed` is the starting concurrency the gateway uses on
@@ -1202,6 +1208,8 @@ export interface ModelEndpointSpec {
    * over-correct.
    */
   readonly minSafe?: number;
+  /** Another endpoint's `spec.model` the gateway serves a refused or failed request from (one hop). */
+  readonly fallbackModel?: string;
 }
 
 /**

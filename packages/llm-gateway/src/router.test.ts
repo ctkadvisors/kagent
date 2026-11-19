@@ -443,6 +443,60 @@ describe('route', () => {
     expect(deps.usage.events.at(-1)?.statusCode).toBe(429);
   });
 
+  it('serves a refused request from the endpoint fallbackModel, one hop, with the task as session', async () => {
+    const cloud = {
+      ...modelEp('cloud'),
+      spec: { ...modelEp('cloud').spec, fallbackModel: 'local' },
+    };
+    const deps = buildDeps(cloud);
+    deps.modelIndex.upsert({ ...modelEp('local'), metadata: { name: 'l' } });
+    const seen: [string, string | undefined][] = [];
+    const provider = new FakeProvider('mock', (req) => {
+      seen.push([req.config.modelId, req.sessionId]);
+      return req.config.modelId === 'cloud'
+        ? Promise.reject(
+            new BackendError({ backend: 'opencode', status: 429, message: 'allowance spent' }),
+          )
+        : Promise.resolve({
+            response: chatResponse(),
+            inputTokens: 3,
+            outputTokens: 1,
+            latencyMs: 1,
+          });
+    });
+    const ctx = {
+      requestId: 'r-fb',
+      request: { model: 'cloud', messages: [{ role: 'user' as const, content: 'hi' }] },
+      apiKeyPrefix: null,
+      taskUid: 'task-1',
+      agentName: 'fleet-inventor',
+      providerOverride: provider,
+    };
+    expect((await route(deps, ctx)).kind).toBe('dispatched');
+    expect(seen).toEqual([
+      ['cloud', 'task-1'],
+      ['local', 'task-1'],
+    ]);
+
+    // Two endpoints naming each other: the fallback's own fallbackModel is not followed.
+    deps.modelIndex.upsert({
+      ...modelEp('local'),
+      metadata: { name: 'l' },
+      spec: { ...modelEp('local').spec, fallbackModel: 'cloud' },
+    });
+    seen.length = 0;
+    const failing = new FakeProvider('mock', (req) => {
+      seen.push([req.config.modelId, req.sessionId]);
+      return Promise.reject(
+        new BackendError({ backend: 'opencode', status: 429, message: 'busy' }),
+      );
+    });
+    expect((await route(deps, { ...ctx, providerOverride: failing })).kind).toBe(
+      'backend_throttled',
+    );
+    expect(seen.map(([model]) => model)).toEqual(['cloud', 'local']);
+  });
+
   it('on BackendError 503 without Retry-After — falls back to a non-zero default (H13)', async () => {
     const deps = buildDeps(modelEp('m', 8, 8));
     const provider = new FakeProvider('mock', () =>

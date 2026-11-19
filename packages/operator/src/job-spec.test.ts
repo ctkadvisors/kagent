@@ -849,6 +849,36 @@ describe('buildJobSpec', () => {
     expect(byName.get('KAGENT_AGENT_MODEL')).toBe('anthropic/claude-3-7-sonnet-20250219');
   });
 
+  it('a task runConfig.modelClass runs that task on its class, over the Agent model and class, in env and ConfigMap', () => {
+    const agent: Agent = {
+      ...sampleAgent,
+      spec: { ...sampleAgent.spec, model: 'flashnext', modelClass: 'reasoner-default' },
+    };
+    const task = {
+      ...sampleTask,
+      spec: { ...sampleTask.spec, runConfig: { modelClass: 'reasoner-cloud' } },
+    };
+    const classes = {
+      'reasoner-default': { model: 'flashnext' },
+      'reasoner-cloud': { model: 'deepseek-v4.1-flash', contextWindowTokens: 65536 },
+    };
+    const env =
+      buildJobSpec(agent, task, { modelClassMap: classes }).spec?.template?.spec?.containers?.[0]
+        ?.env ?? [];
+    const byName = new Map(env.map((e) => [e.name, e.value]));
+    expect(byName.get('KAGENT_AGENT_MODEL')).toBe('deepseek-v4.1-flash');
+    expect(byName.get('KAGENT_AGENT_MODEL_CONTEXT_WINDOW')).toBe('65536');
+    const cm = buildAgentTaskConfigMap(agent, task, classes);
+    expect(JSON.parse(cm.data?.[CONFIG_AGENT_SPEC_KEY] ?? '{}')).toMatchObject({
+      model: 'deepseek-v4.1-flash',
+    });
+    // Without the override the same Agent keeps its own model.
+    const own =
+      buildJobSpec(agent, sampleTask, { modelClassMap: classes }).spec?.template?.spec
+        ?.containers?.[0]?.env ?? [];
+    expect(new Map(own.map((e) => [e.name, e.value])).get('KAGENT_AGENT_MODEL')).toBe('flashnext');
+  });
+
   it('Phase-2 modelClass: throws when modelClass is set but absent from the map', () => {
     const classedAgent: Agent = {
       ...sampleAgent,

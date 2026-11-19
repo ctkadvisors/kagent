@@ -43,6 +43,7 @@ export interface AgentTaskTemplateSpec {
   readonly payload: unknown;
   readonly timeoutSeconds?: number;
   readonly runConfig?: {
+    readonly modelClass?: string;
     readonly tokenLimit?: number;
     readonly costLimitUsd?: number;
     readonly maxIterations?: number;
