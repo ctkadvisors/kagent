@@ -40,6 +40,9 @@ import {
   type RenderedAgentTask,
 } from './render-task.js';
 
+/** createAgentTask throws this when a schedule has no work to bind right now; the tick is skipped quietly. */
+export class NoWorkThisTick extends Error {}
+
 /** Shape of the `KagentSchedule` CR fields the controller cares about. */
 export interface KagentScheduleResource {
   readonly metadata: {
@@ -208,6 +211,8 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
         await deps.createAgentTask(manifest);
         created += 1;
       } catch (err) {
+        // Nothing to bind this tick: like a closed idle gate, not a failure.
+        if (err instanceof NoWorkThisTick) continue;
         console.error(
           `[kagent-triggers] failed to create AgentTask for schedule ` +
             `${resource.metadata.namespace}/${resource.metadata.name}:`,

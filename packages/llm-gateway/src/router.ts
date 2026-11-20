@@ -192,11 +192,30 @@ const FALLS_BACK: ReadonlySet<RouteResult['kind']> = new Set([
 ]);
 
 export async function route(deps: RouterDeps, ctx: RouteContext): Promise<RouteResult> {
-  const result = await routeOnce(deps, ctx);
-  const fallback = deps.modelIndex.lookup(ctx.request.model)?.endpoint.spec.fallbackModel;
-  if (!fallback || fallback === ctx.request.model || !FALLS_BACK.has(result.kind)) return result;
+  const primary = ctx.request.model;
+  const fallback = deps.modelIndex.lookup(primary)?.endpoint.spec.fallbackModel;
+  if (!fallback || fallback === primary) return routeOnce(deps, ctx);
+  // Next available: a full primary hands the call to a fallback with a free slot instead of queuing it.
+  const [first, second] =
+    saturated(deps, primary) && !saturated(deps, fallback)
+      ? [fallback, primary]
+      : [primary, fallback];
+  const to = (model: string): Promise<RouteResult> =>
+    routeOnce(deps, { ...ctx, request: { ...ctx.request, model } });
+  const result = await to(first);
   // One hop: the fallback's own fallbackModel is not followed, so two endpoints naming each other cannot loop.
-  return routeOnce(deps, { ...ctx, request: { ...ctx.request, model: fallback } });
+  return FALLS_BACK.has(result.kind) ? to(second) : result;
+}
+
+/** Every permit in use or a call already waiting: a new call would queue. */
+function saturated(deps: RouterDeps, model: string): boolean {
+  const spec = deps.modelIndex.lookup(model)?.endpoint.spec;
+  if (!spec) return true;
+  return (
+    queuedRequestCount(deps, spec.model, spec.backendUrl) > 0 ||
+    deps.inFlight.current(spec.model, spec.backendUrl) >=
+      deps.aimd.currentCap(spec.model, spec.backendUrl)
+  );
 }
 
 async function routeOnce(deps: RouterDeps, ctx: RouteContext): Promise<RouteResult> {

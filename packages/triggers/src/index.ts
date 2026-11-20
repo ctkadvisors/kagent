@@ -16,7 +16,7 @@ export type {
   TriggerKind,
 } from './render-task.js';
 
-export { buildScheduleController } from './schedule-controller.js';
+export { NoWorkThisTick, buildScheduleController } from './schedule-controller.js';
 export {
   ABANDON_GRACE_SECONDS,
   assessNamespaceIdle,

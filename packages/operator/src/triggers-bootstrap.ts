@@ -90,6 +90,17 @@ export interface TriggersBootstrapHandle {
  * to call .start(); when KAGENT_TRIGGERS_ENABLED is false, main.ts
  * skips this entirely so no informers are opened.
  */
+interface HeldView {
+  readonly status?: { readonly phase?: string };
+  readonly spec?: {
+    readonly payload?: {
+      readonly capability_work?: {
+        readonly sources?: readonly { kind?: unknown; ref?: unknown }[];
+      };
+    };
+  };
+}
+
 export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBootstrapHandle {
   const { kc, customApi, watchNamespace } = deps;
   const env = process.env;
@@ -98,9 +109,27 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
   const createAgentTask = async (manifest: RenderedAgentTask): Promise<void> => {
     const workUrl = env.FLEET_WORK_REPORT_URL;
     const requestModelClass = env.FLEET_REQUEST_MODEL_CLASS;
+    // Operator requests a live (non-terminal) task already works on, read now rather than from the report.
+    const heldRequests = async (): Promise<ReadonlySet<string>> => {
+      const tasks = (await customApi.listNamespacedCustomObject({
+        group: API_GROUP,
+        version: API_VERSION,
+        namespace: manifest.metadata.namespace,
+        plural: AGENT_TASK_PLURAL,
+      })) as { items?: readonly HeldView[] };
+      return new Set(
+        (tasks.items ?? [])
+          .filter((t) => !['Completed', 'Failed'].includes(t.status?.phase ?? ''))
+          .flatMap((t) => t.spec?.payload?.capability_work?.sources ?? [])
+          .filter((source) => source.kind === 'operator_request' && typeof source.ref === 'string')
+          .map((source) => source.ref as string),
+      );
+    };
     const task = await enrichFleetWork(
       manifest,
-      workUrl ? { url: workUrl, ...(requestModelClass && { requestModelClass }) } : {},
+      workUrl
+        ? { url: workUrl, heldRequests, ...(requestModelClass && { requestModelClass }) }
+        : {},
     );
     await customApi.createNamespacedCustomObject({
       group: API_GROUP,
