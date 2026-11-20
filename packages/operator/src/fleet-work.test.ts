@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { renderAgentTaskFromTemplate } from '@kagent/triggers';
+import { NoWorkThisTick, renderAgentTaskFromTemplate } from '@kagent/triggers';
 import { enrichFleetWork } from './fleet-work.js';
 
 function task(triggerName = 'fleet-nightly-invention') {
@@ -75,6 +75,24 @@ describe('existing idle task real-work binding', () => {
     expect(self.spec.runConfig).toEqual(task().spec.runConfig);
     const unset = await enrichFleetWork(task(), { url: opts.url, fetch: respond(request) });
     expect(unset.spec.runConfig).toEqual(task().spec.runConfig);
+  });
+  it('gives the request slot only open, unheld operator requests', async () => {
+    const request = {
+      ...work(),
+      sources: [{ kind: 'operator_request', ref: 'forum:11008', summary: 'x' }],
+    };
+    const opts = { url: 'http://authority/missions', requestModelClass: 'reasoner-cloud' };
+    const lane = task('fleet-operator-requests');
+    const routed = await enrichFleetWork(lane, { ...opts, fetch: respond(request) });
+    expect(routed.spec.runConfig).toMatchObject({ modelClass: 'reasoner-cloud' });
+    await expect(enrichFleetWork(lane, { ...opts, fetch: respond(work()) })).rejects.toBeInstanceOf(
+      NoWorkThisTick,
+    );
+    const held = () => Promise.resolve(new Set(['forum:11008']));
+    for (const slot of [lane, task()])
+      await expect(
+        enrichFleetWork(slot, { ...opts, heldRequests: held, fetch: respond(request) }),
+      ).rejects.toBeInstanceOf(NoWorkThisTick);
   });
   it('never widens grants or bounds from the report', async () => {
     const value = { ...work(), runConfig: { maxIterations: 99999 }, toolProfileRef: 'admin' };

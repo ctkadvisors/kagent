@@ -497,6 +497,59 @@ describe('route', () => {
     expect(seen.map(([model]) => model)).toEqual(['cloud', 'local']);
   });
 
+  it('sends a call to the fallback when the primary is full, and back when the fallback refuses', async () => {
+    const local = {
+      ...modelEp('local', 1, 1),
+      spec: { ...modelEp('local', 1, 1).spec, fallbackModel: 'cloud' },
+    };
+    const deps = buildDeps(local);
+    deps.modelIndex.upsert({ ...modelEp('cloud'), metadata: { name: 'c' } });
+    deps.aimd.updateBounds('local', 'http://x', { seed: 1, max: 1, minSafe: 1 });
+    const seen: string[] = [];
+    const reply = (req: { config: { modelId: string } }) => {
+      seen.push(req.config.modelId);
+      return Promise.resolve({
+        response: chatResponse(),
+        inputTokens: 3,
+        outputTokens: 1,
+        latencyMs: 1,
+      });
+    };
+    const ctx = {
+      requestId: 'r-full',
+      request: { model: 'local', messages: [{ role: 'user' as const, content: 'hi' }] },
+      apiKeyPrefix: null,
+      taskUid: null,
+      agentName: null,
+      providerOverride: new FakeProvider('mock', reply),
+    };
+    expect((await route(deps, ctx)).kind).toBe('dispatched');
+    deps.inFlight.acquire('local', 'http://x');
+    expect((await route(deps, ctx)).kind).toBe('dispatched');
+    expect(seen).toEqual(['local', 'cloud']);
+
+    seen.length = 0;
+    const refusing = new FakeProvider('mock', (req) => {
+      seen.push(req.config.modelId);
+      return req.config.modelId === 'cloud'
+        ? Promise.reject(new BackendError({ backend: 'opencode', status: 429, message: 'limit' }))
+        : Promise.resolve({
+            response: chatResponse(),
+            inputTokens: 3,
+            outputTokens: 1,
+            latencyMs: 1,
+          });
+    });
+    deps.inFlight.release('local', 'http://x');
+    const freed = route(deps, { ...ctx, providerOverride: refusing });
+    expect((await freed).kind).toBe('dispatched');
+    deps.inFlight.acquire('local', 'http://x');
+    const queued = route(deps, { ...ctx, providerOverride: refusing });
+    deps.inFlight.release('local', 'http://x');
+    expect((await queued).kind).toBe('dispatched');
+    expect(seen).toEqual(['local', 'cloud', 'local']);
+  });
+
   it('on BackendError 503 without Retry-After — falls back to a non-zero default (H13)', async () => {
     const deps = buildDeps(modelEp('m', 8, 8));
     const provider = new FakeProvider('mock', () =>

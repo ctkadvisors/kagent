@@ -4,7 +4,7 @@
  */
 
 /** Bind current real work to the existing fleet idle slot. No extra task or grant. */
-import type { RenderedAgentTask } from '@kagent/triggers';
+import { NoWorkThisTick, type RenderedAgentTask } from '@kagent/triggers';
 
 const CONSUMERS = new Set([
   'fleet-auditor',
@@ -13,6 +13,9 @@ const CONSUMERS = new Set([
   'fleet-remeasurer',
   'fleet-verifier',
 ]);
+/** The inventor's own idle slot, and a second slot that only answers operator requests. */
+const INVENTION = 'fleet-nightly-invention';
+const REQUESTS = 'fleet-operator-requests';
 const MAX_REPORT_BYTES = 2 * 1024 * 1024;
 const MAX_WORK_BYTES = 64 * 1024;
 interface FleetWork extends Record<string, unknown> {
@@ -28,6 +31,8 @@ export interface FleetWorkOptions {
   readonly fetch?: typeof globalThis.fetch;
   /** Model class for work that answers an operator request; the report marks the source, never the class. */
   readonly requestModelClass?: string;
+  /** Request refs (`forum:<id>`) a live task holds now; the report can lag by minutes. */
+  readonly heldRequests?: () => Promise<ReadonlySet<string>>;
 }
 function parseWork(value: unknown): FleetWork {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -68,7 +73,9 @@ export async function enrichFleetWork(
     !options.url ||
     manifest.metadata.namespace !== 'kagent-system' ||
     manifest.metadata.labels['kagent.knuteson.io/trigger-kind'] !== 'schedule' ||
-    manifest.metadata.labels['kagent.knuteson.io/trigger-name'] !== 'fleet-nightly-invention' ||
+    ![INVENTION, REQUESTS].includes(
+      manifest.metadata.labels['kagent.knuteson.io/trigger-name'] ?? '',
+    ) ||
     manifest.spec.targetAgent !== 'fleet-inventor'
   )
     return manifest;
@@ -88,14 +95,21 @@ export async function enrichFleetWork(
     !Array.isArray(manifest.spec.payload)
       ? (manifest.spec.payload as Record<string, unknown>)
       : {};
-  const forOperator =
-    options.requestModelClass !== undefined &&
-    (work.sources as unknown[]).some(
-      (source) =>
-        typeof source === 'object' &&
-        source !== null &&
-        (source as Record<string, unknown>).kind === 'operator_request',
-    );
+  const requests = (work.sources as unknown[]).flatMap((source) =>
+    typeof source === 'object' &&
+    source !== null &&
+    (source as Record<string, unknown>).kind === 'operator_request'
+      ? [String((source as Record<string, unknown>).ref)]
+      : [],
+  );
+  if (manifest.metadata.labels['kagent.knuteson.io/trigger-name'] === REQUESTS && !requests.length)
+    throw new NoWorkThisTick('no open operator request');
+  if (requests.length && options.heldRequests) {
+    const held = await options.heldRequests();
+    if (requests.some((ref) => held.has(ref)))
+      throw new NoWorkThisTick('operator request already held by a live task');
+  }
+  const forOperator = options.requestModelClass !== undefined && requests.length > 0;
   const message = `${work.goal}\n\n${work.instructions}\n\nCURRENT WORK AND ORIGINAL REFERENCES:\n${JSON.stringify(work)}`;
   return {
     ...manifest,
