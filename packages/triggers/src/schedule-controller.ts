@@ -200,6 +200,7 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
         const gate = await idleGateOpen(resource, at);
         if (!gate) continue;
       }
+      let bound = true;
       try {
         const manifest = renderAgentTaskFromTemplate({
           triggerName: resource.metadata.name,
@@ -211,20 +212,23 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
         await deps.createAgentTask(manifest);
         created += 1;
       } catch (err) {
-        // Nothing to bind this tick: like a closed idle gate, not a failure.
-        if (err instanceof NoWorkThisTick) continue;
-        console.error(
-          `[kagent-triggers] failed to create AgentTask for schedule ` +
-            `${resource.metadata.namespace}/${resource.metadata.name}:`,
-          err,
-        );
-        // Skip status patch — keep `lastTickAt` pointing at the last
-        // tick that DID succeed so an alert/oncall sees the gap.
-        continue;
+        // Nothing to bind this tick: not a failure. The schedule still looked, so its next tick is
+        // recorded; without it a request-only schedule read as never armed (2026-11-20, forum 11528).
+        if (err instanceof NoWorkThisTick) bound = false;
+        else {
+          console.error(
+            `[kagent-triggers] failed to create AgentTask for schedule ` +
+              `${resource.metadata.namespace}/${resource.metadata.name}:`,
+            err,
+          );
+          // Skip status patch — keep `lastTickAt` pointing at the last
+          // tick that DID succeed so an alert/oncall sees the gap.
+          continue;
+        }
       }
       const next = nextTickAfter(parsed, at);
       const patch: ScheduleStatusPatch = {
-        lastTickAt: at.toISOString(),
+        ...(bound && { lastTickAt: at.toISOString() }),
         ...(next !== undefined && { nextTickAt: next.toISOString() }),
       };
       try {

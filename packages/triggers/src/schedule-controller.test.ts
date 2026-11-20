@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RenderedAgentTask } from './render-task.js';
 import {
   buildScheduleController,
+  NoWorkThisTick,
   type KagentScheduleResource,
   type ScheduleStatusPatch,
 } from './schedule-controller.js';
@@ -56,6 +57,22 @@ describe('schedule controller', () => {
     expect(patches[0]?.patch.lastTickAt).toBe('2026-05-03T06:00:00.000Z');
     // Next match for "0 6 * * *" after 06:00 is +1d 06:00.
     expect(patches[0]?.patch.nextTickAt).toBe('2026-05-04T06:00:00.000Z');
+  });
+
+  it('records the next tick, not a run, when there is no work to bind', async () => {
+    const patches: ScheduleStatusPatch[] = [];
+    const controller = buildScheduleController({
+      createAgentTask: () => {
+        throw new NoWorkThisTick('no open request');
+      },
+      patchScheduleStatus: (_ns, _name, patch) => {
+        patches.push(patch);
+      },
+    });
+    controller.upsert(mkSchedule('requests', '* * * * *'));
+
+    expect(await controller.tickOnce(utc(2026, 11, 20, 15, 0))).toBe(0);
+    expect(patches).toEqual([{ nextTickAt: '2026-11-20T15:01:00.000Z' }]);
   });
 
   it('skips schedules with suspend=true', async () => {
