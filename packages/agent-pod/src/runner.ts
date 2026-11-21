@@ -54,6 +54,7 @@ import type { AgentSpecEnv, PodConfig } from './env.js';
 import { agentHasArtifactInputOrOutput } from './env.js';
 import { loadIdentityHandle, type IdentityHandle } from './svid-client.js';
 import { requestedGatewayToolNames, ToolGatewayProvider } from './tool-gateway-provider.js';
+import { createDeadlineNotice } from './deadline-notice.js';
 
 /**
  * Substrate-defined artifact handle. Structurally identical to the
@@ -307,7 +308,12 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // built-in registry. Unknown names throw here at boot — fail fast so
   // the operator sees a `Failed` AgentTask with a clear runner error
   // rather than a silently-degraded loop.
-  const toolProviders = resolveToolProviders(config, deps, { artifactRegistry });
+  // The model learns the remaining wall-clock time from a tool reply (deadline-notice.ts);
+  // armed below, once the effective timeout is known.
+  const deadlineNotice = createDeadlineNotice();
+  const toolProviders = deadlineNotice.wrap(
+    resolveToolProviders(config, deps, { artifactRegistry }),
+  );
   if (toolProviders.length > 0) {
     console.log(
       `[kagent-agent-pod] tools advertised ${await describeToolProviderNames(toolProviders)}`,
@@ -363,6 +369,7 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   const timeoutStartedAtMs =
     config.deadlineAtMs === undefined ? now : Math.min(now, config.deadlineAtMs - timeoutMs);
   const remainingMs = Math.max(0, timeoutStartedAtMs + timeoutMs - now);
+  deadlineNotice.arm(timeoutStartedAtMs, timeoutMs);
   const timeoutSignal =
     remainingMs === 0
       ? AbortSignal.abort(new Error('task execution deadline elapsed during queue/setup'))
