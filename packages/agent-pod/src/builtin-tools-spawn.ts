@@ -204,6 +204,9 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
           type: 'string',
           minLength: 1,
           maxLength: SPAWN_CHILD_MAX_MESSAGE_BYTES,
+          description:
+            "The whole message the child agent reads. It is the child's only input: " +
+            'put every fact, text and instruction it needs here.',
         },
         runConfig: {
           type: 'object',
@@ -215,7 +218,12 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
         payload: {
           type: 'object',
           additionalProperties: true,
-          description: 'Opaque structured data forwarded to the child as AgentTask.spec.payload.',
+          // 2026-11-21: the first agent a fleet agent made got its quote and transcript here and
+          // answered INSUFFICIENT_INPUT; pickUserMessage (runner.ts) shows a child only the message.
+          description:
+            'Structured data recorded on the child AgentTask (spec.payload) for the operator and ' +
+            'reviewers. The child agent does NOT see it; repeat anything it must read in ' +
+            'originalUserMessage.',
         },
       },
       additionalProperties: false,
