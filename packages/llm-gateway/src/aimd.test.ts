@@ -80,22 +80,14 @@ describe('AimdController', () => {
     expect(a.currentCap('m', 'http://b')).toBe(3);
   });
 
-  it('a 2x latency-spike treated as an error (multiplicative decrease)', () => {
-    const a = new AimdController({
-      seed: 8,
-      max: 16,
-      minSafe: 1,
-      cleanWindowMs: 60_000,
-      latencySpikeMultiplier: 2,
-    });
-    // Build a baseline p50 around 100ms
+  it('a slow success never lowers the cap (a long answer is not congestion)', () => {
+    const a = new AimdController({ seed: 8, max: 16, minSafe: 1, cleanWindowMs: 60_000 });
     for (let i = 0; i < 10; i++) {
       a.onSuccess('m', 'http://b', 100);
     }
+    a.onSuccess('m', 'http://b', 40_000); // 400x the p50: a long generation
     expect(a.currentCap('m', 'http://b')).toBe(8);
-    // 2x the p50
-    a.onSuccess('m', 'http://b', 250);
-    expect(a.currentCap('m', 'http://b')).toBe(4);
+    expect(a.snapshot()[0]?.recentP50Ms).toBe(100);
   });
 
   it('isolates per (model, endpoint) state', () => {
