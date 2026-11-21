@@ -44,8 +44,9 @@ safety per spec §3.2.
 ## Design highlights
 
 - **AIMD self-tuning** (`src/aimd.ts`). Cap rises by 1 per
-  60-second clean window (no errors, no latency spikes); halves on
-  a 429/error or a 2x rolling-p50 latency spike. Bounds come from
+  60-second clean window (no errors); halves on a 429/error. A slow
+  response is not a decrease signal: latency follows output length.
+  Bounds come from
   `ModelEndpoint.spec.inFlight.{seed,max}` and `spec.minSafe`.
 - **In-memory in-flight counter** (`src/inflight-counter.ts`).
   Single-replica v1 (HA via Redis or leader-election is deferred).

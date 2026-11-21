@@ -12,10 +12,14 @@
  *     if (consecutive_clean_window_seconds >= 60) and (current_cap < endpoint.max):
  *       current_cap += 1
  *
- *   on 429 / error / latency-spike:
+ *   on 429 / error:
  *     current_cap = max(endpoint.minSafe, floor(current_cap / 2))
  *
- *   latency-spike := latency_ms > 2 * rolling_p50(last 5 min)
+ * A slow response is not a decrease signal. Whole-response latency follows
+ * output length, so on an LLM backend "over 2x the rolling p50" was nearly
+ * every long answer: on 2026-11-21 it held flashnext at 2-4 of 6 with
+ * requests queued here while the backend had none waiting. The rolling p50
+ * is still kept for /admin/capacity.
  *
  * Bounds (`seed`, `max`, `minSafe`) come from the ModelEndpoint CRD;
  * the gateway uses the current cap for request admission. Capacity is
@@ -35,8 +39,6 @@ export interface AimdBounds {
 export interface AimdOptions extends AimdBounds {
   /** Min ms of clean traffic before the next additive bump. Default 60s. */
   readonly cleanWindowMs?: number;
-  /** Latency spike multiplier vs rolling p50. Default 2x. */
-  readonly latencySpikeMultiplier?: number;
   /** Rolling-window samples kept per key for p50. Default 50. */
   readonly latencyWindowSize?: number;
   /** Test-injectable clock. Production uses `Date.now`. */
@@ -72,13 +74,11 @@ interface PerKeyState {
 }
 
 const DEFAULT_CLEAN_WINDOW_MS = 60_000;
-const DEFAULT_LATENCY_SPIKE_MULTIPLIER = 2;
 const DEFAULT_LATENCY_WINDOW_SIZE = 50;
 
 export class AimdController {
   private readonly defaults: AimdBounds;
   private readonly cleanWindowMs: number;
-  private readonly latencySpikeMultiplier: number;
   private readonly latencyWindowSize: number;
   private readonly clock: () => number;
   private readonly map = new Map<string, PerKeyState>();
@@ -95,7 +95,6 @@ export class AimdController {
   constructor(opts: AimdOptions) {
     this.defaults = { seed: opts.seed, max: opts.max, minSafe: opts.minSafe };
     this.cleanWindowMs = opts.cleanWindowMs ?? DEFAULT_CLEAN_WINDOW_MS;
-    this.latencySpikeMultiplier = opts.latencySpikeMultiplier ?? DEFAULT_LATENCY_SPIKE_MULTIPLIER;
     this.latencyWindowSize = opts.latencyWindowSize ?? DEFAULT_LATENCY_WINDOW_SIZE;
     this.clock = opts.clock ?? ((): number => Date.now());
   }
@@ -126,30 +125,15 @@ export class AimdController {
   }
 
   /**
-   * Record a successful response. If both:
-   *   - cleanWindowMs has elapsed since the last error or last bump, AND
-   *   - latencyMs is not a spike vs the rolling p50,
-   * then additively increase the cap by 1 (clamped at max).
+   * Record a successful response. Once cleanWindowMs has elapsed since the
+   * last error or last bump, additively increase the cap by 1 (clamped at
+   * max). latencyMs only feeds the rolling p50 reported by snapshot().
    */
   onSuccess(model: string, endpoint: string, latencyMs: number): void {
     const state = this.ensure(model, endpoint);
     const now = this.clock();
 
-    // Spike check uses the EXISTING window before this sample is added —
-    // a single spiky sample shouldn't get diluted by adding itself first.
-    const p50Before = computeP50(state.latencies);
     pushBounded(state.latencies, latencyMs, this.latencyWindowSize);
-
-    if (
-      p50Before !== null &&
-      latencyMs > p50Before * this.latencySpikeMultiplier &&
-      state.cap > state.bounds.minSafe
-    ) {
-      state.cap = Math.max(state.bounds.minSafe, Math.floor(state.cap / 2));
-      state.windowStartedAt = now;
-      this.notify(model, endpoint);
-      return;
-    }
 
     if (now - state.windowStartedAt >= this.cleanWindowMs && state.cap < state.bounds.max) {
       state.cap += 1;
