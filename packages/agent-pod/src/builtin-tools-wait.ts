@@ -73,6 +73,37 @@ export interface WaitToolDeps {
   readonly now?: () => number;
 }
 
+/**
+ * A child that stopped for want of time may be continued by the operator
+ * as a sibling task (kagent docs/TASK-RESUME.md). These are the failures
+ * it continues; must match RESUMABLE in the operator's continuation.ts.
+ */
+const RESUMABLE_CHILD_ERRORS = [
+  /^task time limit reached/,
+  /reaching maxIterations/,
+  /^cancelled: SIGTERM received/,
+  /^\[pod\/(PodFailed|DeadlineExceeded)\]/,
+];
+/** How long after such a failure the operator is given to create the continuation. */
+export const CONTINUATION_GRACE_MS = 20_000;
+
+function mayBeContinued(c: ChildSnapshot, nowMs: number): boolean {
+  return (
+    c.phase === 'Failed' &&
+    c.error !== undefined &&
+    RESUMABLE_CHILD_ERRORS.some((pattern) => pattern.test(c.error ?? '')) &&
+    (c.completedAtMs === undefined || nowMs - c.completedAtMs < CONTINUATION_GRACE_MS)
+  );
+}
+
+/** The sibling that continues `uid`, if the operator has created one. */
+function continuationOf(
+  children: readonly ChildSnapshot[],
+  uid: string,
+): ChildSnapshot | undefined {
+  return children.find((c) => c.continuesUid === uid);
+}
+
 interface WaitChildArgs {
   readonly uid: string;
   readonly timeoutSeconds?: number;
@@ -130,11 +161,14 @@ export function defineWaitForChildTask(deps: WaitToolDeps): InProcessToolDefinit
       const deadline = now() + timeoutSec * 1000;
 
       let last: ChildSnapshot | undefined;
+      // The child being waited on; moves to its continuation when the operator resumes it.
+      let uid = args.uid;
+      const continuedFrom: string[] = [];
       while (now() < deadline) {
         if (ctx.abortSignal.aborted) {
           throw new Error('wait_for_child_task: aborted');
         }
-        const snap = await deps.k8s.getTaskByUid(deps.parent.namespace, args.uid);
+        const snap = await deps.k8s.getTaskByUid(deps.parent.namespace, uid);
         if (snap === undefined) {
           // Child not visible yet — could be informer race after spawn.
           // Keep polling until deadline.
@@ -142,15 +176,32 @@ export function defineWaitForChildTask(deps: WaitToolDeps): InProcessToolDefinit
           continue;
         }
         last = snap;
+        if (snap.phase === 'Failed') {
+          // A child that ran out of time may be resumed as a sibling task: wait on that
+          // one instead of reporting a failure the fleet is already recovering from.
+          const next = continuationOf(await deps.k8s.listAllChildren(deps.parent), snap.uid);
+          if (next !== undefined) {
+            continuedFrom.push(snap.name);
+            uid = next.uid;
+            continue;
+          }
+          if (mayBeContinued(snap, now())) {
+            await sleep(Math.min(pollSec * 1000, 5_000));
+            continue;
+          }
+        }
         if (snap.phase === 'Completed' || snap.phase === 'Failed') {
           return jsonContent({
             phase: snap.phase,
             ...(snap.result !== undefined && { result: snap.result }),
             ...(snap.error !== undefined && { error: snap.error }),
+            ...(snap.artifacts !== undefined && { artifacts: snap.artifacts }),
             timedOut: false,
             uid: snap.uid,
             name: snap.name,
             namespace: snap.namespace,
+            // The task you spawned stopped short and these are the tasks that ran before this one.
+            ...(continuedFrom.length > 0 && { continuedFrom }),
           });
         }
         await sleep(pollSec * 1000);
@@ -227,8 +278,13 @@ export function defineWaitForChildrenAll(deps: WaitToolDeps): InProcessToolDefin
             timedOut: false,
           });
         }
+        // A child the operator resumed is represented by its continuation, and one that just
+        // ran out of time is still in flight until the operator has had time to resume it.
+        const superseded = new Set(last.flatMap((c) => (c.continuesUid ? [c.continuesUid] : [])));
+        const pendingResume = last.some((c) => !superseded.has(c.uid) && mayBeContinued(c, now()));
+        last = last.filter((c) => !superseded.has(c.uid));
         const summary = summarize(last);
-        if (summary.inFlight === 0) {
+        if (summary.inFlight === 0 && !pendingResume) {
           return jsonContent({
             aggregatePhase: summary.failureCount > 0 ? 'AnyFailed' : 'AllComplete',
             successCount: summary.successCount,

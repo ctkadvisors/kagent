@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONTINUATION_GRACE_MS,
   buildWaitToolProvider,
   DEFAULT_WAIT_ALL_POLL_SECONDS,
   DEFAULT_WAIT_CHILD_POLL_SECONDS,
@@ -420,5 +421,159 @@ describe('wait_for_children_all', () => {
     // First poll returns terminal; clock should NOT have advanced past
     // one default poll interval.
     expect(clock.now()).toBeLessThanOrEqual(DEFAULT_WAIT_ALL_POLL_SECONDS * 1000);
+  });
+});
+
+/* =====================================================================
+ * Children the operator resumes (kagent docs/TASK-RESUME.md)
+ * ===================================================================== */
+
+describe('a child that ran out of time and was continued', () => {
+  const TIME_LIMIT = 'task time limit reached (timeoutSeconds 900)';
+  /** A cluster view the test edits between polls: tasks by uid, all of them children of PARENT. */
+  function cluster(initial: readonly ChildSnapshot[]) {
+    const tasks = new Map(initial.map((t) => [t.uid, t]));
+    const k8s = {
+      ...makeFakeK8s({}),
+      getTaskByUid: (_ns: string, uid: string) => Promise.resolve(tasks.get(uid)),
+      listAllChildren: () => Promise.resolve([...tasks.values()]),
+    } as K8sTaskCreator;
+    return { k8s, tasks };
+  }
+  const child = (over: Partial<ChildSnapshot>): ChildSnapshot => ({
+    name: 'verify',
+    namespace: PARENT.namespace,
+    uid: 'uid-v',
+    phase: 'Failed',
+    ...over,
+  });
+
+  it('wait_for_child_task follows the child to its continuation and returns that result', async () => {
+    const { k8s, tasks } = cluster([child({ error: TIME_LIMIT, completedAtMs: 0 })]);
+    const clock = makeClock();
+    let polls = 0;
+    const sleep = (ms: number) => {
+      polls += 1;
+      // The operator creates the continuation a moment after the failure; it finishes later.
+      if (polls === 1) {
+        tasks.set(
+          'uid-v2',
+          child({
+            name: 'verify-cont1',
+            uid: 'uid-v2',
+            phase: 'Dispatched',
+            continuesUid: 'uid-v',
+          }),
+        );
+      }
+      if (polls === 3) {
+        tasks.set(
+          'uid-v2',
+          child({
+            name: 'verify-cont1',
+            uid: 'uid-v2',
+            phase: 'Completed',
+            continuesUid: 'uid-v',
+            result: { content: 'VERDICT pass' },
+          }),
+        );
+      }
+      return clock.sleep(ms);
+    };
+    const provider = buildWaitToolProvider({ parent: PARENT, k8s, now: clock.now, sleep });
+    const parsed = JSON.parse(
+      resultText(
+        await callWaitChild(provider, {
+          uid: 'uid-v',
+          timeoutSeconds: 600,
+          pollIntervalSeconds: 5,
+        }),
+      ),
+    ) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      phase: 'Completed',
+      result: { content: 'VERDICT pass' },
+      name: 'verify-cont1',
+      uid: 'uid-v2',
+      continuedFrom: ['verify'],
+      timedOut: false,
+    });
+  });
+
+  it('a time-limit failure nobody continues is reported once the grace has passed', async () => {
+    const { k8s } = cluster([child({ error: TIME_LIMIT, completedAtMs: 0 })]);
+    const clock = makeClock();
+    const provider = buildWaitToolProvider({ parent: PARENT, k8s, ...clock });
+    const parsed = JSON.parse(
+      resultText(
+        await callWaitChild(provider, {
+          uid: 'uid-v',
+          timeoutSeconds: 600,
+          pollIntervalSeconds: 5,
+        }),
+      ),
+    ) as { phase: string; error: string; continuedFrom?: unknown };
+    expect(parsed.phase).toBe('Failed');
+    expect(parsed.error).toBe(TIME_LIMIT);
+    expect(parsed.continuedFrom).toBeUndefined();
+    expect(clock.now()).toBeGreaterThanOrEqual(CONTINUATION_GRACE_MS);
+    expect(clock.now()).toBeLessThan(CONTINUATION_GRACE_MS + 10_000);
+  });
+
+  it('a failure more time would not fix is reported at once', async () => {
+    const { k8s } = cluster([child({ error: 'LLM backend returned HTTP 502', completedAtMs: 0 })]);
+    const clock = makeClock();
+    const provider = buildWaitToolProvider({ parent: PARENT, k8s, ...clock });
+    await callWaitChild(provider, { uid: 'uid-v', timeoutSeconds: 600, pollIntervalSeconds: 5 });
+    expect(clock.now()).toBe(0);
+  });
+
+  it('wait_for_children_all counts the continuation, not the run it replaced', async () => {
+    const { k8s } = cluster([
+      child({ error: TIME_LIMIT, completedAtMs: 0 }),
+      child({
+        name: 'verify-cont1',
+        uid: 'uid-v2',
+        phase: 'Completed',
+        continuesUid: 'uid-v',
+        result: { content: 'VERDICT pass' },
+      }),
+      child({ name: 'other', uid: 'uid-o', phase: 'Completed' }),
+    ]);
+    const clock = makeClock();
+    const provider = buildWaitToolProvider({ parent: PARENT, k8s, ...clock });
+    const parsed = JSON.parse(resultText(await callWaitAll(provider, { timeoutSeconds: 60 }))) as {
+      aggregatePhase: string;
+      successCount: number;
+      failureCount: number;
+      children: { name: string }[];
+    };
+    expect(parsed).toMatchObject({
+      aggregatePhase: 'AllComplete',
+      successCount: 2,
+      failureCount: 0,
+    });
+    expect(parsed.children.map((c) => c.name).sort()).toEqual(['other', 'verify-cont1']);
+  });
+
+  it('wait_for_children_all keeps waiting while a just-failed child may still be resumed', async () => {
+    const { k8s, tasks } = cluster([child({ error: TIME_LIMIT, completedAtMs: 0 })]);
+    const clock = makeClock();
+    let polls = 0;
+    const sleep = (ms: number) => {
+      polls += 1;
+      if (polls === 1) {
+        tasks.set(
+          'uid-v2',
+          child({ name: 'verify-cont1', uid: 'uid-v2', phase: 'Completed', continuesUid: 'uid-v' }),
+        );
+      }
+      return clock.sleep(ms);
+    };
+    const provider = buildWaitToolProvider({ parent: PARENT, k8s, now: clock.now, sleep });
+    const parsed = JSON.parse(
+      resultText(await callWaitAll(provider, { timeoutSeconds: 60, pollIntervalSeconds: 5 })),
+    ) as { aggregatePhase: string; failureCount: number };
+    expect(parsed).toMatchObject({ aggregatePhase: 'AllComplete', failureCount: 0 });
   });
 });

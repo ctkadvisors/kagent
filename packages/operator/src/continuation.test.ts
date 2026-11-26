@@ -125,7 +125,6 @@ describe('planContinuation', () => {
     ).toBe('failure-not-resumable');
     expect(skip(failed({}), agent())).toBe('agent-not-opted-in');
     expect(skip(failed({}), agent('0'))).toBe('agent-not-opted-in');
-    expect(skip(failed({ parentTask: 'kagent-system/parent' }))).toBe('child-task');
     expect(skip(failed({ completedAt: '2026-11-26T17:00:00Z' }))).toBe('finished-too-long-ago');
     const done = failed({});
     (done.status as { phase: string }).phase = 'Completed';
@@ -167,6 +166,35 @@ describe('planContinuation', () => {
     expect('kagent.knuteson.io/continues-checksum' in plan.continuation.metadata.annotations).toBe(
       false,
     );
+  });
+});
+
+describe('a child task', () => {
+  it('is continued as a sibling under the same parent', () => {
+    const child = failed({ parentTask: 'uid-parent', name: 'inv-1-c-abc123' });
+    (child.metadata as { ownerReferences?: unknown }).ownerReferences = [
+      {
+        apiVersion: 'kagent.knuteson.io/v1alpha1',
+        kind: 'AgentTask',
+        name: 'inv-1',
+        uid: 'uid-parent',
+      },
+    ];
+    const plan = planContinuation(child, agent('1'), now);
+    if (!('continuation' in plan)) throw new Error(plan.skip);
+    expect(plan.continuation.metadata.name).toBe('inv-1-c-abc123-cont1');
+    expect(plan.continuation.spec.parentTask).toBe('uid-parent');
+    expect(plan.continuation.metadata.ownerReferences).toEqual([
+      {
+        apiVersion: 'kagent.knuteson.io/v1alpha1',
+        kind: 'AgentTask',
+        name: 'inv-1',
+        uid: 'uid-parent',
+      },
+    ]);
+    // A root task has no owner to carry.
+    const root = planContinuation(failed({}), agent('1'), now);
+    expect('continuation' in root && 'ownerReferences' in root.continuation.metadata).toBe(false);
   });
 });
 

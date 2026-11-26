@@ -19,7 +19,7 @@ A task that stops before it finishes is followed by a new task that continues it
 ## Limits
 
 - Opt-in per Agent, at most 5 continuations whatever the annotation says.
-- Root tasks only. A child's parent has already read the child's failure.
+- A child task is continued as a sibling under the same parent. The parent's `wait_for_child_task` follows the child to its continuation and returns that result with `continuedFrom`; `wait_for_children_all` counts the continuation instead of the run it replaced. After a time-limit failure the wait gives the operator 20 seconds to create the continuation before reporting the failure. The parent's `status.aggregatePhase` still counts the first run as failed.
 - Not continued: a model backend error, a context-window refusal, a policy denial.
 - A task that finished more than an hour ago is never continued.
 
