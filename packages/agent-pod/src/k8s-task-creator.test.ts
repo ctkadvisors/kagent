@@ -107,6 +107,27 @@ describe('K8sTaskCreator.createChildTask (manifest shape)', () => {
     expect(ref.blockOwnerDeletion).toBe(true);
   });
 
+  it('labels the child with the template its target Agent was instantiated from, when given', async () => {
+    const { api, creates } = fakeApi();
+    const creator = buildK8sTaskCreator(api as unknown as CustomObjectsApi);
+    await creator.createChildTask(PARENT_ROOT, {
+      name: 'child-roster',
+      targetAgent: 'agent-quote-clear-yz6diu6q',
+      targetTemplate: 'agent-quote',
+      originalUserMessage: 'brief',
+    });
+    await creator.createChildTask(PARENT_ROOT, {
+      name: 'child-named',
+      targetAgent: 'summarizer',
+      originalUserMessage: 'brief',
+    });
+    const labels = (i: number) =>
+      (creates[i]!.body.metadata as { labels: Record<string, string> }).labels;
+    // The instance name reads like template "agent-quote-clear"; the label says which it was.
+    expect(labels(0)['kagent.knuteson.io/target-from-template']).toBe('agent-quote');
+    expect('kagent.knuteson.io/target-from-template' in labels(1)).toBe(false);
+  });
+
   // v0.1.9 — task-depth threading. Operator stamps `KAGENT_TASK_DEPTH`
   // on each spawned Job from the AgentTask label
   // `kagent.knuteson.io/task-depth`. The agent-pod's K8sTaskCreator is

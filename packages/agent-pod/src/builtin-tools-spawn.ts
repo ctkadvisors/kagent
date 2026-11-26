@@ -259,6 +259,10 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
       // Refusal taxonomy: `policy_denied:capability_violation` —
       // mirrors the operator's admission gate so per-trace
       // observability rolls up across in-pod + admission failures.
+      // One read of the target Agent per spawn, shared by the grant checks and the template label.
+      let targetRead: Promise<Awaited<ReturnType<K8sTaskCreator['getAgentByName']>>> | undefined;
+      const targetAgentCr = (): NonNullable<typeof targetRead> =>
+        (targetRead ??= deps.k8s.getAgentByName(deps.parent.namespace, args.agentName));
       const parentCap = deps.parentCapability;
       if (parentCap !== undefined) {
         const spawnPatterns = parentCap.claims.spawn ?? [];
@@ -266,7 +270,7 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
           // Try the template:* prefix encoding from `cap-issuer`'s
           // legacy fallback — admission may have stamped templated
           // names with that prefix.
-          const target = await deps.k8s.getAgentByName(deps.parent.namespace, args.agentName);
+          const target = await targetAgentCr();
           const fromTemplate =
             target !== undefined ? target.labels[FROM_TEMPLATE_LABEL] : undefined;
           const templatePattern =
@@ -315,7 +319,7 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
       if (enforceLegacyLists && !allow.has(args.agentName)) {
         let admittedByTemplate = false;
         if (allowTemplates.size > 0) {
-          const target = await deps.k8s.getAgentByName(deps.parent.namespace, args.agentName);
+          const target = await targetAgentCr();
           if (target === undefined) {
             const known = describeAllow(allow, allowTemplates);
             throw new Error(
@@ -393,9 +397,23 @@ export function defineSpawnChildTask(deps: SpawnToolDeps): InProcessToolDefiniti
       }
 
       const childName = generate(deps.parent.name);
+      // Record which template the target was made from while its Agent still exists. Only
+      // when the grant checks above already read the Agent (a child admitted by template):
+      // a child named in allowedChildAgents keeps its cheap path and is no template's instance.
+      let targetTemplate: string | undefined;
+      try {
+        const label =
+          targetRead !== undefined ? (await targetRead)?.labels[FROM_TEMPLATE_LABEL] : undefined;
+        if (typeof label === 'string' && /^[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?$/.test(label)) {
+          targetTemplate = label;
+        }
+      } catch {
+        targetTemplate = undefined;
+      }
       const created = await deps.k8s.createChildTask(deps.parent, {
         name: childName,
         targetAgent: args.agentName,
+        ...(targetTemplate !== undefined && { targetTemplate }),
         originalUserMessage: args.originalUserMessage,
         ...(runConfig !== undefined && { runConfig }),
         ...(args.payload !== undefined && { payload: args.payload }),

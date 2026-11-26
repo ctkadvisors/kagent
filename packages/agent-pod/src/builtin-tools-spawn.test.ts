@@ -539,6 +539,8 @@ describe('spawn_child_task — allowedChildTemplates (v0.1.3)', () => {
     expect(k8s.getAgentCalls).toEqual([
       { namespace: PARENT.namespace, name: 'summarizer-rust-7f3a2b9c' },
     ]);
+    // The child task records which template did the work: the Agent is reaped, the task stays.
+    expect(k8s.creates[0]?.targetTemplate).toBe('summarizer');
   });
 
   it('admits a child whose from-template label matches a pattern in allowedChildTemplates', async () => {
