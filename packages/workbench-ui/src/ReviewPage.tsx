@@ -21,6 +21,13 @@
  *   - role="dialog" aria-modal="true" aria-labelledby={titleId}
  *   - NO formal focus-trap (matches NewTaskModal precedent)
  *
+ * Two views of one queue. "To decide" is every row something decides: the
+ * fleet authority accepts or rejects candidate rows through this same API
+ * against a signed verifier verdict (new_localai authority/catalog.py), and
+ * a human may. "Detector flags" are the loop's own suspicious-run tags: no
+ * one decides them, and task retention removes them with their task. The
+ * nav badge counts the first view only (AppShell.tsx).
+ *
  * §11 bounds-test slice: 5s polling via useReviewQueue; AbortController
  * lifecycle; no new substrate primitives.
  */
@@ -91,8 +98,16 @@ function formatStaleness(seconds: number): string {
   return h > 0 ? `${d.toString()}d ${h.toString()}h` : `${d.toString()}d`;
 }
 
+/** A detector flag is a signal about a run, not an item waiting on a decision. */
+export function isDetectorFlag(row: Pick<ReviewQueueRow, 'reason'>): boolean {
+  return row.reason === 'suspicious-detector';
+}
+
 export function ReviewPage({ onBack }: ReviewPageProps): React.JSX.Element {
-  const { rows, loading, error, refresh } = useReviewQueue();
+  const { rows: allRows, loading, error, refresh } = useReviewQueue();
+  const [showFlags, setShowFlags] = useState<boolean>(false);
+  const flagCount = allRows.filter(isDetectorFlag).length;
+  const rows = allRows.filter((row) => isDetectorFlag(row) === showFlags);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -160,14 +175,41 @@ export function ReviewPage({ onBack }: ReviewPageProps): React.JSX.Element {
           </button>
           Review Queue
         </h1>
+        <div role="tablist" aria-label="Queue view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!showFlags}
+            className={styles.backButton}
+            onClick={() => setShowFlags(false)}
+          >
+            To decide ({(allRows.length - flagCount).toString()})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={showFlags}
+            className={styles.backButton}
+            onClick={() => setShowFlags(true)}
+          >
+            Detector flags ({flagCount.toString()})
+          </button>
+        </div>
       </div>
+      <p className={styles.loading} style={{ textAlign: 'left', padding: 0 }}>
+        {showFlags
+          ? 'Runs the loop flagged as suspicious. Nobody decides these; each one leaves with its task when task retention removes it.'
+          : 'Candidates are accepted or rejected by the fleet authority against a verifier verdict. The Fleet tab shows its queue.'}
+      </p>
 
       {error !== null ? <div className={styles.error}>{error}</div> : null}
 
       {loading ? (
         <div className={styles.loading}>Loading review queue…</div>
       ) : rows.length === 0 && error === null ? (
-        <div className={styles.empty}>No items pending review.</div>
+        <div className={styles.empty}>
+          {showFlags ? 'No detector flags.' : 'No items pending review.'}
+        </div>
       ) : (
         <table className={styles.table}>
           <thead>
@@ -221,9 +263,7 @@ export function ReviewPage({ onBack }: ReviewPageProps): React.JSX.Element {
                   <td data-source-field={useSourceField('targetAgent')}>
                     {row.targetAgent ?? '—'}
                   </td>
-                  <td data-source-field={useSourceField('reasonDetail')}>
-                    {row.reasonDetail}
-                  </td>
+                  <td data-source-field={useSourceField('reasonDetail')}>{row.reasonDetail}</td>
                   <td data-source-field={useSourceField('stalenessSeconds')}>
                     {formatStaleness(row.stalenessSeconds)}
                   </td>
@@ -261,12 +301,7 @@ export function ReviewPage({ onBack }: ReviewPageProps): React.JSX.Element {
             if (e.target === e.currentTarget) closeConfirm();
           }}
         >
-          <div
-            className={styles.dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-          >
+          <div className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby={titleId}>
             <h2 id={titleId} className={styles.dialogTitle}>
               {confirm.action === 'accept' ? 'Accept this task?' : 'Reject this task?'}
             </h2>
@@ -275,9 +310,7 @@ export function ReviewPage({ onBack }: ReviewPageProps): React.JSX.Element {
                 ? `Accept task ${confirm.row.taskRef.namespace}/${confirm.row.taskRef.name} and promote to agent template if applicable.`
                 : `Reject task ${confirm.row.taskRef.namespace}/${confirm.row.taskRef.name} and record the decision.`}
             </p>
-            {dialogError !== null ? (
-              <div className={styles.dialogError}>{dialogError}</div>
-            ) : null}
+            {dialogError !== null ? <div className={styles.dialogError}>{dialogError}</div> : null}
             <div className={styles.dialogActions}>
               <button
                 type="button"

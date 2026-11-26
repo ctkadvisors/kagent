@@ -121,7 +121,10 @@ function Icon({ name }: { name: IconKey }): React.JSX.Element {
     ),
     sessions: (
       <>
-        <path {...p} d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v7A3.5 3.5 0 0 1 16.5 16H10l-5 4v-4.5A3.5 3.5 0 0 1 4 12.5v-7z" />
+        <path
+          {...p}
+          d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v7A3.5 3.5 0 0 1 16.5 16H10l-5 4v-4.5A3.5 3.5 0 0 1 4 12.5v-7z"
+        />
         <path {...p} d="M8 7h8M8 11h5" />
       </>
     ),
@@ -228,7 +231,8 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
         });
       fetchReviewQueue()
         .then((rows) => {
-          if (alive) setReviewCount(rows.length);
+          // Items waiting on a decision; detector flags have their own tab on the page.
+          if (alive) setReviewCount(rows.filter((r) => r.reason !== 'suspicious-detector').length);
         })
         .catch(() => {
           /* best-effort chrome */
@@ -274,7 +278,8 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
             <div className={styles.groupLabel}>{group.label}</div>
             {group.items.map((item) => {
               const itemHash = normalizeHash(item.hash);
-              const active = hash === itemHash || (itemHash !== '#/' && hash.startsWith(`${itemHash}/`));
+              const active =
+                hash === itemHash || (itemHash !== '#/' && hash.startsWith(`${itemHash}/`));
               const showBadge = item.badge === 'review' && reviewCount !== null && reviewCount > 0;
               return (
                 <a
@@ -330,7 +335,8 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
       <nav className={styles.mobileNav} aria-label="Primary">
         {navItems.map((item) => {
           const itemHash = normalizeHash(item.hash);
-          const active = hash === itemHash || (itemHash !== '#/' && hash.startsWith(`${itemHash}/`));
+          const active =
+            hash === itemHash || (itemHash !== '#/' && hash.startsWith(`${itemHash}/`));
           const showBadge = item.badge === 'review' && reviewCount !== null && reviewCount > 0;
           return (
             <a

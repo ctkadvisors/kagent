@@ -1,5 +1,7 @@
 # RENAME-EVALUATION.md
 
+> **Dated 2026-05. Superseded for anything about Solo.io's kagent, and for several claims about this repo, by [`SOLO-COMPARISON-2026-11-26.md`](./SOLO-COMPARISON-2026-11-26.md).** Kept as a record of what was true then.
+
 **Authored:** 2026-05-07 (W4-Strategy-Name, audit-rev2 punchlist S2)
 **Inputs:** `CLAUDE.md` § "Naming note"; `evidence/audit-rev2/R1.md` §6.4 ("naming-collision question is now urgent").
 **Posture:** evidence-led, decision-deferred. Surfaces availability + conflict data so the user can choose. Does not pick a winner.

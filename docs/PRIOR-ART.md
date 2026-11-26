@@ -1,5 +1,7 @@
 # Prior art — what we use, what we don't, why
 
+> **Dated 2026-05. Superseded for anything about Solo.io's kagent, and for several claims about this repo, by [`SOLO-COMPARISON-2026-11-26.md`](./SOLO-COMPARISON-2026-11-26.md).** Kept as a record of what was true then.
+
 **Date:** 2026-04-26
 **Subject:** Decision-grade survey of the 2026 agent-platform field, oriented around the question "for a K3s-portable agent farm with per-agent sandbox/dyno, what do we adopt vs build vs avoid?"
 **Source material:** synthesizes the WHY-NOT-X.md / GAP-VS-STRANDS-AUTONOMOUS.md / GAP-VS-CF-OAS-ADK.md analyses from `homelab-orchestrator/docs/` (originals retained there as the reasoning trail).
