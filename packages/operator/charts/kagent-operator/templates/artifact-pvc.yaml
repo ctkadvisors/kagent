@@ -18,7 +18,7 @@ ARTIFACTS.md §6. A dedicated sweeper Job is a follow-up; the PVC's
 own lifecycle (Retain via the SMB StorageClass) handles longer-term
 cleanup.
 */}}
-{{- if .Values.agentPod.artifactStorage.enabled -}}
+{{- if and .Values.agentPod.artifactStorage.enabled .Values.agentPod.artifactStorage.create -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

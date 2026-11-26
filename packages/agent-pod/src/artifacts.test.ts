@@ -16,7 +16,17 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,6 +47,8 @@ import {
   inlineArtifactRef,
   inlineSafeForArtifact,
   isArtifactRefShape,
+  readArtifactFromDisk,
+  sweepExpiredArtifacts,
   resolveWriterEnv,
   resolveWriterEnvOrDisabled,
   tryParseArtifactRefFromToolOutput,
@@ -562,6 +574,48 @@ describe('tryParseArtifactRefFromToolOutput', () => {
  * ===================================================================== */
 
 describe('write_artifact tool', () => {
+  it("read_artifact: a second task reads the first task's artifact by its URI", async () => {
+    const shared = { [ENV_ARTIFACTS_DIR]: tmpRoot, [ENV_ARTIFACTS_PVC_NAME]: 'kagent-artifacts' };
+    const writerTools = buildBuiltinToolRegistry({ env: { ...shared, [ENV_TASK_ID]: 'task-a' } });
+    const w = await new InProcessToolProvider({
+      tools: [writerTools.get('write_artifact')!],
+    }).executeTool(
+      call('write_artifact', { name: 'plan.md', mediaType: 'text/markdown', content: '# plan' }),
+      ctx(),
+    );
+    const ref = JSON.parse((w.content as { text: string }[])[0]!.text) as ArtifactRef;
+
+    const readerTools = buildBuiltinToolRegistry({ env: { ...shared, [ENV_TASK_ID]: 'task-b' } });
+    const reader = new InProcessToolProvider({ tools: [readerTools.get('read_artifact')!] });
+    const r = await reader.executeTool(
+      call('read_artifact', { uri: ref.uri, mediaType: ref.mediaType }),
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    expect(JSON.parse((r.content as { text: string }[])[0]!.text)).toEqual({
+      uri: 'pvc://kagent-artifacts/task-a/plan.md',
+      mediaType: 'text/markdown',
+      sizeBytes: 6,
+      checksum: ref.checksum,
+      base64Encoded: false,
+      content: '# plan',
+    });
+
+    const missing = await reader.executeTool(
+      call('read_artifact', { uri: 'pvc://kagent-artifacts/task-a/nope.md' }),
+      ctx(),
+    );
+    expect(missing.isError).toBe(true);
+
+    // Storage off: the tool exists and refuses, like write_artifact.
+    const off = buildBuiltinToolRegistry({ env: { [ENV_TASK_ID]: 'task-c' } });
+    const refused = await new InProcessToolProvider({
+      tools: [off.get('read_artifact')!],
+    }).executeTool(call('read_artifact', { uri: ref.uri }), ctx());
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain('artifact storage is disabled');
+  });
+
   it('happy path — writes to PVC dir and returns the ArtifactRef', async () => {
     const taskUid = `uid-${randomUUID().slice(0, 8)}`;
     const env = {
@@ -1262,5 +1316,84 @@ describe('inlineArtifactRef payload', () => {
     expect(
       inlineSafeForArtifact('spec: {}\n', 'application/x-kagent-template-candidate+yaml'),
     ).toBe(true);
+  });
+});
+
+/* =====================================================================
+ * readArtifactFromDisk + sweepExpiredArtifacts
+ * ===================================================================== */
+
+describe('readArtifactFromDisk', () => {
+  const setup = (): { dir: string; env: { artifactsDir: string; pvcName: string } } => {
+    const dir = mkdtempSync(join(tmpdir(), 'kagent-read-'));
+    return { dir, env: { artifactsDir: dir, pvcName: 'kagent-artifacts' } };
+  };
+
+  it('reads what another task wrote, by the URI the writer returned', () => {
+    const { dir, env } = setup();
+    const written = writeArtifactToDisk(
+      'notes/plan.md',
+      '# plan\nstep one',
+      'text/markdown',
+      { ...env, taskUid: 'task-a', maxBytes: 1024 },
+      new Date('2026-11-26T16:00:00Z'),
+    );
+    // Task B has a different uid; only the mount and the URI are shared.
+    const read = readArtifactFromDisk(written.ref.uri, env);
+    expect(read.bytes.toString('utf8')).toBe('# plan\nstep one');
+    expect(read.checksum).toBe(written.ref.checksum);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses another volume, a path that leaves the root, a missing file and a .tmp file', () => {
+    const { dir, env } = setup();
+    mkdirSync(join(dir, 'task-a'), { recursive: true });
+    writeFileSync(join(dir, 'task-a', 'half.tmp'), 'x');
+    writeFileSync(join(dir, 'secret'), 'outside any task directory');
+    for (const uri of [
+      'pvc://other-volume/task-a/plan.md',
+      'pvc://kagent-artifacts/task-a/../secret',
+      'pvc://kagent-artifacts/../secret',
+      'pvc://kagent-artifacts/task-a/nope.md',
+      'pvc://kagent-artifacts/task-a/half.tmp',
+      'pvc://kagent-artifacts/task-a',
+      'cas://sha256:abc/plan.md',
+      '/etc/passwd',
+      42,
+    ]) {
+      expect(() => readArtifactFromDisk(uri, env), String(uri)).toThrow(/read_artifact/);
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses an artifact over the read limit', () => {
+    const { dir, env } = setup();
+    mkdirSync(join(dir, 'task-a'));
+    writeFileSync(join(dir, 'task-a', 'big.bin'), Buffer.alloc(11));
+    expect(() => readArtifactFromDisk('pvc://kagent-artifacts/task-a/big.bin', env, 10)).toThrow(
+      /over the 10-byte read limit/,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('sweepExpiredArtifacts', () => {
+  it('removes task directories older than the limit and keeps fresh ones, its own and stray files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kagent-sweep-'));
+    const now = new Date('2026-11-26T16:00:00Z');
+    const old = new Date('2026-10-20T00:00:00Z');
+    for (const name of ['old-task', 'own-task', 'fresh-task']) {
+      mkdirSync(join(dir, name));
+      writeFileSync(join(dir, name, 'a.txt'), 'x');
+    }
+    writeFileSync(join(dir, 'stray-file'), 'x');
+    for (const name of ['old-task', 'own-task', 'stray-file'])
+      utimesSync(join(dir, name), old, old);
+    utimesSync(join(dir, 'fresh-task'), now, now);
+
+    expect(sweepExpiredArtifacts(dir, 30 * 86_400_000, now, 'own-task')).toEqual(['old-task']);
+    expect(readdirSync(dir).sort()).toEqual(['fresh-task', 'own-task', 'stray-file']);
+    expect(sweepExpiredArtifacts(join(dir, 'missing'), 1, now)).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
