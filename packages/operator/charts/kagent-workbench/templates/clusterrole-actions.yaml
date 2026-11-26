@@ -94,6 +94,11 @@ rules:
   - apiGroups: ['kagent.knuteson.io']
     resources: ['channels']
     verbs: ['patch', 'update']
+  # "Run now" on the Schedules page — POST /api/schedules/:ns/:name/run
+  # stamps the run-request annotation; the operator creates the task.
+  - apiGroups: ['kagent.knuteson.io']
+    resources: ['kagentschedules']
+    verbs: ['patch']
 {{- end }}
 {{- if and .Values.rbac.create .Values.rbac.actions.create .Values.rbac.actions.terminateAllNamespaces }}
 ---

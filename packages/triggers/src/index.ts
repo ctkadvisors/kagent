@@ -16,7 +16,11 @@ export type {
   TriggerKind,
 } from './render-task.js';
 
-export { NoWorkThisTick, buildScheduleController } from './schedule-controller.js';
+export {
+  NoWorkThisTick,
+  RUN_REQUESTED_ANNOTATION,
+  buildScheduleController,
+} from './schedule-controller.js';
 export {
   ABANDON_GRACE_SECONDS,
   assessNamespaceIdle,

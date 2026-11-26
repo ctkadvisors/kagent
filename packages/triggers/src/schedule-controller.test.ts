@@ -9,6 +9,7 @@ import type { RenderedAgentTask } from './render-task.js';
 import {
   buildScheduleController,
   NoWorkThisTick,
+  RUN_REQUESTED_ANNOTATION,
   type KagentScheduleResource,
   type ScheduleStatusPatch,
 } from './schedule-controller.js';
@@ -130,21 +131,147 @@ describe('schedule controller', () => {
     expect(patches).toEqual([{ nextTickAt: '2026-10-01T22:00:00.000Z' }]);
   });
 
-  it('keeps an overdue next tick that still matches the cron so failures stay visible', async () => {
-    const patches: ScheduleStatusPatch[] = [];
-    const controller = buildScheduleController({
-      createAgentTask: () => undefined,
-      patchScheduleStatus: (_ns, _name, patch) => {
-        patches.push(patch);
-      },
+  describe('a missed tick', () => {
+    const missed = (overrides: Partial<KagentScheduleResource['spec']> = {}) => ({
+      ...mkSchedule('dream', '10 3 * * *', overrides),
+      status: { lastTickAt: '2026-11-25T03:10:00.000Z', nextTickAt: '2026-11-26T03:10:00.000Z' },
     });
-    controller.upsert({
-      ...mkSchedule('audit', '*/30 * * * *'),
-      status: { lastTickAt: '2026-10-01T21:00:00.000Z', nextTickAt: '2026-10-01T21:30:00.000Z' },
+    const build = (created: RenderedAgentTask[], patches: ScheduleStatusPatch[], fail = false) =>
+      buildScheduleController({
+        createAgentTask: (m) => {
+          if (fail) throw new Error('apiserver said no');
+          created.push(m);
+        },
+        patchScheduleStatus: (_ns, _name, patch) => {
+          patches.push(patch);
+        },
+        assessIdle: () =>
+          Promise.resolve({ idleSince: utc(2026, 11, 26, 0, 0), activeSchedules: new Set() }),
+      });
+
+    it('runs once at the next tick and records the run, however late', async () => {
+      const created: RenderedAgentTask[] = [];
+      const patches: ScheduleStatusPatch[] = [];
+      const controller = build(created, patches);
+      controller.upsert(missed());
+
+      // 07:33Z: the daily 03:10 tick fell inside a pause that has just lifted.
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 33))).toBe(1);
+      expect(patches).toEqual([
+        { lastTickAt: '2026-11-26T07:33:00.000Z', nextTickAt: '2026-11-27T03:10:00.000Z' },
+      ]);
+
+      // The informer hands the patched status back; the next minute is quiet.
+      controller.upsert({ ...missed(), status: patches[0] ?? {} });
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 34))).toBe(0);
+      expect(created).toHaveLength(1);
     });
 
-    expect(await controller.tickOnce(utc(2026, 10, 1, 21, 45))).toBe(0);
-    expect(patches).toHaveLength(0);
+    it('does not run while the schedule is suspended', async () => {
+      const created: RenderedAgentTask[] = [];
+      const controller = build(created, []);
+      controller.upsert(missed({ suspend: true }));
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 33))).toBe(0);
+    });
+
+    it('is retried every minute while task creation fails, and stays recorded as overdue', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const patches: ScheduleStatusPatch[] = [];
+      const controller = build([], patches, true);
+      controller.upsert(missed());
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 33))).toBe(0);
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 34))).toBe(0);
+      expect(errSpy).toHaveBeenCalledTimes(2);
+      expect(patches).toHaveLength(0);
+      errSpy.mockRestore();
+    });
+
+    it('leaves an idle-gated schedule to its next cron minute', async () => {
+      const created: RenderedAgentTask[] = [];
+      const controller = build(created, []);
+      controller.upsert({
+        ...mkSchedule('invent', '*/5 * * * *', { whenIdle: { quietSeconds: 300 } }),
+        status: { lastTickAt: '2026-11-26T07:00:00.000Z', nextTickAt: '2026-11-26T07:05:00.000Z' },
+      });
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 33))).toBe(0);
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 35))).toBe(1);
+    });
+
+    it('is not claimed for a next tick that has not passed or was never recorded', async () => {
+      const created: RenderedAgentTask[] = [];
+      const controller = build(created, []);
+      controller.upsert(mkSchedule('fresh', '10 3 * * *'));
+      controller.upsert({
+        ...mkSchedule('later', '10 3 * * *'),
+        status: { nextTickAt: '2026-11-27T03:10:00.000Z' },
+      });
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 33))).toBe(0);
+    });
+  });
+
+  describe('a run request', () => {
+    const requested = (
+      at: string,
+      overrides: Partial<KagentScheduleResource['spec']> = {},
+      status: KagentScheduleResource['status'] = {
+        lastTickAt: '2026-11-26T07:30:00.000Z',
+        nextTickAt: '2026-11-26T07:45:00.000Z',
+      },
+    ): KagentScheduleResource => {
+      const base = mkSchedule('boss', '*/15 * * * *', overrides);
+      return {
+        ...base,
+        metadata: { ...base.metadata, annotations: { [RUN_REQUESTED_ANNOTATION]: at } },
+        status,
+      };
+    };
+    const build = (created: RenderedAgentTask[], patches: ScheduleStatusPatch[]) =>
+      buildScheduleController({
+        createAgentTask: (m) => {
+          created.push(m);
+        },
+        patchScheduleStatus: (_ns, _name, patch) => {
+          patches.push(patch);
+        },
+        // Busy namespace: the idle gate is closed for every schedule.
+        assessIdle: () => Promise.resolve({ idleSince: undefined, activeSchedules: new Set() }),
+      });
+
+    it('runs the schedule once off its cron and past a closed idle gate', async () => {
+      const created: RenderedAgentTask[] = [];
+      const patches: ScheduleStatusPatch[] = [];
+      const controller = build(created, patches);
+      const spec = { whenIdle: { quietSeconds: 120 } };
+      controller.upsert(requested('2026-11-26T07:36:20.000Z', spec));
+
+      // The request lands mid-minute: the 07:36 tick is before it, 07:37 honours it.
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 36))).toBe(0);
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 37))).toBe(1);
+      expect(patches).toEqual([
+        { lastTickAt: '2026-11-26T07:37:00.000Z', nextTickAt: '2026-11-26T07:45:00.000Z' },
+      ]);
+
+      // The annotation stays on the object; the recorded run is what spends it.
+      controller.upsert(requested('2026-11-26T07:36:20.000Z', spec, patches[0]));
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 38))).toBe(0);
+      expect(created).toHaveLength(1);
+    });
+
+    it('is ignored on a suspended schedule and when the value is not an instant', async () => {
+      const created: RenderedAgentTask[] = [];
+      const controller = build(created, []);
+      controller.upsert(requested('2026-11-26T07:36:20.000Z', { suspend: true }));
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 37))).toBe(0);
+      controller.upsert(requested('now please'));
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 37))).toBe(0);
+    });
+
+    it('runs a schedule that has never ticked', async () => {
+      const created: RenderedAgentTask[] = [];
+      const controller = build(created, []);
+      controller.upsert(requested('2026-11-26T07:36:20.000Z', {}, {}));
+      expect(await controller.tickOnce(utc(2026, 11, 26, 7, 37))).toBe(1);
+    });
   });
 
   it('upsert replaces an existing schedule entry', () => {

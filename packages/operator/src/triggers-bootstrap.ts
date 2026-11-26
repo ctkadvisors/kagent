@@ -227,11 +227,17 @@ export function buildTriggersBootstrap(deps: TriggersBootstrapDeps): TriggersBoo
         name: obj.metadata.name,
         namespace: obj.metadata.namespace,
         ...(obj.metadata.uid !== undefined && { uid: obj.metadata.uid }),
+        // Carries the Workbench's run-now request (RUN_REQUESTED_ANNOTATION).
+        ...(obj.metadata.annotations !== undefined && { annotations: obj.metadata.annotations }),
       },
       spec: obj.spec,
-      // `whenIdle` measures its gap from the last tick the API recorded.
-      ...(obj.status?.lastTickAt !== undefined && {
-        status: { lastTickAt: obj.status.lastTickAt },
+      // `whenIdle` measures its gap from the last tick the API recorded; a
+      // recorded next tick that has passed is a missed tick the controller runs.
+      ...(obj.status !== undefined && {
+        status: {
+          ...(obj.status.lastTickAt !== undefined && { lastTickAt: obj.status.lastTickAt }),
+          ...(obj.status.nextTickAt !== undefined && { nextTickAt: obj.status.nextTickAt }),
+        },
       }),
     });
   };

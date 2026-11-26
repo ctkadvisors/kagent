@@ -8,8 +8,12 @@
  * as a tab: it is its own one-file page on the LAN at fleet.knuteson.io, so it
  * is framed here rather than rebuilt. Chris, 2026-09-04: "why isnt this a
  * subtab of kagent.knuteson.io".
+ *
+ * `/embed` is the copy that page lets this site frame: same content, the
+ * pause switch's state without its button (new_localai forum.py). The root
+ * page refuses every frame.
  */
-const DEFAULT_URL = 'https://fleet.knuteson.io/';
+const DEFAULT_URL = 'https://fleet.knuteson.io/embed';
 const env = import.meta.env as { readonly VITE_FLEET_CONSOLE_URL?: string };
 
 /** Only an https URL may be framed; anything else (javascript:, data:, a typo) falls back. */

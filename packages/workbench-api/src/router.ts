@@ -194,7 +194,15 @@ export function buildRouter(deps: RouterDeps): Hono {
     }),
   );
   app.route('/', agentsRoute({ cache: deps.cache }));
-  app.route('/', schedulesRoute({ cache: deps.cache }));
+  app.route(
+    '/',
+    schedulesRoute({
+      cache: deps.cache,
+      ...(deps.customApi !== undefined && { customApi: deps.customApi }),
+      writesEnabled: deps.writesEnabled === true && deps.customApi !== undefined,
+      ...(deps.defaultNamespace !== undefined && { defaultNamespace: deps.defaultNamespace }),
+    }),
+  );
   app.route(
     '/',
     channelsRoute({

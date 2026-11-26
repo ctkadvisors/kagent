@@ -440,6 +440,18 @@ export async function fetchSchedules(signal?: AbortSignal): Promise<ScheduleSumm
   return body.items ?? [];
 }
 
+/** Ask the operator to run a schedule at its next minute tick. */
+export async function runScheduleNow(namespace: string, name: string): Promise<void> {
+  const res = await fetch(
+    `/api/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/run`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new Error(body.message ?? body.error ?? `run schedule: ${String(res.status)}`);
+  }
+}
+
 /* =====================================================================
  * Cluster page — substrate visibility surface.
  * ===================================================================== */
