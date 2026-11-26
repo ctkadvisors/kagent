@@ -14,6 +14,13 @@
  *      an AgentTask and hand it to `deps.createAgentTask`.
  *   3. Patch the schedule's status (`lastTickAt` + recomputed
  *      `nextTickAt`) via `deps.patchScheduleStatus`.
+ *   4. Run a tick the loop never evaluated. A schedule without an idle
+ *      gate whose recorded `nextTickAt` has passed (the schedule was
+ *      suspended, the operator was down, or task creation failed) fires
+ *      once at the next tick, however many ticks it missed.
+ *   5. Run on request: the `RUN_REQUESTED_ANNOTATION` instant, when it is
+ *      newer than `lastTickAt`, fires the schedule once outside its cron
+ *      and its idle gate. A suspended schedule runs neither way.
  *
  * Why a custom tick loop instead of `node-cron` (or per-schedule
  * `setTimeout`s):
@@ -40,6 +47,14 @@ import {
   type RenderedAgentTask,
 } from './render-task.js';
 
+/**
+ * "Run this schedule now": an RFC 3339 instant written by the Workbench
+ * (`POST /api/schedules/:ns/:name/run`). The controller honours it at the
+ * first tick at or after that instant and records the run in
+ * `status.lastTickAt`, which is what makes a request fire once.
+ */
+export const RUN_REQUESTED_ANNOTATION = 'kagent.knuteson.io/run-requested-at';
+
 /** createAgentTask throws this when a schedule has no work to bind right now; the tick is skipped quietly. */
 export class NoWorkThisTick extends Error {}
 
@@ -49,6 +64,7 @@ export interface KagentScheduleResource {
     readonly name: string;
     readonly namespace: string;
     readonly uid?: string;
+    readonly annotations?: Readonly<Record<string, string>>;
   };
   readonly spec: {
     readonly schedule: string;
@@ -167,7 +183,8 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
         continue;
       }
       if (resource.spec.suspend === true) continue;
-      if (!cronMatches(parsed, at)) {
+      const requested = runRequested(resource, at);
+      if (!cronMatches(parsed, at) && !requested && !tickMissed(resource, parsed, at)) {
         // A spec change can leave nextTickAt from the previous expression
         // until the new cron first fires. Refresh only when that timestamp
         // cannot be a tick of the current cron; preserve valid overdue ticks
@@ -196,7 +213,7 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
         }
         continue;
       }
-      if (resource.spec.whenIdle !== undefined) {
+      if (resource.spec.whenIdle !== undefined && !requested) {
         const gate = await idleGateOpen(resource, at);
         if (!gate) continue;
       }
@@ -322,6 +339,30 @@ export function buildScheduleController(deps: ScheduleControllerDeps) {
 }
 
 export type ScheduleController = ReturnType<typeof buildScheduleController>;
+
+/** A run request is live from its own instant until a tick at or after it is recorded. */
+function runRequested(resource: KagentScheduleResource, at: Date): boolean {
+  const requestedAt = Date.parse(resource.metadata.annotations?.[RUN_REQUESTED_ANNOTATION] ?? '');
+  if (!Number.isFinite(requestedAt) || requestedAt > at.getTime()) return false;
+  const last = Date.parse(resource.status?.lastTickAt ?? '');
+  return !Number.isFinite(last) || requestedAt > last;
+}
+
+/**
+ * The recorded next tick is a tick of the current cron and it has passed
+ * without being run. Idle-gated schedules are left out: a closed gate
+ * leaves their `nextTickAt` behind on purpose, and they look again at
+ * their next cron minute.
+ */
+function tickMissed(resource: KagentScheduleResource, parsed: ParsedSchedule, at: Date): boolean {
+  if (resource.spec.whenIdle !== undefined) return false;
+  const recorded = new Date(resource.status?.nextTickAt ?? '');
+  return (
+    Number.isFinite(recorded.getTime()) &&
+    recorded.getTime() < at.getTime() &&
+    cronMatches(parsed, recorded)
+  );
+}
 
 function topOfMinute(d: Date): Date {
   return new Date(

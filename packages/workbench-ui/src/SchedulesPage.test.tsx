@@ -4,17 +4,20 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { ScheduleSummary } from './types.js';
 
 vi.mock('./api.js', () => ({
   fetchSchedules: vi.fn(),
+  runScheduleNow: vi.fn(),
   subscribeCacheEvents: vi.fn(),
 }));
 
-import { fetchSchedules, subscribeCacheEvents } from './api.js';
-import { SchedulesPage } from './SchedulesPage.js';
+import { fetchSchedules, runScheduleNow, subscribeCacheEvents } from './api.js';
+import { nextTick, SchedulesPage } from './SchedulesPage.js';
+
+const mockRunScheduleNow = runScheduleNow as ReturnType<typeof vi.fn>;
 
 const mockFetchSchedules = fetchSchedules as ReturnType<typeof vi.fn>;
 const mockSubscribeCacheEvents = subscribeCacheEvents as ReturnType<typeof vi.fn>;
@@ -121,5 +124,28 @@ describe('SchedulesPage', () => {
     emit({ kind: 'task' });
 
     expect(mockFetchSchedules).not.toHaveBeenCalled();
+  });
+
+  it('says "in" for a coming tick and "overdue" for one that has passed', () => {
+    const now = Date.parse('2026-11-26T14:22:00Z');
+    const at = (iso: string, suspended = false) =>
+      nextTick(makeSchedule({ nextTickAt: iso, suspended }), now);
+    expect(at('2026-11-26T14:30:00Z')).toEqual({ text: 'in 8m', overdue: false });
+    // The three daily ticks the 2026-11-26 pause swallowed read "in 7h/10h/11h" before this.
+    expect(at('2026-11-26T03:10:00Z')).toEqual({ text: 'overdue 11h', overdue: true });
+    expect(at('2026-11-26T14:21:30Z')).toEqual({ text: 'in 0s', overdue: false });
+    expect(at('2026-10-01T19:30:00Z', true)).toEqual({ text: '—', overdue: false });
+  });
+
+  it('Run now posts the request and reports it; a suspended row cannot be run', async () => {
+    mockFetchSchedules.mockResolvedValue([makeSchedule(), makeSuspendedSchedule()]);
+    mockRunScheduleNow.mockResolvedValue(undefined);
+    render(<SchedulesPage />);
+
+    const buttons = await screen.findAllByRole('button', { name: 'Run now' });
+    expect((buttons[1] as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(buttons[0] as HTMLButtonElement);
+    expect(mockRunScheduleNow).toHaveBeenCalledWith('kagent-system', 'brain-invalidation-audit');
+    expect(await screen.findByText(/requested, starts within a minute/)).toBeTruthy();
   });
 });
