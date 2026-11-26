@@ -151,6 +151,10 @@ export interface ChildSnapshot {
   readonly error?: string;
   /** `status.artifacts` refs the child wrote; pass a `uri` to read_artifact. */
   readonly artifacts?: readonly ChildArtifact[];
+  /** This task continues the task with this uid (kagent task resume). */
+  readonly continuesUid?: string;
+  /** `status.completedAt`, epoch ms. */
+  readonly completedAtMs?: number;
 }
 
 /** What a waiting parent needs to fetch a child's artifact. */
@@ -407,6 +411,10 @@ export function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSn
   let result: { readonly content?: string } | undefined;
   let error: string | undefined;
   let artifacts: readonly ChildArtifact[] | undefined;
+  let completedAtMs: number | undefined;
+  const annotations = (item as { metadata?: { annotations?: Record<string, unknown> } }).metadata
+    ?.annotations;
+  const continues = annotations?.['kagent.knuteson.io/continues-uid'];
   if (status !== null && typeof status === 'object') {
     const s = status as Record<string, unknown>;
     if (s.result !== null && typeof s.result === 'object') {
@@ -415,6 +423,8 @@ export function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSn
       else result = {};
     }
     if (typeof s.error === 'string') error = s.error;
+    const completed = typeof s.completedAt === 'string' ? Date.parse(s.completedAt) : NaN;
+    if (Number.isFinite(completed)) completedAtMs = completed;
     if (Array.isArray(s.artifacts)) {
       // Only refs a reader can follow: inline:// bodies already ride in the result.
       artifacts = s.artifacts.flatMap((a: unknown): ChildArtifact[] => {
@@ -441,6 +451,8 @@ export function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSn
     ...(result !== undefined && { result }),
     ...(error !== undefined && { error }),
     ...(artifacts !== undefined && artifacts.length > 0 && { artifacts }),
+    ...(typeof continues === 'string' && continues.length > 0 && { continuesUid: continues }),
+    ...(completedAtMs !== undefined && { completedAtMs }),
   };
 }
 

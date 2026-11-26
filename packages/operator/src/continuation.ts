@@ -23,8 +23,11 @@
  * without one (the pod died before it could report), the continuation is
  * a fresh run of the same work.
  *
- * v1 continues root tasks only. A child's parent is waiting on that child
- * by uid and has already read its failure.
+ * A child task is continued the same way, as a sibling under the same
+ * parent (same `spec.parentTask`, parent labels and ownerReferences). The
+ * parent's wait_for_child_task / wait_for_children_all follow a child to
+ * its continuation (agent-pod builtin-tools-wait.ts), so a verifier that
+ * ran out of time is resumed instead of being read as a failure.
  */
 
 import type { Agent, AgentTask } from './crds/index.js';
@@ -62,6 +65,8 @@ export interface ContinuationManifest {
     readonly namespace: string;
     readonly labels: Readonly<Record<string, string>>;
     readonly annotations: Readonly<Record<string, string>>;
+    /** A child's continuation stays owned by the same parent. */
+    readonly ownerReferences?: AgentTask['metadata']['ownerReferences'];
   };
   readonly spec: AgentTask['spec'];
 }
@@ -83,7 +88,6 @@ export function planContinuation(
   if (task.status?.phase !== 'Failed') return { skip: 'not-failed' };
   const limit = maxContinuations(agent);
   if (limit === 0) return { skip: 'agent-not-opted-in' };
-  if (task.spec.parentTask !== undefined) return { skip: 'child-task' };
   const name = task.metadata.name;
   const uid = task.metadata.uid;
   if (name === undefined || uid === undefined) return { skip: 'no-identity' };
@@ -134,6 +138,10 @@ export function planContinuation(
         name: nextName,
         namespace: task.metadata.namespace ?? 'default',
         labels: { ...(task.metadata.labels ?? {}) },
+        ...(task.spec.parentTask !== undefined &&
+          task.metadata.ownerReferences !== undefined && {
+            ownerReferences: task.metadata.ownerReferences,
+          }),
         annotations: {
           ...inherited,
           [CONTINUES_UID_ANNOTATION]: uid,
