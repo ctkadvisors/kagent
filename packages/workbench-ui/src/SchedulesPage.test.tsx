@@ -135,6 +135,9 @@ describe('SchedulesPage', () => {
     expect(at('2026-11-26T03:10:00Z')).toEqual({ text: 'overdue 11h', overdue: true });
     expect(at('2026-11-26T14:21:30Z')).toEqual({ text: 'in 0s', overdue: false });
     expect(at('2026-10-01T19:30:00Z', true)).toEqual({ text: '—', overdue: false });
+    expect(
+      nextTick(makeSchedule({ nextTickAt: '2026-11-26T14:05:00Z', whenIdle: true }), now),
+    ).toEqual({ text: 'waiting for idle 17m', overdue: false });
   });
 
   it('Run now posts the request and reports it; a suspended row cannot be run', async () => {

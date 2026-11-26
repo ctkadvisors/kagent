@@ -39,6 +39,9 @@ export function nextTick(s: ScheduleSummary, now: number): { text: string; overd
   if (Number.isNaN(at) || s.suspended) return { text: '—', overdue: false };
   // The controller ticks on the minute; a next tick inside this minute is not late yet.
   if (now - at < 60_000) return { text: `in ${formatSpan(Math.max(0, at - now))}`, overdue: false };
+  // A closed idle gate leaves the next tick behind on purpose: the schedule is waiting, not late.
+  if (s.whenIdle === true)
+    return { text: `waiting for idle ${formatSpan(now - at)}`, overdue: false };
   return { text: `overdue ${formatSpan(now - at)}`, overdue: true };
 }
 
