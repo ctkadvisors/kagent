@@ -1280,6 +1280,8 @@ export function buildHandler(
       const result = await reconcileAgentTask(task, deps);
       logResult('add', task, result);
       await maybeReconcileParent('add', task, deps);
+      // A task that failed while the operator was down is seen first as an add.
+      await maybeContinue(task, deps);
       await maybeRouteSupervision(task, supervisionDeps);
       // === Wave 3 — Blackboard ===
       // v0.4.1-blackboard. Provision the per-task-tree NATS KV
@@ -1313,6 +1315,7 @@ export function buildHandler(
       // exists to act on (and re-firing supervision on relist is the
       // mechanism that closes the loop, not this onUpdate path).
       await maybeEnforceCompletionContract(task, deps);
+      await maybeContinue(task, deps);
       try {
         const reaped = await reapTaskSandboxes(task, deps);
         if (reaped > 0) {
@@ -1657,6 +1660,63 @@ async function maybeEnforceCompletionContract(
     }
   } catch (err) {
     console.warn('[kagent-operator] enforceCompletionContract raised:', err);
+  }
+}
+
+/**
+ * A task that failed for want of time is followed by a continuation task
+ * when its Agent allows it (continuation.ts). Creating the continuation is
+ * idempotent on its name, so a repeated event is harmless. Never throws:
+ * a failed continuation must not disturb the rest of the event.
+ */
+export async function maybeContinue(
+  task: import('./crds/index.js').AgentTask,
+  deps: Pick<ReconcileDeps, 'customApi'>,
+  now: Date = new Date(),
+): Promise<'continued' | 'exists' | 'skipped'> {
+  if (task.status?.phase !== 'Failed') return 'skipped';
+  const agentName = task.spec.targetAgent;
+  if (typeof agentName !== 'string' || agentName.length === 0) return 'skipped';
+  const namespace = task.metadata.namespace ?? 'default';
+  const id = `${namespace}/${task.metadata.name ?? '(no-name)'}`;
+  try {
+    const { planContinuation, MAX_CONTINUATIONS_ANNOTATION } = await import('./continuation.js');
+    const agent = (await deps.customApi.getNamespacedCustomObject({
+      group: 'kagent.knuteson.io',
+      version: 'v1alpha1',
+      namespace,
+      plural: 'agents',
+      name: agentName,
+    })) as import('./crds/index.js').Agent;
+    const plan = planContinuation(task, agent, now);
+    if ('skip' in plan) {
+      // Only an opted-in Agent's refusals are worth a log line.
+      if (agent.metadata.annotations?.[MAX_CONTINUATIONS_ANNOTATION] !== undefined) {
+        console.log(`[kagent-operator] continuation: ${id} not continued (${plan.skip})`);
+      }
+      return 'skipped';
+    }
+    try {
+      await deps.customApi.createNamespacedCustomObject({
+        group: 'kagent.knuteson.io',
+        version: 'v1alpha1',
+        namespace,
+        plural: 'agenttasks',
+        body: plan.continuation,
+      });
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      if (code === 409) return 'exists';
+      throw err;
+    }
+    console.log(
+      `[kagent-operator] continuation: ${id} → ${plan.continuation.metadata.name} ` +
+        `(${task.status.error ?? 'failed'})`,
+    );
+    return 'continued';
+  } catch (err) {
+    console.warn(`[kagent-operator] continuation: ${id} failed:`, err);
+    return 'skipped';
   }
 }
 
