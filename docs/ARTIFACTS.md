@@ -329,3 +329,14 @@ CAS-backed dedupe (v0.2.2) reads the same field. The PVC writer is the substrate
 - **The legacy `resolveWriterEnv` (back-compat) keeps falling back to defaults**; the new `resolveWriterEnvOrDisabled` is the strict gate the tool consults. The legacy entry point is kept callable so existing direct-disk-writer tests stay green during the v0.1 → v0.1.x transition.
 - **Inline path is admissible even when storage is disabled** for text-only payloads. The substrate contract for `inline://sha256:<hex>` is "bytes live in `status.result.content`, not on disk", so the inline shortcut doesn't need PVC plumbing. This lets an Agent fall back to inlining small text outputs even on a cluster where the artifact PVC isn't enabled.
 - **Registry de-dupes on `uri` (last-write-wins)** so an Agent that overwrites a file in place during the run produces ONE entry in `status.artifacts` with the most recent metadata rather than a confusing per-write log.
+
+## 10. Reading, hand-off and retention (2026-11-26)
+
+- **`read_artifact`** is a built-in next to `write_artifact`: it reads the bytes behind a `pvc://<volume>/<task-uid>/<name>` URI from the same mount, in any task. An agent gets it by listing `read_artifact` in `spec.tools`. It refuses another volume's URI, a path outside the task directory, a `.tmp` file and anything over 8 MiB, and returns the `sha256:` checksum of what it read.
+- **Parent and child.** `wait_for_child_task` and `wait_for_children_all` return each child's `pvc://` refs under `artifacts`. A parent passes a URI to a child in the message text.
+- **The URI is the capability.** A task that knows a URI can read it. `write_artifact` writes only inside the calling task's directory, and agent code runs in a sandbox pod that does not mount the volume, but the mount itself is the whole volume read-write. Pass the writer's `checksum` to `read_artifact` and it refuses bytes that were replaced.
+- **`.kagent/`** inside a task directory is the substrate's (task checkpoints). Neither tool reads or writes it.
+- **Limits.** 25 MiB per write (`KAGENT_ARTIFACT_MAX_BYTES`), 256 MiB per task (`KAGENT_ARTIFACT_TASK_MAX_BYTES`). The volume's total is not enforced by `local-path`.
+- **Retention.** Each agent pod, at boot, removes task directories unchanged for `KAGENT_ARTIFACT_RETENTION_DAYS` (default 30), at most 50 per boot. Nothing else deletes them.
+- **`agentPod.artifactStorage.create: false`** mounts a claim made outside the chart, for a cluster with no RWX class.
+- The `cas://` reader (`defineReadArtifact`, `PvcCasBackend`) is still unregistered; §9.6's migration has not happened.

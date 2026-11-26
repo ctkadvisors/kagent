@@ -50,8 +50,11 @@ import type { InProcessToolDefinition } from '@kagent/in-process-tool-provider';
 
 import {
   inlineArtifactRef,
+  DEFAULT_ARTIFACT_RETENTION_DAYS,
   inlineSafeForArtifact,
+  readArtifactFromDisk,
   resolveWriterEnvOrDisabled,
+  sweepExpiredArtifacts,
   validateArtifactName,
   writeArtifactToDisk,
   type ArtifactRegistry,
@@ -793,6 +796,23 @@ export function buildBuiltinToolRegistry(
         `Set agentPod.artifactStorage.enabled=true in the operator chart to wire the PVC.`,
     );
   }
+  if (!('disabled' in writerEnv)) {
+    // Retention: nothing else deletes old task directories (the operator does not mount the volume).
+    const days = Number(env.KAGENT_ARTIFACT_RETENTION_DAYS);
+    const maxAgeMs =
+      (Number.isFinite(days) && days > 0 ? days : DEFAULT_ARTIFACT_RETENTION_DAYS) * 86_400_000;
+    const removed = sweepExpiredArtifacts(
+      writerEnv.artifactsDir,
+      maxAgeMs,
+      clock(),
+      writerEnv.taskUid,
+    );
+    if (removed.length > 0) {
+      console.log(
+        `[kagent-agent-pod] artifacts: removed ${String(removed.length)} expired task directories`,
+      );
+    }
+  }
   const writeArtifact = defineInProcessTool({
     name: 'write_artifact',
     description:
@@ -907,11 +927,65 @@ export function buildBuiltinToolRegistry(
     },
   });
 
+  // read_artifact: the bytes behind a pvc:// URI another task (or this
+  // one) got from write_artifact. Same boot-time gate as the writer.
+  const readArtifact = defineInProcessTool({
+    name: 'read_artifact',
+    description:
+      'Read an artifact by the pvc:// URI that write_artifact returned, in ' +
+      'this task or any other (a child, a parent, an earlier run). Returns ' +
+      '{uri, mediaType, sizeBytes, checksum, base64Encoded, content}: text ' +
+      'media types come back as a UTF-8 string, anything else base64. ' +
+      'Compare `checksum` with the one the writer reported. Limit 8 MiB.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uri: { type: 'string', description: 'pvc://<volume>/<task-uid>/<name>' },
+        mediaType: {
+          type: 'string',
+          description: 'The media type the writer reported; default text/plain.',
+        },
+        checksum: {
+          type: 'string',
+          description:
+            'The sha256:<hex> the writer reported. Pass it whenever you have it: the read is refused if the bytes changed.',
+        },
+      },
+      required: ['uri'],
+      additionalProperties: false,
+    },
+    tags: ['substrate', 'artifacts', 'read-only'],
+    handler: (args) => {
+      if ('disabled' in writerEnv) {
+        throw new Error(
+          `tool_error: read_artifact: artifact storage is disabled (${writerEnv.reason})`,
+        );
+      }
+      const read = readArtifactFromDisk(
+        args.uri,
+        writerEnv,
+        undefined,
+        typeof args.checksum === 'string' ? args.checksum : undefined,
+      );
+      const mediaType = typeof args.mediaType === 'string' ? args.mediaType : 'text/plain';
+      const text = isTextLikeMediaType(mediaType);
+      return jsonContent({
+        uri: read.uri,
+        mediaType,
+        sizeBytes: read.bytes.byteLength,
+        checksum: read.checksum,
+        base64Encoded: !text,
+        content: text ? read.bytes.toString('utf8') : read.bytes.toString('base64'),
+      });
+    },
+  });
+
   return new Map<string, InProcessToolDefinition>([
     [httpGet.name, httpGet],
     [rssFetch.name, rssFetch],
     [extractText.name, extractText],
     [writeArtifact.name, writeArtifact],
+    [readArtifact.name, readArtifact],
   ]);
 }
 
@@ -1312,7 +1386,7 @@ export function defineReadArtifact(deps: ReadArtifactDeps): InProcessToolDefinit
   return defineInProcessTool({
     name: 'read_artifact',
     description:
-      'Fetch the bytes behind an artifact URI (cas:// or pvc://). Verifies ' +
+      'Fetch the bytes behind a cas:// artifact URI. Verifies ' +
       'the sha256 hash post-fetch and refuses on mismatch (corruption / ' +
       'tampering / mid-write). Text-like media types round-trip as UTF-8 ' +
       'strings; binary payloads return base64-encoded bytes with ' +

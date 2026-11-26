@@ -149,6 +149,17 @@ export interface ChildSnapshot {
   readonly phase: AgentTaskPhase | undefined;
   readonly result?: { readonly content?: string };
   readonly error?: string;
+  /** `status.artifacts` refs the child wrote; pass a `uri` to read_artifact. */
+  readonly artifacts?: readonly ChildArtifact[];
+}
+
+/** What a waiting parent needs to fetch a child's artifact. */
+export interface ChildArtifact {
+  readonly uri: string;
+  readonly name: string;
+  readonly mediaType?: string;
+  readonly sizeBytes?: number;
+  readonly checksum?: string;
 }
 
 /** Minimal Agent CR projection — labels only, all v0.1.3 needs. */
@@ -381,7 +392,7 @@ async function listChildrenRaw(
   return readItems(list);
 }
 
-function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSnapshot {
+export function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSnapshot {
   const meta = readMeta(item);
   const phase = readPhase(item);
   if (item === null || typeof item !== 'object') {
@@ -395,6 +406,7 @@ function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSnapshot 
   const status = (item as Record<string, unknown>).status;
   let result: { readonly content?: string } | undefined;
   let error: string | undefined;
+  let artifacts: readonly ChildArtifact[] | undefined;
   if (status !== null && typeof status === 'object') {
     const s = status as Record<string, unknown>;
     if (s.result !== null && typeof s.result === 'object') {
@@ -403,6 +415,23 @@ function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSnapshot 
       else result = {};
     }
     if (typeof s.error === 'string') error = s.error;
+    if (Array.isArray(s.artifacts)) {
+      // Only refs a reader can follow: inline:// bodies already ride in the result.
+      artifacts = s.artifacts.flatMap((a: unknown): ChildArtifact[] => {
+        if (a === null || typeof a !== 'object') return [];
+        const r = a as Record<string, unknown>;
+        if (typeof r.uri !== 'string' || !r.uri.startsWith('pvc://')) return [];
+        return [
+          {
+            uri: r.uri,
+            name: typeof r.name === 'string' ? r.name : '',
+            ...(typeof r.mediaType === 'string' && { mediaType: r.mediaType }),
+            ...(typeof r.sizeBytes === 'number' && { sizeBytes: r.sizeBytes }),
+            ...(typeof r.checksum === 'string' && { checksum: r.checksum }),
+          },
+        ];
+      });
+    }
   }
   return {
     name: meta.name ?? '',
@@ -411,6 +440,7 @@ function buildSnapshot(item: unknown, fallbackNamespace: string): ChildSnapshot 
     phase,
     ...(result !== undefined && { result }),
     ...(error !== undefined && { error }),
+    ...(artifacts !== undefined && artifacts.length > 0 && { artifacts }),
   };
 }
 

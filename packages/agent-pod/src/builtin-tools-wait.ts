@@ -297,6 +297,7 @@ function serializeChild(c: ChildSnapshot): {
   phase?: string;
   result?: { content?: string };
   error?: string;
+  artifacts?: ChildSnapshot['artifacts'];
 } {
   return {
     uid: c.uid,
@@ -305,6 +306,8 @@ function serializeChild(c: ChildSnapshot): {
     ...(c.phase !== undefined && { phase: c.phase }),
     ...(c.result !== undefined && { result: c.result }),
     ...(c.error !== undefined && { error: c.error }),
+    // What the child wrote with write_artifact; read_artifact takes each `uri`.
+    ...(c.artifacts !== undefined && { artifacts: c.artifacts }),
   };
 }
 

@@ -45,7 +45,11 @@ import {
   fsyncSync,
   mkdirSync,
   openSync,
+  readdirSync,
+  readFileSync,
   renameSync,
+  rmSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -153,6 +157,35 @@ const INLINE_SAFE_MEDIA_TYPES: ReadonlySet<string> = new Set<string>([
  * forward slashes for nested layout (e.g. `screenshots/01.png`). The
  * canonical PVC-URI helper accepts the same shape.
  */
+/** First path segment, inside a task directory, that only the substrate reads and writes. */
+export const RESERVED_DIR = '.kagent';
+
+/** Default ceiling on everything one task may keep on the artifact volume. */
+export const DEFAULT_TASK_ARTIFACT_BYTES = 256 * 1024 * 1024;
+
+/** Total size of the regular files under `dir` (0 when it does not exist). */
+export function directoryBytes(dir: string): number {
+  let total = 0;
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    const path = resolve(dir, entry.name);
+    if (entry.isDirectory()) total += directoryBytes(path);
+    else if (entry.isFile()) {
+      try {
+        total += statSync(path).size;
+      } catch {
+        // removed between listing and stat
+      }
+    }
+  }
+  return total;
+}
+
 export function validateArtifactName(name: unknown): string {
   if (typeof name !== 'string') {
     throw new Error('write_artifact: "name" must be a string');
@@ -167,6 +200,11 @@ export function validateArtifactName(name: unknown): string {
   // in a Linux PVC layout and are an obvious traversal bypass.
   if (name.includes('\\')) {
     throw new Error('write_artifact: "name" must not contain backslashes');
+  }
+  // `.kagent/` in a task directory is the substrate's own (task checkpoints):
+  // no tool may write it or read it back.
+  if (name.split('/')[0] === RESERVED_DIR) {
+    throw new Error(`write_artifact: "name" must not begin with "${RESERVED_DIR}/"`);
   }
   // Reject `..` / `.` / empty segments (segment-aware so `foo..bar.txt` is fine).
   for (const segment of name.split('/')) {
@@ -297,6 +335,11 @@ export interface WriteArtifactResult {
  * {@link DEFAULT_ARTIFACT_MAX_BYTES} when unset / malformed / non-positive
  * so a fat-fingered Helm value can't silently disable the cap.
  */
+function parseTaskBytes(raw: string | undefined): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_TASK_ARTIFACT_BYTES;
+}
+
 function parseMaxBytes(raw: string | undefined): number {
   if (typeof raw !== 'string' || raw.length === 0) return DEFAULT_ARTIFACT_MAX_BYTES;
   const n = Number(raw);
@@ -458,6 +501,16 @@ export function writeArtifactToDisk(
     );
   }
 
+  // One task cannot fill the volume: the per-write cap bounds a file, this bounds the task.
+  const taskLimit = parseTaskBytes(process.env.KAGENT_ARTIFACT_TASK_MAX_BYTES);
+  const used = directoryBytes(taskRoot);
+  if (used + bytes.byteLength > taskLimit) {
+    throw new Error(
+      `write_artifact: this task already holds ${String(used)} bytes of artifacts; ` +
+        `${String(bytes.byteLength)} more would pass its ${String(taskLimit)}-byte limit`,
+    );
+  }
+
   const tmpPath = `${targetPath}.tmp`;
   const targetDir = targetPath.slice(0, targetPath.lastIndexOf(sep));
   mkdirSync(targetDir, { recursive: true });
@@ -511,6 +564,137 @@ export function writeArtifactToDisk(
     producedAt: now.toISOString(),
   };
   return { ref, path: targetPath };
+}
+
+/* =====================================================================
+ * Reader — the other half of write_artifact.
+ *
+ * Every agent pod mounts the same artifact volume, so a task can read
+ * what another task wrote, given the `pvc://<pvc>/<task-uid>/<name>` URI
+ * the writer returned. The URI is the capability: a task learns it from
+ * its parent's message, a child's wait result, a forum post or its own
+ * earlier write.
+ * ===================================================================== */
+
+/** Largest artifact `read_artifact` hands back; a model cannot use more in one tool reply. */
+export const READ_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
+
+const TASK_UID_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+export interface ReadArtifactResult {
+  readonly uri: string;
+  readonly bytes: Buffer;
+  /** `sha256:<hex>` of the bytes read, comparable with the writer's `checksum`. */
+  readonly checksum: string;
+}
+
+/**
+ * Read the bytes behind a `pvc://` URI from this pod's artifact mount.
+ * Refuses another volume's URI, a path that leaves the artifact root, a
+ * missing or half-written file, and anything over `maxBytes`.
+ */
+export function readArtifactFromDisk(
+  uri: unknown,
+  env: Pick<ArtifactWriterEnv, 'artifactsDir' | 'pvcName'>,
+  maxBytes: number = READ_ARTIFACT_MAX_BYTES,
+  /** The writer's `checksum` (`sha256:<hex>`); when given, other bytes are refused. */
+  expectedChecksum?: string,
+): ReadArtifactResult {
+  if (typeof uri !== 'string' || !uri.startsWith('pvc://')) {
+    throw new Error('read_artifact: "uri" must be a pvc:// URI returned by write_artifact');
+  }
+  const [pvc, taskUid, ...rest] = uri.slice('pvc://'.length).split('/');
+  if (pvc !== env.pvcName) {
+    throw new Error(
+      `read_artifact: this pod mounts artifact volume "${env.pvcName}", not "${pvc ?? ''}"`,
+    );
+  }
+  if (taskUid === undefined || !TASK_UID_SEGMENT.test(taskUid) || taskUid.includes('..')) {
+    throw new Error('read_artifact: the URI has no valid task-uid segment');
+  }
+  let name: string;
+  try {
+    name = validateArtifactName(rest.join('/'));
+  } catch (err) {
+    // Same name rules as the writer, reported under this tool's name.
+    throw new Error(
+      String(err instanceof Error ? err.message : err).replace(/^write_artifact/, 'read_artifact'),
+    );
+  }
+  if (name.endsWith('.tmp')) {
+    throw new Error('read_artifact: a ".tmp" file is a write in progress, not an artifact');
+  }
+  const root = resolve(env.artifactsDir);
+  const target = resolve(root, taskUid, name);
+  if (!target.startsWith(resolve(root, taskUid) + sep)) {
+    throw new Error('read_artifact: resolved path escapes the task-uid directory');
+  }
+  let size: number;
+  try {
+    const stat = statSync(target);
+    if (!stat.isFile()) throw new Error('not a file');
+    size = stat.size;
+  } catch {
+    throw new Error(`read_artifact: no artifact at ${uri}`);
+  }
+  if (size > maxBytes) {
+    throw new Error(
+      `read_artifact: artifact is ${String(size)} bytes, over the ${String(maxBytes)}-byte read limit`,
+    );
+  }
+  const bytes = readFileSync(target);
+  const checksum = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (expectedChecksum !== undefined && expectedChecksum !== checksum) {
+    throw new Error(
+      `read_artifact: the bytes at ${uri} hash to ${checksum}, not the expected ${expectedChecksum}; ` +
+        'the artifact was replaced after its ref was issued',
+    );
+  }
+  return { uri, bytes, checksum };
+}
+
+/* =====================================================================
+ * Retention — nothing else deletes `<task-uid>/` directories.
+ * ===================================================================== */
+
+/** Default age after which a task's artifact directory is removed. */
+export const DEFAULT_ARTIFACT_RETENTION_DAYS = 30;
+
+/**
+ * Remove task directories whose newest change is older than `maxAgeMs`.
+ * Run by each agent pod at boot: every pod mounts the volume read-write
+ * and the operator does not mount it. Best-effort and bounded (`limit`
+ * removals per run) so a slow volume never delays a task. Never touches
+ * `keepTaskUid` (this pod's own directory).
+ */
+export function sweepExpiredArtifacts(
+  artifactsDir: string,
+  maxAgeMs: number,
+  now: Date,
+  keepTaskUid?: string,
+  limit = 50,
+): readonly string[] {
+  const removed: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(artifactsDir);
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (removed.length >= limit) break;
+    if (entry === keepTaskUid || !TASK_UID_SEGMENT.test(entry)) continue;
+    const dir = resolve(artifactsDir, entry);
+    try {
+      const stat = statSync(dir);
+      if (!stat.isDirectory() || now.getTime() - stat.mtimeMs < maxAgeMs) continue;
+      rmSync(dir, { recursive: true, force: true });
+      removed.push(entry);
+    } catch {
+      // another pod removed it first, or the volume hiccuped: next boot retries
+    }
+  }
+  return removed;
 }
 
 /* =====================================================================

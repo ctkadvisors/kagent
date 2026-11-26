@@ -759,6 +759,10 @@ agentPod:
   # per-Agent PVCs only if mixed-Agent contention shows up under load.
   artifactStorage:
     enabled: true
+    # false = the claim named `pvcName` is provided outside this chart (a
+    # cluster without the RWX class below pre-creates it); the chart then
+    # only mounts it. `size`, `storageClassName` and `accessMode` are unused.
+    create: true
     # PVC claim name (referenced from the spawned Job's volume mount).
     pvcName: 'kagent-artifacts'
     # Container path the PVC mounts at inside every agent pod. Forwarded
