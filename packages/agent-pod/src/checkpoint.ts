@@ -20,7 +20,10 @@
  * no tool can read or write (`RESERVED_DIR` in artifacts.ts). Its ref
  * rides in `AgentTask.status.artifacts`, so the operator knows its
  * sha256; a continuation loads a checkpoint only when the bytes match
- * the digest the operator passed it.
+ * the digest the operator passed it and the checkpoint was written by
+ * the same Agent in the same namespace. The continuation annotations
+ * are not proof of who set them; these two checks are what bound a
+ * resume.
  *
  * What a resume does not carry: the code-interpreter sandbox (a new
  * task gets a new, empty workspace), and the loop's iteration and token
@@ -53,6 +56,9 @@ export interface Checkpoint {
   readonly schema: typeof CHECKPOINT_SCHEMA;
   readonly taskUid: string;
   readonly taskName: string;
+  /** The Agent and namespace that ran the task; only the same pair may resume it. */
+  readonly agentName: string;
+  readonly namespace: string;
   readonly savedAt: string;
   /** Model calls the run had started when this was saved (1 = the first). */
   readonly llmCalls: number;
@@ -107,6 +113,8 @@ export function loadCheckpoint(
   store: CheckpointStore,
   taskUid: string,
   expectedChecksum: string | undefined,
+  /** The resuming task's own Agent and namespace: a conversation never crosses either. */
+  resumer: { readonly agentName: string; readonly namespace: string },
 ): LoadedCheckpoint {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(taskUid) || taskUid.includes('..')) {
     return { unavailable: 'the task uid to continue is not a valid uid' };
@@ -142,6 +150,9 @@ export function loadCheckpoint(
     !c.messages.every(isChatMessage)
   ) {
     return { unavailable: 'the checkpoint file is not a kagent-checkpoint/v1 for that task' };
+  }
+  if (c.agentName !== resumer.agentName || c.namespace !== resumer.namespace) {
+    return { unavailable: 'the checkpoint belongs to another agent or namespace' };
   }
   return { checkpoint: c as Checkpoint };
 }

@@ -334,6 +334,8 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
               schema: CHECKPOINT_SCHEMA,
               taskUid: config.taskId,
               taskName: config.taskName,
+              agentName: config.agentName,
+              namespace: config.taskNamespace,
               savedAt: new Date().toISOString(),
               llmCalls,
               messages: saved,
@@ -372,7 +374,10 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
     const loaded =
       checkpointStore === undefined
         ? { unavailable: 'artifact storage is not mounted in this pod' }
-        : loadCheckpoint(checkpointStore, continuesUid, runEnv.KAGENT_CONTINUES_CHECKSUM);
+        : loadCheckpoint(checkpointStore, continuesUid, runEnv.KAGENT_CONTINUES_CHECKSUM, {
+            agentName: config.agentName,
+            namespace: config.taskNamespace,
+          });
     if ('checkpoint' in loaded) {
       messages = resumeMessages(
         loaded.checkpoint,

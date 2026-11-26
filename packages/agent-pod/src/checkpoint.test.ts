@@ -35,6 +35,8 @@ const store = (): { artifactsDir: string; pvcName: string } => ({
   pvcName: 'kagent-artifacts',
 });
 
+const me = { agentName: 'researcher', namespace: 'default' };
+
 const history: ChatMessage[] = [
   { role: 'system', content: 'old system prompt' },
   { role: 'user', content: 'build the thing' },
@@ -50,6 +52,8 @@ const checkpoint = (over: Partial<Checkpoint> = {}): Checkpoint => ({
   schema: CHECKPOINT_SCHEMA,
   taskUid: 'uid-first',
   taskName: 'invent-1',
+  agentName: 'researcher',
+  namespace: 'default',
   savedAt: '2026-11-26T16:00:00.000Z',
   llmCalls: 2,
   messages: history,
@@ -61,21 +65,21 @@ describe('checkpoint file', () => {
     const ref = saveCheckpoint(store(), checkpoint());
     expect(ref.uri).toBe('pvc://kagent-artifacts/uid-first/.kagent/checkpoint.json');
     expect(ref.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
-    const loaded = loadCheckpoint(store(), 'uid-first', ref.checksum);
+    const loaded = loadCheckpoint(store(), 'uid-first', ref.checksum, me);
     expect('checkpoint' in loaded && loaded.checkpoint.messages).toEqual(history);
   });
 
   it('a later save replaces the earlier one', () => {
     saveCheckpoint(store(), checkpoint());
     const ref = saveCheckpoint(store(), checkpoint({ llmCalls: 3 }));
-    const loaded = loadCheckpoint(store(), 'uid-first', ref.checksum);
+    const loaded = loadCheckpoint(store(), 'uid-first', ref.checksum, me);
     expect('checkpoint' in loaded && loaded.checkpoint.llmCalls).toBe(3);
   });
 
   it('is not loaded without the recorded digest, with another digest, or when it was edited', () => {
     const ref = saveCheckpoint(store(), checkpoint());
     const reason = (uid: string, sum: string | undefined): string => {
-      const loaded = loadCheckpoint(store(), uid, sum);
+      const loaded = loadCheckpoint(store(), uid, sum, me);
       return 'unavailable' in loaded ? loaded.unavailable : 'LOADED';
     };
     expect(reason('uid-first', undefined)).toMatch(/no checkpoint digest/);
@@ -89,12 +93,23 @@ describe('checkpoint file', () => {
     expect(reason('uid-first', ref.checksum)).toMatch(/does not match the digest/);
   });
 
+  it('is not loaded by another agent or from another namespace, even with the right digest', () => {
+    const ref = saveCheckpoint(store(), checkpoint());
+    for (const resumer of [
+      { agentName: 'fleet-boss', namespace: 'default' },
+      { agentName: 'researcher', namespace: 'kagent-draft' },
+    ]) {
+      const loaded = loadCheckpoint(store(), 'uid-first', ref.checksum, resumer);
+      expect('unavailable' in loaded && loaded.unavailable).toMatch(/another agent or namespace/);
+    }
+  });
+
   it('is not loaded when it belongs to another task or is not a checkpoint', () => {
     const other = saveCheckpoint(store(), checkpoint({ taskUid: 'uid-other' }));
     // Copy another task's valid checkpoint into this uid's place.
     saveCheckpoint(store(), checkpoint());
     writeFileSync(checkpointPath(dir, 'uid-first'), readFileSync(checkpointPath(dir, 'uid-other')));
-    const loaded = loadCheckpoint(store(), 'uid-first', other.checksum);
+    const loaded = loadCheckpoint(store(), 'uid-first', other.checksum, me);
     expect('unavailable' in loaded && loaded.unavailable).toMatch(/not a kagent-checkpoint\/v1/);
   });
 });
