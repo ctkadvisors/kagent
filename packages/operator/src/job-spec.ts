@@ -26,6 +26,7 @@ import type {
 import * as cacheController from '@kagent/cache-controller';
 
 import type { Agent, AgentTask, InputDecl } from './crds/index.js';
+import { continuationEnv } from './continuation.js';
 import { isFromWorkspace } from './crds/agent-task.js';
 import {
   applyResolvedModel,
@@ -686,6 +687,8 @@ export function buildJobSpec(agent: Agent, task: AgentTask, opts: BuildJobSpecOp
     { name: 'KAGENT_TASK_ID', value: task.metadata.uid ?? '' },
     { name: 'KAGENT_TASK_NAME', value: task.metadata.name ?? '' },
     { name: 'KAGENT_TASK_NAMESPACE', value: namespace },
+    // A continuation task names the task it resumes and that task's checkpoint digest.
+    ...continuationEnv(task),
     ...executionDeadlineEnv(task),
     { name: 'KAGENT_AGENT_NAME', value: agent.metadata.name ?? '' },
     // Always emit the model as a tiny env var — admission consults

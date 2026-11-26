@@ -46,9 +46,17 @@ import { StdoutSink } from '@kagent/trace-sinks';
 import {
   createArtifactRegistry,
   DEFAULT_ARTIFACT_MAX_BYTES,
+  resolveWriterEnvOrDisabled,
   tryParseArtifactRefFromToolOutput,
   type ArtifactRegistry,
 } from './artifacts.js';
+import {
+  CHECKPOINT_SCHEMA,
+  checkpointingClient,
+  loadCheckpoint,
+  resumeMessages,
+  saveCheckpoint,
+} from './checkpoint.js';
 import { defineGetMyContext, InProcessToolProvider, resolveBuiltinTools } from './builtin-tools.js';
 import type { AgentSpecEnv, PodConfig } from './env.js';
 import { agentHasArtifactInputOrOutput } from './env.js';
@@ -128,6 +136,11 @@ export const DEFAULT_TASK_TIMEOUT_SECONDS = 1800;
  * `AbortSignal.any` so EITHER source can cancel the run.
  */
 export interface RunDeps {
+  /**
+   * Env for the checkpoint wiring (artifact mount, `KAGENT_CONTINUES_*`).
+   * Defaults to `process.env`; tests pass their own.
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly llm?: LLMClient;
   readonly sinks?: readonly TraceSink[];
   readonly toolProviders?: readonly ToolProvider[];
@@ -265,7 +278,7 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // bundle (loaded by main.ts via `loadCapabilityOptional`). Absent
   // cap = absent header (legacy / pre-Wave-4 install).
   const tenantClaim = deps.capabilityBundle?.claims?.tenant;
-  const llm =
+  const baseLlm =
     deps.llm ??
     buildLlmClient(config, undefined, identityHandle ?? undefined, tenantClaim ?? undefined);
 
@@ -302,6 +315,32 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   // loop so mid-run reads (status flush) see partial state.
   const artifactRegistry = deps.artifactRegistry ?? createArtifactRegistry();
 
+  // Checkpoints (checkpoint.ts): with the artifact volume mounted, the
+  // conversation is saved before every model call, and its ref joins this
+  // run's artifacts so the operator learns the file's digest. Without the
+  // volume the run is exactly as before.
+  const runEnv = deps.env ?? process.env;
+  const checkpointEnv = resolveWriterEnvOrDisabled({ ...runEnv, KAGENT_TASK_ID: config.taskId });
+  const checkpointStore =
+    'disabled' in checkpointEnv
+      ? undefined
+      : { artifactsDir: checkpointEnv.artifactsDir, pvcName: checkpointEnv.pvcName };
+  const llm =
+    checkpointStore === undefined
+      ? baseLlm
+      : checkpointingClient(baseLlm, (saved, llmCalls) => {
+          artifactRegistry.add(
+            saveCheckpoint(checkpointStore, {
+              schema: CHECKPOINT_SCHEMA,
+              taskUid: config.taskId,
+              taskName: config.taskName,
+              savedAt: new Date().toISOString(),
+              llmCalls,
+              messages: saved,
+            }),
+          );
+        });
+
   // Resolve tool providers: tests may inject explicitly via deps; in
   // production we read `Agent.spec.tools` and look each name up in the
   // built-in registry. Unknown names throw here at boot — fail fast so
@@ -322,7 +361,33 @@ export async function runAgentTask(config: PodConfig, deps: RunDeps = {}): Promi
   });
 
   const userMessage = pickUserMessage(config);
-  const messages: ChatMessage[] = [{ role: 'user', content: userMessage }];
+  let messages: ChatMessage[] = [{ role: 'user', content: userMessage }];
+
+  // A continuation (the operator set KAGENT_CONTINUES_TASK_UID) starts from
+  // the earlier task's saved conversation when its checkpoint is there and
+  // matches the digest the operator recorded. Otherwise it is a fresh run
+  // of the same work, and the log says why.
+  const continuesUid = runEnv.KAGENT_CONTINUES_TASK_UID;
+  if (typeof continuesUid === 'string' && continuesUid.length > 0) {
+    const loaded =
+      checkpointStore === undefined
+        ? { unavailable: 'artifact storage is not mounted in this pod' }
+        : loadCheckpoint(checkpointStore, continuesUid, runEnv.KAGENT_CONTINUES_CHECKSUM);
+    if ('checkpoint' in loaded) {
+      messages = resumeMessages(
+        loaded.checkpoint,
+        runEnv.KAGENT_CONTINUES_REASON ?? 'it did not finish',
+      );
+      console.log(
+        `[kagent-agent-pod] resume: continuing ${loaded.checkpoint.taskName} (${continuesUid}) from model call ` +
+          `${String(loaded.checkpoint.llmCalls)}, ${String(messages.length)} messages`,
+      );
+    } else {
+      console.warn(
+        `[kagent-agent-pod] resume: starting fresh instead of continuing ${continuesUid}: ${loaded.unavailable}`,
+      );
+    }
+  }
 
   // WS-G — resolve the per-run knobs from `runConfig` if present,
   // falling back to the deprecated top-level `timeoutSeconds`.
