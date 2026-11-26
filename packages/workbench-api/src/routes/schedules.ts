@@ -48,6 +48,8 @@ export interface ScheduleSummary {
   readonly name: string;
   readonly schedule: string;
   readonly suspended: boolean;
+  /** The schedule has an idle gate: it fires at a cron minute only when the namespace is quiet. */
+  readonly whenIdle: boolean;
   readonly targetAgent?: string;
   readonly targetCapability?: string;
   readonly lastTickAt?: string;
@@ -60,6 +62,7 @@ function scheduleSummary(s: KagentSchedule): ScheduleSummary {
     name: s.metadata.name ?? '<unnamed>',
     schedule: s.spec.schedule,
     suspended: s.spec.suspend === true,
+    whenIdle: s.spec.whenIdle !== undefined,
     ...(s.spec.taskTemplate.targetAgent !== undefined && {
       targetAgent: s.spec.taskTemplate.targetAgent,
     }),

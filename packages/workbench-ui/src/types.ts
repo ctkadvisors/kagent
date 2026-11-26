@@ -593,6 +593,8 @@ export interface ScheduleSummary {
   readonly name: string;
   readonly schedule: string;
   readonly suspended: boolean;
+  /** Has an idle gate; absent from an older API. */
+  readonly whenIdle?: boolean;
   readonly targetAgent?: string;
   readonly targetCapability?: string;
   readonly lastTickAt?: string;

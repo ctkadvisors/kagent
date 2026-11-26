@@ -51,6 +51,7 @@ describe('schedulesRoute', () => {
         name: 'brain-invalidation-audit',
         schedule: '*/15 * * * *',
         suspended: false,
+        whenIdle: false,
         targetAgent: 'brain-auditor',
         lastTickAt: '2026-08-01T00:15:00Z',
         nextTickAt: '2026-08-01T00:30:00Z',
