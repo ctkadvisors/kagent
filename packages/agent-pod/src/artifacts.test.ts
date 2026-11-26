@@ -1366,6 +1366,64 @@ describe('readArtifactFromDisk', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('refuses bytes that do not match the checksum the writer reported', () => {
+    const { dir, env } = setup();
+    const written = writeArtifactToDisk(
+      'plan.md',
+      'original',
+      'text/markdown',
+      { ...env, taskUid: 'task-a', maxBytes: 1024 },
+      new Date('2026-11-26T16:00:00Z'),
+    );
+    expect(
+      readArtifactFromDisk(written.ref.uri, env, undefined, written.ref.checksum).checksum,
+    ).toBe(written.ref.checksum);
+    writeFileSync(join(dir, 'task-a', 'plan.md'), 'replaced by someone else');
+    expect(() =>
+      readArtifactFromDisk(written.ref.uri, env, undefined, written.ref.checksum),
+    ).toThrow(/replaced after its ref was issued/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the substrate's .kagent directory out of both tools", () => {
+    const { dir, env } = setup();
+    mkdirSync(join(dir, 'task-a', '.kagent'), { recursive: true });
+    writeFileSync(join(dir, 'task-a', '.kagent', 'checkpoint.json'), '{}');
+    expect(() =>
+      readArtifactFromDisk('pvc://kagent-artifacts/task-a/.kagent/checkpoint.json', env),
+    ).toThrow(/must not begin with "\.kagent\/"/);
+    expect(() =>
+      writeArtifactToDisk(
+        '.kagent/checkpoint.json',
+        '{}',
+        'application/json',
+        { ...env, taskUid: 'task-a', maxBytes: 1024 },
+        new Date(),
+      ),
+    ).toThrow(/must not begin with "\.kagent\/"/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('stops a task at its total artifact limit', () => {
+    const { dir, env } = setup();
+    const write = (name: string) =>
+      writeArtifactToDisk(
+        name,
+        'x'.repeat(60),
+        'text/plain',
+        { ...env, taskUid: 'task-a', maxBytes: 1024 },
+        new Date(),
+      );
+    process.env.KAGENT_ARTIFACT_TASK_MAX_BYTES = '100';
+    try {
+      write('one.txt');
+      expect(() => write('two.txt')).toThrow(/would pass its 100-byte limit/);
+    } finally {
+      delete process.env.KAGENT_ARTIFACT_TASK_MAX_BYTES;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('refuses an artifact over the read limit', () => {
     const { dir, env } = setup();
     mkdirSync(join(dir, 'task-a'));

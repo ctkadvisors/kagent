@@ -334,7 +334,9 @@ CAS-backed dedupe (v0.2.2) reads the same field. The PVC writer is the substrate
 
 - **`read_artifact`** is a built-in next to `write_artifact`: it reads the bytes behind a `pvc://<volume>/<task-uid>/<name>` URI from the same mount, in any task. An agent gets it by listing `read_artifact` in `spec.tools`. It refuses another volume's URI, a path outside the task directory, a `.tmp` file and anything over 8 MiB, and returns the `sha256:` checksum of what it read.
 - **Parent and child.** `wait_for_child_task` and `wait_for_children_all` return each child's `pvc://` refs under `artifacts`. A parent passes a URI to a child in the message text.
-- **The URI is the capability.** Every agent pod mounts the whole volume read-write, so a task that knows a URI can read it, and agents in one namespace can overwrite each other's files. Compare the checksum when it matters.
+- **The URI is the capability.** A task that knows a URI can read it. `write_artifact` writes only inside the calling task's directory, and agent code runs in a sandbox pod that does not mount the volume, but the mount itself is the whole volume read-write. Pass the writer's `checksum` to `read_artifact` and it refuses bytes that were replaced.
+- **`.kagent/`** inside a task directory is the substrate's (task checkpoints). Neither tool reads or writes it.
+- **Limits.** 25 MiB per write (`KAGENT_ARTIFACT_MAX_BYTES`), 256 MiB per task (`KAGENT_ARTIFACT_TASK_MAX_BYTES`). The volume's total is not enforced by `local-path`.
 - **Retention.** Each agent pod, at boot, removes task directories unchanged for `KAGENT_ARTIFACT_RETENTION_DAYS` (default 30), at most 50 per boot. Nothing else deletes them.
 - **`agentPod.artifactStorage.create: false`** mounts a claim made outside the chart, for a cluster with no RWX class.
 - The `cas://` reader (`defineReadArtifact`, `PvcCasBackend`) is still unregistered; §9.6's migration has not happened.

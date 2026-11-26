@@ -157,6 +157,35 @@ const INLINE_SAFE_MEDIA_TYPES: ReadonlySet<string> = new Set<string>([
  * forward slashes for nested layout (e.g. `screenshots/01.png`). The
  * canonical PVC-URI helper accepts the same shape.
  */
+/** First path segment, inside a task directory, that only the substrate reads and writes. */
+export const RESERVED_DIR = '.kagent';
+
+/** Default ceiling on everything one task may keep on the artifact volume. */
+export const DEFAULT_TASK_ARTIFACT_BYTES = 256 * 1024 * 1024;
+
+/** Total size of the regular files under `dir` (0 when it does not exist). */
+export function directoryBytes(dir: string): number {
+  let total = 0;
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    const path = resolve(dir, entry.name);
+    if (entry.isDirectory()) total += directoryBytes(path);
+    else if (entry.isFile()) {
+      try {
+        total += statSync(path).size;
+      } catch {
+        // removed between listing and stat
+      }
+    }
+  }
+  return total;
+}
+
 export function validateArtifactName(name: unknown): string {
   if (typeof name !== 'string') {
     throw new Error('write_artifact: "name" must be a string');
@@ -171,6 +200,11 @@ export function validateArtifactName(name: unknown): string {
   // in a Linux PVC layout and are an obvious traversal bypass.
   if (name.includes('\\')) {
     throw new Error('write_artifact: "name" must not contain backslashes');
+  }
+  // `.kagent/` in a task directory is the substrate's own (task checkpoints):
+  // no tool may write it or read it back.
+  if (name.split('/')[0] === RESERVED_DIR) {
+    throw new Error(`write_artifact: "name" must not begin with "${RESERVED_DIR}/"`);
   }
   // Reject `..` / `.` / empty segments (segment-aware so `foo..bar.txt` is fine).
   for (const segment of name.split('/')) {
@@ -301,6 +335,11 @@ export interface WriteArtifactResult {
  * {@link DEFAULT_ARTIFACT_MAX_BYTES} when unset / malformed / non-positive
  * so a fat-fingered Helm value can't silently disable the cap.
  */
+function parseTaskBytes(raw: string | undefined): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_TASK_ARTIFACT_BYTES;
+}
+
 function parseMaxBytes(raw: string | undefined): number {
   if (typeof raw !== 'string' || raw.length === 0) return DEFAULT_ARTIFACT_MAX_BYTES;
   const n = Number(raw);
@@ -462,6 +501,16 @@ export function writeArtifactToDisk(
     );
   }
 
+  // One task cannot fill the volume: the per-write cap bounds a file, this bounds the task.
+  const taskLimit = parseTaskBytes(process.env.KAGENT_ARTIFACT_TASK_MAX_BYTES);
+  const used = directoryBytes(taskRoot);
+  if (used + bytes.byteLength > taskLimit) {
+    throw new Error(
+      `write_artifact: this task already holds ${String(used)} bytes of artifacts; ` +
+        `${String(bytes.byteLength)} more would pass its ${String(taskLimit)}-byte limit`,
+    );
+  }
+
   const tmpPath = `${targetPath}.tmp`;
   const targetDir = targetPath.slice(0, targetPath.lastIndexOf(sep));
   mkdirSync(targetDir, { recursive: true });
@@ -548,6 +597,8 @@ export function readArtifactFromDisk(
   uri: unknown,
   env: Pick<ArtifactWriterEnv, 'artifactsDir' | 'pvcName'>,
   maxBytes: number = READ_ARTIFACT_MAX_BYTES,
+  /** The writer's `checksum` (`sha256:<hex>`); when given, other bytes are refused. */
+  expectedChecksum?: string,
 ): ReadArtifactResult {
   if (typeof uri !== 'string' || !uri.startsWith('pvc://')) {
     throw new Error('read_artifact: "uri" must be a pvc:// URI returned by write_artifact');
@@ -592,7 +643,14 @@ export function readArtifactFromDisk(
     );
   }
   const bytes = readFileSync(target);
-  return { uri, bytes, checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+  const checksum = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (expectedChecksum !== undefined && expectedChecksum !== checksum) {
+    throw new Error(
+      `read_artifact: the bytes at ${uri} hash to ${checksum}, not the expected ${expectedChecksum}; ` +
+        'the artifact was replaced after its ref was issued',
+    );
+  }
+  return { uri, bytes, checksum };
 }
 
 /* =====================================================================

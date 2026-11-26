@@ -945,6 +945,11 @@ export function buildBuiltinToolRegistry(
           type: 'string',
           description: 'The media type the writer reported; default text/plain.',
         },
+        checksum: {
+          type: 'string',
+          description:
+            'The sha256:<hex> the writer reported. Pass it whenever you have it: the read is refused if the bytes changed.',
+        },
       },
       required: ['uri'],
       additionalProperties: false,
@@ -956,7 +961,12 @@ export function buildBuiltinToolRegistry(
           `tool_error: read_artifact: artifact storage is disabled (${writerEnv.reason})`,
         );
       }
-      const read = readArtifactFromDisk(args.uri, writerEnv);
+      const read = readArtifactFromDisk(
+        args.uri,
+        writerEnv,
+        undefined,
+        typeof args.checksum === 'string' ? args.checksum : undefined,
+      );
       const mediaType = typeof args.mediaType === 'string' ? args.mediaType : 'text/plain';
       const text = isTextLikeMediaType(mediaType);
       return jsonContent({
