@@ -52,6 +52,14 @@ export const PARENT_TASK_UID_LABEL = 'kagent.knuteson.io/parent-task-uid';
  * them in `allowedChildAgents`.
  */
 export const FROM_TEMPLATE_LABEL = 'kagent.knuteson.io/from-template';
+/**
+ * On a child AgentTask: the AgentTemplate its target Agent was instantiated
+ * from, copied from that Agent's own `from-template` label when the child is
+ * created. An instantiated Agent is reaped when idle; the task is what stays,
+ * so this is the durable record of which template did the work (its name is
+ * not: the middle of an instance name is whatever its creator typed).
+ */
+export const TARGET_TEMPLATE_LABEL = 'kagent.knuteson.io/target-from-template';
 
 /**
  * v0.1.9 — task-depth label. Local mirror of the operator's canonical
@@ -106,6 +114,8 @@ export interface ParentIdentity {
 export interface ChildTaskInput {
   readonly name: string;
   readonly targetAgent: string;
+  /** The target Agent's `from-template` label, when it has one. */
+  readonly targetTemplate?: string;
   readonly originalUserMessage: string;
   readonly runConfig?: {
     readonly timeoutSeconds?: number;
@@ -244,6 +254,10 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
             [PARENT_TASK_UID_LABEL]: parent.uid,
             [TASK_DEPTH_LABEL]: String(childDepth),
             [ROOT_TASK_UID_LABEL]: childRootUid,
+            ...(input.targetTemplate !== undefined &&
+              input.targetTemplate.length > 0 && {
+                [TARGET_TEMPLATE_LABEL]: input.targetTemplate,
+              }),
           },
           ownerReferences: [
             {
