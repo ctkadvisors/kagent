@@ -520,6 +520,32 @@ describe('a child that ran out of time and was continued', () => {
     expect(clock.now()).toBeLessThan(CONTINUATION_GRACE_MS + 10_000);
   });
 
+  it('a continuation chain that loops back ends the wait instead of spinning', async () => {
+    const { k8s } = cluster([
+      child({ error: 'LLM backend returned HTTP 502', continuesUid: 'uid-v2' }),
+      child({
+        name: 'verify-cont1',
+        uid: 'uid-v2',
+        error: 'LLM backend returned HTTP 502',
+        continuesUid: 'uid-v',
+      }),
+    ]);
+    const clock = makeClock();
+    const provider = buildWaitToolProvider({ parent: PARENT, k8s, ...clock });
+    const parsed = JSON.parse(
+      resultText(
+        await callWaitChild(provider, {
+          uid: 'uid-v',
+          timeoutSeconds: 600,
+          pollIntervalSeconds: 5,
+        }),
+      ),
+    ) as { phase: string; name: string; continuedFrom: string[] };
+    expect(parsed.phase).toBe('Failed');
+    expect(parsed.name).toBe('verify-cont1');
+    expect(parsed.continuedFrom).toEqual(['verify']);
+  });
+
   it('a failure more time would not fix is reported at once', async () => {
     const { k8s } = cluster([child({ error: 'LLM backend returned HTTP 502', completedAtMs: 0 })]);
     const clock = makeClock();

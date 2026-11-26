@@ -84,6 +84,8 @@ const RESUMABLE_CHILD_ERRORS = [
   /^cancelled: SIGTERM received/,
   /^\[pod\/(PodFailed|DeadlineExceeded)\]/,
 ];
+/** The operator's ceiling on continuations of one piece of work (continuation.ts). */
+const MAX_CONTINUATION_HOPS = 5;
 /** How long after such a failure the operator is given to create the continuation. */
 export const CONTINUATION_GRACE_MS = 20_000;
 
@@ -164,6 +166,7 @@ export function defineWaitForChildTask(deps: WaitToolDeps): InProcessToolDefinit
       // The child being waited on; moves to its continuation when the operator resumes it.
       let uid = args.uid;
       const continuedFrom: string[] = [];
+      const followed = new Set<string>([args.uid]);
       while (now() < deadline) {
         if (ctx.abortSignal.aborted) {
           throw new Error('wait_for_child_task: aborted');
@@ -180,7 +183,14 @@ export function defineWaitForChildTask(deps: WaitToolDeps): InProcessToolDefinit
           // A child that ran out of time may be resumed as a sibling task: wait on that
           // one instead of reporting a failure the fleet is already recovering from.
           const next = continuationOf(await deps.k8s.listAllChildren(deps.parent), snap.uid);
-          if (next !== undefined) {
+          // Follow each task once and no further than the operator ever continues one, so a
+          // malformed chain (a task naming itself or an earlier one) ends the wait, not loops it.
+          if (
+            next !== undefined &&
+            !followed.has(next.uid) &&
+            followed.size <= MAX_CONTINUATION_HOPS
+          ) {
+            followed.add(next.uid);
             continuedFrom.push(snap.name);
             uid = next.uid;
             continue;
