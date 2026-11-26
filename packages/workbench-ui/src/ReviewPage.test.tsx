@@ -37,11 +37,7 @@ vi.mock('./api.js', () => ({
   },
 }));
 
-import {
-  useReviewQueue,
-  acceptReviewQueueRow,
-  rejectReviewQueueRow,
-} from './api.js';
+import { useReviewQueue, acceptReviewQueueRow, rejectReviewQueueRow } from './api.js';
 
 import { ReviewPage } from './ReviewPage.js';
 
@@ -95,15 +91,21 @@ describe('ReviewPage (REV-02)', () => {
 
     render(<ReviewPage onBack={vi.fn()} />);
 
-    // Verify 2 data rows rendered (not counting header row)
+    // "To decide" is the default view: the verifier failure, not the detector flag.
+    expect(screen.getByRole('tab', { name: 'To decide (1)' }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
     const tbody = document.querySelector('tbody');
     expect(tbody).not.toBeNull();
-    const rows = tbody!.querySelectorAll('tr');
-    expect(rows.length).toBe(2);
+    expect(tbody!.querySelectorAll('tr').length).toBe(1);
+    expect(document.querySelectorAll('td[data-source-field="reason"]').length).toBe(1);
+    expect(screen.queryByText(/researcher-suspicious-01/)).toBeNull();
 
-    // Verify data-source-field attributes on cells
-    const reasonCells = document.querySelectorAll('td[data-source-field="reason"]');
-    expect(reasonCells.length).toBe(2);
+    // The detector flag is on its own tab, with the same source-bound cells.
+    fireEvent.click(screen.getByRole('tab', { name: 'Detector flags (1)' }));
+    expect(screen.getByText(/researcher-suspicious-01/)).toBeTruthy();
+    expect(document.querySelectorAll('tbody tr').length).toBe(1);
+    fireEvent.click(screen.getByRole('tab', { name: 'To decide (1)' }));
 
     // Verify Open Detail link encodes namespace+name
     const detailLink = screen.getByRole('link', { name: /kagent-system\/researcher-fail-01/ });

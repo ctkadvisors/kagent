@@ -9,6 +9,31 @@ It is not the product, not the orchestrator, and not a chat app. Its job
 is to make autonomous execution inspectable: tasks, pods, traces,
 artifacts, failures, retries, and agent definitions.
 
+## 0. What is deployed (2026-11-26)
+
+The sections below are the May 2026 plan. This is what `packages/workbench-ui/src/App.tsx` routes to today.
+
+| Route | Page | Shows | Writes |
+|---|---|---|---|
+| `#/` | Tasks | every `AgentTask`: phase, detector flags, trace, pod, failure | new task |
+| `#/tasks/<ns>/<name>` | Task detail | identity, evidence, payload, result, children | cancel, retry |
+| `#/command` | Command Center | agents, tasks and gateway flows as a map (`COMMAND-CENTER-CONTRACT.md`) | task actions |
+| `#/sessions` | Sessions | chat sessions with an agent profile | send a message |
+| `#/channels` | Channels | Telegram and WhatsApp accounts, bindings, sessions | pause a channel |
+| `#/schedules` | Schedules | `KagentSchedule` rows, last and next tick, overdue ticks | run now |
+| `#/cluster` | Cluster | nodes, managed pods, recent task trees | none |
+| `#/gateway` | Gateway | `ModelEndpoint` in-flight caps, recent requests | endpoint bounds, pause provider dispatch |
+| `#/review` | Review | "To decide" (candidates, verifier failures, requests) and "Detector flags" | accept, reject |
+| `#/architect` | Architect | drafts an `AgentTemplate` from a description and smoke-tests it | draft, try |
+| `#/fleet` | Fleet | frames the fleet forum (`fleet.knuteson.io/embed`, in `ctkadvisors/new_localai`) | none; the pause switch is on the forum itself |
+
+Planned below and not built as their own pages: task graph (§3.3), agent catalog (§3.4), artifact browser (§3.5),
+ops panel (§3.6), and the Tool Foundry in the Command Center contract. Built although §7 said not to: a chat
+surface (Sessions, Architect).
+
+Who decides what: the fleet authority accepts and rejects candidate rows through `/api/review-queue`; its own
+queue, catalog and pause switch are on the forum. The Workbench is the map of tasks, schedules and capacity.
+
 ## 1. Why this belongs early
 
 Phase 4 proved the core loop works, but the first bring-up also proved

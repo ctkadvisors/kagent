@@ -102,7 +102,7 @@ At runtime, the agent-pod's cap-consumer verifies the bundle's signature and exp
 
 **What this does not yet do:** `claims.tools` is not enforced at invocation time. The agent-pod reads only `claims.tenant` off the verified bundle; runtime tool wiring comes from `Agent.spec.tools`, and the tool gateway's invoke path does no capability check. `resolveAgentClaims()` also never derives `tools` from `spec.tools`, so an Agent that declares tools but no `capabilityClaims` resolves to empty claims and passes admission trivially — which describes 31 of the 33 Agent CRs on the homelab cluster today. Concretely: the substrate stops a parent from spawning a child *Agent* it isn't entitled to spawn, and stops that child from publishing or reading/writing blackboard keys outside its grant. It does not currently stop a child Agent whose CR declares `tools: [shell.exec]` from calling `shell.exec`. Closing that gap is an entitlement check on `POST /v1/tool-runtime/invoke` plus deriving `claims.tools` from `spec.tools` at resolve time.
 
-The OSS landscape (Solo.io kagent.dev v0.9.x, kubernetes-sigs/agent-sandbox v0.4.5) has Agent isolation but does not have substrate-enforced **capability narrowing across the parent/child boundary**. AWS AgentCore has a related primitive ("on-behalf-of" identity) at the proprietary level. Anthropic Managed Agents and CF Agents+Sandbox have neither.
+As audited in May 2026, the OSS landscape (Solo.io kagent.dev v0.9.x, kubernetes-sigs/agent-sandbox v0.4.5) had Agent isolation but did not have substrate-enforced **capability narrowing across the parent/child boundary**. AWS AgentCore has a related primitive ("on-behalf-of" identity) at the proprietary level. Anthropic Managed Agents and CF Agents+Sandbox have neither.
 
 **Status:** mint/admission narrowing + `spawn`/`publish`/`blackboard` runtime enforcement shipped (`packages/operator/src/cap-issuer.ts`, `packages/operator/src/task-admission.ts`, `packages/agent-pod/src/cap-consumer.ts`; review under `evidence/audit-rev2/R1.md` §1). Runtime `claims.tools` enforcement is on the not-shipped list above.
 
@@ -138,9 +138,9 @@ The peer review framing is "adopt this, adopt the official sandbox set, or go an
 
 A possible middle ground: kagent could refactor to *consume* `kubernetes-sigs/agent-sandbox` for the isolation primitive and keep the three distinctive primitives on top. This is documented as `docs/UPSTREAM-DIFF-AGENT-SANDBOX.md` and is a viable path forward. A first hook already exists: the operator chart optionally renders `extensions.agents.x-k8s.io/v1beta1` SandboxTemplates for the tool gateway's code-interpreter sessions and grants the gateway RBAC on `SandboxClaim`. Code execution still runs on the gateway-local runner today; the templates are the handoff point, not a live dependency.
 
-### vs Solo.io [`kagent.dev`](https://kagent.dev) (name collision, different problem)
+### vs Solo.io [`kagent.dev`](https://kagent.dev) (name collision, overlapping problem)
 
-Solo.io's kagent.dev is an autonomous **K8s-operating** agent — an AI that troubleshoots clusters. **Different problem domain.** Their v0.9.x consumes `kubernetes-sigs/agent-sandbox` for the isolation layer. Pre-public-release, this kagent (the homelab project) will need to rename to avoid collision — candidates in `docs/RENAME-EVALUATION.md`: `agentforge`, `kfarm`, `agentpod`, `podforge`. **Not blocking the technical evaluation.**
+As of 2026-11-26 Solo.io's kagent is at v1.0.1 and is a general agent runtime on Kubernetes: sessions run as sandboxed actors on Agent Substrate, with Codex, Claude and bring-your-own harnesses, scheduled runs, checkpoint and resume, A2A and MCP. It is no longer only a cluster-operations agent, and its `Agent` and `AgentTemplate` kinds now share names with ours. It has no self-improvement or promotion loop, which is what this project is built around. The dated comparison, with sources and what is worth porting, is [`docs/SOLO-COMPARISON-2026-11-26.md`](./docs/SOLO-COMPARISON-2026-11-26.md). The rename question (`docs/RENAME-EVALUATION.md`) is still open before any wider release.
 
 ### vs proprietary substrates
 
