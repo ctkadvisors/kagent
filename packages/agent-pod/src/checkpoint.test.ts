@@ -76,13 +76,18 @@ describe('checkpoint file', () => {
     expect('checkpoint' in loaded && loaded.checkpoint.llmCalls).toBe(3);
   });
 
-  it('is not loaded without the recorded digest, with another digest, or when it was edited', () => {
+  it('is not loaded with another digest, a malformed one, or when it was edited', () => {
     const ref = saveCheckpoint(store(), checkpoint());
     const reason = (uid: string, sum: string | undefined): string => {
       const loaded = loadCheckpoint(store(), uid, sum, me);
       return 'unavailable' in loaded ? loaded.unavailable : 'LOADED';
     };
-    expect(reason('uid-first', undefined)).toMatch(/no checkpoint digest/);
+    expect(reason('uid-first', 'md5:abc')).toMatch(/not a sha256 digest/);
+    // A killed pod reports no digest; its checkpoint is still the conversation to resume.
+    for (const none of [undefined, '']) {
+      const loaded = loadCheckpoint(store(), 'uid-first', none, me);
+      expect('checkpoint' in loaded && loaded.checkpoint.taskUid).toBe('uid-first');
+    }
     expect(reason('uid-first', `sha256:${'0'.repeat(64)}`)).toMatch(/does not match the digest/);
     expect(reason('uid-none', ref.checksum)).toMatch(/left no checkpoint file/);
     expect(reason('../uid-first', ref.checksum)).toMatch(/not a valid uid/);

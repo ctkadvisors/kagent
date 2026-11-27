@@ -19,11 +19,12 @@
  * The file is `<artifacts>/<task-uid>/.kagent/checkpoint.json`, a path
  * no tool can read or write (`RESERVED_DIR` in artifacts.ts). Its ref
  * rides in `AgentTask.status.artifacts`, so the operator knows its
- * sha256; a continuation loads a checkpoint only when the bytes match
- * the digest the operator passed it and the checkpoint was written by
- * the same Agent in the same namespace. The continuation annotations
- * are not proof of who set them; these two checks are what bound a
- * resume.
+ * sha256 once the pod reports; a killed pod never does. A continuation
+ * loads a checkpoint written for the task it names by the same Agent in
+ * the same namespace, and, when a digest was recorded, only if the bytes
+ * match it. Who may name a task to continue is an admission rule on the
+ * continues-* annotations (operator only), not something the pod can
+ * check.
  *
  * What a resume does not carry: the code-interpreter sandbox (a new
  * task gets a new, empty workspace), and the loop's iteration and token
@@ -119,8 +120,12 @@ export function loadCheckpoint(
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(taskUid) || taskUid.includes('..')) {
     return { unavailable: 'the task uid to continue is not a valid uid' };
   }
-  if (expectedChecksum === undefined || !/^sha256:[0-9a-f]{64}$/.test(expectedChecksum)) {
-    return { unavailable: 'no checkpoint digest was recorded for the earlier task' };
+  // No digest: the earlier pod was killed before it could report one, which is the case a
+  // resume matters most for. Who may name a task to continue is settled at admission (only the
+  // operator sets the continues-* annotations), so the file is loaded on the checks below.
+  const expected = expectedChecksum === '' ? undefined : expectedChecksum;
+  if (expected !== undefined && !/^sha256:[0-9a-f]{64}$/.test(expected)) {
+    return { unavailable: 'the recorded checkpoint digest is not a sha256 digest' };
   }
   let bytes: Buffer;
   try {
@@ -131,7 +136,10 @@ export function loadCheckpoint(
   if (bytes.byteLength > CHECKPOINT_MAX_BYTES) {
     return { unavailable: 'the checkpoint file is larger than a conversation can be' };
   }
-  if (`sha256:${createHash('sha256').update(bytes).digest('hex')}` !== expectedChecksum) {
+  if (
+    expected !== undefined &&
+    `sha256:${createHash('sha256').update(bytes).digest('hex')}` !== expected
+  ) {
     return { unavailable: 'the checkpoint file does not match the digest the operator recorded' };
   }
   let parsed: unknown;
