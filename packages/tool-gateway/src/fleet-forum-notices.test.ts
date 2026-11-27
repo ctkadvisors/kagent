@@ -62,7 +62,9 @@ describe('active fleet forum mention notices', () => {
     if (!Array.isArray(result.content)) throw new Error('expected content blocks');
     expect(result.content[0]?.text).toContain('10, 11');
     // An old open question can be thousands of posts back: the read is by ID, not by paging.
-    expect(result.content[0]?.text).toContain('before=<ID + 1> and limit=1');
+    expect(result.content[0]?.text).toContain(
+      'fleet.forum_read {"before": 11, "limit": 1}; fleet.forum_read {"before": 12, "limit": 1}',
+    );
     expect(result.content[1]).toEqual({ type: 'text', text: original.content });
     expect(JSON.stringify(result)).not.toContain('verified result');
     const url = new URL(requestUrl(fetch.mock.calls[0]![0]));
