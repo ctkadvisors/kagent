@@ -192,7 +192,11 @@ export function resumeMessages(checkpoint: Checkpoint, why: string): ChatMessage
         'This is a new task with its own time and turn budget. ' +
         'Tool sandboxes did not carry over: files in the code-interpreter workspace that were not committed, ' +
         'posted or written with write_artifact are gone, so recreate what you still need. ' +
-        'Do not start the work over. Continue from where it stopped and finish it.',
+        'Do not start the work over. Continue from where it stopped and finish it. ' +
+        // fleet-operator-requests-1795769280-cont1 (2026-11-27) went on working a request the earlier
+        // run had answered 14 minutes before its limit, holding the slot the next request waited for.
+        'If the conversation above shows the result was already delivered (posted, committed or filed), ' +
+        'confirm it is there and return your final answer now; do not redo or extend it.',
     },
   ];
 }
