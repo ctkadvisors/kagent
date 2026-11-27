@@ -30,6 +30,13 @@ import type { TraceEntry } from '../trace.js';
 
 const TRUNCATION_MIN_OUTPUT_TOKENS = 200;
 const TRUNCATION_MIN_CONTENT_LEN = 200;
+/**
+ * Output-token ceiling below which an engine-reported `end_turn` is
+ * treated as a genuine model finish (not a cap cut-off). Above this the
+ * answer is cap-sized and the punctuation heuristic still applies even
+ * when the engine claims `end_turn` (CF-gateway-compat lies).
+ */
+const TRUNCATION_CAP_SIZED_OUTPUT_TOKENS = 4096;
 
 /**
  * Default detector knobs for `context_pressure_ignored`. Match the
@@ -333,6 +340,17 @@ function detectTruncatedSynthesis(traces: TraceEntry[], finalContent: string | n
   if (!last) return false;
   const out = last.output_tokens_est ?? 0;
   if (out < TRUNCATION_MIN_OUTPUT_TOKENS) return false;
+
+  // Stop-reason aware. A length/max_tokens stop is ALWAYS a cut-off, even
+  // when the text happens to end on punctuation (the cap, not the model,
+  // decided where it ended). An engine end_turn on a short answer means the
+  // model finished on its own — do not flag even if the last character is
+  // not a sentence terminator (fixes 644 false-positive fleet-boss
+  // 'nothing queued' answers). Unknown stop reason keeps the punctuation
+  // heuristic below.
+  const stopReason = last.stop_reason;
+  if (stopReason === 'length' || stopReason === 'max_tokens') return true;
+  if (stopReason === 'end_turn' && out < TRUNCATION_CAP_SIZED_OUTPUT_TOKENS) return false;
 
   // Sentence terminators + balanced closing fences. `)` and `]` are
   // accepted because long answers legitimately end on a markdown link
