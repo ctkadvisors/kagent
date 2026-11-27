@@ -65,6 +65,7 @@ import {
 } from '@kagent/agent-loop';
 import { buildOpenAIRequestBody, buildOpenAIHeaders } from './request-builder.js';
 import { mapOpenAIResponseToChatResult } from './response-mapper.js';
+import { recoverTextToolCalls } from './text-tool-calls.js';
 import { parseSSEStream } from './sse-parser.js';
 import { assembleChatCompletion, sseData } from './stream-assembler.js';
 
@@ -172,6 +173,10 @@ export class OpenAICompatibleLLMClient implements LLMClient {
     const body = buildOpenAIRequestBody(request, model, { stream: true });
     const headers = buildOpenAIHeaders(apiKey, defaultHeaders, { stream: true });
     const url = `${baseUrl}/chat/completions`;
+    // A backend that could not parse the model's tool-call markup hands it back as text;
+    // on a turn that may call tools, that text is a call to make, not an answer.
+    const recover = (result: ChatResult): ChatResult =>
+      request.toolChoice === 'none' ? result : recoverTextToolCalls(result, request.tools);
 
     let response: Response;
     try {
@@ -210,8 +215,10 @@ export class OpenAICompatibleLLMClient implements LLMClient {
       (response.headers.get('content-type') ?? '').includes('text/event-stream');
     if (streamed && response.body !== null) {
       try {
-        return mapOpenAIResponseToChatResult(
-          await assembleChatCompletion(sseData(response.body, ctx?.abortSignal)),
+        return recover(
+          mapOpenAIResponseToChatResult(
+            await assembleChatCompletion(sseData(response.body, ctx?.abortSignal)),
+          ),
         );
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
@@ -234,7 +241,7 @@ export class OpenAICompatibleLLMClient implements LLMClient {
       );
     }
 
-    return mapOpenAIResponseToChatResult(json);
+    return recover(mapOpenAIResponseToChatResult(json));
   }
 
   /**
