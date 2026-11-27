@@ -9,6 +9,7 @@ import { taskDiagnosticsRoute } from './task-diagnostics.js';
 import { LangfuseTraceReader } from '../langfuse-client.js';
 
 interface Body {
+  task: { structuralVerdict?: unknown };
   pod: { state: string };
   trace: {
     state: string;
@@ -28,7 +29,12 @@ function cache() {
     kind: 'AgentTask',
     metadata: { name: 'failed', namespace: 'kagent-system', uid: 'task-uid' },
     spec: { targetAgent: 'fleet-auditor', runConfig: { maxIterations: 4 } },
-    status: { phase: 'Failed', error: 'maxIterations', children: [] },
+    status: {
+      phase: 'Failed',
+      error: 'maxIterations',
+      children: [],
+      structuralVerdict: { suspicious: ['synthesis_low_yield'] },
+    },
   });
   return c;
 }
@@ -68,6 +74,8 @@ describe('task diagnostics', () => {
     const body = await read(first);
     expect(first.status).toBe(200);
     expect(body.pod.state).toBe('gone');
+    // The detectors' verdict travels with the trace it was drawn from.
+    expect(body.task.structuralVerdict).toEqual({ suspicious: ['synthesis_low_yield'] });
     expect(body.trace.state).toBe('observed');
     expect(body.trace.events.map((e: { sequence: number }) => e.sequence)).toEqual([1, 2]);
     expect(body.trace.events[0].arguments.code).toHaveLength(1400);

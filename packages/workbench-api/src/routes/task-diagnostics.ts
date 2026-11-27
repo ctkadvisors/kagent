@@ -114,6 +114,12 @@ export function taskDiagnosticsRoute(deps: TaskDiagnosticsDeps): Hono {
         runConfig: task.spec.runConfig,
         phase: task.status?.phase,
         error: task.status?.error,
+        completedAt: task.status?.completedAt,
+        // What the operator's detectors said about this run (for example `truncated_synthesis`,
+        // `synthesis_low_yield`): the agent reading its own or a child's run sees the verdict
+        // with the trace it was drawn from, not only on a human review page.
+        structuralVerdict: (task.status as { structuralVerdict?: unknown } | undefined)
+          ?.structuralVerdict,
         children: task.status?.children ?? [],
         artifacts: task.status?.artifacts ?? [],
       }),
