@@ -183,3 +183,47 @@ describe('K8sTaskCreator.createChildTask (manifest shape)', () => {
     expect(labels[TASK_DEPTH_LABEL]).toBe('2');
   });
 });
+
+describe('getTaskByUid', () => {
+  const task = (uid: string) => ({
+    metadata: { name: `t-${uid}`, uid },
+    status: { phase: 'Completed' },
+  });
+  const api = (pages: Record<string, { items: unknown[]; metadata?: { continue?: string } }>) => {
+    const calls: Record<string, unknown>[] = [];
+    const customApi = {
+      listNamespacedCustomObject: (req: Record<string, unknown>) => {
+        calls.push(req);
+        const key =
+          typeof req.labelSelector === 'string'
+            ? 'children'
+            : typeof req._continue === 'string'
+              ? req._continue
+              : 'first';
+        return Promise.resolve(pages[key] ?? { items: [] });
+      },
+    } as unknown as Parameters<typeof buildK8sTaskCreator>[0];
+    return { k8s: buildK8sTaskCreator(customApi), calls };
+  };
+  const parent = { name: 'p', namespace: 'ns', uid: 'parent-uid' };
+
+  it("finds a parent's own child with one labelled list, never the whole namespace", async () => {
+    const { k8s, calls } = api({ children: { items: [task('a'), task('b')] } });
+    expect((await k8s.getTaskByUid('ns', 'b', parent))?.name).toBe('t-b');
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.labelSelector)).toContain('parent-uid');
+  });
+
+  it('falls back to the namespace a page at a time', async () => {
+    const { k8s, calls } = api({
+      children: { items: [] },
+      first: { items: [task('a')], metadata: { continue: 'p2' } },
+      p2: { items: [task('z')] },
+    });
+    expect((await k8s.getTaskByUid('ns', 'z', parent))?.name).toBe('t-z');
+    expect(await k8s.getTaskByUid('ns', 'missing')).toBeUndefined();
+    expect(calls.filter((c) => c.labelSelector === undefined).every((c) => c.limit === 50)).toBe(
+      true,
+    );
+  });
+});

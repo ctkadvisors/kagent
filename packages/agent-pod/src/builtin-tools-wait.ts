@@ -171,7 +171,7 @@ export function defineWaitForChildTask(deps: WaitToolDeps): InProcessToolDefinit
         if (ctx.abortSignal.aborted) {
           throw new Error('wait_for_child_task: aborted');
         }
-        const snap = await deps.k8s.getTaskByUid(deps.parent.namespace, uid);
+        const snap = await deps.k8s.getTaskByUid(deps.parent.namespace, uid, deps.parent);
         if (snap === undefined) {
           // Child not visible yet — could be informer race after spawn.
           // Keep polling until deadline.
