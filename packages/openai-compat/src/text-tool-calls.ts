@@ -17,11 +17,15 @@
  * for the tool named `code_interpreter.execute_code` (the model drops the
  * part after the dot, sometimes writing it as a first, empty parameter).
  *
- * The recovery is conservative. It applies only when the response has no
- * structured tool calls, tools were offered, and the content ENDS with a
- * complete `<tool_call>…</tool_call>` block: a call the model was making,
- * not markup it quoted mid-answer. Every recovered call must resolve to
- * exactly one offered tool, or nothing is recovered.
+ * It applies only when the response has no structured tool calls, tools
+ * were offered, and the content ENDS with a complete
+ * `<tool_call>…</tool_call>` block that names a function: a call the model
+ * was making, not markup it quoted mid-answer. A call that resolves to
+ * exactly one offered tool is made as that tool. A call that names a
+ * function but resolves to none (or to several) is passed on under the name
+ * the model wrote, so the loop answers it with its ordinary unknown-tool
+ * error and the model tries again; ending the run on one slip is what this
+ * exists to stop. Markup with no function in it is left as text.
  */
 
 import type { ChatResult, ToolCall, ToolDescriptor } from '@kagent/agent-loop';
@@ -29,7 +33,8 @@ import type { ChatResult, ToolCall, ToolDescriptor } from '@kagent/agent-loop';
 // A block starts at the LAST `<tool_call>` before its close: the model often names the tag in
 // prose first ("earlier runs emitted `<tool_call>` text"), and that mention is not a call.
 const CALL_BLOCK = /<tool_call>((?:(?!<tool_call>)[\s\S])*?)<\/tool_call>/g;
-const FUNCTION_TAG = /<function=([A-Za-z0-9_.-]+)>/;
+// The name as the model wrote it, which may itself be malformed (`code_interpreter=execute_code`).
+const FUNCTION_TAG = /<function=([^>\s]+)>/;
 /** `<parameter=key>` immediately followed by another parameter: a key with no value. */
 const BARE_PARAMETER = /<parameter=([A-Za-z0-9_.-]+)>\s*(?=<parameter=)/g;
 const PARAMETER = /<parameter=([A-Za-z0-9_.-]+)>\n?([\s\S]*?)\n?<\/parameter>/g;
@@ -65,10 +70,18 @@ function parseBlock(block: string): ParsedCall | undefined {
   }
   const fn = FUNCTION_TAG.exec(body);
   if (fn?.[1] === undefined) return undefined;
-  const bare = [...body.matchAll(BARE_PARAMETER)].map((m) => m[1] ?? '');
+  // `<function=a=b>`: the model put the second half of a dotted name after an equals sign.
+  const [written = '', afterEquals] = fn[1].split('=');
+  if (written === '') return undefined;
+  const bare = [
+    ...(afterEquals !== undefined && afterEquals !== '' && afterEquals !== written
+      ? [afterEquals]
+      : []),
+    ...[...body.matchAll(BARE_PARAMETER)].map((m) => m[1] ?? ''),
+  ];
   const withoutBare = body.replace(BARE_PARAMETER, '');
   const params = [...withoutBare.matchAll(PARAMETER)].map((m) => [m[1] ?? '', m[2] ?? ''] as const);
-  return { name: fn[1], bare, params };
+  return { name: written, bare, params };
 }
 
 /** The one offered tool this call means, or undefined when it is not exactly one. */
@@ -143,14 +156,15 @@ export function recoverTextToolCalls(
     const parsed = parseBlock(block);
     if (parsed === undefined) return result;
     const tool = resolveTool(parsed, tools);
-    if (tool === undefined) return result;
     const properties =
-      (tool.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
+      (tool?.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
     const args: Record<string, unknown> = {};
     for (const [key, raw] of parsed.params) {
       args[key] = typedValue(raw, properties[key]);
     }
-    calls.push({ id: newId(index), name: tool.name, args });
+    // Unresolved: keep the model's own name. The loop has no such tool and says so, which
+    // is a reply the model can act on; a silent end of the run is not.
+    calls.push({ id: newId(index), name: tool?.name ?? parsed.name, args });
   }
 
   return {
