@@ -98,8 +98,34 @@ describe('recoverTextToolCalls', () => {
     ]);
   });
 
-  it('leaves the result alone unless a call for exactly one offered tool ends the message', () => {
-    const same = (result: ChatResult, tools: readonly ToolDescriptor[] | undefined = TOOLS) =>
+  it('a call that names a function but resolves to no single tool is passed on for the loop to refuse', () => {
+    const names = (content: string, tools: readonly ToolDescriptor[] = TOOLS) =>
+      recoverTextToolCalls(text(content), tools, id).tool_calls?.map((c) => [c.name, c.args]);
+    const call = REAL['code_interpreter|False'] ?? '';
+    // The run that still ended after the first fix (fleet-operator-requests-1795745220, 2026-11-27):
+    // an empty call under a doubled name. It resolves, and the tool answers that it has no code.
+    expect(
+      names(
+        '<tool_call>\n<function=code_interpreter=code_interpreter>\n\n</function>\n</tool_call>',
+      ),
+    ).toEqual([['code_interpreter.execute_code', {}]]);
+    expect(
+      names('<tool_call>\n<function=code_interpreter=execute_code>\n\n</function>\n</tool_call>'),
+    ).toEqual([['code_interpreter.execute_code', {}]]);
+    // Not offered, or ambiguous: the model's own name goes through and the loop says "unknown tool".
+    expect(
+      names(
+        '<tool_call>\n<function=shell.exec>\n<parameter=cmd>\nid\n</parameter>\n</function>\n</tool_call>',
+      ),
+    ).toEqual([['shell.exec', { cmd: 'id' }]]);
+    expect(names(call, [...TOOLS, tool('code_interpreter.read_files')])?.[0]?.[0]).toBe(
+      'code_interpreter',
+    );
+    expect(names(call, [tool('fleet.forum_read')])?.[0]?.[0]).toBe('code_interpreter');
+  });
+
+  it('leaves the result alone when no call ends the message', () => {
+    const same = (result: ChatResult, tools: readonly ToolDescriptor[] = TOOLS) =>
       expect(recoverTextToolCalls(result, tools, id)).toBe(result);
     const call = REAL['code_interpreter|False'] ?? '';
     same(text('A finished answer with no markup.'));
@@ -107,17 +133,9 @@ describe('recoverTextToolCalls', () => {
     same(text(call), []); // no tools offered
     const noTools = text(call);
     expect(recoverTextToolCalls(noTools, undefined, id)).toBe(noTools);
-    same(text(call), [tool('fleet.forum_read')]); // nothing it could mean
-    same(text(call), [...TOOLS, tool('code_interpreter.read_files')]); // two it could mean
-    same(
-      text(
-        '<tool_call>\n<function=shell.exec>\n<parameter=cmd>\nid\n</parameter>\n</function>\n</tool_call>',
-      ),
-    ); // not offered
-    same(text('<tool_call>\nnot a call at all\n</tool_call>'));
+    same(text('<tool_call>\nnot a call at all\n</tool_call>')); // no function named
     same(text('<tool_call>\n<function=fleet.forum_read>\n<parameter=limit>\n2')); // cut off mid-call
-    // one unresolvable call among several recovers none of them
-    same(text(call + '\n<tool_call>\n<function=shell.exec>\n</function>\n</tool_call>'));
+    same(text('<tool_call>\n{"arguments": {}}\n</tool_call>')); // JSON form with no name
     const structured: ChatResult = {
       content: call,
       tool_calls: [{ id: 'x', name: 'write_artifact', args: {} }],
