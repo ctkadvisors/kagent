@@ -25,7 +25,9 @@
  * function but resolves to none (or to several) is passed on under the name
  * the model wrote, so the loop answers it with its ordinary unknown-tool
  * error and the model tries again; ending the run on one slip is what this
- * exists to stop. Markup with no function in it is left as text.
+ * exists to stop. The same goes for a trailing block with no readable
+ * function at all, passed on as `invalid_tool_call`. Only markup that does
+ * not end the message, or is cut off before its closing tag, stays text.
  */
 
 import type { ChatResult, ToolCall, ToolDescriptor } from '@kagent/agent-loop';
@@ -33,8 +35,12 @@ import type { ChatResult, ToolCall, ToolDescriptor } from '@kagent/agent-loop';
 // A block starts at the LAST `<tool_call>` before its close: the model often names the tag in
 // prose first ("earlier runs emitted `<tool_call>` text"), and that mention is not a call.
 const CALL_BLOCK = /<tool_call>((?:(?!<tool_call>)[\s\S])*?)<\/tool_call>/g;
-// The name as the model wrote it, which may itself be malformed (`code_interpreter=execute_code`).
-const FUNCTION_TAG = /<function=([^>\s]+)>/;
+// The name as far as it is a name, and what follows an equals sign if the model wrote one
+// (`code_interpreter=execute_code>`, `code_interpreter=code_interpreter>`, `code_interpreter= `).
+// No closing `>` is required: a malformed tag is still a call the model was trying to make.
+const FUNCTION_TAG = /<function=([A-Za-z0-9_.-]+)(?:=([A-Za-z0-9_.-]*))?/;
+/** What an unparseable trailing call is passed on as; the loop has no such tool and says so. */
+export const INVALID_TOOL_CALL = 'invalid_tool_call';
 /** `<parameter=key>` immediately followed by another parameter: a key with no value. */
 const BARE_PARAMETER = /<parameter=([A-Za-z0-9_.-]+)>\s*(?=<parameter=)/g;
 const PARAMETER = /<parameter=([A-Za-z0-9_.-]+)>\n?([\s\S]*?)\n?<\/parameter>/g;
@@ -70,9 +76,8 @@ function parseBlock(block: string): ParsedCall | undefined {
   }
   const fn = FUNCTION_TAG.exec(body);
   if (fn?.[1] === undefined) return undefined;
-  // `<function=a=b>`: the model put the second half of a dotted name after an equals sign.
-  const [written = '', afterEquals] = fn[1].split('=');
-  if (written === '') return undefined;
+  const written = fn[1];
+  const afterEquals = fn[2];
   const bare = [
     ...(afterEquals !== undefined && afterEquals !== '' && afterEquals !== written
       ? [afterEquals]
@@ -153,8 +158,13 @@ export function recoverTextToolCalls(
 
   const calls: ToolCall[] = [];
   for (const [index, block] of trailing.entries()) {
-    const parsed = parseBlock(block);
-    if (parsed === undefined) return result;
+    // A trailing block that is not a readable call is still not an answer: pass it on under a
+    // name no tool has, with what the model wrote, so it is told and can send the call again.
+    const parsed = parseBlock(block) ?? {
+      name: INVALID_TOOL_CALL,
+      bare: [],
+      params: [['wrote', block.trim().slice(0, 400)]] as const,
+    };
     const tool = resolveTool(parsed, tools);
     const properties =
       (tool?.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};

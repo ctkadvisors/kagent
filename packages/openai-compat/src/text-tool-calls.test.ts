@@ -112,6 +112,21 @@ describe('recoverTextToolCalls', () => {
     expect(
       names('<tool_call>\n<function=code_interpreter=execute_code>\n\n</function>\n</tool_call>'),
     ).toEqual([['code_interpreter.execute_code', {}]]);
+    // The two runs that ended on #220's image, 2026-11-27 02:17Z and 02:39Z, after 12 and 34 minutes
+    // of real work: an unfinished tag. Still a call, still answered.
+    expect(
+      names('missed this.\n\n<tool_call>\n<function=code_interpreter=\n</function>\n</tool_call>'),
+    ).toEqual([['code_interpreter.execute_code', {}]]);
+    expect(names('<tool_call>\n<function=code_interpreter\n</tool_call>')).toEqual([
+      ['code_interpreter.execute_code', {}],
+    ]);
+    // No function at all: passed on under a name no tool has, with what was written.
+    expect(names('<tool_call>\nnot a call at all\n</tool_call>')).toEqual([
+      ['invalid_tool_call', { wrote: 'not a call at all' }],
+    ]);
+    expect(names('<tool_call>\n{"arguments": {}}\n</tool_call>')?.[0]?.[0]).toBe(
+      'invalid_tool_call',
+    );
     // Not offered, or ambiguous: the model's own name goes through and the loop says "unknown tool".
     expect(
       names(
@@ -133,9 +148,7 @@ describe('recoverTextToolCalls', () => {
     same(text(call), []); // no tools offered
     const noTools = text(call);
     expect(recoverTextToolCalls(noTools, undefined, id)).toBe(noTools);
-    same(text('<tool_call>\nnot a call at all\n</tool_call>')); // no function named
     same(text('<tool_call>\n<function=fleet.forum_read>\n<parameter=limit>\n2')); // cut off mid-call
-    same(text('<tool_call>\n{"arguments": {}}\n</tool_call>')); // JSON form with no name
     const structured: ChatResult = {
       content: call,
       tool_calls: [{ id: 'x', name: 'write_artifact', args: {} }],
