@@ -240,6 +240,8 @@ describe('runAgentTask with the artifact volume mounted', () => {
     expect(sent[0]?.content).toContain('CURRENT system prompt.');
     expect(sent[1]).toEqual({ role: 'user', content: 'build the thing' });
     expect(sent.at(-1)?.content).toContain('[resumed task] You are continuing task invent-1');
+    // A resumed run that already delivered must close, not keep working.
+    expect(sent.at(-1)?.content).toContain('already delivered');
     expect(sent.at(-1)?.content).toContain('task time limit reached (timeoutSeconds 60)');
     expect(sent.filter((m) => m.role === 'system')).toHaveLength(1);
   });
