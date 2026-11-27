@@ -187,7 +187,15 @@ export interface K8sTaskCreator {
   /** Used by WS-L wait_for_children_all to enumerate ALL children incl. terminal. */
   listAllChildren(parent: ParentIdentity): Promise<readonly ChildSnapshot[]>;
   /** Used by WS-L wait_for_child_task to fetch one specific child by uid. */
-  getTaskByUid(namespace: string, uid: string): Promise<ChildSnapshot | undefined>;
+  /**
+   * `parent`, when given, is tried first: one labelled list of that task's children instead of
+   * every task in the namespace.
+   */
+  getTaskByUid(
+    namespace: string,
+    uid: string,
+    parent?: ParentIdentity,
+  ): Promise<ChildSnapshot | undefined>;
   /**
    * v0.1.3 — fetch an Agent CR by namespace/name, returning just the
    * label projection used by `spawn_child_task`'s
@@ -337,23 +345,37 @@ export function buildK8sTaskCreator(customApi: CustomObjectsApi): K8sTaskCreator
       return items.map((it) => buildSnapshot(it, parent.namespace));
     },
 
-    async getTaskByUid(namespace: string, uid: string): Promise<ChildSnapshot | undefined> {
-      // CustomObjectsApi has no get-by-UID; the standard idiom is
-      // list-with-no-selector and find. For per-task polling this is
-      // wasteful, so we filter by the parent-task-uid label on the
-      // CALL SITE — but here we need the absolute fallback (no parent
-      // hint), so list-and-find is correct.
-      const list: unknown = await customApi.listNamespacedCustomObject({
-        group: KAGENT_GROUP,
-        version: KAGENT_VERSION,
-        namespace,
-        plural: AGENTTASK_PLURAL,
-      });
-      const items = readItems(list);
-      for (const it of items) {
-        const meta = readMeta(it);
-        if (meta.uid === uid) return buildSnapshot(it, namespace);
+    async getTaskByUid(
+      namespace: string,
+      uid: string,
+      parent?: ParentIdentity,
+    ): Promise<ChildSnapshot | undefined> {
+      // The task a parent waits on is nearly always its own child, and that is one small
+      // labelled list. The unlabelled list is every task's full spec and status: 62.6 MB in
+      // production on 2026-11-27, read on every poll, which ran the pod out of heap.
+      if (parent !== undefined) {
+        for (const it of await listChildrenRaw(customApi, parent)) {
+          if (readMeta(it).uid === uid) return buildSnapshot(it, namespace);
+        }
       }
+      // CustomObjectsApi has no get-by-UID, so the fallback is list-and-find, a page at a
+      // time so no more than a page is ever held.
+      let _continue: string | undefined;
+      do {
+        const list: unknown = await customApi.listNamespacedCustomObject({
+          group: KAGENT_GROUP,
+          version: KAGENT_VERSION,
+          namespace,
+          plural: AGENTTASK_PLURAL,
+          limit: LIST_PAGE_SIZE,
+          ...(_continue !== undefined && { _continue }),
+        });
+        for (const it of readItems(list)) {
+          if (readMeta(it).uid === uid) return buildSnapshot(it, namespace);
+        }
+        const next = (list as { metadata?: { continue?: unknown } } | null)?.metadata?.continue;
+        _continue = typeof next === 'string' && next !== '' ? next : undefined;
+      } while (_continue !== undefined);
       return undefined;
     },
 
@@ -395,6 +417,9 @@ function readLabels(obj: unknown): Readonly<Record<string, string>> {
   }
   return out;
 }
+
+/** Tasks per page of the unlabelled fallback list. */
+const LIST_PAGE_SIZE = 50;
 
 async function listChildrenRaw(
   customApi: CustomObjectsApi,
